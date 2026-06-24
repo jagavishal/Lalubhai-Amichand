@@ -61,32 +61,52 @@ window.Pages.approvals = {
   async _grantRevise(task) {
     this._granting = true;
     this._renderGrantModal();
-    await fetch('/api/delegations', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: task.id, status: 'revise', _grantRevise: true }),
-    });
-    this._granting = false;
-    this._grantTask = null;
+    try {
+      const res = await fetch('/api/delegations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: task.id, status: 'revise', _grantRevise: true }),
+      });
+      if (!res.ok) throw new Error('Server error ' + res.status);
+    } catch (err) {
+      console.error('Grant revise failed:', err);
+      if (window.Utils?.showToast) Utils.showToast('Failed to grant revise. Try again.', 'error');
+    } finally {
+      this._granting = false;
+      this._grantTask = null;
+      document.getElementById('grant-modal-overlay')?.remove();
+    }
     await this._refresh();
   },
 
   async _denyRevise(task) {
     if (!confirm('Are you sure you want to deny this request?')) return;
-    await fetch('/api/delegations', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: task.id, status: 'pending', _denyRevise: true }),
-    });
+    try {
+      const res = await fetch('/api/delegations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: task.id, status: 'pending', _denyRevise: true }),
+      });
+      if (!res.ok) throw new Error('Server error ' + res.status);
+    } catch (err) {
+      console.error('Deny revise failed:', err);
+      if (window.Utils?.showToast) Utils.showToast('Failed to deny request. Try again.', 'error');
+    }
     await this._refresh();
   },
 
   async _approveTask(task) {
-    await fetch('/api/delegations', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: task.id, status: 'pending', approval: 'Approved' }),
-    });
+    try {
+      const res = await fetch('/api/delegations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: task.id, status: 'pending', approval: 'Approved' }),
+      });
+      if (!res.ok) throw new Error('Server error ' + res.status);
+    } catch (err) {
+      console.error('Approve failed:', err);
+      if (window.Utils?.showToast) Utils.showToast('Failed to approve. Try again.', 'error');
+    }
     await this._refresh();
   },
 
