@@ -122,6 +122,7 @@ window.Pages.dashboard = (function () {
     users: [],
     holidays: [],
     delegations: [],
+    clients: [],
     subTab: 'All',
     userFilter: 'All',
     reviseTask: null,
@@ -149,6 +150,7 @@ window.Pages.dashboard = (function () {
     const el = document.getElementById('main-content');
     if (!el) return;
 
+    try {
     el.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:center;padding:3rem;">
         <div style="display:flex;flex-direction:column;align-items:center;gap:12px;color:#94a3b8;">
@@ -162,11 +164,12 @@ window.Pages.dashboard = (function () {
     const admin = isAdmin(user);
 
     /* parallel fetches */
-    const [dashData, usersData, holidaysData, delegationsData] = await Promise.all([
+    const [dashData, usersData, holidaysData, delegationsData, clientsData] = await Promise.all([
       Utils.apiFetch('/api/dashboard'),
       Utils.apiFetch('/api/users'),
       Utils.apiFetch('/api/holidays'),
       admin ? Utils.apiFetch('/api/delegations') : Promise.resolve([]),
+      Utils.apiFetch('/api/clients').catch(() => []),
     ]);
 
     if (!dashData) return;
@@ -175,10 +178,15 @@ window.Pages.dashboard = (function () {
     _state.users       = usersData || [];
     _state.holidays    = holidaysData || [];
     _state.delegations = delegationsData || [];
+    _state.clients     = clientsData || [];
     _state.subTab      = 'All';
     _state.userFilter  = 'All';
 
     _renderShell(el, admin);
+    } catch(err) {
+      el.innerHTML = `<div style="padding:2rem;color:#dc2626;font-size:14px;">❌ Dashboard error: ${err.message}</div>`;
+      console.error('Dashboard render error:', err);
+    }
   }
 
   function _renderShell(el, admin) {
@@ -190,7 +198,22 @@ window.Pages.dashboard = (function () {
     el.innerHTML = `
       <style>
         @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
-        #db-wrap { animation: fadeIn .25s ease both; min-width: 900px; }
+        #db-wrap { animation: fadeIn .25s ease both; }
+        /* Mobile responsive */
+        @media (max-width: 767px) {
+          #db-topbar { flex-direction: column; gap: 10px; }
+          #db-title-row { display: flex !important; align-items: center; justify-content: space-between; width: 100%; }
+          #db-btn-row { display: flex !important; width: 100%; gap: 8px; }
+          #db-btn-row button { flex: 1; font-size: 11.5px !important; padding: 8px 6px !important; }
+          #db-emp-picker { width: 100% !important; }
+          #db-emp-trigger { width: 100% !important; min-width: unset !important; }
+          #db-stat-cards { display: flex !important; overflow-x: auto; gap: 10px; padding-bottom: 4px; scroll-snap-type: x mandatory; }
+          #db-stat-cards .db-stat-card { min-width: 130px !important; flex-shrink: 0; scroll-snap-align: start; }
+          #db-main-grid { grid-template-columns: 1fr !important; }
+          #db-perf-grid  { grid-template-columns: 1fr !important; }
+          #db-stat-cards::-webkit-scrollbar { height: 3px; }
+          #db-stat-cards::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 2px; }
+        }
         .db-modal-overlay { position:fixed;inset:0;background:rgba(15,23,42,.5);backdrop-filter:blur(4px);z-index:100;display:none;align-items:center;justify-content:center;padding:1rem; }
         .db-modal-box { background:#fff;border-radius:1.25rem;box-shadow:0 20px 60px rgba(0,0,0,.18);width:100%;max-width:440px;overflow:hidden; }
         .db-modal-head { display:flex;align-items:center;gap:12px;padding:1rem 1.25rem;border-bottom:1px solid #e2e8f0; }
@@ -217,47 +240,86 @@ window.Pages.dashboard = (function () {
 
       <div id="db-wrap">
         <!-- Top bar -->
-        <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px;">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div id="db-topbar" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px;">
+          <div id="db-title-row" style="display:none;">
+            <h2 style="font-size:18px;font-weight:800;color:#0f172a;margin:0;">Dashboard</h2>
+            ${admin ? `<div id="db-emp-picker-mobile"></div>` : ''}
+          </div>
+          <div id="db-btn-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             ${admin ? `
-            <select id="db-user-filter" style="padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12.5px;background:#fff;color:#374151;">
-              <option value="All">All Employees</option>
-              ${allDoers.map(d => `<option value="${d}">${d}</option>`).join('')}
-            </select>
             <button id="db-btn-holidays" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#f59e0b;color:#fff;border:none;cursor:pointer;">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
               Holidays
             </button>` : ''}
             <button id="db-btn-checklist" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#059669;color:#fff;border:none;cursor:pointer;">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-              Checklist
+              + Checklist
             </button>
             <button id="db-btn-delegate" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:#C4714A;color:#fff;border:none;cursor:pointer;">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-              Delegate
+              + Delegate
             </button>
+            ${admin ? `<button id="db-btn-transfer" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:#7c3aed;color:#fff;border:none;cursor:pointer;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              Transfer
+            </button>` : ''}
           </div>
+          ${admin ? `
+          <!-- Custom employee picker (top-right) -->
+          <div id="db-emp-picker" style="position:relative;">
+            <button id="db-emp-trigger" style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:8px;border:1.5px solid #e2e8f0;background:#fff;font-size:12.5px;font-weight:500;color:#374151;cursor:pointer;min-width:240px;justify-content:space-between;">
+              <span style="display:flex;align-items:center;gap:6px;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <span style="color:#94a3b8;font-size:11.5px;font-weight:600;">Dashboard:</span>
+                <span id="db-emp-label">All Employees</span>
+              </span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div id="db-emp-dropdown" style="display:none;position:absolute;right:0;top:calc(100% + 4px);width:280px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:200;overflow:hidden;">
+              <div style="padding:8px;">
+                <input id="db-emp-search" type="text" placeholder="Search employee..." style="width:100%;padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12px;outline:none;box-sizing:border-box;" />
+              </div>
+              <div id="db-emp-list" style="max-height:260px;overflow-y:auto;padding:4px 0;">
+                <div data-emp-val="All" data-emp-label="All Employees" class="db-emp-opt" style="padding:8px 14px;cursor:pointer;font-size:12.5px;font-weight:600;color:#374151;background:#f0f9ff;">All Employees</div>
+                ${(users || []).sort((a,b)=>a.name.localeCompare(b.name)).map(u => {
+                  const dept = (u.department||'').length > 14 ? (u.department||'').slice(0,14)+'…' : (u.department||'');
+                  return `<div data-emp-val="${u.name}" data-emp-label="${u.name}${u.department ? ' · '+u.department : ''}" class="db-emp-opt" style="padding:8px 14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                    <span style="font-size:12.5px;font-weight:600;color:#0f172a;">${u.name}</span>
+                    ${dept ? `<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">${dept}</span>` : ''}
+                  </div>`;
+                }).join('')}
+              </div>
+            </div>
+          </div>` : ''}
         </div>
 
         <!-- Stat cards -->
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:20px;">
-          <div class="card" style="padding:20px;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Total</div>
-            <div style="font-size:2.5rem;font-weight:800;color:#C4714A;">${admin ? data.total : data.pendingTasks.length}</div>
-          </div>
-          <div class="card" style="padding:20px;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Completed</div>
-            <div style="font-size:2.5rem;font-weight:800;color:#059669;">${data.completed}</div>
-          </div>
-          <div class="card" style="padding:20px;">
+        <div id="db-stat-cards" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1rem;margin-bottom:20px;">
+          <div class="card db-stat-card" style="padding:20px;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Pending</div>
-            <div style="font-size:2.5rem;font-weight:800;color:#dc2626;">${data.pendingTasks.length}</div>
-            ${data.revised > 0 ? `<div style="font-size:11px;font-weight:600;color:#d97706;margin-top:4px;">${data.revised} revised</div>` : ''}
+            <div id="db-stat-pending" style="font-size:2.5rem;font-weight:800;color:#dc2626;">${data.pending || data.pendingTasks.length}</div>
+            <div id="db-stat-revised" style="font-size:11px;font-weight:600;color:#d97706;margin-top:4px;${data.revised > 0 ? '' : 'display:none;'}">+ ${data.revised} revised</div>
+          </div>
+          <div class="card db-stat-card" style="padding:20px;">
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Revised</div>
+            <div id="db-stat-revised-count" style="font-size:2.5rem;font-weight:800;color:#d97706;">${data.revised || 0}</div>
+          </div>
+          <div class="card db-stat-card" style="padding:20px;">
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Completed</div>
+            <div id="db-stat-completed" style="font-size:2.5rem;font-weight:800;color:#059669;">${data.completed}</div>
+          </div>
+          <div class="card db-stat-card" style="padding:20px;">
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Upcoming</div>
+            <div id="db-stat-upcoming" style="font-size:2.5rem;font-weight:800;color:#7c3aed;">${data.upcoming || 0}</div>
+          </div>
+          <div class="card db-stat-card" style="padding:20px;display:none;" id="db-stat-total-card">
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Total</div>
+            <div id="db-stat-total" style="font-size:2.5rem;font-weight:800;color:#C4714A;">${admin ? data.total : data.pendingTasks.length}</div>
           </div>
         </div>
 
         <!-- Tasks + Pie -->
-        <div style="display:grid;grid-template-columns:1fr 280px;gap:1rem;margin-bottom:20px;">
+        <div id="db-main-grid" style="display:grid;grid-template-columns:1fr 280px;gap:1rem;margin-bottom:20px;">
 
           <!-- Tasks card -->
           <div class="card" style="overflow:hidden;">
@@ -283,8 +345,8 @@ window.Pages.dashboard = (function () {
               <h3 style="font-size:13px;font-weight:700;color:#0f172a;margin:0;">Task Overview</h3>
               <p style="font-size:11.5px;color:#64748b;margin:3px 0 0;">Overall distribution</p>
             </div>
-            <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-top:12px;">
-              ${renderPieSVG(data.completed, data.pendingTasks.length, data.revised)}
+            <div id="db-pie-container" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-top:12px;">
+              ${renderPieSVG(data.completed, data.pending || data.pendingTasks.length, data.revised, data.upcoming || 0)}
             </div>
           </div>
         </div>
@@ -302,7 +364,7 @@ window.Pages.dashboard = (function () {
             </div>
             <span style="background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;display:inline-flex;align-items:center;padding:2px 10px;font-size:10.5px;font-weight:600;border-radius:9999px;">Last 30 days</span>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;">
+          <div id="db-perf-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;">
             ${barListHTML('🏆 Top 5 Performers',   perf.top5,       'completed', 'emerald', '★')}
             ${barListHTML('📉 Bottom 5 Performers', perf.bottom5,    'pending',   'red',     '!')}
             ${barListHTML('⚡ Top 5 Most Active',   perf.mostActive, 'total',     'blue',    '⚡')}
@@ -312,40 +374,37 @@ window.Pages.dashboard = (function () {
 
       <!-- ── Add Delegate Modal ── -->
       <div id="modal-delegate" class="db-modal-overlay">
-        <div class="db-modal-box" onclick="event.stopPropagation()">
+        <div class="db-modal-box" style="max-width:520px;" onclick="event.stopPropagation()">
           <div class="db-modal-head">
-            <div style="width:36px;height:36px;border-radius:10px;background:#fff7ed;display:flex;align-items:center;justify-content:center;color:#C4714A;flex-shrink:0;">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-            </div>
-            <div style="flex:1;">
-              <h2 style="font-size:14px;font-weight:700;margin:0;">Delegate Task</h2>
-              <p style="font-size:11.5px;color:#64748b;margin:2px 0 0;">Assign a task to a team member</p>
-            </div>
-            <button id="modal-delegate-close" style="background:none;border:none;cursor:pointer;color:#64748b;padding:4px;">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            <h2 style="font-size:15px;font-weight:700;margin:0;flex:1;">+ Delegate Task</h2>
+            <button id="modal-delegate-close" style="width:28px;height:28px;border-radius:50%;background:#f1f5f9;border:none;cursor:pointer;color:#64748b;display:flex;align-items:center;justify-content:center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <div class="db-modal-body">
-            <div>
-              <label class="db-label">Description <span style="color:#ef4444">*</span></label>
-              <textarea id="del-desc" rows="2" class="db-input" style="resize:vertical;" placeholder="What needs to be done?"></textarea>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="db-modal-body" style="max-height:70vh;overflow-y:auto;">
+            <!-- Row 1: Doer | Due Date -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label class="db-label">Doer <span style="color:#ef4444">*</span></label>
+                <label class="db-label">DOER (ASSIGN TO)</label>
                 <select id="del-doer" class="db-input">
-                  <option value="">Select person…</option>
+                  <option value="">Select Doer</option>
                   ${(users || []).map(u => `<option value="${u.id}" data-name="${u.name}">${u.name}</option>`).join('')}
                 </select>
               </div>
               <div>
-                <label class="db-label">Due Date <span style="color:#ef4444">*</span></label>
-                <input type="date" id="del-due" class="db-input" min="${todayISO()}" />
+                <label class="db-label">DUE DATE</label>
+                <input type="date" id="del-due" class="db-input" value="${todayISO()}" />
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <!-- Doer-defined due date checkbox -->
+            <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
+              <input type="checkbox" id="del-doer-date" style="width:14px;height:14px;accent-color:#C4714A;cursor:pointer;" />
+              <label for="del-doer-date" style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;cursor:pointer;">Doer-Defined Due Date</label>
+            </div>
+            <!-- Row 2: Priority | Approval Required -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label class="db-label">Priority</label>
+                <label class="db-label">PRIORITY</label>
                 <select id="del-priority" class="db-input">
                   <option value="Low">Low</option>
                   <option value="Medium">Medium</option>
@@ -353,72 +412,147 @@ window.Pages.dashboard = (function () {
                 </select>
               </div>
               <div>
-                <label class="db-label">Client</label>
-                <input type="text" id="del-client" class="db-input" placeholder="Client name (optional)" />
+                <label class="db-label">APPROVAL REQUIRED</label>
+                <select id="del-approval" class="db-input">
+                  <option value="No Approval">No Approval</option>
+                  <option value="Approval Required">Approval Required</option>
+                </select>
               </div>
             </div>
+            <!-- Client -->
             <div>
-              <label class="db-label">URL (optional)</label>
-              <input type="url" id="del-url" class="db-input" placeholder="https://..." />
+              <label class="db-label">CLIENT <span style="color:#ef4444;">*</span></label>
+              <select id="del-client" class="db-input">
+                <option value="">— Select Client —</option>
+                ${(_state.clients || []).map(c => `<option value="${c.name||c}">${c.name||c}</option>`).join('')}
+                <option value="__other__">Other / Type manually</option>
+              </select>
+              <input type="text" id="del-client-text" class="db-input" placeholder="Enter client name" style="display:none;margin-top:6px;" />
             </div>
+            <!-- Description -->
             <div>
-              <label class="db-label">Remarks (optional)</label>
-              <input type="text" id="del-remarks" class="db-input" placeholder="Additional notes…" />
+              <label class="db-label">DESCRIPTION</label>
+              <textarea id="del-desc" rows="3" class="db-input" style="resize:vertical;" placeholder="Enter task description..."></textarea>
+            </div>
+            <!-- URL -->
+            <div>
+              <label class="db-label">URL <span style="font-size:10px;color:#94a3b8;font-weight:400;text-transform:none;">(OPTIONAL)</span></label>
+              <input type="url" id="del-url" class="db-input" placeholder="https://docs.google.com/..." />
+            </div>
+            <!-- Remarks -->
+            <div>
+              <label class="db-label">REMARKS</label>
+              <textarea id="del-remarks" rows="2" class="db-input" style="resize:vertical;" placeholder="Any remarks..."></textarea>
             </div>
             <p id="del-error" style="color:#dc2626;font-size:12px;display:none;margin:0;"></p>
           </div>
-          <div class="db-modal-foot">
-            <button id="modal-delegate-cancel" class="db-btn-secondary">Cancel</button>
-            <button id="modal-delegate-submit" class="db-btn-primary">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-              Add Task
-            </button>
+          <!-- Footer buttons -->
+          <div class="db-modal-foot" style="justify-content:space-between;">
+            <button id="modal-delegate-cancel" class="db-btn-secondary">Close</button>
+            <button id="modal-delegate-submit" class="db-btn-primary">Assign</button>
+          </div>
+          <!-- Bulk CSV upload -->
+          <div style="border-top:1px solid #f1f5f9;padding:12px 20px 16px;background:#fafafa;">
+            <p style="font-size:10.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#94a3b8;text-align:center;margin:0 0 10px;">OR BULK UPLOAD CSV</p>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <input type="file" id="del-csv-file" accept=".csv" style="font-size:12px;flex:1;min-width:0;" />
+              <button id="del-csv-upload" style="padding:6px 14px;border-radius:7px;background:#10b981;color:#fff;border:none;cursor:pointer;font-size:12px;font-weight:700;display:flex;align-items:center;gap:5px;white-space:nowrap;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+                Upload CSV
+              </button>
+              <a href="/delegation_sample.csv" download style="padding:6px 14px;border-radius:7px;background:#fff;color:#374151;border:1.5px solid #e2e8f0;cursor:pointer;font-size:12px;font-weight:700;text-decoration:none;display:flex;align-items:center;gap:5px;white-space:nowrap;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
+                Sample
+              </a>
+            </div>
+            <p style="font-size:10.5px;color:#94a3b8;margin:8px 0 0;">Format: doer_email, approver_email, due_date, priority, approval, description, remarks, client_name</p>
           </div>
         </div>
       </div>
 
       <!-- ── Add Checklist Master Modal ── -->
       <div id="modal-checklist" class="db-modal-overlay">
-        <div class="db-modal-box" onclick="event.stopPropagation()">
+        <div class="db-modal-box" style="max-width:520px;" onclick="event.stopPropagation()">
           <div class="db-modal-head">
-            <div style="width:36px;height:36px;border-radius:10px;background:#ecfdf5;display:flex;align-items:center;justify-content:center;color:#059669;flex-shrink:0;">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-            </div>
-            <div style="flex:1;">
-              <h2 style="font-size:14px;font-weight:700;margin:0;">Add Checklist Task</h2>
-              <p style="font-size:11.5px;color:#64748b;margin:2px 0 0;">Create a recurring checklist master</p>
-            </div>
-            <button id="modal-checklist-close" style="background:none;border:none;cursor:pointer;color:#64748b;padding:4px;">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            <h2 style="font-size:15px;font-weight:700;margin:0;flex:1;">+ Add Checklist Task</h2>
+            <button id="modal-checklist-close" style="width:28px;height:28px;border-radius:50%;background:#f1f5f9;border:none;cursor:pointer;color:#64748b;display:flex;align-items:center;justify-content:center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <div class="db-modal-body">
+          <div class="db-modal-body" style="max-height:70vh;overflow-y:auto;">
+            <!-- Select Employee -->
             <div>
-              <label class="db-label">Task <span style="color:#ef4444">*</span></label>
-              <input type="text" id="chk-task" class="db-input" placeholder="Describe the recurring task…" />
+              <label class="db-label">SELECT EMPLOYEE</label>
+              <select id="chk-assigned" class="db-input">
+                <option value="">Select Employee</option>
+                ${(users || []).map(u => `<option value="${u.id}" data-email="${u.email}" data-name="${u.name}">${u.name}</option>`).join('')}
+              </select>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <!-- Frequency -->
+            <div>
+              <label class="db-label">FREQUENCY</label>
+              <select id="chk-frequency" class="db-input">
+                <option value="daily">Daily (365 tasks/year)</option>
+                <option value="alternative_week">Alternative Week (26 tasks/year)</option>
+                <option value="weekly">Weekly (52 tasks/year)</option>
+                <option value="monthly">Monthly (12 tasks/year)</option>
+                <option value="quarterly">Quarterly (4 tasks/year)</option>
+                <option value="yearly">Yearly (1 task/year)</option>
+              </select>
+            </div>
+            <!-- Start Date | End Date -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label class="db-label">Assigned To</label>
-                <input type="text" id="chk-assigned" class="db-input" placeholder="Person or team" />
+                <label class="db-label">START DATE</label>
+                <input type="date" id="chk-start" class="db-input" value="${todayISO()}" />
               </div>
               <div>
-                <label class="db-label">Frequency</label>
-                <select id="chk-frequency" class="db-input">
-                  <option value="Daily">Daily</option>
-                  <option value="Weekly">Weekly</option>
-                  <option value="Monthly">Monthly</option>
-                </select>
+                <label class="db-label">END DATE <span style="font-size:10px;color:#94a3b8;font-weight:400;text-transform:none;">(OPTIONAL)</span></label>
+                <input type="date" id="chk-end" class="db-input" />
               </div>
+            </div>
+            <!-- Client -->
+            <div>
+              <label class="db-label">CLIENT <span style="font-size:10px;color:#94a3b8;font-weight:400;text-transform:none;">(OPTIONAL)</span></label>
+              <select id="chk-client" class="db-input">
+                <option value="">— No Client —</option>
+                ${(_state.clients || []).map(c => `<option value="${c.name||c}">${c.name||c}</option>`).join('')}
+              </select>
+            </div>
+            <!-- Task Name / Description -->
+            <div>
+              <label class="db-label">TASK NAME / DESCRIPTION</label>
+              <input type="text" id="chk-task" class="db-input" placeholder="Enter task name..." />
+            </div>
+            <!-- Remarks -->
+            <div>
+              <label class="db-label">REMARKS</label>
+              <input type="text" id="chk-remarks" class="db-input" placeholder="Any remarks..." />
             </div>
             <p id="chk-error" style="color:#dc2626;font-size:12px;display:none;margin:0;"></p>
           </div>
-          <div class="db-modal-foot">
-            <button id="modal-checklist-cancel" class="db-btn-secondary">Cancel</button>
-            <button id="modal-checklist-submit" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 14px;border-radius:8px;font-size:12.5px;font-weight:600;background:#059669;color:#fff;border:none;cursor:pointer;">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-              Add Checklist
+          <!-- Footer buttons -->
+          <div class="db-modal-foot" style="justify-content:space-between;">
+            <button id="modal-checklist-cancel" class="db-btn-secondary">Close</button>
+            <button id="modal-checklist-submit" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 18px;border-radius:8px;font-size:12.5px;font-weight:600;background:#2563eb;color:#fff;border:none;cursor:pointer;">
+              Generate Tasks
             </button>
+          </div>
+          <!-- Bulk CSV upload -->
+          <div style="border-top:1px solid #f1f5f9;padding:12px 20px 16px;background:#fafafa;">
+            <p style="font-size:10.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#94a3b8;text-align:center;margin:0 0 10px;">OR BULK UPLOAD CSV</p>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <input type="file" id="chk-csv-file" accept=".csv" style="font-size:12px;flex:1;min-width:0;" />
+              <button id="chk-csv-upload" style="padding:6px 14px;border-radius:7px;background:#10b981;color:#fff;border:none;cursor:pointer;font-size:12px;font-weight:700;display:flex;align-items:center;gap:5px;white-space:nowrap;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+                Upload CSV
+              </button>
+              <a href="/checklist_bulk_sample.csv" download style="padding:6px 14px;border-radius:7px;background:#fff;color:#374151;border:1.5px solid #e2e8f0;cursor:pointer;font-size:12px;font-weight:700;text-decoration:none;display:flex;align-items:center;gap:5px;white-space:nowrap;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
+                Sample
+              </a>
+            </div>
+            <p style="font-size:10.5px;color:#94a3b8;margin:8px 0 0;">Format: user_email, frequency (daily/weekly/monthly/yearly/quarterly/alternative_week), start_date, description, remarks — tasks auto-generate!</p>
           </div>
         </div>
       </div>
@@ -427,38 +561,55 @@ window.Pages.dashboard = (function () {
       <div id="modal-holidays" class="db-modal-overlay">
         <div class="db-modal-box" style="max-width:520px;" onclick="event.stopPropagation()">
           <div class="db-modal-head">
-            <div style="width:36px;height:36px;border-radius:10px;background:#fffbeb;display:flex;align-items:center;justify-content:center;color:#d97706;flex-shrink:0;">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-            </div>
-            <div style="flex:1;">
-              <h2 style="font-size:14px;font-weight:700;margin:0;">Holidays</h2>
-              <p style="font-size:11.5px;color:#64748b;margin:2px 0 0;">Manage company holidays</p>
-            </div>
-            <button id="modal-holidays-close" style="background:none;border:none;cursor:pointer;color:#64748b;padding:4px;">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+            <h2 style="font-size:15px;font-weight:700;margin:0;flex:1;padding-left:8px;">Holidays</h2>
+            <button id="modal-holidays-close" style="width:28px;height:28px;border-radius:50%;background:#f1f5f9;border:none;cursor:pointer;color:#64748b;display:flex;align-items:center;justify-content:center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <div class="db-modal-body" style="max-height:60vh;overflow-y:auto;">
+          <div class="db-modal-body" style="max-height:65vh;overflow-y:auto;">
             <!-- Add holiday form -->
-            <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label class="db-label">Date <span style="color:#ef4444">*</span></label>
+                <label class="db-label">DATE</label>
                 <input type="date" id="hol-date" class="db-input" />
               </div>
               <div>
-                <label class="db-label">Name <span style="color:#ef4444">*</span></label>
-                <input type="text" id="hol-name" class="db-input" placeholder="e.g. Holi" />
+                <label class="db-label">HOLIDAY NAME</label>
+                <input type="text" id="hol-name" class="db-input" placeholder="e.g. Diwali" />
               </div>
-              <button id="hol-add-btn" style="display:inline-flex;align-items:center;gap:5px;padding:7px 12px;border-radius:8px;font-size:12px;font-weight:600;background:#f59e0b;color:#fff;border:none;cursor:pointer;white-space:nowrap;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-                Add
-              </button>
             </div>
+            <button id="hol-add-btn" style="width:100%;padding:9px;border-radius:8px;font-size:13px;font-weight:700;background:#2563eb;color:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
+              + Add Holiday
+            </button>
             <p id="hol-error" style="color:#dc2626;font-size:12px;display:none;margin:0;"></p>
-            <div id="hol-list"></div>
+            <!-- Bulk CSV section -->
+            <div style="border:1.5px dashed #f59e0b;border-radius:10px;background:#fffbeb;padding:14px 16px;">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="#f59e0b"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <span style="font-size:13px;font-weight:700;color:#92400e;">Bulk Upload (CSV)</span>
+              </div>
+              <p style="font-size:11.5px;color:#92400e;margin:0 0 10px;">Format: date,name per line — date as YYYY-MM-DD or DD-MM-YYYY</p>
+              <a href="/holiday_sample.csv" download style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:7px;background:#fff;color:#374151;border:1.5px solid #e2e8f0;font-size:12px;font-weight:700;text-decoration:none;margin-bottom:10px;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
+                Sample
+              </a>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <input type="file" id="hol-csv-file" accept=".csv" style="font-size:12px;flex:1;min-width:0;" />
+                <button id="hol-csv-upload" style="padding:6px 16px;border-radius:7px;background:#10b981;color:#fff;border:none;cursor:pointer;font-size:12px;font-weight:700;display:flex;align-items:center;gap:5px;white-space:nowrap;">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  Upload CSV
+                </button>
+              </div>
+            </div>
+            <!-- Holiday list -->
+            <div>
+              <p style="font-size:10.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#2563eb;margin:0 0 8px;">HOLIDAY LIST</p>
+              <div id="hol-list"></div>
+            </div>
           </div>
           <div class="db-modal-foot">
-            <button id="modal-holidays-done" class="db-btn-primary">Done</button>
+            <button id="modal-holidays-done" class="db-btn-secondary" style="width:100%;justify-content:center;">Close</button>
           </div>
         </div>
       </div>
@@ -495,22 +646,88 @@ window.Pages.dashboard = (function () {
           </div>
         </div>
       </div>
+
+      <!-- ── Transfer Modal ── -->
+      <div id="modal-transfer" class="db-modal-overlay">
+        <div class="db-modal-box" style="max-width:460px;" onclick="event.stopPropagation()">
+          <div class="db-modal-head">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            <h2 style="font-size:15px;font-weight:700;margin:0;flex:1;padding-left:8px;">Transfer Tasks</h2>
+            <button id="modal-transfer-close" style="width:28px;height:28px;border-radius:50%;background:#f1f5f9;border:none;cursor:pointer;color:#64748b;display:flex;align-items:center;justify-content:center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="db-modal-body">
+            <div>
+              <label class="db-label">FROM (Current Doer)</label>
+              <select id="tr-from" class="db-input">
+                <option value="">— Select Employee —</option>
+                ${(users || []).map(u => `<option value="${u.id}" data-name="${u.name}">${u.name}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label class="db-label">TO (New Doer)</label>
+              <select id="tr-to" class="db-input">
+                <option value="">— Select Employee —</option>
+                ${(users || []).map(u => `<option value="${u.id}" data-name="${u.name}">${u.name}</option>`).join('')}
+              </select>
+            </div>
+            <div style="background:#f8fafc;border-radius:8px;padding:10px 12px;">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151;">
+                <input type="checkbox" id="tr-all" style="width:14px;height:14px;accent-color:#7c3aed;" />
+                Transfer ALL pending tasks (not just selected employee's)
+              </label>
+            </div>
+            <p id="tr-error" style="color:#dc2626;font-size:12px;display:none;margin:0;"></p>
+          </div>
+          <div class="db-modal-foot" style="justify-content:space-between;">
+            <button id="modal-transfer-cancel" class="db-btn-secondary">Close</button>
+            <button id="modal-transfer-submit" style="display:inline-flex;align-items:center;gap:6px;padding:7px 18px;border-radius:8px;font-size:12.5px;font-weight:700;background:#7c3aed;color:#fff;border:none;cursor:pointer;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+              Transfer
+            </button>
+          </div>
+        </div>
+      </div>
     `;
 
     _updateTasksTable(admin);
     _attachEvents(el, admin);
+
+    /* Mobile: show title row, hide desktop topbar row */
+    function _applyMobileLayout() {
+      const isMobile = window.innerWidth < 768;
+      const titleRow = el.querySelector('#db-title-row');
+      const btnRow   = el.querySelector('#db-btn-row');
+      const topbar   = el.querySelector('#db-topbar');
+      if (isMobile) {
+        if (titleRow) titleRow.style.display = 'flex';
+        /* move emp picker into mobile title row */
+        if (admin) {
+          const mobilePicker = el.querySelector('#db-emp-picker-mobile');
+          const picker       = el.querySelector('#db-emp-picker');
+          if (mobilePicker && picker && !mobilePicker.hasChildNodes()) mobilePicker.appendChild(picker);
+        }
+      } else {
+        if (titleRow) titleRow.style.display = 'none';
+      }
+    }
+    _applyMobileLayout();
+    window.addEventListener('resize', _applyMobileLayout);
   }
 
   /* ── pie chart svg ───────────────────────────────────────────────── */
-  function renderPieSVG(completed, pending, revised) {
+  function renderPieSVG(completed, pending, revised, upcoming) {
     const size = 200;
     const cx = size / 2, cy = size / 2, r = size / 2 - 6;
-    const total = completed + pending + revised;
-    const slices = [
-      { value: completed, color: '#10b981', label: 'Completed' },
-      { value: pending,   color: '#ef4444', label: 'Pending'   },
-      { value: revised,   color: '#f59e0b', label: 'Revised'   },
-    ].filter(s => s.value > 0);
+    const allSlices = [
+      { value: completed,        color: '#10b981', label: 'Completed' },
+      { value: pending - (upcoming||0), color: '#ef4444', label: 'Pending'   },
+      { value: revised,          color: '#f59e0b', label: 'Revised'   },
+      { value: upcoming || 0,    color: '#7c3aed', label: 'Upcoming'  },
+    ];
+    const slices = allSlices.filter(s => s.value > 0);
+    const total = slices.reduce((a, s) => a + s.value, 0);
 
     let paths = '';
     if (total === 0) {
@@ -520,29 +737,26 @@ window.Pages.dashboard = (function () {
     } else {
       let angle = -Math.PI / 2;
       slices.forEach(s => {
-        const slice = (s.value / total) * Math.PI * 2;
+        const sweep = (s.value / total) * Math.PI * 2;
         const x1 = cx + r * Math.cos(angle);
         const y1 = cy + r * Math.sin(angle);
-        angle += slice;
+        angle += sweep;
         const x2 = cx + r * Math.cos(angle);
         const y2 = cy + r * Math.sin(angle);
-        const largeArc = slice > Math.PI ? 1 : 0;
+        const largeArc = sweep > Math.PI ? 1 : 0;
         paths += `<path d="M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
       });
     }
 
-    const legend = [
-      { value: completed, color: '#10b981', label: 'Completed' },
-      { value: pending,   color: '#ef4444', label: 'Pending'   },
-      { value: revised,   color: '#f59e0b', label: 'Revised'   },
-    ].map(s => `
-      <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#475569;">
-        <span style="width:10px;height:10px;border-radius:50%;background:${s.color};flex-shrink:0;"></span>${s.label}
+    const legend = allSlices.map(s => `
+      <div style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#475569;">
+        <span style="width:10px;height:10px;border-radius:50%;background:${s.color};flex-shrink:0;"></span>
+        <span>${s.label}</span>
       </div>`).join('');
 
     return `
       <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${paths}</svg>
-      <div style="display:flex;align-items:center;justify-content:center;gap:20px;margin-top:12px;">${legend}</div>`;
+      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px 16px;margin-top:12px;">${legend}</div>`;
   }
 
   /* ── tasks table update ──────────────────────────────────────────── */
@@ -656,33 +870,17 @@ window.Pages.dashboard = (function () {
   function _renderHolidayList() {
     const listEl = document.getElementById('hol-list');
     if (!listEl) return;
-    const holidays = _state.holidays || [];
+    const holidays = (_state.holidays || []).slice().sort((a, b) => a.date > b.date ? 1 : -1);
     if (holidays.length === 0) {
       listEl.innerHTML = '<div style="color:#94a3b8;font-size:12px;text-align:center;padding:1rem;">No holidays added yet.</div>';
       return;
     }
-    listEl.innerHTML = `
-      <table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:4px;">
-        <thead>
-          <tr>
-            <th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;border-bottom:1px solid #e2e8f0;">Date</th>
-            <th style="text-align:left;padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;border-bottom:1px solid #e2e8f0;">Name</th>
-            <th style="padding:8px 10px;border-bottom:1px solid #e2e8f0;"></th>
-          </tr>
-        </thead>
-        <tbody>
-          ${holidays.map(h => `
-            <tr>
-              <td style="padding:8px 10px;border-top:1px solid #f1f5f9;color:#475569;">${fmt(h.date)}</td>
-              <td style="padding:8px 10px;border-top:1px solid #f1f5f9;font-weight:600;color:#0f172a;">${h.name}</td>
-              <td style="padding:8px 10px;border-top:1px solid #f1f5f9;text-align:right;">
-                <button data-hol-del="${h.id}" style="background:none;border:none;cursor:pointer;color:#94a3b8;padding:2px 4px;" title="Delete">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6 18 20a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-                </button>
-              </td>
-            </tr>`).join('')}
-        </tbody>
-      </table>`;
+    listEl.innerHTML = holidays.map(h => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f1f5f9;">
+        <span style="font-size:13px;font-weight:700;color:#0f172a;">${fmt(h.date)}</span>
+        <span style="font-size:13px;color:#475569;flex:1;padding:0 12px;">— ${h.name}</span>
+        <button data-hol-del="${h.id}" style="padding:3px 10px;border-radius:6px;background:#fff0f0;color:#ef4444;border:1px solid #fecaca;font-size:11.5px;font-weight:600;cursor:pointer;">Remove</button>
+      </div>`).join('');
 
     listEl.querySelectorAll('[data-hol-del]').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -764,96 +962,291 @@ window.Pages.dashboard = (function () {
     });
 
     /* ── user filter ── */
-    const userFilter = el.querySelector('#db-user-filter');
-    if (userFilter) {
-      userFilter.addEventListener('change', () => {
-        _state.userFilter = userFilter.value;
-        _updateTasksTable(admin);
+    /* ── custom employee picker ── */
+    const empTrigger  = el.querySelector('#db-emp-trigger');
+    const empDropdown = el.querySelector('#db-emp-dropdown');
+    const empSearch   = el.querySelector('#db-emp-search');
+    const empLabel    = el.querySelector('#db-emp-label');
+    const empList     = el.querySelector('#db-emp-list');
+
+    async function setEmpFilter(val, label) {
+      _state.userFilter = val;
+      if (empLabel) empLabel.textContent = label.length > 28 ? label.slice(0,28)+'…' : label;
+      if (empDropdown) empDropdown.style.display = 'none';
+      /* highlight selected */
+      if (empList) empList.querySelectorAll('.db-emp-opt').forEach(o => {
+        o.style.background = o.dataset.empVal === val ? '#f0f9ff' : '';
+        o.style.fontWeight = o.dataset.empVal === val ? '700' : '';
+      });
+      /* re-fetch from server with doer filter */
+      try {
+        const url = val === 'All' ? '/api/dashboard' : `/api/dashboard?doer=${encodeURIComponent(val)}`;
+        const newData = await Utils.apiFetch(url);
+        if (newData) {
+          _state.data = newData;
+          /* update stat cards */
+          const statTotal     = el.querySelector('#db-stat-total');
+          const statCompleted = el.querySelector('#db-stat-completed');
+          const statPending   = el.querySelector('#db-stat-pending');
+          const statUpcoming  = el.querySelector('#db-stat-upcoming');
+          const statRevised   = el.querySelector('#db-stat-revised');
+          if (statTotal)     statTotal.textContent     = newData.total;
+          if (statCompleted) statCompleted.textContent = newData.completed;
+          if (statPending)   statPending.textContent   = newData.pending || newData.pendingTasks.length;
+          if (statUpcoming)  statUpcoming.textContent  = newData.upcoming || 0;
+          if (statRevised) {
+            statRevised.textContent = newData.revised > 0 ? `+ ${newData.revised} revised` : '';
+            statRevised.style.display = newData.revised > 0 ? '' : 'none';
+          }
+          /* update pie chart */
+          const pieEl = el.querySelector('#db-pie-container');
+          if (pieEl) pieEl.innerHTML = renderPieSVG(newData.completed, newData.pending || newData.pendingTasks.length, newData.revised, newData.upcoming || 0);
+        }
+      } catch(e) { /* fallback to client filter */ }
+      _updateTasksTable(admin);
+    }
+
+    if (empTrigger) {
+      empTrigger.addEventListener('click', e => {
+        e.stopPropagation();
+        const open = empDropdown.style.display === 'block';
+        empDropdown.style.display = open ? 'none' : 'block';
+        if (!open && empSearch) { empSearch.value = ''; empSearch.focus(); _filterEmpList(''); }
       });
     }
 
+    function _filterEmpList(q) {
+      if (!empList) return;
+      empList.querySelectorAll('.db-emp-opt').forEach(o => {
+        const label = (o.dataset.empLabel || o.textContent).toLowerCase();
+        o.style.display = (!q || label.includes(q.toLowerCase())) ? '' : 'none';
+      });
+    }
+
+    if (empSearch) empSearch.addEventListener('input', () => _filterEmpList(empSearch.value));
+
+    if (empList) {
+      empList.addEventListener('click', e => {
+        const opt = e.target.closest('.db-emp-opt');
+        if (!opt) return;
+        setEmpFilter(opt.dataset.empVal, opt.dataset.empLabel || opt.textContent.trim());
+      });
+    }
+
+    /* close on outside click */
+    document.addEventListener('click', function _outsideClose(e) {
+      const picker = el.querySelector('#db-emp-picker');
+      if (picker && !picker.contains(e.target)) {
+        if (empDropdown) empDropdown.style.display = 'none';
+      }
+    });
+
+    /* hover style for options */
+    if (empList) {
+      empList.addEventListener('mouseover', e => { const o = e.target.closest('.db-emp-opt'); if (o && o.dataset.empVal !== _state.userFilter) o.style.background = '#f8fafc'; });
+      empList.addEventListener('mouseout',  e => { const o = e.target.closest('.db-emp-opt'); if (o && o.dataset.empVal !== _state.userFilter) o.style.background = ''; });
+    }
+
     /* ── delegate modal ── */
+    function resetDelegateForm() {
+      ['#del-doer','#del-due','#del-priority','#del-approval','#del-client','#del-client-text','#del-desc','#del-url','#del-remarks'].forEach(id => {
+        const f = el.querySelector(id);
+        if (!f) return;
+        if (f.tagName === 'SELECT') f.selectedIndex = 0;
+        else f.value = id === '#del-due' ? todayISO() : '';
+      });
+      const txt = el.querySelector('#del-client-text');
+      if (txt) txt.style.display = 'none';
+      const chk = el.querySelector('#del-doer-date');
+      if (chk) chk.checked = false;
+      const err = el.querySelector('#del-error');
+      if (err) { err.textContent = ''; err.style.display = 'none'; }
+    }
     const btnDelegate = el.querySelector('#db-btn-delegate');
-    if (btnDelegate) btnDelegate.addEventListener('click', () => showModal('modal-delegate'));
+    if (btnDelegate) btnDelegate.addEventListener('click', () => { resetDelegateForm(); showModal('modal-delegate'); });
     el.querySelector('#modal-delegate-close')?.addEventListener('click', () => hideModal('modal-delegate'));
     el.querySelector('#modal-delegate-cancel')?.addEventListener('click', () => hideModal('modal-delegate'));
     el.querySelector('#modal-delegate')?.addEventListener('click', () => hideModal('modal-delegate'));
-    el.querySelector('#modal-delegate-submit')?.addEventListener('click', async () => {
-      const desc     = el.querySelector('#del-desc')?.value.trim();
-      const doerSel  = el.querySelector('#del-doer');
-      const doerId   = doerSel?.value;
-      const doerName = doerSel?.selectedOptions[0]?.dataset.name || '';
-      const dueDate  = el.querySelector('#del-due')?.value;
-      const priority = el.querySelector('#del-priority')?.value || 'Low';
-      const client   = el.querySelector('#del-client')?.value.trim();
-      const url      = el.querySelector('#del-url')?.value.trim();
-      const remarks  = el.querySelector('#del-remarks')?.value.trim();
-      const errEl    = el.querySelector('#del-error');
+    /* client select → show text input if "Other" chosen */
+    el.querySelector('#del-client')?.addEventListener('change', function() {
+      const txt = el.querySelector('#del-client-text');
+      if (txt) txt.style.display = this.value === '__other__' ? 'block' : 'none';
+    });
 
-      if (!desc)    { if (errEl) { errEl.textContent = 'Description is required.'; errEl.style.display = 'block'; } return; }
-      if (!doerId)  { if (errEl) { errEl.textContent = 'Please select a doer.';     errEl.style.display = 'block'; } return; }
-      if (!dueDate) { if (errEl) { errEl.textContent = 'Due date is required.';     errEl.style.display = 'block'; } return; }
+    el.querySelector('#modal-delegate-submit')?.addEventListener('click', async () => {
+      const desc      = el.querySelector('#del-desc')?.value.trim();
+      const doerSel   = el.querySelector('#del-doer');
+      const doerId    = doerSel?.value;
+      const doerName  = doerSel?.selectedOptions[0]?.dataset.name || '';
+      const dueDate   = el.querySelector('#del-due')?.value;
+      const priority  = el.querySelector('#del-priority')?.value || 'Low';
+      const approval  = el.querySelector('#del-approval')?.value || 'No Approval';
+      const clientSel = el.querySelector('#del-client')?.value;
+      const client    = clientSel === '__other__' ? (el.querySelector('#del-client-text')?.value.trim() || '') : (clientSel || '');
+      const url       = el.querySelector('#del-url')?.value.trim();
+      const remarks   = el.querySelector('#del-remarks')?.value.trim();
+      const errEl     = el.querySelector('#del-error');
+
+      if (!doerId)  { if (errEl) { errEl.textContent = 'Please select a doer.'; errEl.style.display = 'block'; } return; }
+      if (!dueDate) { if (errEl) { errEl.textContent = 'Due date is required.';  errEl.style.display = 'block'; } return; }
       if (errEl) errEl.style.display = 'none';
 
       const submitBtn = el.querySelector('#modal-delegate-submit');
-      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Adding…'; }
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Assigning…'; }
 
       try {
         await Utils.apiFetch('/api/delegations', {
           method: 'POST',
           body: JSON.stringify({
-            description: desc,
-            doerId,
-            doerName,
+            description: desc || '',
+            doerId, doerName,
             delegatedBy: window.currentUser?.id,
-            dueDate,
-            priority,
+            dueDate, priority, approval,
             client: client || '',
-            url:    url || '',
+            url: url || '',
             remarks: remarks || '',
           }),
         });
         hideModal('modal-delegate');
+        resetDelegateForm();
         Utils.showToast('Task delegated successfully!');
         await _refresh(admin);
       } catch (err) {
         if (errEl) { errEl.textContent = err.message || 'Failed to add task.'; errEl.style.display = 'block'; }
       } finally {
-        if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> Add Task'; }
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Assign'; }
       }
     });
 
+    /* CSV bulk upload */
+    el.querySelector('#del-csv-upload')?.addEventListener('click', async () => {
+      const fileInput = el.querySelector('#del-csv-file');
+      const file = fileInput?.files?.[0];
+      if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
+      const text = await file.text();
+      const lines = text.trim().split('\n').filter(Boolean);
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+      const rows = lines.slice(1);
+      let ok = 0, fail = 0;
+      for (const row of rows) {
+        const cols = row.split(',').map(c => c.trim());
+        const obj = {};
+        headers.forEach((h, i) => obj[h] = cols[i] || '');
+        try {
+          const allUsers = _state.users || [];
+          const doer = allUsers.find(u => u.email === obj['doer_email']);
+          if (!doer) { fail++; continue; }
+          await Utils.apiFetch('/api/delegations', {
+            method: 'POST',
+            body: JSON.stringify({
+              description: obj['description'] || '',
+              doerId: doer.id, doerName: doer.name,
+              delegatedBy: window.currentUser?.id,
+              dueDate: obj['due_date'] || todayISO(),
+              priority: obj['priority'] || 'Low',
+              approval: obj['approval'] === 'yes' ? 'Approval Required' : 'No Approval',
+              client: obj['client_name'] || '',
+              remarks: obj['remarks'] || '',
+              url: '',
+            }),
+          });
+          ok++;
+        } catch { fail++; }
+      }
+      hideModal('modal-delegate');
+      Utils.showToast(`${ok} tasks uploaded${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
+      await _refresh(admin);
+    });
+
     /* ── checklist modal ── */
+    function resetChecklistForm() {
+      ['#chk-assigned','#chk-frequency','#chk-start','#chk-end','#chk-client','#chk-task','#chk-remarks'].forEach(id => {
+        const f = el.querySelector(id);
+        if (!f) return;
+        if (f.tagName === 'SELECT') f.selectedIndex = 0;
+        else f.value = id === '#chk-start' ? todayISO() : '';
+      });
+      const err = el.querySelector('#chk-error');
+      if (err) { err.textContent = ''; err.style.display = 'none'; }
+      const csvFile = el.querySelector('#chk-csv-file');
+      if (csvFile) csvFile.value = '';
+    }
     const btnChecklist = el.querySelector('#db-btn-checklist');
-    if (btnChecklist) btnChecklist.addEventListener('click', () => showModal('modal-checklist'));
+    if (btnChecklist) btnChecklist.addEventListener('click', () => { resetChecklistForm(); showModal('modal-checklist'); });
     el.querySelector('#modal-checklist-close')?.addEventListener('click', () => hideModal('modal-checklist'));
     el.querySelector('#modal-checklist-cancel')?.addEventListener('click', () => hideModal('modal-checklist'));
     el.querySelector('#modal-checklist')?.addEventListener('click', () => hideModal('modal-checklist'));
     el.querySelector('#modal-checklist-submit')?.addEventListener('click', async () => {
-      const task      = el.querySelector('#chk-task')?.value.trim();
-      const assigned  = el.querySelector('#chk-assigned')?.value.trim();
-      const frequency = el.querySelector('#chk-frequency')?.value || 'Daily';
-      const errEl     = el.querySelector('#chk-error');
+      const task       = el.querySelector('#chk-task')?.value.trim();
+      const userSel    = el.querySelector('#chk-assigned');
+      const userId     = userSel?.value;
+      const userName   = userSel?.selectedOptions[0]?.dataset.name || '';
+      const frequency  = el.querySelector('#chk-frequency')?.value || 'daily';
+      const startDate  = el.querySelector('#chk-start')?.value || todayISO();
+      const endDate    = el.querySelector('#chk-end')?.value || '';
+      const client     = el.querySelector('#chk-client')?.value || '';
+      const remarks    = el.querySelector('#chk-remarks')?.value.trim() || '';
+      const errEl      = el.querySelector('#chk-error');
 
-      if (!task) { if (errEl) { errEl.textContent = 'Task is required.'; errEl.style.display = 'block'; } return; }
+      if (!task)   { if (errEl) { errEl.textContent = 'Task name is required.'; errEl.style.display = 'block'; } return; }
+      if (!userId) { if (errEl) { errEl.textContent = 'Please select an employee.'; errEl.style.display = 'block'; } return; }
       if (errEl) errEl.style.display = 'none';
 
       const submitBtn = el.querySelector('#modal-checklist-submit');
-      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Adding…'; }
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Generating…'; }
 
       try {
         await Utils.apiFetch('/api/masters', {
           method: 'POST',
-          body: JSON.stringify({ task, assignedTo: assigned || '', frequency }),
+          body: JSON.stringify({ task, assignedTo: userName, frequency, startDate, endDate: endDate || null, client, remarks }),
         });
         hideModal('modal-checklist');
-        Utils.showToast('Checklist task added!');
+        Utils.showToast('Checklist tasks generated!');
         await _refresh(admin);
       } catch (err) {
-        if (errEl) { errEl.textContent = err.message || 'Failed to add checklist.'; errEl.style.display = 'block'; }
+        if (errEl) { errEl.textContent = err.message || 'Failed to generate tasks.'; errEl.style.display = 'block'; }
       } finally {
-        if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> Add Checklist'; }
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Generate Tasks'; }
       }
+    });
+
+    /* checklist CSV bulk upload */
+    el.querySelector('#chk-csv-upload')?.addEventListener('click', async () => {
+      const fileInput = el.querySelector('#chk-csv-file');
+      const file = fileInput?.files?.[0];
+      if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
+      const text = await file.text();
+      const lines = text.trim().split('\n').filter(Boolean);
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+      const rows = lines.slice(1);
+      let ok = 0, fail = 0;
+      for (const row of rows) {
+        const cols = row.split(',').map(c => c.trim());
+        const obj = {};
+        headers.forEach((h, i) => obj[h] = cols[i] || '');
+        try {
+          const allUsers = _state.users || [];
+          const user = allUsers.find(u => u.email === obj['user_email']);
+          if (!user || !obj['description']) { fail++; continue; }
+          await Utils.apiFetch('/api/masters', {
+            method: 'POST',
+            body: JSON.stringify({
+              task: obj['description'],
+              assignedTo: user.id,
+              assignedEmail: user.email,
+              frequency: obj['frequency'] || 'daily',
+              startDate: obj['start_date'] || todayISO(),
+              endDate: null,
+              client: '',
+              remarks: obj['remarks'] || '',
+            }),
+          });
+          ok++;
+        } catch { fail++; }
+      }
+      hideModal('modal-checklist');
+      Utils.showToast(`${ok} checklist(s) created${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
+      await _refresh(admin);
     });
 
     /* ── holidays modal ── */
@@ -890,11 +1283,37 @@ window.Pages.dashboard = (function () {
       } catch (err) {
         if (errEl) { errEl.textContent = err.message || 'Failed to add holiday.'; errEl.style.display = 'block'; }
       } finally {
-        if (addBtn) {
-          addBtn.disabled = false;
-          addBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> Add';
-        }
+        if (addBtn) { addBtn.disabled = false; addBtn.innerHTML = '+ Add Holiday'; }
       }
+    });
+
+    /* holiday CSV bulk upload */
+    el.querySelector('#hol-csv-upload')?.addEventListener('click', async () => {
+      const fileInput = el.querySelector('#hol-csv-file');
+      const file = fileInput?.files?.[0];
+      if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
+      const text = await file.text();
+      const lines = text.trim().split('\n').filter(Boolean);
+      const dataLines = lines[0].toLowerCase().includes('date') ? lines.slice(1) : lines;
+      let ok = 0, fail = 0;
+      for (const line of dataLines) {
+        const [rawDate, ...nameParts] = line.split(',');
+        const name = nameParts.join(',').trim();
+        if (!rawDate || !name) { fail++; continue; }
+        let date = rawDate.trim();
+        if (/^\d{2}-\d{2}-\d{4}$/.test(date)) {
+          const [d, m, y] = date.split('-');
+          date = `${y}-${m}-${d}`;
+        }
+        try {
+          const result = await Utils.apiFetch('/api/holidays', { method: 'POST', body: JSON.stringify({ date, name }) });
+          if (result?.id) _state.holidays.push({ id: result.id, date, name, type: 'Holiday' });
+          ok++;
+        } catch { fail++; }
+      }
+      if (fileInput) fileInput.value = '';
+      _renderHolidayList();
+      Utils.showToast(`${ok} holiday(s) added${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
     });
 
     /* ── revise modal close ── */
@@ -934,6 +1353,61 @@ window.Pages.dashboard = (function () {
         alert(err.message || 'Failed to update task.');
       } finally {
         if (confirmBtn) { confirmBtn.disabled = false; }
+      }
+    });
+
+    /* ── transfer modal ── */
+    const btnTransfer = el.querySelector('#db-btn-transfer');
+    if (btnTransfer) btnTransfer.addEventListener('click', () => {
+      const trFrom = el.querySelector('#tr-from');
+      const trTo   = el.querySelector('#tr-to');
+      const trAll  = el.querySelector('#tr-all');
+      if (trFrom) trFrom.selectedIndex = 0;
+      if (trTo)   trTo.selectedIndex   = 0;
+      if (trAll)  trAll.checked        = false;
+      const err = el.querySelector('#tr-error');
+      if (err) { err.textContent = ''; err.style.display = 'none'; }
+      showModal('modal-transfer');
+    });
+    el.querySelector('#modal-transfer-close')?.addEventListener('click',  () => hideModal('modal-transfer'));
+    el.querySelector('#modal-transfer-cancel')?.addEventListener('click', () => hideModal('modal-transfer'));
+    el.querySelector('#modal-transfer')?.addEventListener('click',        () => hideModal('modal-transfer'));
+
+    el.querySelector('#modal-transfer-submit')?.addEventListener('click', async () => {
+      const fromSel  = el.querySelector('#tr-from');
+      const toSel    = el.querySelector('#tr-to');
+      const transferAll = el.querySelector('#tr-all')?.checked;
+      const fromId   = fromSel?.value;
+      const fromName = fromSel?.selectedOptions[0]?.dataset.name || '';
+      const toId     = toSel?.value;
+      const toName   = toSel?.selectedOptions[0]?.dataset.name || '';
+      const errEl    = el.querySelector('#tr-error');
+
+      if (!toId) { if (errEl) { errEl.textContent = 'Please select the "To" employee.'; errEl.style.display = 'block'; } return; }
+      if (!transferAll && !fromId) { if (errEl) { errEl.textContent = 'Please select the "From" employee or check Transfer All.'; errEl.style.display = 'block'; } return; }
+      if (errEl) errEl.style.display = 'none';
+
+      const submitBtn = el.querySelector('#modal-transfer-submit');
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Transferring…'; }
+
+      try {
+        await Utils.apiFetch('/api/delegations', {
+          method: 'PATCH',
+          body: JSON.stringify({
+            action: 'transfer',
+            fromDoer: fromName,
+            toDoer: toName,
+            toDoerId: toId,
+            transferAll: transferAll || false,
+          }),
+        });
+        hideModal('modal-transfer');
+        Utils.showToast('Tasks transferred successfully!');
+        await _refresh(admin);
+      } catch (err) {
+        if (errEl) { errEl.textContent = err.message || 'Transfer failed.'; errEl.style.display = 'block'; }
+      } finally {
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg> Transfer'; }
       }
     });
   }
@@ -995,16 +1469,23 @@ window.Pages.dashboard = (function () {
     const wrap = document.getElementById('db-wrap');
     if (!wrap) return;
 
-    const cards = wrap.querySelectorAll('.card');
-    /* find the stat cards by their label text */
-    cards.forEach(card => {
-      const label = card.querySelector('div')?.textContent?.trim().toLowerCase();
-      const valEl = card.querySelectorAll('div')[1];
-      if (!valEl) return;
-      if (label === 'total')     valEl.textContent = admin ? dashData.total : dashData.pendingTasks.length;
-      if (label === 'completed') valEl.textContent = dashData.completed;
-      if (label === 'pending')   valEl.textContent = dashData.pendingTasks.length;
-    });
+    const statPending   = wrap.querySelector('#db-stat-pending');
+    const statCompleted = wrap.querySelector('#db-stat-completed');
+    const statTotal     = wrap.querySelector('#db-stat-total');
+    const statUpcoming  = wrap.querySelector('#db-stat-upcoming');
+    const statRevised   = wrap.querySelector('#db-stat-revised');
+    const statRevisedC  = wrap.querySelector('#db-stat-revised-count');
+    if (statPending)   statPending.textContent   = dashData.pending || dashData.pendingTasks.length;
+    if (statCompleted) statCompleted.textContent = dashData.completed;
+    if (statTotal)     statTotal.textContent     = admin ? dashData.total : dashData.pendingTasks.length;
+    if (statUpcoming)  statUpcoming.textContent  = dashData.upcoming || 0;
+    if (statRevisedC)  statRevisedC.textContent  = dashData.revised || 0;
+    if (statRevised) {
+      statRevised.textContent = dashData.revised > 0 ? `+ ${dashData.revised} revised` : '';
+      statRevised.style.display = dashData.revised > 0 ? '' : 'none';
+    }
+    const pieEl = wrap.querySelector('#db-pie-container');
+    if (pieEl) pieEl.innerHTML = renderPieSVG(dashData.completed, dashData.pending || dashData.pendingTasks.length, dashData.revised, dashData.upcoming || 0);
 
     _updateTasksTable(admin);
   }

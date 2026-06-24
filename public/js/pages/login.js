@@ -9,8 +9,12 @@ window.Pages.login = {
       <style>
         @keyframes loginFloat {
           0%, 100% { transform: translateY(0px) rotate(0deg); }
-          33%       { transform: translateY(-10px) rotate(-1deg); }
-          66%       { transform: translateY(-5px) rotate(1deg); }
+          33%       { transform: translateY(-12px) rotate(-2deg); }
+          66%       { transform: translateY(-6px) rotate(2deg); }
+        }
+        @keyframes loginPulse {
+          0%, 100% { box-shadow: 0 8px 32px rgba(196,113,74,0.25); }
+          50%       { box-shadow: 0 16px 48px rgba(196,113,74,0.45); }
         }
         @keyframes loginFadeSlide {
           from { opacity: 0; transform: translateY(18px); }
@@ -40,11 +44,13 @@ window.Pages.login = {
       </style>
 
       <div style="
+        width: 100%;
         min-height: 100vh;
         display: flex;
         align-items: center;
         justify-content: center;
         padding: 1.5rem;
+        box-sizing: border-box;
         background: radial-gradient(ellipse at 25% 60%, #F5C97A 0%, #FDEBC8 35%, #FDF6ED 65%, #FFFBF5 100%);
       ">
         <div class="login-card" style="width: 100%; max-width: 23rem;">
@@ -60,22 +66,25 @@ window.Pages.login = {
             <!-- Header / Logo area -->
             <div style="text-align: center; margin-bottom: 1.75rem;">
 
-              <!-- TASK MANAGER label -->
-              <div style="
-                font-size: 10px;
-                font-weight: 700;
-                letter-spacing: 0.26em;
-                text-transform: uppercase;
-                color: #C4714A;
-                margin-bottom: 4px;
-              ">Task Manager</div>
-
-              <!-- Dot decoration -->
-              <div style="display: flex; justify-content: center; gap: 4px; margin-bottom: 1.25rem;">
-                <span style="width:5px;height:5px;border-radius:50%;background:#F5D6C4;display:inline-block;"></span>
-                <span style="width:5px;height:5px;border-radius:50%;background:#C4714A;display:inline-block;"></span>
-                <span style="width:5px;height:5px;border-radius:50%;background:#F5D6C4;display:inline-block;"></span>
+              <!-- Animated brand logo -->
+              <div style="display:flex;justify-content:center;margin-bottom:14px;">
+                <div style="animation: loginFloat 3.5s ease-in-out infinite;">
+                  <img src="/logo.png" alt="Logo"
+                    style="width:72px;height:72px;border-radius:18px;object-fit:contain;box-shadow:0 8px 32px rgba(196,113,74,0.3);"
+                    onerror="this.style.display='none';document.getElementById('login-fallback-icon').style.display='flex';"
+                  />
+                  <div id="login-fallback-icon" style="display:none;width:72px;height:72px;border-radius:18px;background:linear-gradient(135deg,#C4714A,#D4895A);align-items:center;justify-content:center;box-shadow:0 8px 32px rgba(196,113,74,0.3);">
+                    <svg width="40" height="40" viewBox="0 0 28 28" fill="none">
+                      <path d="M7 20V10l7-4 7 4v10" stroke="rgba(255,255,255,0.8)" stroke-width="1.8" stroke-linejoin="round"/>
+                      <path d="M11 20v-5h6v5" stroke="rgba(255,255,255,0.8)" stroke-width="1.8" stroke-linejoin="round"/>
+                      <path d="M4 12l10-6 10 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                </div>
               </div>
+
+              <!-- Brand name -->
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:#C4714A;margin-bottom:8px;">Lallubhai Amichand</div>
 
               <h1 style="font-size: 1.35rem; font-weight: 700; color: #1e293b; margin: 0 0 4px;">
                 Welcome back &#x1F44B;
@@ -216,7 +225,7 @@ window.Pages.login = {
                 margin-bottom: 1rem;
               "></div>
               <p style="font-size: 11px; color: #94a3b8; margin: 0;">
-                <span style="color: #C4714A; font-weight: 600; letter-spacing: 0.05em;">India Automotive Task Manager</span>
+                <span style="color: #C4714A; font-weight: 600; letter-spacing: 0.05em;">Lallubhai Amichand</span>
                 <span style="margin: 0 6px; color: #cbd5e1;">&middot;</span>
                 <span style="color: #94a3b8;">Grow Your Business</span>
               </p>

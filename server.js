@@ -2,6 +2,7 @@
 require('dotenv').config({ path: '.env.local' });
 const express = require('express');
 const session = require('express-session');
+const FileStore = require('session-file-store')(session);
 const bcrypt = require('bcryptjs');
 const path = require('path');
 
@@ -140,6 +141,7 @@ async function seedIfEmpty() {
 }
 
 async function ensureSchema() {
+  if (!USE_DB) return; // JSON store mode — no schema needed
   if (g.__pg_schema_ready) return g.__pg_schema_ready;
   g.__pg_schema_ready = (async () => {
     for (const stmt of SCHEMA) await pool.query(stmt);
@@ -302,28 +304,34 @@ async function writeStoreDb(data) {
 
 async function writeStore(data) { return USE_DB ? writeStoreDb(data) : writeStoreJson(data); }
 
-function computeDashboard(store, filter='all') {
-  let total=0, completed=0, pending=0, revised=0;
+function computeDashboard(store, filter='all', doerFilter='') {
+  let total=0, completed=0, pending=0, revised=0, upcoming=0;
   const items=[];
-  const now=new Date();
+  const now=new Date(); now.setHours(0,0,0,0);
+  const df = doerFilter ? doerFilter.toLowerCase() : '';
   if (filter==='all'||filter==='delegation') {
     (store.delegations||[]).forEach(d => {
+      if (df && (d.doer||'').toLowerCase() !== df) return;
       total++;
       if (d.status==='done') { completed++; }
       else {
         pending++;
         if (d.status==='revise'||d.status==='revise_requested') revised++;
-        items.push({ id:d.id, doerId:d.doerId, type:'Delegation', description:d.description, doer:d.doer, date:d.dueDate||d.due_date, client:d.client||'-', overdue:new Date(d.dueDate||d.due_date)<now, status:d.status||'pending', priority:d.priority||'Low', url:d.url||'', remarks:d.remarks||'', transferredBy:d.transferredBy||null, transferredFrom:d.transferredFrom||null, createdAt:d.createdAt||d.created_at });
+        const due = new Date(d.dueDate||d.due_date); due.setHours(0,0,0,0);
+        const isOverdue = due < now;
+        if (due > now) upcoming++;
+        items.push({ id:d.id, doerId:d.doerId, type:'Delegation', description:d.description, doer:d.doer, date:d.dueDate||d.due_date, client:d.client||'-', overdue:isOverdue, status:d.status||'pending', priority:d.priority||'Low', url:d.url||'', remarks:d.remarks||'', transferredBy:d.transferredBy||null, transferredFrom:d.transferredFrom||null, createdAt:d.createdAt||d.created_at });
       }
     });
   }
   if (filter==='all'||filter==='checklist') {
     (store.masters||[]).forEach(m => {
+      if (df && (m.assignedTo||'').toLowerCase() !== df) return;
       total++; pending++;
       items.push({ id:m.id, doerId:m.doerId||null, type:'Checklist', description:m.task, doer:m.assignedTo, date:now.toISOString(), client:'-', overdue:false, status:'pending', createdAt:m.createdAt||m.created_at });
     });
   }
-  return { total, completed, pending, revised, pendingTasks:items.sort((a,b)=>new Date(b.createdAt||b.date)-new Date(a.createdAt||a.date)).slice(0,50) };
+  return { total, completed, pending, revised, upcoming, pendingTasks:items.sort((a,b)=>new Date(b.createdAt||b.date)-new Date(a.createdAt||a.date)).slice(0,200) };
 }
 
 function buildPlannedSteps(startDate=new Date()) {
@@ -391,6 +399,12 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(session({
+  store: new FileStore({
+    path: path.join(__dirname, 'sessions'),
+    ttl: 30 * 24 * 60 * 60,
+    retries: 1,
+    logFn: () => {},
+  }),
   secret: process.env.NEXTAUTH_SECRET || 'fallback-secret-change-me',
   resave: false,
   saveUninitialized: false,
@@ -497,14 +511,44 @@ app.get('/api/auth/session', (req, res) => {
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 app.get('/api/dashboard', requireAuth, async (req, res) => {
   const store = await readStore();
-  return res.json(computeDashboard(store));
+  const doer = req.query.doer || '';
+  return res.json(computeDashboard(store, 'all', doer));
 });
 
 // ── Delegations ───────────────────────────────────────────────────────────────
 app.get('/api/delegations', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    const rows = await q(`SELECT id, description, doer_id AS "doerId", doer, delegated_by AS "delegatedBy", due_date AS "dueDate", client, status, type, priority, approval, url, remarks, created_at AS "createdAt", completed_at AS "completedAt" FROM delegations ORDER BY created_at DESC`);
+    const { filter, myRevise } = req.query;
+    const userId = req.session?.user?.id;
+    const userName = req.session?.user?.name || '';
+
+    if (!USE_DB) {
+      const store = await readStore();
+      let rows = (store.delegations || []).map(d => ({
+        id: d.id, description: d.description, doerId: d.doerId, doer: d.doer,
+        delegatedBy: d.delegatedBy, dueDate: d.dueDate || d.due_date, client: d.client || '',
+        status: d.status, type: d.type, priority: d.priority || 'Low',
+        approval: d.approval || 'No Approval', url: d.url || '', remarks: d.remarks || '',
+        createdAt: d.createdAt, completedAt: d.completedAt || null,
+        transferredBy: d.transferredBy || null, transferredFrom: d.transferredFrom || null,
+      }));
+      if (filter === 'revise_requested') rows = rows.filter(d => d.status === 'revise_requested');
+      else if (filter === 'approval_required') rows = rows.filter(d => d.approval === 'Approval Required' && d.status === 'pending');
+      else if (myRevise === 'true') rows = rows.filter(d => (d.doerId === userId || d.doer === userName) && d.status === 'revise');
+      return res.json(rows);
+    }
+
+    let sqlWhere = '';
+    const params = [];
+    if (filter === 'revise_requested') { sqlWhere = `WHERE status='revise_requested'`; }
+    else if (filter === 'approval_required') { sqlWhere = `WHERE approval='Approval Required' AND status='pending'`; }
+    else if (myRevise === 'true') {
+      sqlWhere = `WHERE (doer_id=$1 OR doer=$2) AND status='revise'`;
+      params.push(userId, userName);
+    }
+
+    const rows = await q(`SELECT id, description, doer_id AS "doerId", doer, delegated_by AS "delegatedBy", due_date AS "dueDate", client, status, type, priority, approval, url, remarks, transferred_by AS "transferredBy", transferred_from AS "transferredFrom", created_at AS "createdAt", completed_at AS "completedAt" FROM delegations ${sqlWhere} ORDER BY created_at DESC`, params);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });

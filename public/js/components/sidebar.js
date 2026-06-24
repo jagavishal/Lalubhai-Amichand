@@ -141,8 +141,14 @@ window.Sidebar = {
 
       <!-- Brand -->
       <div style="height:56px;padding:0 12px;display:flex;align-items:center;gap:10px;flex-shrink:0;border-bottom:1px solid #1c1c1f;">
+        <img src="/logo.png" alt="Logo" width="32" height="32" style="flex-shrink:0;border-radius:7px;object-fit:contain;background:#fff;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
+        <svg width="32" height="32" viewBox="0 0 28 28" fill="none" style="flex-shrink:0;display:none;">
+          <rect width="28" height="28" rx="7" fill="#C4714A"/>
+          <path d="M7 20V10l7-4 7 4v10" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M11 20v-5h6v5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
         <div class="sb-brand-name" style="opacity:0;transition:opacity 0.2s;white-space:nowrap;overflow:hidden;">
-          <div style="font-size:13px;font-weight:600;letter-spacing:-0.02em;color:#f4f4f5;">India Automotive</div>
+          <div style="font-size:13px;font-weight:600;letter-spacing:-0.02em;color:#f4f4f5;">Lallubhai Amichand</div>
         </div>
       </div>
 
@@ -213,6 +219,40 @@ window.Sidebar = {
     });
   },
 
+  _syncBottomNav() {
+    const activeRoute = (window.location.hash || '').replace('#', '') || 'dashboard';
+    document.querySelectorAll('#bottom-nav [data-route]').forEach(el => {
+      el.classList.toggle('active', el.dataset.route === activeRoute);
+    });
+  },
+
+  _renderBottomNav(user, pendingCount) {
+    const nav = document.getElementById('bottom-nav');
+    if (!nav) return;
+    const isAdmin = this._isAdmin(user);
+    const activeRoute = (window.location.hash || '').replace('#', '') || 'dashboard';
+
+    const items = [
+      { route: 'dashboard', label: 'Dashboard', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>' },
+      { route: 'all-tasks', label: 'Tasks',     icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="m9 14 2 2 4-4"/></svg>' },
+      ...(isAdmin ? [{ route: 'fms', label: 'FMS', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' }] : []),
+      { route: 'approvals', label: 'Approvals', badge: pendingCount, icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>' },
+      ...(isAdmin ? [{ route: 'users', label: 'Users', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>' }] : []),
+      ...(isAdmin ? [{ route: 'mis', label: 'MIS', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-6"/></svg>' }] : []),
+      { route: 'profile', label: 'Profile', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' },
+    ];
+
+    nav.innerHTML = items.map(item => {
+      const active = activeRoute === item.route;
+      const badge = item.badge > 0 ? `<span class="bn-badge">${item.badge}</span>` : '';
+      return `<a class="bn-item${active ? ' active' : ''}" data-route="${item.route}" href="#${item.route}" onclick="Router.navigate('${item.route}');return false;">
+        ${badge}
+        ${item.icon}
+        <span>${item.label}</span>
+      </a>`;
+    }).join('');
+  },
+
   async render(user) {
     this._user = user;
     const el = document.getElementById('sidebar');
@@ -227,6 +267,7 @@ window.Sidebar = {
       box-shadow:4px 0 24px rgba(0,0,0,0.5);
       display:flex;flex-direction:column;
       z-index:40;overflow:hidden;
+      transition:width 0.2s ease-out;
     `;
 
     const isAdmin = this._isAdmin(user);
@@ -235,8 +276,9 @@ window.Sidebar = {
     this._pendingCount = pendingCount;
 
     el.innerHTML = this._buildHTML(user, pendingCount);
+    this._renderBottomNav(user, pendingCount);
 
     // Keep active state in sync with hash navigation
-    window.addEventListener('hashchange', () => this._syncActive());
+    window.addEventListener('hashchange', () => { this._syncActive(); this._syncBottomNav(); });
   },
 };
