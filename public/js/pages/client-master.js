@@ -234,239 +234,250 @@ window.Pages['client-master'] = (() => {
     return _pmEntries.map(function(e,i){ return _pmEntryHtml(e,i); }).join('');
   }
 
-  function _renderPaymentTab() {
-    const thS  = 'padding:11px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;text-align:left;white-space:nowrap;border-bottom:2px solid #f1f5f9;background:#f8fafc;';
-    const dv   = _pmDraft.vendorId ? _list.find(v => String(v.id) === String(_pmDraft.vendorId)) : null;
-    const canAdd = dv && _pmDraft.amount && parseFloat(_pmDraft.amount) > 0;
+  function _pmDetailHtml(v) {
+    if (!v) return '';
+    const thS = 'padding:10px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;text-align:left;white-space:nowrap;border-bottom:2px solid #f1f5f9;background:#f8fafc;';
+    const tdS = 'padding:12px 14px;color:#374151;font-size:13px;';
+    const canTick = !!(v && _pmDraft.amount && parseFloat(_pmDraft.amount) > 0);
+    const tickStyle = 'width:32px;height:32px;border:none;border-radius:50%;cursor:'+(canTick?'pointer':'not-allowed')+';'
+      +'background:'+(canTick?'#059669':'#e2e8f0')+';color:'+(canTick?'#fff':'#9ca3af')+';'
+      +'font-size:16px;font-weight:700;line-height:1;transition:background .15s;';
+    return '<div style="margin-top:20px;border-top:1px solid #f1f5f9;padding-top:20px;overflow-x:auto;">'
+      +'<table style="width:100%;border-collapse:collapse;">'
+        +'<thead><tr>'
+          +'<th style="'+thS+'">Name</th>'
+          +'<th style="'+thS+'">Mobile</th>'
+          +'<th style="'+thS+'">Bank Name</th>'
+          +'<th style="'+thS+'">Account Holder</th>'
+          +'<th style="'+thS+'">Account No.</th>'
+          +'<th style="'+thS+'">IFSC Code</th>'
+          +'<th style="'+thS+'">Branch</th>'
+          +'<th style="'+thS+'width:52px;"></th>'
+        +'</tr></thead>'
+        +'<tbody><tr>'
+          +'<td style="'+tdS+'font-weight:600;color:#1e293b;">'+esc(v.name)+'</td>'
+          +'<td style="'+tdS+'">'+esc(v.mobile||v.contact_number||'—')+'</td>'
+          +'<td style="'+tdS+'">'+esc(v.bank_name||'—')+'</td>'
+          +'<td style="'+tdS+'">'+esc(v.account_holder||'—')+'</td>'
+          +'<td style="'+tdS+'font-family:monospace;letter-spacing:.04em;">'+esc(v.account_no||'—')+'</td>'
+          +'<td style="'+tdS+'font-family:monospace;letter-spacing:.06em;">'+esc(v.ifsc_code||'—')+'</td>'
+          +'<td style="'+tdS+'">'+esc(v.branch_name||'—')+'</td>'
+          +'<td style="padding:8px 14px;text-align:center;">'
+            +'<button id="pm-tick-btn" title="Add entry" '+(canTick?'':'disabled')+' style="'+tickStyle+'">&#10003;</button>'
+          +'</td>'
+        +'</tr></tbody>'
+      +'</table>'
+    +'</div>';
+  }
 
-    const preview = dv
-      ? '<div id="pm-vendor-preview" style="margin-top:14px;padding:12px 16px;background:#f0fdf4;border-radius:10px;border:1px solid #bbf7d0;display:flex;gap:24px;flex-wrap:wrap;align-items:center;">'
-          +'<span style="font-size:12px;color:#15803d;"><b>Bank:</b> '+esc(dv.bank_name||'—')+'</span>'
-          +'<span style="font-size:12px;color:#15803d;"><b>Account No:</b> <span style="font-family:monospace;">'+esc(dv.account_no||'—')+'</span></span>'
-          +'<span style="font-size:12px;color:#15803d;"><b>IFSC:</b> <span style="font-family:monospace;">'+esc(dv.ifsc_code||'—')+'</span></span>'
-          +'<span style="font-size:12px;color:#15803d;"><b>Holder:</b> '+esc(dv.account_holder||'—')+'</span>'
-          +'<span style="font-size:12px;color:#15803d;"><b>Branch:</b> '+esc(dv.branch_name||'—')+'</span>'
+  function _pmSavedHtml() {
+    if (!_pmEntries.length) return '';
+    const thS = 'padding:10px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;text-align:left;white-space:nowrap;border-bottom:2px solid #f1f5f9;background:#f8fafc;';
+    return '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #f1f5f9;background:#fafafa;">'
+        +'<span style="font-size:13px;font-weight:700;color:#1e293b;">Added Entries '
+          +'<span style="color:#94a3b8;font-weight:400;font-size:12px;">('+_pmEntries.length+')</span></span>'
+        +'<div style="display:flex;gap:8px;">'
+          +'<button id="pm-save-btn" style="padding:6px 14px;font-size:12px;font-weight:600;border:1.5px solid #C4714A;border-radius:7px;background:#fff;color:#C4714A;cursor:pointer;">Save</button>'
+          +'<button id="pm-excel-btn" style="padding:6px 14px;font-size:12px;font-weight:600;border:none;border-radius:7px;background:#059669;color:#fff;cursor:pointer;">&#8675; Excel</button>'
         +'</div>'
-      : '<div id="pm-vendor-preview" style="display:none;"></div>';
+      +'</div>'
+      +'<div style="overflow-x:auto;">'
+        +'<table style="width:100%;border-collapse:collapse;">'
+          +'<thead><tr>'
+            +'<th style="'+thS+'text-align:center;width:44px;">#</th>'
+            +'<th style="'+thS+'">Name</th>'
+            +'<th style="'+thS+'">Amount</th>'
+            +'<th style="'+thS+'">Bank Name</th>'
+            +'<th style="'+thS+'">Account Holder</th>'
+            +'<th style="'+thS+'">Account No.</th>'
+            +'<th style="'+thS+'">IFSC Code</th>'
+            +'<th style="'+thS+'">Branch</th>'
+            +'<th style="'+thS+'width:44px;"></th>'
+          +'</tr></thead>'
+          +'<tbody id="pm-entries-tbody">'
+            +_pmEntries.map(function(e,i){ return _pmEntryHtml(e,i); }).join('')
+          +'</tbody>'
+        +'</table>'
+      +'</div>'
+    +'</div>';
+  }
 
+  function _renderPaymentTab() {
+    const dv = _pmDraft.vendorId ? _list.find(v => String(v.id) === String(_pmDraft.vendorId)) : null;
     return '<div style="display:flex;flex-direction:column;gap:16px;">'
-      // ── Input card ──────────────────────────────────────────────
-      +'<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:20px 22px;">'
-        +'<div style="font-size:13px;font-weight:700;color:#1e293b;margin-bottom:16px;">Add Payment Entry</div>'
-        +'<div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;">'
-          +'<div style="flex:1;min-width:240px;">'
+      +'<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:24px;">'
+        +'<div style="display:flex;gap:14px;flex-wrap:wrap;">'
+          +'<div style="flex:1;min-width:220px;">'
             +'<label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:6px;">Vendor Name</label>'
             +'<div style="position:relative;">'
               +'<div id="pm-search-wrap" style="display:flex;align-items:center;gap:8px;border:1.5px solid '+(dv?'#C4714A':'#e2e8f0')+';border-radius:9px;padding:9px 12px;background:#fff;transition:border-color .15s;">'
                 +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
-                +'<input id="pm-vendor-search" type="text" placeholder="Type to search vendor…" autocomplete="off" value="'+esc(dv?dv.name:'')+'" '
+                +'<input id="pm-vendor-search" type="text" placeholder="Search vendor name…" autocomplete="off" value="'+esc(dv?dv.name:'')+'" '
                   +'style="border:none;outline:none;background:transparent;font-size:13px;font-weight:'+(dv?'600':'400')+';color:#1e293b;width:100%;" />'
               +'</div>'
               +'<div id="pm-vendor-dd" style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;min-width:260px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:200;box-shadow:0 8px 28px rgba(0,0,0,.12);max-height:260px;overflow-y:auto;"></div>'
             +'</div>'
           +'</div>'
-          +'<div style="min-width:170px;">'
+          +'<div style="min-width:180px;">'
             +'<label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:6px;">Amount</label>'
-            +'<div style="display:flex;align-items:center;gap:6px;border:1.5px solid #e2e8f0;border-radius:9px;padding:9px 12px;background:#f8fafc;" '
+            +'<div style="display:flex;align-items:center;gap:6px;border:1.5px solid #e2e8f0;border-radius:9px;padding:9px 12px;background:#f8fafc;transition:border-color .15s;" '
               +'onfocusin="this.style.borderColor=\'#C4714A\'" onfocusout="this.style.borderColor=\'#e2e8f0\'">'
               +'<span style="font-size:13px;color:#94a3b8;font-weight:600;">&#x20B9;</span>'
               +'<input id="pm-amount-input" type="number" min="0" step="0.01" placeholder="0.00" value="'+esc(_pmDraft.amount)+'" '
-                +'style="border:none;outline:none;background:transparent;font-size:14px;font-weight:700;color:#1e293b;width:130px;" />'
+                +'style="border:none;outline:none;background:transparent;font-size:14px;font-weight:700;color:#1e293b;width:140px;" />'
             +'</div>'
           +'</div>'
-          +'<button id="pm-add-entry-btn" '+(canAdd?'':'disabled')+' '
-            +'style="width:46px;height:46px;border-radius:10px;border:none;cursor:'+(canAdd?'pointer':'not-allowed')+';flex-shrink:0;'
-            +'background:'+(canAdd?'#059669':'#e2e8f0')+';color:'+(canAdd?'#fff':'#9ca3af')+';'
-            +'display:flex;align-items:center;justify-content:center;transition:all .2s;" title="Add entry">'
-            +'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
-          +'</button>'
         +'</div>'
-        +preview
+        +'<div id="pm-detail">'+_pmDetailHtml(dv)+'</div>'
       +'</div>'
-      // ── Saved entries table ──────────────────────────────────────
-      +'<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">'
-        +'<div style="padding:12px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-          +'<span style="font-size:13px;font-weight:700;color:#1e293b;">Payment Entries</span>'
-          +'<span id="pm-entries-count" style="font-size:11px;color:#94a3b8;">('+_pmEntries.length+' added)</span>'
-          +'<div style="margin-left:auto;display:flex;gap:8px;">'
-            +'<button id="pm-save-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;border-radius:8px;background:#059669;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;">'
-              +'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save'
-            +'</button>'
-            +'<button id="pm-excel-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;border-radius:8px;background:#1d6f42;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;">'
-              +'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="8" y1="9" x2="10" y2="9"/></svg>Excel'
-            +'</button>'
-          +'</div>'
-        +'</div>'
-        +'<div style="overflow-x:auto;">'
-          +'<table style="width:100%;border-collapse:collapse;min-width:860px;">'
-            +'<thead><tr>'
-              +'<th style="'+thS+'width:44px;text-align:center;">S.No.</th>'
-              +'<th style="'+thS+'">Name</th>'
-              +'<th style="'+thS+'">Amount</th>'
-              +'<th style="'+thS+'">Bank Name</th>'
-              +'<th style="'+thS+'">Account Holder</th>'
-              +'<th style="'+thS+'">Account No.</th>'
-              +'<th style="'+thS+'">IFSC Code</th>'
-              +'<th style="'+thS+'">Branch</th>'
-              +'<th style="'+thS+'width:44px;"></th>'
-            +'</tr></thead>'
-            +'<tbody id="pm-entries-tbody">'+_pmEntriesTbody()+'</tbody>'
-          +'</table>'
-        +'</div>'
-      +'</div>'
+      +'<div id="pm-saved">'+_pmSavedHtml()+'</div>'
     +'</div>';
   }
 
-  function _refreshEntriesTable() {
-    const tbody = document.getElementById('pm-entries-tbody');
-    if (tbody) tbody.innerHTML = _pmEntriesTbody();
-    const cnt = document.getElementById('pm-entries-count');
-    if (cnt) cnt.textContent = '('+_pmEntries.length+' added)';
-    _bindEntryTableEvents();
+  function _refreshSaved() {
+    const saved = document.getElementById('pm-saved');
+    if (saved) saved.innerHTML = _pmSavedHtml();
+    _bindSavedEvents();
   }
 
-  function _bindEntryTableEvents() {
+  function _bindSavedEvents() {
     document.querySelectorAll('.pm-del-entry').forEach(function(btn) {
       btn.addEventListener('click', function() {
         const idx = parseInt(btn.dataset.ei);
         if (!isNaN(idx) && idx >= 0 && idx < _pmEntries.length) {
           _pmEntries.splice(idx, 1);
-          _refreshEntriesTable();
+          _refreshSaved();
         }
       });
+    });
+    document.getElementById('pm-save-btn')?.addEventListener('click', function() {
+      try {
+        localStorage.setItem('pm_entries', JSON.stringify(_pmEntries.map(function(e){ return {vendorId:e.vendorId,amount:e.amount}; })));
+        Utils.showToast('Payment entries saved');
+      } catch(err) { Utils.showToast('Failed to save','error'); }
+    });
+    document.getElementById('pm-excel-btn')?.addEventListener('click', function() {
+      const today=new Date(), dd=String(today.getDate()).padStart(2,'0'), mm=String(today.getMonth()+1).padStart(2,'0'), yyyy=today.getFullYear();
+      const dateStr=dd+'/'+mm+'/'+yyyy;
+      function q(s){ return '"'+String(s||'').replace(/"/g,'""')+'"'; }
+      const hdr=['Transaction Type','Beneficiary Code','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Drawee Location in case of Demand Draft','DD Printing Location','Beneficiary Address 1','Beneficiary Address 2','Beneficiary Address 3','Beneficiary Address 4','Beneficiary Address 5','Instruction Reference Number','Customer Reference Number','Payment details 1','Payment details 2','Payment details 3','Payment details 4','Payment details 5','Payment details 6','Payment details 7','Cheque Number','Chq / Trn Date','MICR Number','IFSC Code','Beneficiary Bank Name','Beneficiary Bank Branch Name','Beneficiary email id'];
+      const csvRows=[hdr.join(',')]; var sno=1;
+      _pmEntries.forEach(function(entry) {
+        var v=_list.find(function(x){ return String(x.id)===String(entry.vendorId); });
+        if(!v) return;
+        csvRows.push(['N',sno++,q(v.account_no),parseFloat(entry.amount||0).toFixed(2),q(v.name),'','','','','','','','','','','','','','','','','',dateStr,'',q(v.ifsc_code),q(v.bank_name),q(v.branch_name),''].join(','));
+      });
+      var csv='﻿'+csvRows.join('\r\n');
+      var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+      var url=URL.createObjectURL(blob);
+      var a=document.createElement('a');
+      a.href=url; a.download='neft_payment_'+yyyy+mm+dd+'.csv';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+      Utils.showToast('NEFT payment file downloaded');
     });
   }
 
   function _bindPaymentEvents() {
     const searchInp = document.getElementById('pm-vendor-search');
     if (!searchInp) return;
-    const ddMenu    = document.getElementById('pm-vendor-dd');
-    const amtInp    = document.getElementById('pm-amount-input');
-    const addBtn    = document.getElementById('pm-add-entry-btn');
-    const preview   = document.getElementById('pm-vendor-preview');
-    const wrap      = document.getElementById('pm-search-wrap');
+    const ddMenu = document.getElementById('pm-vendor-dd');
+    const wrap   = document.getElementById('pm-search-wrap');
 
-    function _updateTickBtn() {
-      const dv = _pmDraft.vendorId ? _list.find(x => String(x.id) === String(_pmDraft.vendorId)) : null;
-      const ok = !!(dv && _pmDraft.amount && parseFloat(_pmDraft.amount) > 0);
-      if (!addBtn) return;
-      addBtn.disabled         = !ok;
-      addBtn.style.background = ok ? '#059669' : '#e2e8f0';
-      addBtn.style.color      = ok ? '#fff'    : '#9ca3af';
-      addBtn.style.cursor     = ok ? 'pointer' : 'not-allowed';
+    function _updateTick() {
+      const tickBtn = document.getElementById('pm-tick-btn');
+      if (!tickBtn) return;
+      const canTick = !!(  _pmDraft.vendorId && _pmDraft.amount && parseFloat(_pmDraft.amount) > 0);
+      tickBtn.disabled         = !canTick;
+      tickBtn.style.background = canTick ? '#059669' : '#e2e8f0';
+      tickBtn.style.color      = canTick ? '#fff'    : '#9ca3af';
+      tickBtn.style.cursor     = canTick ? 'pointer' : 'not-allowed';
     }
 
-    function _updatePreview() {
-      if (!preview) return;
-      const dv = _pmDraft.vendorId ? _list.find(x => String(x.id) === String(_pmDraft.vendorId)) : null;
-      if (!dv) { preview.style.display='none'; preview.innerHTML=''; if(wrap) wrap.style.borderColor='#e2e8f0'; return; }
-      if (wrap) wrap.style.borderColor = '#C4714A';
-      preview.style.display    = 'flex';
-      preview.style.marginTop  = '14px';
-      preview.style.padding    = '12px 16px';
-      preview.style.background = '#f0fdf4';
-      preview.style.borderRadius = '10px';
-      preview.style.border     = '1px solid #bbf7d0';
-      preview.style.flexWrap   = 'wrap';
-      preview.style.gap        = '20px';
-      preview.style.alignItems = 'center';
-      preview.innerHTML =
-        '<span style="font-size:12px;color:#15803d;"><b>Bank:</b> '+esc(dv.bank_name||'—')+'</span>'
-        +'<span style="font-size:12px;color:#15803d;"><b>Account No:</b> <span style="font-family:monospace;">'+esc(dv.account_no||'—')+'</span></span>'
-        +'<span style="font-size:12px;color:#15803d;"><b>IFSC:</b> <span style="font-family:monospace;">'+esc(dv.ifsc_code||'—')+'</span></span>'
-        +'<span style="font-size:12px;color:#15803d;"><b>Holder:</b> '+esc(dv.account_holder||'—')+'</span>'
-        +'<span style="font-size:12px;color:#15803d;"><b>Branch:</b> '+esc(dv.branch_name||'—')+'</span>';
+    function _bindTickEvent() {
+      const tickBtn = document.getElementById('pm-tick-btn');
+      if (!tickBtn) return;
+      tickBtn.addEventListener('click', function() {
+        const dv = _pmDraft.vendorId ? _list.find(function(x){ return String(x.id)===String(_pmDraft.vendorId); }) : null;
+        if (!dv || !_pmDraft.amount || parseFloat(_pmDraft.amount) <= 0) return;
+        _pmEntries.push({ vendorId: _pmDraft.vendorId, amount: _pmDraft.amount });
+        _pmDraft = { vendorId: null, amount: '' };
+        searchInp.value = ''; searchInp.style.fontWeight = '400';
+        var amtInp = document.getElementById('pm-amount-input');
+        if (amtInp) amtInp.value = '';
+        if (wrap) wrap.style.borderColor = '#e2e8f0';
+        var detail = document.getElementById('pm-detail');
+        if (detail) detail.innerHTML = '';
+        _refreshSaved();
+        Utils.showToast('Entry added');
+        setTimeout(function(){ searchInp.focus(); }, 80);
+      });
+    }
+
+    function _showDetail() {
+      const detail = document.getElementById('pm-detail');
+      if (!detail) return;
+      const dv = _pmDraft.vendorId ? _list.find(function(x){ return String(x.id)===String(_pmDraft.vendorId); }) : null;
+      detail.innerHTML = _pmDetailHtml(dv);
+      if (wrap) wrap.style.borderColor = dv ? '#C4714A' : '#e2e8f0';
+      _updateTick();
+      _bindTickEvent();
     }
 
     function _buildMenu(q) {
       if (!ddMenu) return;
-      const qt      = q.trim().toLowerCase();
-      const matches = qt ? _list.filter(v => v.name.toLowerCase().includes(qt)||(v.mobile||'').includes(qt)) : _list;
+      var qt      = q.trim().toLowerCase();
+      var matches = qt ? _list.filter(function(v){ return v.name.toLowerCase().includes(qt)||(v.mobile||'').includes(qt); }) : _list;
       if (!matches.length) { ddMenu.innerHTML='<div style="padding:12px 16px;font-size:13px;color:#94a3b8;">No vendors found</div>'; return; }
-      ddMenu.innerHTML = matches.slice(0,50).map(v =>
-        '<div class="pm-dd-opt" data-id="'+v.id+'" style="padding:10px 16px;cursor:pointer;border-bottom:1px solid #f8fafc;">'
+      ddMenu.innerHTML = matches.slice(0,50).map(function(v){
+        return '<div class="pm-dd-opt" data-id="'+v.id+'" style="padding:10px 16px;cursor:pointer;border-bottom:1px solid #f8fafc;">'
           +'<div style="font-size:13px;font-weight:600;color:#1e293b;">'+esc(v.name)+'</div>'
           +(v.mobile ? '<div style="font-size:11px;color:#94a3b8;margin-top:1px;">'+esc(v.mobile)+'</div>' : '')
-        +'</div>'
-      ).join('');
+        +'</div>';
+      }).join('');
       ddMenu.querySelectorAll('.pm-dd-opt').forEach(function(opt) {
         opt.addEventListener('mouseenter', function() { opt.style.background='#f1f5f9'; });
         opt.addEventListener('mouseleave', function() { opt.style.background=''; });
         opt.addEventListener('mousedown', function(e) {
           e.preventDefault();
-          const vendor = _list.find(v => String(v.id) === String(opt.dataset.id));
+          var vendor = _list.find(function(v){ return String(v.id)===String(opt.dataset.id); });
           if (!vendor) return;
-          _pmDraft.vendorId   = vendor.id;
-          searchInp.value     = vendor.name;
+          _pmDraft.vendorId  = vendor.id;
+          searchInp.value    = vendor.name;
           searchInp.style.fontWeight = '600';
           ddMenu.style.display = 'none';
-          _updatePreview();
-          _updateTickBtn();
+          _showDetail();
         });
       });
     }
 
     searchInp.addEventListener('focus', function() { ddMenu.style.display='block'; _buildMenu(searchInp.value); });
     searchInp.addEventListener('input', function() {
-      _pmDraft.vendorId = null; searchInp.style.fontWeight='400';
-      ddMenu.style.display='block'; _buildMenu(searchInp.value);
-      _updatePreview(); _updateTickBtn();
+      _pmDraft.vendorId = null;
+      searchInp.style.fontWeight = '400';
+      ddMenu.style.display = 'block';
+      _buildMenu(searchInp.value);
+      _showDetail();
     });
     searchInp.addEventListener('blur', function() {
       setTimeout(function() {
-        ddMenu.style.display='none';
+        ddMenu.style.display = 'none';
         if (_pmDraft.vendorId) {
-          const v = _list.find(x => String(x.id) === String(_pmDraft.vendorId));
+          var v = _list.find(function(x){ return String(x.id)===String(_pmDraft.vendorId); });
           if (v && searchInp.value !== v.name) searchInp.value = v.name;
-        } else { searchInp.value=''; }
+        } else { searchInp.value = ''; _showDetail(); }
       }, 160);
     });
-    searchInp.addEventListener('keydown', function(e) { if(e.key==='Escape'){ddMenu.style.display='none';searchInp.blur();} });
-
-    amtInp?.addEventListener('input', function(e) { _pmDraft.amount=e.target.value; _updateTickBtn(); });
-
-    addBtn?.addEventListener('click', function() {
-      const dv = _pmDraft.vendorId ? _list.find(x => String(x.id) === String(_pmDraft.vendorId)) : null;
-      if (!dv || !_pmDraft.amount || parseFloat(_pmDraft.amount) <= 0) return;
-      _pmEntries.push({ vendorId: _pmDraft.vendorId, amount: _pmDraft.amount });
-      _pmDraft = { vendorId: null, amount: '' };
-      searchInp.value=''; searchInp.style.fontWeight='400';
-      if (amtInp) amtInp.value='';
-      if (wrap) wrap.style.borderColor='#e2e8f0';
-      _updatePreview(); _updateTickBtn();
-      _refreshEntriesTable();
-      Utils.showToast('Entry added');
-      setTimeout(function(){ searchInp.focus(); }, 80);
+    searchInp.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') { ddMenu.style.display='none'; searchInp.blur(); }
     });
 
-    document.getElementById('pm-save-btn')?.addEventListener('click', function() {
-      try {
-        localStorage.setItem('pm_entries', JSON.stringify(_pmEntries.map(function(e){ return {vendorId:e.vendorId,amount:e.amount}; })));
-        Utils.showToast('Payment entries saved');
-      } catch { Utils.showToast('Failed to save','error'); }
+    document.getElementById('pm-amount-input')?.addEventListener('input', function(e) {
+      _pmDraft.amount = e.target.value;
+      _updateTick();
     });
 
-    document.getElementById('pm-excel-btn')?.addEventListener('click', function() {
-      const today=new Date(), dd=String(today.getDate()).padStart(2,'0'), mm=String(today.getMonth()+1).padStart(2,'0'), yyyy=today.getFullYear();
-      const dateStr=dd+'/'+mm+'/'+yyyy;
-      function q(s){ return '"'+String(s||'').replace(/"/g,'""')+'"'; }
-      const hdr=['Transaction Type','Beneficiary Code','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Drawee Location in case of Demand Draft','DD Printing Location','Beneficiary Address 1','Beneficiary Address 2','Beneficiary Address 3','Beneficiary Address 4','Beneficiary Address 5','Instruction Reference Number','Customer Reference Number','Payment details 1','Payment details 2','Payment details 3','Payment details 4','Payment details 5','Payment details 6','Payment details 7','Cheque Number','Chq / Trn Date','MICR Number','IFSC Code','Beneficiary Bank Name','Beneficiary Bank Branch Name','Beneficiary email id'];
-      const csvRows=[hdr.join(',')]; let sno=1;
-      _pmEntries.forEach(function(entry) {
-        const v=_list.find(x=>String(x.id)===String(entry.vendorId));
-        if(!v) return;
-        csvRows.push(['N',sno++,q(v.account_no),parseFloat(entry.amount||0).toFixed(2),q(v.name),'','','','','','','','','','','','','','','','','',dateStr,'',q(v.ifsc_code),q(v.bank_name),q(v.branch_name),''].join(','));
-      });
-      const csv='﻿'+csvRows.join('\r\n');
-      const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
-      const url=URL.createObjectURL(blob);
-      const a=document.createElement('a');
-      a.href=url; a.download='neft_payment_'+yyyy+mm+dd+'.csv';
-      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-      Utils.showToast('NEFT payment file downloaded');
-    });
-
-    _bindEntryTableEvents();
+    _bindSavedEvents();
   }
 
   /* ── Main render ──────────────────────────────────────────── */
