@@ -427,11 +427,19 @@ window.Pages['client-master'] = (() => {
     function _buildMenu(q) {
       if (!ddMenu) return;
       var qt      = q.trim().toLowerCase();
-      var matches = qt ? _list.filter(function(v){ return v.name.toLowerCase().includes(qt)||(v.mobile||'').includes(qt); }) : _list;
+      var matches = qt ? _list.filter(function(v){ return v.name.toLowerCase().includes(qt)||(v.mobile||'').includes(qt); }) : _list.slice();
       if (!matches.length) { ddMenu.innerHTML='<div style="padding:12px 16px;font-size:13px;color:#94a3b8;">No vendors found</div>'; return; }
+      var usedIds = _pmEntries.map(function(e){ return String(e.vendorId); });
+      matches.sort(function(a, b) {
+        var aUsed = usedIds.includes(String(a.id));
+        var bUsed = usedIds.includes(String(b.id));
+        if (aUsed === bUsed) return 0;
+        return aUsed ? 1 : -1;
+      });
       ddMenu.innerHTML = matches.slice(0,50).map(function(v){
+        var used = usedIds.includes(String(v.id));
         return '<div class="pm-dd-opt" data-id="'+v.id+'" style="padding:10px 16px;cursor:pointer;border-bottom:1px solid #f8fafc;">'
-          +'<div style="font-size:13px;font-weight:600;color:#1e293b;">'+esc(v.name)+'</div>'
+          +'<div style="font-size:13px;font-weight:600;color:'+(used?'#94a3b8':'#1e293b')+';">'+esc(v.name)+'</div>'
           +(v.mobile ? '<div style="font-size:11px;color:#94a3b8;margin-top:1px;">'+esc(v.mobile)+'</div>' : '')
         +'</div>';
       }).join('');
