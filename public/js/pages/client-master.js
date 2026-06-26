@@ -208,10 +208,18 @@ window.Pages['client-master'] = (() => {
   }
 
   /* ── Payment Management table ─────────────────────────────── */
-  function _pmTableRows(rows) {
-    if (!rows.length) return '<tr><td colspan="8" style="padding:32px;text-align:center;color:#94a3b8;font-size:13px;">No vendors found.</td></tr>';
+  function _pmTableRows(rows, showBank) {
+    const cols = showBank ? 8 : 3;
+    if (!rows.length) return '<tr><td colspan="'+cols+'" style="padding:32px;text-align:center;color:#94a3b8;font-size:13px;">No vendors found.</td></tr>';
     return rows.map((v, i) => {
       const amt = _pmAmounts[v.id] || '';
+      const bankCols = showBank
+        ? '<td style="padding:12px 14px;font-size:13px;color:#374151;">'+esc(v.bank_name||'—')+'</td>'
+          +'<td style="padding:12px 14px;font-size:13px;color:#374151;">'+esc(v.account_holder||'—')+'</td>'
+          +'<td style="padding:12px 14px;font-size:12px;color:#374151;font-family:monospace;letter-spacing:.03em;">'+esc(v.account_no||'—')+'</td>'
+          +'<td style="padding:12px 14px;font-size:12px;color:#374151;font-family:monospace;letter-spacing:.06em;">'+esc(v.ifsc_code||'—')+'</td>'
+          +'<td style="padding:12px 14px;font-size:13px;color:#374151;">'+esc(v.branch_name||'—')+'</td>'
+        : '';
       return '<tr style="border-bottom:1px solid #f1f5f9;" onmouseenter="this.style.background=\'#fafafa\'" onmouseleave="this.style.background=\'transparent\'">'
         +'<td style="padding:12px 14px;font-size:13px;color:#94a3b8;text-align:center;">'+(i+1)+'</td>'
         +'<td style="padding:12px 14px;">'
@@ -224,17 +232,14 @@ window.Pages['client-master'] = (() => {
             +'<input class="pm-amount-input" data-id="'+v.id+'" type="number" min="0" step="0.01" placeholder="0.00" value="'+esc(amt)+'" style="border:none;outline:none;background:transparent;font-size:13px;font-weight:600;color:#1e293b;width:100%;min-width:0;" />'
           +'</div>'
         +'</td>'
-        +'<td style="padding:12px 14px;font-size:13px;color:#374151;">'+esc(v.bank_name||'—')+'</td>'
-        +'<td style="padding:12px 14px;font-size:13px;color:#374151;">'+esc(v.account_holder||'—')+'</td>'
-        +'<td style="padding:12px 14px;font-size:12px;color:#374151;font-family:monospace;letter-spacing:.03em;">'+esc(v.account_no||'—')+'</td>'
-        +'<td style="padding:12px 14px;font-size:12px;color:#374151;font-family:monospace;letter-spacing:.06em;">'+esc(v.ifsc_code||'—')+'</td>'
-        +'<td style="padding:12px 14px;font-size:13px;color:#374151;">'+esc(v.branch_name||'—')+'</td>'
+        +bankCols
         +'</tr>';
     }).join('');
   }
 
   function _renderPaymentTab() {
-    const rows = _pmFiltered();
+    const rows     = _pmFiltered();
+    const showBank = _pmSearch.trim().length > 0;
     const thS  = 'padding:11px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;text-align:left;white-space:nowrap;border-bottom:2px solid #f1f5f9;background:#f8fafc;';
 
     return '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">'
@@ -261,13 +266,15 @@ window.Pages['client-master'] = (() => {
             +'<th style="'+thS+'width:48px;text-align:center;">S.No.</th>'
             +'<th style="'+thS+'">Name</th>'
             +'<th style="'+thS+'">Amount</th>'
-            +'<th style="'+thS+'">Bank Name</th>'
-            +'<th style="'+thS+'">Account Holder</th>'
-            +'<th style="'+thS+'">Account No.</th>'
-            +'<th style="'+thS+'">IFSC Code</th>'
-            +'<th style="'+thS+'">Branch</th>'
+            +(showBank
+              ? '<th style="'+thS+'">Bank Name</th>'
+                +'<th style="'+thS+'">Account Holder</th>'
+                +'<th style="'+thS+'">Account No.</th>'
+                +'<th style="'+thS+'">IFSC Code</th>'
+                +'<th style="'+thS+'">Branch</th>'
+              : '')
           +'</tr></thead>'
-          +'<tbody id="pm-tbody">'+_pmTableRows(_pmFiltered())+'</tbody>'
+          +'<tbody id="pm-tbody">'+_pmTableRows(rows, showBank)+'</tbody>'
         +'</table>'
       +'</div>'
     +'</div>';
@@ -343,14 +350,18 @@ window.Pages['client-master'] = (() => {
 
     input.addEventListener('input', e => {
       _pmSearch = e.target.value;
-      // Save current amounts before re-rendering rows
+      // Save amounts before re-render
       document.querySelectorAll('.pm-amount-input').forEach(i => { _pmAmounts[i.dataset.id] = i.value; });
-      const filtered = _pmFiltered();
-      const tbody = document.getElementById('pm-tbody');
-      if (tbody) tbody.innerHTML = _pmTableRows(filtered);
-      const count = document.getElementById('pm-count');
-      if (count) count.textContent = filtered.length + ' of ' + _list.length;
-      _bindAmountInputs();
+      // Full re-render needed because thead changes (bank columns appear/disappear)
+      const content = document.getElementById('cm-tab-content');
+      if (content) {
+        const pos = input.selectionStart;
+        content.innerHTML = _renderPaymentTab();
+        _bindPaymentEvents();
+        // Restore cursor in search input
+        const newInput = document.getElementById('pm-search-input');
+        if (newInput) { newInput.focus(); newInput.setSelectionRange(pos, pos); }
+      }
     });
 
     _bindAmountInputs();
