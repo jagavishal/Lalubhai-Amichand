@@ -238,8 +238,8 @@ window.Pages['client-master'] = (() => {
   }
 
   function _renderPaymentTab() {
-    const rows     = _pmFiltered();
-    const showBank = _pmSearch.trim().length > 0;
+    const hasSearch = _pmSearch.trim().length > 0;
+    const rows      = hasSearch ? _pmFiltered() : [];
     const thS  = 'padding:11px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;text-align:left;white-space:nowrap;border-bottom:2px solid #f1f5f9;background:#f8fafc;';
 
     return '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">'
@@ -248,7 +248,7 @@ window.Pages['client-master'] = (() => {
           +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
           +'<input id="pm-search-input" placeholder="Search vendor name…" value="'+esc(_pmSearch)+'" style="border:none;outline:none;font-size:13px;color:#1e293b;background:transparent;width:100%;" autocomplete="off" />'
         +'</div>'
-        +'<span id="pm-count" style="font-size:11px;color:#94a3b8;flex:1;">'+rows.length+' of '+_list.length+'</span>'
+        +'<span id="pm-count" style="font-size:11px;color:#94a3b8;flex:1;">'+(hasSearch ? rows.length+' of '+_list.length : '')+'</span>'
         +'<div style="display:flex;align-items:center;gap:8px;margin-left:auto;">'
           +'<button id="pm-save-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;border-radius:8px;background:#059669;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;">'
             +'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>'
@@ -260,23 +260,29 @@ window.Pages['client-master'] = (() => {
           +'</button>'
         +'</div>'
       +'</div>'
-      +'<div style="overflow-x:auto;">'
-        +'<table style="width:100%;border-collapse:collapse;min-width:860px;">'
-          +'<thead><tr>'
-            +'<th style="'+thS+'width:48px;text-align:center;">S.No.</th>'
-            +'<th style="'+thS+'">Name</th>'
-            +'<th style="'+thS+'">Amount</th>'
-            +(showBank
-              ? '<th style="'+thS+'">Bank Name</th>'
+      +(hasSearch
+        ? '<div style="overflow-x:auto;">'
+            +'<table style="width:100%;border-collapse:collapse;min-width:860px;">'
+              +'<thead><tr>'
+                +'<th style="'+thS+'width:48px;text-align:center;">S.No.</th>'
+                +'<th style="'+thS+'">Name</th>'
+                +'<th style="'+thS+'">Amount</th>'
+                +'<th style="'+thS+'">Bank Name</th>'
                 +'<th style="'+thS+'">Account Holder</th>'
                 +'<th style="'+thS+'">Account No.</th>'
                 +'<th style="'+thS+'">IFSC Code</th>'
                 +'<th style="'+thS+'">Branch</th>'
-              : '')
-          +'</tr></thead>'
-          +'<tbody id="pm-tbody">'+_pmTableRows(rows, showBank)+'</tbody>'
-        +'</table>'
-      +'</div>'
+              +'</tr></thead>'
+              +'<tbody id="pm-tbody">'+_pmTableRows(rows, true)+'</tbody>'
+            +'</table>'
+          +'</div>'
+        : '<div style="padding:48px;text-align:center;">'
+            +'<div style="width:52px;height:52px;border-radius:14px;background:#f1f5f9;display:grid;place-items:center;margin:0 auto 14px;">'
+              +'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
+            +'</div>'
+            +'<div style="font-size:14px;font-weight:600;color:#475569;margin-bottom:4px;">Search for a vendor</div>'
+            +'<div style="font-size:12px;color:#94a3b8;">Type vendor name above to see their payment details</div>'
+          +'</div>')
     +'</div>';
   }
 
