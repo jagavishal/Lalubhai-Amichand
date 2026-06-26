@@ -276,12 +276,10 @@ window.Pages.dashboard = (function () {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
               Holidays
             </button>` : ''}
-            <button id="db-btn-checklist" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#059669;color:#fff;border:none;cursor:pointer;">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+            <button id="db-btn-checklist" style="padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#059669;color:#fff;border:none;cursor:pointer;">
               Checklist
             </button>
-            <button id="db-btn-delegate" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:#C4714A;color:#fff;border:none;cursor:pointer;">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+            <button id="db-btn-delegate" style="padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:#C4714A;color:#fff;border:none;cursor:pointer;">
               Delegate
             </button>
             ${admin ? `<button id="db-btn-transfer" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:#7c3aed;color:#fff;border:none;cursor:pointer;">
@@ -422,16 +420,6 @@ window.Pages.dashboard = (function () {
                   <option value="Approval Required">Approval Required</option>
                 </select>
               </div>
-            </div>
-            <!-- Client -->
-            <div>
-              <label class="db-label">CLIENT <span style="color:#ef4444;">*</span></label>
-              <select id="del-client" class="db-input">
-                <option value="">— Select Client —</option>
-                ${(_state.clients || []).map(c => `<option value="${c.name||c}">${c.name||c}</option>`).join('')}
-                <option value="__other__">Other / Type manually</option>
-              </select>
-              <input type="text" id="del-client-text" class="db-input" placeholder="Enter client name" style="display:none;margin-top:6px;" />
             </div>
             <!-- Description -->
             <div>
@@ -1053,14 +1041,12 @@ window.Pages.dashboard = (function () {
 
     /* ── delegate modal ── */
     function resetDelegateForm() {
-      ['#del-doer','#del-due','#del-priority','#del-approval','#del-client','#del-client-text','#del-desc','#del-url','#del-remarks'].forEach(id => {
+      ['#del-doer','#del-due','#del-priority','#del-approval','#del-desc','#del-url','#del-remarks'].forEach(id => {
         const f = el.querySelector(id);
         if (!f) return;
         if (f.tagName === 'SELECT') f.selectedIndex = 0;
         else f.value = id === '#del-due' ? todayISO() : '';
       });
-      const txt = el.querySelector('#del-client-text');
-      if (txt) txt.style.display = 'none';
       const chk = el.querySelector('#del-doer-date');
       if (chk) chk.checked = false;
       const err = el.querySelector('#del-error');
@@ -1071,12 +1057,6 @@ window.Pages.dashboard = (function () {
     el.querySelector('#modal-delegate-close')?.addEventListener('click', () => hideModal('modal-delegate'));
     el.querySelector('#modal-delegate-cancel')?.addEventListener('click', () => hideModal('modal-delegate'));
     el.querySelector('#modal-delegate')?.addEventListener('click', () => hideModal('modal-delegate'));
-    /* client select → show text input if "Other" chosen */
-    el.querySelector('#del-client')?.addEventListener('change', function() {
-      const txt = el.querySelector('#del-client-text');
-      if (txt) txt.style.display = this.value === '__other__' ? 'block' : 'none';
-    });
-
     el.querySelector('#modal-delegate-submit')?.addEventListener('click', async () => {
       const desc      = el.querySelector('#del-desc')?.value.trim();
       const doerSel   = el.querySelector('#del-doer');
@@ -1085,8 +1065,6 @@ window.Pages.dashboard = (function () {
       const dueDate   = el.querySelector('#del-due')?.value;
       const priority  = el.querySelector('#del-priority')?.value || 'Low';
       const approval  = el.querySelector('#del-approval')?.value || 'No Approval';
-      const clientSel = el.querySelector('#del-client')?.value;
-      const client    = clientSel === '__other__' ? (el.querySelector('#del-client-text')?.value.trim() || '') : (clientSel || '');
       const url       = el.querySelector('#del-url')?.value.trim();
       const remarks   = el.querySelector('#del-remarks')?.value.trim();
       const errEl     = el.querySelector('#del-error');
@@ -1106,7 +1084,6 @@ window.Pages.dashboard = (function () {
             doerId, doerName,
             delegatedBy: window.currentUser?.id,
             dueDate, priority, approval,
-            client: client || '',
             url: url || '',
             remarks: remarks || '',
           }),
