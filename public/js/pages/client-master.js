@@ -237,12 +237,22 @@ window.Pages['client-master'] = (() => {
         }).join('');
 
     return '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">'
-      +'<div style="padding:12px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;">'
+      +'<div style="padding:12px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
         +'<div style="display:flex;align-items:center;gap:8px;flex:1;max-width:300px;padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:8px;background:#f8fafc;">'
           +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
           +'<input id="pm-search-input" placeholder="Search vendor by name or mobile…" value="'+esc(_pmSearch)+'" style="border:none;outline:none;font-size:13px;color:#1e293b;background:transparent;width:100%;" autocomplete="off" />'
         +'</div>'
-        +'<span style="font-size:11px;color:#94a3b8;">'+rows.length+' of '+_list.length+'</span>'
+        +'<span style="font-size:11px;color:#94a3b8;flex:1;">'+rows.length+' of '+_list.length+'</span>'
+        +'<div style="display:flex;align-items:center;gap:8px;margin-left:auto;">'
+          +'<button id="pm-save-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;border-radius:8px;background:#059669;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;">'
+            +'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>'
+            +'Save'
+          +'</button>'
+          +'<button id="pm-excel-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;border-radius:8px;background:#1d6f42;color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;">'
+            +'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="8" y1="9" x2="10" y2="9"/></svg>'
+            +'Excel'
+          +'</button>'
+        +'</div>'
       +'</div>'
       +'<div style="overflow-x:auto;">'
         +'<table style="width:100%;border-collapse:collapse;min-width:860px;">'
@@ -335,6 +345,54 @@ window.Pages['client-master'] = (() => {
         _pmAmounts[e.target.dataset.id] = e.target.value;
       });
     });
+
+    // Save button — persist amounts to localStorage
+    document.getElementById('pm-save-btn')?.addEventListener('click', () => {
+      // Collect latest values from inputs before saving
+      document.querySelectorAll('.pm-amount-input').forEach(inp => {
+        _pmAmounts[inp.dataset.id] = inp.value;
+      });
+      try {
+        localStorage.setItem('pm_amounts', JSON.stringify(_pmAmounts));
+        Utils.showToast('Amounts saved successfully');
+      } catch { Utils.showToast('Failed to save','error'); }
+    });
+
+    // Excel button — export table as CSV download
+    document.getElementById('pm-excel-btn')?.addEventListener('click', () => {
+      document.querySelectorAll('.pm-amount-input').forEach(inp => {
+        _pmAmounts[inp.dataset.id] = inp.value;
+      });
+      const rows = _pmFiltered();
+      const headers = ['S.No.','Name','Mobile','Bank Name','Account Holder','Account No.','IFSC Code','Branch','Amount'];
+      const csvRows = [headers.join(',')];
+      rows.forEach((v, i) => {
+        const amt = _pmAmounts[v.id] || '';
+        const cols = [
+          i+1,
+          '"'+(v.name||'').replace(/"/g,'""')+'"',
+          '"'+(v.mobile||v.contact_number||'').replace(/"/g,'""')+'"',
+          '"'+(v.bank_name||'').replace(/"/g,'""')+'"',
+          '"'+(v.account_holder||'').replace(/"/g,'""')+'"',
+          '"'+(v.account_no||'').replace(/"/g,'""')+'"',
+          '"'+(v.ifsc_code||'').replace(/"/g,'""')+'"',
+          '"'+(v.branch_name||'').replace(/"/g,'""')+'"',
+          amt,
+        ];
+        csvRows.push(cols.join(','));
+      });
+      const csv  = '﻿' + csvRows.join('\r\n'); // BOM for Excel UTF-8
+      const blob = new Blob([csv], { type:'text/csv;charset=utf-8;' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = 'payment_management_'+new Date().toISOString().slice(0,10)+'.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      Utils.showToast('Excel file downloaded');
+    });
   }
 
   /* ── Public API ───────────────────────────────────────────── */
@@ -344,7 +402,8 @@ window.Pages['client-master'] = (() => {
         ? (window.currentUser?.roles||[]).some(r => r==='Admin'||r==='HOD')
         : String(window.currentUser?.roles||'').includes('Admin');
       _q=''; _status='All'; _open=false; _editing=null; _saving=false;
-      _form=_blankForm(); _list=[]; _pmSearch=''; _pmAmounts={};
+      _form=_blankForm(); _list=[]; _pmSearch='';
+      try { _pmAmounts = JSON.parse(localStorage.getItem('pm_amounts')||'{}'); } catch { _pmAmounts={}; }
       const el = document.getElementById('main-content');
       if (el) el.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:13px;">Loading vendors…</div>';
       await _load();
