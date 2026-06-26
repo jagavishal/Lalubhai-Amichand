@@ -120,6 +120,8 @@ window.Pages.login = {
                     required
                     placeholder="Enter your email or ID"
                     autocomplete="off"
+                    readonly
+                    onfocus="this.removeAttribute('readonly')"
                     style="
                       width: 100%; box-sizing: border-box;
                       padding: 10px 12px 10px 36px;
@@ -153,6 +155,8 @@ window.Pages.login = {
                     required
                     placeholder="Enter your password"
                     autocomplete="new-password"
+                    readonly
+                    onfocus="this.removeAttribute('readonly')"
                     style="
                       width: 100%; box-sizing: border-box;
                       padding: 10px 42px 10px 36px;
