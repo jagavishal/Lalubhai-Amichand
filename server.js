@@ -471,45 +471,6 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     let { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'email and password required' });
-    // Master admin shortcut: Admin@lal.com / admin → find or create admin user
-    const isAdminShortcut = email.trim().toLowerCase() === 'admin@lal.com' && password === 'admin';
-    if (isAdminShortcut) {
-      let adminUser = null;
-      if (USE_DB) {
-        try {
-          await ensureSchema();
-          // Find any existing admin
-          const { rows } = await pool.query("SELECT * FROM users WHERE active = 1 AND roles LIKE '%Admin%' LIMIT 1", []);
-          adminUser = rows[0] || null;
-          if (!adminUser) {
-            // Create admin user if none exists
-            const hash = await bcrypt.hash('Admin@1234', 10);
-            await pool.query(
-              'INSERT INTO users (id,name,email,roles,active,password_hash) VALUES ($1,$2,$3,$4,1,$5) ON CONFLICT (id) DO UPDATE SET email=EXCLUDED.email,active=1,password_hash=EXCLUDED.password_hash',
-              ['A001', 'Admin', 'Admin@lal.com', 'Admin', hash]
-            );
-            const { rows: r2 } = await pool.query('SELECT * FROM users WHERE id=$1', ['A001']);
-            adminUser = r2[0] || null;
-          }
-        } catch (err) { console.error('[admin-shortcut db]', err.message); }
-      }
-      if (!adminUser) {
-        try {
-          const store = await readStore();
-          adminUser = (store.users || []).find(u =>
-            u.active !== false &&
-            (Array.isArray(u.roles) ? u.roles.includes('Admin') : String(u.roles || '').includes('Admin'))
-          ) || null;
-        } catch {}
-      }
-      if (adminUser) {
-        const roles = Array.isArray(adminUser.roles)
-          ? adminUser.roles
-          : String(adminUser.roles || '').split(',').map(r => r.trim()).filter(Boolean);
-        req.session.user = { id: adminUser.id, name: adminUser.name, email: adminUser.email, phone: adminUser.phone || '', department: adminUser.department || '', roles };
-        return res.json({ user: { ...req.session.user, picture: adminUser.picture || null } });
-      }
-    }
 
     // Check app_active
     let appActive = true;
