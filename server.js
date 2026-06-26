@@ -1496,4 +1496,27 @@ app.get('/api/master', async (req, res) => {
 // ── Catch-all SPA ─────────────────────────────────────────────────────────────
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'app.html')));
 
-app.listen(process.env.PORT || 3000, () => console.log('Server on http://localhost:' + (process.env.PORT || 3000)));
+// Seed JSON store with admin user if no users exist (fallback when DB unavailable)
+async function seedJsonFallback() {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  if (!adminEmail) return;
+  try {
+    const store = await readStoreJson();
+    if (store.users && store.users.length > 0) return;
+    const hash = await bcrypt.hash(process.env.ADMIN_PASSWORD || DEFAULT_PASSWORD, 10);
+    store.users = [{
+      id: 'A001', name: process.env.ADMIN_NAME || 'Admin',
+      email: adminEmail, roles: ['Admin'], active: true,
+      password_hash: hash, phone: '', department: '', picture: null,
+    }];
+    await writeStoreJson(store);
+    console.log('[store] Admin user seeded in JSON store:', adminEmail);
+  } catch (e) {
+    console.error('[store] seedJsonFallback error:', e.message);
+  }
+}
+
+app.listen(process.env.PORT || 3000, async () => {
+  console.log('Server on http://localhost:' + (process.env.PORT || 3000));
+  await seedJsonFallback();
+});
