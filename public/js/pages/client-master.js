@@ -269,7 +269,7 @@ window.Pages['client-master'] = (() => {
         + '<div style="padding:14px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
           + '<div style="position:relative;flex:1;min-width:200px;">'
             + '<svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#94a3b8;" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
-            + '<input id="cm-search" placeholder="Search name, mobile, email…" value="' + esc(_q) + '" style="width:100%;box-sizing:border-box;padding:8px 12px 8px 32px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;outline:none;background:#f8fafc;" onfocus="this.style.borderColor=\'#C4714A\';this.style.background=\'#fff\'" onblur="this.style.borderColor=\'#e2e8f0\';this.style.background=\'#f8fafc\'" />'
+            + '<input id="cm-search" placeholder="Search name, mobile, email…" value="' + esc(_q) + '" style="width:100%;box-sizing:border-box;padding:8px 12px 8px 32px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;outline:none;background:#f8fafc;" onfocus="this.style.borderColor=\'var(--color-primary)\';this.style.background=\'#fff\'" onblur="this.style.borderColor=\'#e2e8f0\';this.style.background=\'#f8fafc\'" />'
           + '</div>'
           + '<select id="cm-status-filter" style="padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;outline:none;background:#f8fafc;color:#374151;cursor:pointer;">'
             + '<option ' + (_status==='All'?'selected':'') + '>All</option>'
@@ -426,6 +426,15 @@ window.Pages['client-master'] = (() => {
           + 'Add 5 more rows'
         + '</button>'
         + '<span style="font-size:11px;color:#94a3b8;margin-left:auto;">Entries are saved to server — accessible from any device</span>'
+      + '</div>'
+    + '</div>'
+    // ── Payment History (inline, below the entries grid)
+    + '<div id="cm-history-section" style="margin-top:4px;">'
+      + '<div style="display:flex;align-items:center;justify-content:center;min-height:200px;">'
+        + '<div style="text-align:center;">'
+          + '<div style="width:32px;height:32px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 10px;"></div>'
+          + '<div style="font-size:12px;color:#94a3b8;">Loading history…</div>'
+        + '</div>'
       + '</div>'
     + '</div>';
   }
@@ -930,57 +939,92 @@ window.Pages['client-master'] = (() => {
   }
 
   /* ── Main render ────────────────────────────────────────────── */
+  function _tabBtn(id, label, icon, active) {
+    const hover = active ? '' : ' onmouseenter="this.style.color=\'#374151\'" onmouseleave="this.style.color=\'#64748b\'"';
+    return '<button id="' + id + '" style="'
+      + 'display:flex;align-items:center;gap:7px;'
+      + 'padding:12px 20px;'
+      + 'border:none;background:transparent;cursor:pointer;'
+      + 'font-size:13px;font-weight:' + (active ? '700' : '500') + ';'
+      + 'color:' + (active ? 'var(--color-primary)' : '#64748b') + ';'
+      + 'border-bottom:2px solid ' + (active ? 'var(--color-primary)' : 'transparent') + ';'
+      + 'margin-bottom:-1px;transition:color .15s,border-color .15s;white-space:nowrap;'
+      + '"' + hover + '>'
+      + icon
+      + label
+      + '</button>';
+  }
+
   function _render() {
     const el = document.getElementById('main-content');
     if (!el) return;
 
-    const tabBtn = (id, label, active) =>
-      '<button id="' + id + '" style="padding:7px 18px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all .15s;'
-      + 'background:' + (active ? '#fff' : 'transparent') + ';color:' + (active ? 'var(--color-primary)' : '#64748b') + ';'
-      + 'box-shadow:' + (active ? '0 1px 4px rgba(0,0,0,.08)' : 'none') + ';">' + label + '</button>';
+    const tabContent = _tab === 'vendors' ? _renderVendorTab() : _renderPaymentTab();
 
-    let tabContent;
-    if (_tab === 'vendors')   tabContent = _renderVendorTab();
-    else if (_tab === 'payments') tabContent = _renderPaymentTab();
-    else                      tabContent = _renderHistoryTab();
+    const iconVendor  = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+    const iconPayment = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>';
+    el.innerHTML =
+      '<div style="display:flex;flex-direction:column;gap:20px;">'
 
-    el.innerHTML = '<div style="padding:20px;max-width:1280px;margin:0 auto;">'
-      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:10px;">'
-        + '<div>'
-          + '<h1 style="font-size:20px;font-weight:800;color:#1e293b;margin:0;letter-spacing:-.3px;">Vendor Master</h1>'
-          + '<p style="font-size:12px;color:#94a3b8;margin:3px 0 0;">Vendors, payment entries and history</p>'
+      // ── Header card — white card with icon, action button, and tab bar
+      + '<div style="background:#fff;border-radius:16px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,.05);overflow:hidden;">'
+
+        // Title row
+        + '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:20px 22px 18px;">'
+          + '<div style="display:flex;align-items:center;gap:14px;">'
+            + '<div style="width:44px;height:44px;border-radius:13px;background:var(--color-primary-light);display:grid;place-items:center;flex-shrink:0;">'
+              + '<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l8-4 8 4v14M9 9h1M9 13h1M9 17h1M14 9h1M14 13h1M14 17h1"/></svg>'
+            + '</div>'
+          + '</div>'
+          + (_tab === 'vendors' && _canEdit
+            ? '<button id="cm-add-btn" style="display:flex;align-items:center;gap:7px;padding:9px 20px;border-radius:10px;background:var(--color-primary);color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px var(--color-primary-ring);" onmouseenter="this.style.filter=\'brightness(.9)\'" onmouseleave="this.style.filter=\'none\'">'
+              + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Add Vendor'
+            + '</button>'
+            : '')
         + '</div>'
-        + (_tab === 'vendors' && _canEdit
-          ? '<button id="cm-add-btn" style="display:flex;align-items:center;gap:6px;padding:9px 20px;border-radius:10px;background:var(--color-primary);color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px var(--color-primary-ring);" onmouseenter="this.style.filter=\'brightness(.92)\'" onmouseleave="this.style.filter=\'none\'">'
-            + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Add Vendor'
-          + '</button>'
-          : '')
+
+        // Tab bar — 2 tabs only, history is now part of payment management
+        + '<div style="display:flex;gap:0;border-top:1px solid #f1f5f9;padding:0 10px;">'
+          + _tabBtn('tab-vendors',  'Vendor List',        iconVendor,  _tab === 'vendors')
+          + _tabBtn('tab-payments', 'Payment Management', iconPayment, _tab === 'payments')
+        + '</div>'
+
       + '</div>'
-      + '<div style="display:flex;gap:3px;padding:4px;background:#f1f5f9;border-radius:11px;width:fit-content;margin-bottom:20px;">'
-        + tabBtn('tab-vendors',  'Vendor List',        _tab === 'vendors')
-        + tabBtn('tab-payments', 'Payment Management', _tab === 'payments')
-        + tabBtn('tab-history',  'Payment History',    _tab === 'history')
-      + '</div>'
+
+      // ── Content area
       + '<div id="cm-tab-content">' + tabContent + '</div>'
+
       + '<div id="cm-modal"></div>'
     + '</div>';
 
-    document.getElementById('tab-vendors') .addEventListener('click', () => { _tab = 'vendors';  _render(); });
-    document.getElementById('tab-payments').addEventListener('click', () => { _tab = 'payments'; _render(); });
-    document.getElementById('tab-history') .addEventListener('click', async () => {
-      _tab = 'history'; _phOpenBatch = null;
-      // Show spinner while loading history
-      const content = document.getElementById('cm-tab-content');
-      if (content) content.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:300px;"><div style="text-align:center;"><div style="width:36px;height:36px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 12px;"></div><div style="font-size:13px;color:#94a3b8;">Loading history…</div></div></div>';
-      await _phLoad();
-      if (content) content.innerHTML = _renderHistoryTab();
-      _bindHistoryTabEvents();
+    document.getElementById('tab-vendors') .addEventListener('click', () => { _tab = 'vendors'; _render(); });
+    document.getElementById('tab-payments').addEventListener('click', async () => {
+      _tab = 'payments';
+      _render();
+      // Load history async and inject below the payment grid
+      const histEl = document.getElementById('cm-history-section');
+      if (histEl) {
+        await _phLoad();
+        const h = document.getElementById('cm-history-section');
+        if (h) { h.innerHTML = _renderHistoryTab(); _bindHistoryTabEvents(); }
+      }
     });
     document.getElementById('cm-add-btn')?.addEventListener('click', _openAdd);
 
     _bindTableButtons();
-    if (_tab === 'payments') _bindPaymentTabEvents();
-    if (_tab === 'history')  _bindHistoryTabEvents();
+    if (_tab === 'payments') {
+      _bindPaymentTabEvents();
+      // If history not yet loaded, kick off load and inject
+      if (!_phRows.length) {
+        _phLoad().then(() => {
+          const h = document.getElementById('cm-history-section');
+          if (h) { h.innerHTML = _renderHistoryTab(); _bindHistoryTabEvents(); }
+        });
+      } else {
+        const h = document.getElementById('cm-history-section');
+        if (h) { h.innerHTML = _renderHistoryTab(); _bindHistoryTabEvents(); }
+      }
+    }
     _renderModal();
   }
 
