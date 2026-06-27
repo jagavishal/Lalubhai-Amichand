@@ -184,7 +184,7 @@ window.Pages.mis = {
 
   async _generateMIS() {
     const s = this._state;
-    if (!s.misStart || !s.misEnd) { alert('Please select Start Date and End Date first.'); return; }
+    if (!s.misStart || !s.misEnd) { Utils.showToast('Please select Start Date and End Date first', 'warning'); return; }
     s.misLoading = true;
     s.misModal   = null;
 
@@ -419,7 +419,7 @@ window.Pages.mis = {
 
   _exportMISCSV() {
     const s = this._state;
-    if (!s.misRows.length) { alert('Generate the report first.'); return; }
+    if (!s.misRows.length) { Utils.showToast('Generate the report first', 'warning'); return; }
     const headers = ['#', 'Name', 'Total', 'Pending', 'Completed', 'Revised', 'Delayed', 'Score %'];
     const lines   = s.misRows.map((r, i) =>
       [i + 1, r.name, r.total, r.pending, r.completed, r.revised, r.delayed, r.score + '%'].join(',')

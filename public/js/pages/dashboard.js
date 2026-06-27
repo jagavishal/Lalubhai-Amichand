@@ -877,7 +877,7 @@ window.Pages.dashboard = (function () {
     listEl.querySelectorAll('[data-hol-del]').forEach(btn => {
       btn.addEventListener('click', async () => {
         const id = btn.dataset.holDel;
-        if (!confirm('Delete this holiday?')) return;
+        if (!await Utils.showConfirm('Remove this holiday from the list?', { title: 'Delete Holiday', confirmText: 'Delete', danger: true })) return;
         await Utils.apiFetch(`/api/holidays?id=${id}`, { method: 'DELETE' });
         _state.holidays = _state.holidays.filter(h => h.id !== id);
         _renderHolidayList();
@@ -1309,8 +1309,8 @@ window.Pages.dashboard = (function () {
       const dateVal  = document.getElementById('revise-date-input')?.value;
       const noteVal  = document.getElementById('revise-note-input')?.value.trim();
 
-      if (mode !== 'grant' && !dateVal) { alert('Please pick a "revise until" date.'); return; }
-      if (mode === 'request' && !noteVal) { alert('Revise note is required — please explain what needs to be revised.'); return; }
+      if (mode !== 'grant' && !dateVal) { Utils.showToast('Please pick a "revise until" date', 'warning'); return; }
+      if (mode === 'request' && !noteVal) { Utils.showToast('Revise note is required — please explain what needs to be revised', 'warning'); return; }
 
       const confirmBtn = document.getElementById('modal-revise-confirm');
       if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Saving…'; }
@@ -1331,7 +1331,7 @@ window.Pages.dashboard = (function () {
         Utils.showToast(mode === 'grant' ? 'Revise granted.' : 'Revise request sent.');
         await _refresh(admin);
       } catch (err) {
-        alert(err.message || 'Failed to update task.');
+        Utils.showToast(err.message || 'Failed to update task', 'error');
       } finally {
         if (confirmBtn) { confirmBtn.disabled = false; }
       }
@@ -1423,7 +1423,7 @@ window.Pages.dashboard = (function () {
   }
 
   async function denyRevise(task, admin) {
-    if (!confirm('Deny this revise request?')) return;
+    if (!await Utils.showConfirm('This will send the task back to pending status.', { title: 'Deny Revise Request', confirmText: 'Deny', danger: true })) return;
     try {
       await Utils.apiFetch('/api/delegations', {
         method: 'PATCH',

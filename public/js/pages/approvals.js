@@ -80,7 +80,7 @@ window.Pages.approvals = {
   },
 
   async _denyRevise(task) {
-    if (!confirm('Are you sure you want to deny this request?')) return;
+    if (!await Utils.showConfirm('This will send the task back for revision.', { title: 'Deny Request', confirmText: 'Deny', danger: true })) return;
     try {
       const res = await fetch('/api/delegations', {
         method: 'PATCH',
@@ -111,7 +111,7 @@ window.Pages.approvals = {
   },
 
   async _rejectTask(task) {
-    if (!confirm('Are you sure you want to reject this task?')) return;
+    if (!await Utils.showConfirm('The task will be moved to Revise status.', { title: 'Reject Task', confirmText: 'Reject', danger: true })) return;
     await fetch('/api/delegations', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

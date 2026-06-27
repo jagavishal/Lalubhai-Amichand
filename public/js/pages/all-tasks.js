@@ -163,7 +163,7 @@ window.Pages['all-tasks'] = (function () {
   }
 
   async function deleteTask(id, type) {
-    if (!confirm('Are you sure you want to delete this task?')) return;
+    if (!await Utils.showConfirm('This will permanently remove the task.', { title: 'Delete Task', confirmText: 'Delete', danger: true })) return;
     try {
       if (type === 'Checklist') {
         await Utils.apiFetch('/api/masters?id=' + id, { method: 'DELETE' });

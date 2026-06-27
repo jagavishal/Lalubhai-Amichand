@@ -350,7 +350,7 @@ window.Pages.profile = {
     const f = this._form;
 
     if (f.newPassword && f.newPassword !== f.confirmPassword) {
-      alert('New passwords do not match');
+      Utils.showToast('New passwords do not match', 'error');
       return;
     }
 
@@ -381,10 +381,10 @@ window.Pages.profile = {
         this._renderContent();
       } else {
         const data = await res.json().catch(() => ({}));
-        alert(data.error || 'Failed to save profile');
+        Utils.showToast(data.error || 'Failed to save profile', 'error');
       }
     } catch (err) {
-      alert('Network error: ' + err.message);
+      Utils.showToast('Network error: ' + err.message, 'error');
     }
 
     this._saving = false;

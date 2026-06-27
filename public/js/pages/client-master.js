@@ -80,7 +80,7 @@ window.Pages['client-master'] = (() => {
   }
 
   async function _remove(id) {
-    if (!confirm('Delete this vendor?')) return;
+    if (!await Utils.showConfirm('All vendor data will be permanently removed.', { title: 'Delete Vendor', confirmText: 'Delete', danger: true })) return;
     await Utils.apiFetch('/api/clients?id=' + id, { method: 'DELETE' });
     Utils.showToast('Vendor deleted');
     await _load();
