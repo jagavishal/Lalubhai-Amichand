@@ -417,12 +417,14 @@ window.Pages['client-master'] = (() => {
     }).join('');
   }
 
-  function _bindPaymentRowEvents() {
-    document.querySelectorAll('.pm-name-inp').forEach(inp => {
-      const ri = parseInt(inp.dataset.ri);
-      const ddEl = document.querySelector('.pm-dd[data-ri="' + ri + '"]');
-      if (!ddEl) return;
+  // Bind search + delegation for a single row — works even after _buildDropdown rebuilds innerHTML
+  function _bindSingleRow(ri, rowEl) {
+    const inp    = rowEl.querySelector('.pm-name-inp[data-ri="' + ri + '"]');
+    const ddEl   = rowEl.querySelector('.pm-dd[data-ri="' + ri + '"]');
+    const amtInp = rowEl.querySelector('.pm-amount-inp[data-ri="' + ri + '"]');
+    const clearBtn = rowEl.querySelector('.pm-clear-row[data-ri="' + ri + '"]');
 
+    if (inp && ddEl) {
       inp.addEventListener('focus', () => {
         _buildDropdown(ddEl, inp.value, [ri]);
         ddEl.style.display = 'block';
@@ -435,128 +437,94 @@ window.Pages['client-master'] = (() => {
         inp.style.background     = '#fff';
         _buildDropdown(ddEl, inp.value, [ri]);
         ddEl.style.display = 'block';
-        // Clear auto-filled cells in this row
-        const tr = document.querySelector('tr[data-ri="' + ri + '"]');
+        const tr = rowEl.closest ? rowEl : document.querySelector('tr[data-ri="' + ri + '"]');
         if (tr) {
-          const cells = tr.querySelectorAll('td:nth-child(n+4)');
-          cells.forEach(c => { const span = c.querySelector('span'); if (span) { span.textContent = '—'; span.style.color = '#cbd5e1'; } });
+          tr.querySelectorAll('td:nth-child(n+4) span').forEach(span => {
+            span.textContent = '—'; span.style.color = '#cbd5e1';
+          });
         }
       });
       inp.addEventListener('blur', () => {
         setTimeout(() => {
           ddEl.style.display = 'none';
-          if (!_pmRows[ri].vendorId) {
-            _pmRows[ri].vendorSearch = '';
-            inp.value = '';
-          }
+          if (!_pmRows[ri].vendorId) { _pmRows[ri].vendorSearch = ''; inp.value = ''; }
         }, 160);
       });
       inp.addEventListener('keydown', e => {
         if (e.key === 'Escape') { ddEl.style.display = 'none'; inp.blur(); }
       });
 
-      ddEl.querySelectorAll('.pm-dd-opt').forEach(opt => {
-        opt.addEventListener('mouseenter', () => { opt.style.background = '#f1f5f9'; });
-        opt.addEventListener('mouseleave', () => { opt.style.background = ''; });
-        opt.addEventListener('mousedown', e => {
-          e.preventDefault();
-          const v = _list.find(x => String(x.id) === String(opt.dataset.vid));
-          if (!v) return;
-          _pmRows[ri].vendorId     = v.id;
-          _pmRows[ri].vendorSearch = v.name;
-          inp.value             = v.name;
-          inp.style.fontWeight  = '600';
-          inp.style.borderColor = '#C4714A';
-          inp.style.background  = '#fff8f5';
-          ddEl.style.display    = 'none';
-          // Update auto-filled cells live
-          const tr = document.querySelector('tr[data-ri="' + ri + '"]');
-          if (tr) {
-            const spans = tr.querySelectorAll('td:nth-child(n+4) span');
-            const vals  = [v.bank_name, v.account_holder, v.account_no, v.ifsc_code, v.branch_name];
-            spans.forEach((span, si) => {
-              if (si < vals.length) { span.textContent = vals[si] || '—'; span.style.color = '#374151'; }
-            });
-          }
-          // Update clear button
-          const clearCell = tr?.querySelector('td:last-child');
+      // Delegation — handles dynamically created .pm-dd-opt items
+      ddEl.addEventListener('mouseover', e => {
+        const opt = e.target.closest('.pm-dd-opt');
+        ddEl.querySelectorAll('.pm-dd-opt').forEach(o => { o.style.background = ''; });
+        if (opt) opt.style.background = '#f1f5f9';
+      });
+      ddEl.addEventListener('mouseout', e => {
+        const opt = e.target.closest('.pm-dd-opt');
+        if (opt) opt.style.background = '';
+      });
+      ddEl.addEventListener('mousedown', e => {
+        e.preventDefault();
+        const opt = e.target.closest('.pm-dd-opt');
+        if (!opt) return;
+        const v = _list.find(x => String(x.id) === String(opt.dataset.vid));
+        if (!v) return;
+        _pmRows[ri].vendorId     = v.id;
+        _pmRows[ri].vendorSearch = v.name;
+        inp.value             = v.name;
+        inp.style.fontWeight  = '600';
+        inp.style.borderColor = '#C4714A';
+        inp.style.background  = '#fff8f5';
+        ddEl.style.display    = 'none';
+        // Fill auto cells in this row
+        const tr = document.querySelector('tr[data-ri="' + ri + '"]');
+        if (tr) {
+          const spans = tr.querySelectorAll('td:nth-child(n+4) span');
+          const vals  = [v.bank_name, v.account_holder, v.account_no, v.ifsc_code, v.branch_name];
+          spans.forEach((span, si) => {
+            if (si < vals.length) { span.textContent = vals[si] || '—'; span.style.color = '#374151'; }
+          });
+          // Show clear button if not already there
+          const clearCell = tr.querySelector('td:last-child');
           if (clearCell && !clearCell.querySelector('.pm-clear-row')) {
             clearCell.innerHTML = '<button class="pm-clear-row" data-ri="' + ri + '" title="Clear row" style="background:transparent;border:none;cursor:pointer;color:#d1d5db;padding:3px;line-height:1;" onmouseenter="this.style.color=\'#ef4444\'" onmouseleave="this.style.color=\'#d1d5db\'">'
               + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
             + '</button>';
             clearCell.querySelector('.pm-clear-row').addEventListener('click', () => {
-              _pmRows[ri] = _blankRow();
-              _refreshPmRow(ri);
+              _pmRows[ri] = _blankRow(); _refreshPmRow(ri); _updatePmHeader();
             });
           }
-          // Focus amount
-          const amtInp = document.querySelector('.pm-amount-inp[data-ri="' + ri + '"]');
-          if (amtInp) amtInp.focus();
-          _updatePmHeader();
-        });
-      });
-    });
-
-    document.querySelectorAll('.pm-amount-inp').forEach(inp => {
-      const ri = parseInt(inp.dataset.ri);
-      inp.addEventListener('input', () => {
-        _pmRows[ri].amount = inp.value;
+        }
+        const amtI = document.querySelector('.pm-amount-inp[data-ri="' + ri + '"]');
+        if (amtI) amtI.focus();
         _updatePmHeader();
       });
-    });
+    }
 
-    document.querySelectorAll('.pm-clear-row').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const ri = parseInt(btn.dataset.ri);
-        _pmRows[ri] = _blankRow();
-        _refreshPmRow(ri);
-        _updatePmHeader();
-      });
+    if (amtInp) {
+      amtInp.addEventListener('input', () => { _pmRows[ri].amount = amtInp.value; _updatePmHeader(); });
+    }
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => { _pmRows[ri] = _blankRow(); _refreshPmRow(ri); _updatePmHeader(); });
+    }
+  }
+
+  function _bindPaymentRowEvents() {
+    document.querySelectorAll('tr[data-ri]').forEach(tr => {
+      const ri = parseInt(tr.dataset.ri);
+      if (!isNaN(ri)) _bindSingleRow(ri, tr);
     });
   }
 
   function _refreshPmRow(ri) {
     const tr = document.querySelector('tr[data-ri="' + ri + '"]');
     if (!tr) return;
-    const newTr = document.createElement('tbody');
-    newTr.innerHTML = _pmRowHtml(_pmRows[ri], ri);
-    const newEl = newTr.firstElementChild;
-    tr.replaceWith(newEl);
-    // Re-bind events for the replaced row
-    const inp   = newEl.querySelector('.pm-name-inp');
-    const amtInp = newEl.querySelector('.pm-amount-inp');
-    const ddEl   = newEl.querySelector('.pm-dd');
-    const clearBtn = newEl.querySelector('.pm-clear-row');
-    if (inp && ddEl) {
-      inp.addEventListener('focus', () => { _buildDropdown(ddEl, inp.value, [ri]); ddEl.style.display = 'block'; });
-      inp.addEventListener('input', () => {
-        _pmRows[ri].vendorId = null; _pmRows[ri].vendorSearch = inp.value;
-        inp.style.fontWeight = '400'; inp.style.borderColor = '#e9ecef'; inp.style.background = '#fff';
-        _buildDropdown(ddEl, inp.value, [ri]); ddEl.style.display = 'block';
-      });
-      inp.addEventListener('blur', () => { setTimeout(() => { ddEl.style.display = 'none'; if (!_pmRows[ri].vendorId) { _pmRows[ri].vendorSearch = ''; inp.value = ''; } }, 160); });
-      inp.addEventListener('keydown', e => { if (e.key === 'Escape') { ddEl.style.display = 'none'; inp.blur(); } });
-      ddEl.querySelectorAll('.pm-dd-opt').forEach(opt => {
-        opt.addEventListener('mouseenter', () => { opt.style.background = '#f1f5f9'; });
-        opt.addEventListener('mouseleave', () => { opt.style.background = ''; });
-        opt.addEventListener('mousedown', e => {
-          e.preventDefault();
-          const v = _list.find(x => String(x.id) === String(opt.dataset.vid));
-          if (!v) return;
-          _pmRows[ri].vendorId = v.id; _pmRows[ri].vendorSearch = v.name;
-          inp.value = v.name; inp.style.fontWeight = '600'; inp.style.borderColor = '#C4714A'; inp.style.background = '#fff8f5';
-          ddEl.style.display = 'none';
-          const spans = newEl.querySelectorAll('td:nth-child(n+4) span');
-          const vals  = [v.bank_name, v.account_holder, v.account_no, v.ifsc_code, v.branch_name];
-          spans.forEach((span, si) => { if (si < vals.length) { span.textContent = vals[si] || '—'; span.style.color = '#374151'; } });
-          const amtI = newEl.querySelector('.pm-amount-inp');
-          if (amtI) amtI.focus();
-          _updatePmHeader();
-        });
-      });
-    }
-    if (amtInp) amtInp.addEventListener('input', () => { _pmRows[ri].amount = amtInp.value; _updatePmHeader(); });
-    if (clearBtn) clearBtn.addEventListener('click', () => { _pmRows[ri] = _blankRow(); _refreshPmRow(ri); _updatePmHeader(); });
+    const tmp = document.createElement('tbody');
+    tmp.innerHTML = _pmRowHtml(_pmRows[ri], ri);
+    const newTr = tmp.firstElementChild;
+    tr.replaceWith(newTr);
+    _bindSingleRow(ri, newTr);
   }
 
   function _bindPaymentTabEvents() {
