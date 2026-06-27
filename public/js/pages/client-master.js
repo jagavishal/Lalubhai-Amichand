@@ -1,7 +1,7 @@
 window.Pages = window.Pages || {};
 
 window.Pages['client-master'] = (() => {
-  /* ── State ─────────────────────────────────────────────────── */
+  /* ── State ──────────────────────────────────────────────────── */
   let _list    = [];
   let _q       = '';
   let _status  = 'All';
@@ -10,11 +10,12 @@ window.Pages['client-master'] = (() => {
   let _saving  = false;
   let _canEdit = false;
   let _form    = _blankForm();
-  let _tab        = 'vendors';   // 'vendors' | 'payments'
-  let _pmEntries  = [];          // [{ vendorId, amount }] — saved entries
-  let _pmDraft    = { vendorId: null, amount: '' }; // current input
+  let _tab     = 'vendors';
 
-  /* ── Helpers ─────────────────────────────────────────────── */
+  // Payment grid state
+  let _pmRows = [];   // [{ vendorId, vendorSearch, amount }]
+
+  /* ── Helpers ────────────────────────────────────────────────── */
   function _blankForm() {
     return {
       name:'', mobile:'', email:'', state:'', district:'', address:'', pin:'',
@@ -23,118 +24,139 @@ window.Pages['client-master'] = (() => {
     };
   }
 
+  function _blankRow() { return { vendorId: null, vendorSearch: '', amount: '' }; }
+
+  function _initRows(saved) {
+    _pmRows = (Array.isArray(saved) ? saved : [])
+      .map(e => ({ vendorId: e.vendorId || null, vendorSearch: '', amount: e.amount || '' }));
+    _resolveVendorNames();
+    while (_pmRows.length < 10) _pmRows.push(_blankRow());
+  }
+
+  function _resolveVendorNames() {
+    _pmRows.forEach(row => {
+      if (row.vendorId && !row.vendorSearch) {
+        const v = _list.find(x => String(x.id) === String(row.vendorId));
+        if (v) row.vendorSearch = v.name;
+      }
+    });
+  }
+
   function _filtered() {
     const t = _q.toLowerCase();
     return _list.filter(c =>
       (_status === 'All' || c.status === _status.toLowerCase()) &&
-      (!t || (c.name+(c.mobile||'')+(c.email||'')+(c.state||'')+(c.district||'')).toLowerCase().includes(t))
+      (!t || (c.name + (c.mobile||'') + (c.email||'') + (c.state||'') + (c.district||'')).toLowerCase().includes(t))
     );
   }
 
-  function _initPmEntries(saved) {
-    _pmEntries = (saved && saved.length ? saved : [])
-      .map(e => ({ vendorId: e.vendorId||null, amount: e.amount||'' }));
-    _pmDraft = { vendorId: null, amount: '' };
-  }
-
   function esc(s) {
-    return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  /* ── API ──────────────────────────────────────────────────── */
+  /* ── API ────────────────────────────────────────────────────── */
   async function _load() {
     try {
       const res = await Utils.apiFetch('/api/clients');
       _list = Array.isArray(res) ? res : [];
     } catch { _list = []; }
+    _resolveVendorNames();
     _render();
   }
 
   async function _save() {
-    if (!_form.name.trim()) { Utils.showToast('Vendor name is required','error'); return; }
+    if (!_form.name.trim()) { Utils.showToast('Vendor name is required', 'error'); return; }
     _saving = true; _renderModal();
     try {
       const method = _editing !== null ? 'PATCH' : 'POST';
-      const body   = _editing !== null ? { id:_editing, ..._form } : _form;
+      const body   = _editing !== null ? { id: _editing, ..._form } : _form;
       await Utils.apiFetch('/api/clients', { method, body: JSON.stringify(body) });
-      _open=false; _editing=null; _form=_blankForm();
-      Utils.showToast(_editing!==null ? 'Vendor updated' : 'Vendor added');
+      _open = false; _editing = null; _form = _blankForm();
+      Utils.showToast(_editing !== null ? 'Vendor updated' : 'Vendor added');
     } catch(e) {
-      Utils.showToast(e.message||'Failed to save','error');
-    } finally { _saving=false; }
+      Utils.showToast(e.message || 'Failed to save', 'error');
+    } finally { _saving = false; }
     await _load();
   }
 
   async function _remove(id) {
     if (!confirm('Delete this vendor?')) return;
-    await Utils.apiFetch('/api/clients?id='+id, { method:'DELETE' });
+    await Utils.apiFetch('/api/clients?id=' + id, { method: 'DELETE' });
     Utils.showToast('Vendor deleted');
     await _load();
   }
 
-  /* ── Modal open/close ─────────────────────────────────────── */
-  function _openAdd()  { _editing=null; _form=_blankForm(); _open=true; _render(); }
+  /* ── Modal helpers ──────────────────────────────────────────── */
+  function _openAdd()  { _editing = null; _form = _blankForm(); _open = true; _render(); }
   function _openEdit(c) {
-    _editing=c.id;
+    _editing = c.id;
     _form = {
-      name:c.name||'', mobile:c.mobile||c.contact_number||'', email:c.email||'',
-      state:c.state||'', district:c.district||'', address:c.address||'', pin:c.pin||'',
-      bankName:c.bank_name||'', accountHolder:c.account_holder||'',
-      accountNo:c.account_no||'', ifscCode:c.ifsc_code||'', branchName:c.branch_name||'',
-      status:c.status||'active',
+      name: c.name||'', mobile: c.mobile||c.contact_number||'', email: c.email||'',
+      state: c.state||'', district: c.district||'', address: c.address||'', pin: c.pin||'',
+      bankName: c.bank_name||'', accountHolder: c.account_holder||'',
+      accountNo: c.account_no||'', ifscCode: c.ifsc_code||'', branchName: c.branch_name||'',
+      status: c.status||'active',
     };
-    _open=true; _render();
+    _open = true; _render();
   }
-  function _closeModal() { _open=false; _editing=null; _form=_blankForm(); _render(); }
+  function _closeModal() { _open = false; _editing = null; _form = _blankForm(); _render(); }
 
-  /* ── Modal HTML ───────────────────────────────────────────── */
   function _fld(id, label, v, type, ph) {
-    return '<div><label style="display:block;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:4px;">'+label+'</label>'
-      +'<input class="input" id="'+id+'" type="'+(type||'text')+'" value="'+esc(v)+'" placeholder="'+(ph||'')+'" style="width:100%;box-sizing:border-box;" /></div>';
+    return '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">' + label + '</label>'
+      + '<input class="input" id="' + id + '" type="' + (type||'text') + '" value="' + esc(v) + '" placeholder="' + (ph||'') + '" style="width:100%;box-sizing:border-box;" /></div>';
   }
 
   function _renderModal() {
     const modal = document.getElementById('cm-modal');
     if (!modal) return;
-    if (!_open) { modal.innerHTML=''; return; }
-    const title = _editing!==null ? 'Edit Vendor' : 'Add Vendor';
-    modal.innerHTML = '<div style="position:fixed;inset:0;background:rgba(0,0,0,.45);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="cm-backdrop">'
-      +'<div style="background:#fff;border-radius:16px;width:100%;max-width:600px;box-shadow:0 20px 60px rgba(0,0,0,.2);overflow:hidden;" onclick="event.stopPropagation()">'
-      +'<div style="padding:18px 22px 14px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between;">'
-      +'<div><div style="font-size:16px;font-weight:700;color:#1e293b;">'+title+'</div><div style="font-size:12px;color:#94a3b8;margin-top:1px;">Fill in vendor information</div></div>'
-      +'<button id="cm-modal-close" style="background:transparent;border:none;cursor:pointer;color:#94a3b8;font-size:20px;line-height:1;padding:4px;">&#x2715;</button>'
-      +'</div>'
-      +'<div style="padding:20px 22px;max-height:70vh;overflow-y:auto;">'
-      // Basic section
-      +'<div style="margin-bottom:20px;">'
-      +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">'
-      +'<div style="width:28px;height:28px;border-radius:8px;background:#eff6ff;display:grid;place-items:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>'
-      +'<span style="font-size:13px;font-weight:700;color:#1e293b;">Basic Details</span></div>'
-      +'<div style="display:grid;gap:12px;">'
-      +_fld('cm-name','Name *',_form.name,'text','Vendor / Company name')
-      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'+_fld('cm-mobile','Mobile No.',_form.mobile,'tel','10-digit mobile')+_fld('cm-email','Email',_form.email,'email','vendor@email.com')+'</div>'
-      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'+_fld('cm-state','State',_form.state,'text','e.g. Rajasthan')+_fld('cm-district','District',_form.district,'text','e.g. Jaipur')+'</div>'
-      +'<div style="display:grid;grid-template-columns:1fr 120px;gap:12px;">'+_fld('cm-address','Address',_form.address,'text','Street / Area')+_fld('cm-pin','Pin Code',_form.pin,'text','6-digit PIN')+'</div>'
-      +'<div><label style="display:block;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:4px;">Status</label>'
-      +'<select class="input" id="cm-status" style="width:100%;box-sizing:border-box;"><option value="active" '+(_form.status==='active'?'selected':'')+'>Active</option><option value="inactive" '+(_form.status==='inactive'?'selected':'')+'>Inactive</option></select></div>'
-      +'</div></div>'
-      +'<div style="height:1px;background:#f1f5f9;margin:0 0 20px;"></div>'
-      // Bank section
-      +'<div>'
-      +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">'
-      +'<div style="width:28px;height:28px;border-radius:8px;background:#f0fdf4;display:grid;place-items:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg></div>'
-      +'<span style="font-size:13px;font-weight:700;color:#1e293b;">Bank Details</span></div>'
-      +'<div style="display:grid;gap:12px;">'
-      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'+_fld('cm-bankName','Bank Name',_form.bankName,'text','e.g. SBI, HDFC')+_fld('cm-accountHolder','Account Holder Name',_form.accountHolder,'text','As per bank records')+'</div>'
-      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'+_fld('cm-accountNo','Account No.',_form.accountNo,'text','Bank account number')+_fld('cm-ifscCode','IFSC Code',_form.ifscCode,'text','e.g. SBIN0001234')+'</div>'
-      +_fld('cm-branchName','Branch Name',_form.branchName,'text','Branch location')
-      +'</div></div>'
-      +'</div>'
-      +'<div style="padding:14px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;background:#fafafa;">'
-      +'<button id="cm-modal-cancel" style="padding:8px 20px;border-radius:8px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
-      +'<button id="cm-modal-save" style="padding:8px 22px;border-radius:8px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;" '+(_saving?'disabled':'')+'>'
-      +(_saving ? 'Saving…' : (_editing!==null ? 'Update Vendor' : 'Add Vendor'))
-      +'</button></div></div></div>';
+    if (!_open) { modal.innerHTML = ''; return; }
+    const title = _editing !== null ? 'Edit Vendor' : 'Add Vendor';
+    modal.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="cm-backdrop">'
+      + '<div style="background:#fff;border-radius:18px;width:100%;max-width:600px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
+      + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;">'
+        + '<div style="width:38px;height:38px;border-radius:10px;background:#fff8f5;display:grid;place-items:center;flex-shrink:0;">'
+          + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C4714A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'
+        + '</div>'
+        + '<div style="flex:1;"><div style="font-size:15px;font-weight:700;color:#1e293b;">' + title + '</div><div style="font-size:12px;color:#94a3b8;margin-top:1px;">Fill in vendor information</div></div>'
+        + '<button id="cm-modal-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;" onmouseenter="this.style.background=\'#f1f5f9\'" onmouseleave="this.style.background=\'transparent\'">'
+          + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
+        + '</button>'
+      + '</div>'
+      + '<div style="padding:22px 24px;max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:20px;">'
+        + '<div>'
+          + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">'
+            + '<div style="width:26px;height:26px;border-radius:7px;background:#eff6ff;display:grid;place-items:center;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>'
+            + '<span style="font-size:12px;font-weight:700;color:#1e293b;letter-spacing:.01em;">Basic Details</span>'
+          + '</div>'
+          + '<div style="display:grid;gap:12px;">'
+            + _fld('cm-name', 'Name *', _form.name, 'text', 'Vendor / Company name')
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-mobile','Mobile No.',_form.mobile,'tel','10-digit mobile') + _fld('cm-email','Email',_form.email,'email','vendor@email.com') + '</div>'
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-state','State',_form.state,'text','e.g. Rajasthan') + _fld('cm-district','District',_form.district,'text','e.g. Jaipur') + '</div>'
+            + '<div style="display:grid;grid-template-columns:1fr 120px;gap:12px;">' + _fld('cm-address','Address',_form.address,'text','Street / Area') + _fld('cm-pin','Pin Code',_form.pin,'text','6-digit PIN') + '</div>'
+            + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Status</label>'
+              + '<select class="input" id="cm-status" style="width:100%;box-sizing:border-box;"><option value="active" ' + (_form.status==='active'?'selected':'') + '>Active</option><option value="inactive" ' + (_form.status==='inactive'?'selected':'') + '>Inactive</option></select></div>'
+          + '</div>'
+        + '</div>'
+        + '<div style="height:1px;background:#f1f5f9;"></div>'
+        + '<div>'
+          + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">'
+            + '<div style="width:26px;height:26px;border-radius:7px;background:#f0fdf4;display:grid;place-items:center;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg></div>'
+            + '<span style="font-size:12px;font-weight:700;color:#1e293b;letter-spacing:.01em;">Bank Details</span>'
+          + '</div>'
+          + '<div style="display:grid;gap:12px;">'
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-bankName','Bank Name',_form.bankName,'text','e.g. SBI, HDFC') + _fld('cm-accountHolder','Account Holder',_form.accountHolder,'text','As per bank records') + '</div>'
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-accountNo','Account No.',_form.accountNo,'text','Bank account number') + _fld('cm-ifscCode','IFSC Code',_form.ifscCode,'text','e.g. SBIN0001234') + '</div>'
+            + _fld('cm-branchName','Branch Name',_form.branchName,'text','Branch location')
+          + '</div>'
+        + '</div>'
+      + '</div>'
+      + '<div style="padding:14px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;background:#fafafa;">'
+        + '<button id="cm-modal-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
+        + '<button id="cm-modal-save" style="padding:9px 24px;border-radius:9px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_saving ? 'disabled' : '') + '>'
+          + (_saving ? 'Saving…' : (_editing !== null ? 'Update Vendor' : 'Add Vendor'))
+        + '</button>'
+      + '</div>'
+    + '</div></div>';
 
     document.getElementById('cm-backdrop').addEventListener('click', _closeModal);
     document.getElementById('cm-modal-close').addEventListener('click', _closeModal);
@@ -157,370 +179,467 @@ window.Pages['client-master'] = (() => {
     });
   }
 
-  /* ── Vendor List table ────────────────────────────────────── */
+  /* ── Vendor List tab ────────────────────────────────────────── */
   function _renderTable() {
     const rows = _filtered();
-    if (!rows.length) return '<p style="text-align:center;color:#94a3b8;font-size:13px;padding:32px 0;">No vendors yet.</p>';
-    const actionTh = _canEdit ? '<th class="table-th" style="text-align:right;">Action</th>' : '';
-    return '<div class="overflow-x-auto"><table class="w-full"><thead><tr>'
-      +'<th class="table-th">Name</th><th class="table-th">Mobile</th><th class="table-th">Email</th>'
-      +'<th class="table-th">State</th><th class="table-th">District</th><th class="table-th">Bank</th>'
-      +'<th class="table-th">Status</th>'+actionTh
-      +'</tr></thead><tbody>'
-      +rows.map(c => {
-        const pill = c.status==='active'
-          ? '<span class="pill bg-emerald-50 text-emerald-600">Active</span>'
-          : '<span class="pill bg-slate-100 text-slate-500">Inactive</span>';
-        const actionTd = _canEdit
-          ? '<td class="table-td"><div style="display:flex;gap:6px;justify-content:flex-end;">'
-            +'<button class="btn-secondary js-edit" data-id="'+c.id+'" style="font-size:12px;padding:3px 10px;">Edit</button>'
-            +'<button class="btn-danger js-delete" data-id="'+c.id+'" style="font-size:12px;padding:3px 10px;">Delete</button>'
-            +'</div></td>' : '';
-        return '<tr class="table-row">'
-          +'<td class="table-td font-medium text-slate-800">'+esc(c.name)+'</td>'
-          +'<td class="table-td">'+esc(c.mobile||c.contact_number||'—')+'</td>'
-          +'<td class="table-td">'+esc(c.email||'—')+'</td>'
-          +'<td class="table-td">'+esc(c.state||'—')+'</td>'
-          +'<td class="table-td">'+esc(c.district||'—')+'</td>'
-          +'<td class="table-td">'+esc(c.bank_name||'—')+'</td>'
-          +'<td class="table-td">'+pill+'</td>'+actionTd
-          +'</tr>';
-      }).join('')
-      +'</tbody></table></div>';
+    if (!rows.length) {
+      return '<div style="padding:56px 24px;text-align:center;">'
+        + '<div style="width:48px;height:48px;border-radius:12px;background:#f1f5f9;display:grid;place-items:center;margin:0 auto 12px;">'
+          + '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'
+        + '</div>'
+        + '<div style="font-size:14px;font-weight:600;color:#374151;">No vendors found</div>'
+        + '<div style="font-size:12px;color:#94a3b8;margin-top:4px;">Try adjusting your search or filter</div>'
+      + '</div>';
+    }
+
+    const thS = 'padding:10px 16px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;background:#f8fafc;text-align:left;white-space:nowrap;';
+    const actionTh = _canEdit ? '<th style="' + thS + 'text-align:right;">Actions</th>' : '';
+
+    return '<div class="overflow-x-auto"><table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr style="border-bottom:2px solid #e2e8f0;">'
+        + '<th style="' + thS + 'text-align:center;width:44px;">#</th>'
+        + '<th style="' + thS + '">Name</th>'
+        + '<th style="' + thS + '">Mobile</th>'
+        + '<th style="' + thS + '">Email</th>'
+        + '<th style="' + thS + '">State</th>'
+        + '<th style="' + thS + '">District</th>'
+        + '<th style="' + thS + '">Bank</th>'
+        + '<th style="' + thS + '">Status</th>'
+        + actionTh
+      + '</tr></thead>'
+      + '<tbody>'
+        + rows.map((c, i) => {
+          const pill = c.status === 'active'
+            ? '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;"><span style="width:5px;height:5px;border-radius:50%;background:#16a34a;"></span>Active</span>'
+            : '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;"><span style="width:5px;height:5px;border-radius:50%;background:#94a3b8;"></span>Inactive</span>';
+          const tdS = 'padding:12px 16px;font-size:13px;color:#374151;border-bottom:1px solid #f1f5f9;';
+          const actionTd = _canEdit
+            ? '<td style="' + tdS + '"><div style="display:flex;gap:6px;justify-content:flex-end;">'
+              + '<button class="js-edit" data-id="' + c.id + '" style="padding:4px 12px;border-radius:6px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:11px;font-weight:600;cursor:pointer;">Edit</button>'
+              + '<button class="js-delete" data-id="' + c.id + '" style="padding:4px 12px;border-radius:6px;border:1.5px solid #fecaca;background:#fff5f5;color:#ef4444;font-size:11px;font-weight:600;cursor:pointer;">Delete</button>'
+              + '</div></td>' : '';
+          return '<tr style="' + (i % 2 === 1 ? 'background:#fafafa;' : '') + '" onmouseenter="this.style.background=\'#fff8f5\'" onmouseleave="this.style.background=\'' + (i % 2 === 1 ? '#fafafa' : 'transparent') + '\'">'
+            + '<td style="' + tdS + 'text-align:center;color:#94a3b8;font-weight:600;">' + (i+1) + '</td>'
+            + '<td style="' + tdS + '">'
+              + '<div style="font-weight:600;color:#1e293b;">' + esc(c.name) + '</div>'
+              + (c.email ? '<div style="font-size:11px;color:#94a3b8;margin-top:1px;">' + esc(c.email) + '</div>' : '')
+            + '</td>'
+            + '<td style="' + tdS + '">' + esc(c.mobile||c.contact_number||'—') + '</td>'
+            + '<td style="' + tdS + '">' + esc(c.email||'—') + '</td>'
+            + '<td style="' + tdS + '">' + esc(c.state||'—') + '</td>'
+            + '<td style="' + tdS + '">' + esc(c.district||'—') + '</td>'
+            + '<td style="' + tdS + '">' + esc(c.bank_name||'—') + '</td>'
+            + '<td style="' + tdS + '">' + pill + '</td>'
+            + actionTd
+          + '</tr>';
+        }).join('')
+      + '</tbody></table></div>';
   }
 
   function _renderVendorTab() {
     const rows = _filtered();
-    return '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">'
-      +'<div style="padding:14px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-      +'<input id="cm-search" placeholder="Search name / mobile / email…" value="'+esc(_q)+'" style="flex:1;min-width:180px;padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;outline:none;" />'
-      +'<select id="cm-status-filter" style="padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;outline:none;background:#fff;">'
-      +'<option '+(_status==='All'?'selected':'')+'>All</option>'
-      +'<option '+(_status==='Active'?'selected':'')+'>Active</option>'
-      +'<option '+(_status==='Inactive'?'selected':'')+'>Inactive</option>'
-      +'</select>'
-      +'<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">'+rows.length+' of '+_list.length+'</span>'
-      +'</div><div id="cm-table">'+_renderTable()+'</div></div>';
+    const active   = _list.filter(c => c.status === 'active').length;
+    const inactive = _list.filter(c => c.status !== 'active').length;
+
+    return '<div style="display:flex;flex-direction:column;gap:16px;">'
+      // Stat chips
+      + '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+        + '<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;background:#fff;border:1px solid #e2e8f0;box-shadow:0 1px 2px rgba(0,0,0,.04);">'
+          + '<div style="width:32px;height:32px;border-radius:8px;background:#f8fafc;display:grid;place-items:center;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>'
+          + '<div><div style="font-size:18px;font-weight:800;color:#1e293b;line-height:1;">' + _list.length + '</div><div style="font-size:10.5px;color:#94a3b8;margin-top:1px;">Total</div></div>'
+        + '</div>'
+        + '<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;background:#f0fdf4;border:1px solid #bbf7d0;">'
+          + '<div style="width:32px;height:32px;border-radius:8px;background:#dcfce7;display:grid;place-items:center;"><span style="width:8px;height:8px;border-radius:50%;background:#16a34a;"></span></div>'
+          + '<div><div style="font-size:18px;font-weight:800;color:#16a34a;line-height:1;">' + active + '</div><div style="font-size:10.5px;color:#15803d;margin-top:1px;">Active</div></div>'
+        + '</div>'
+        + '<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;">'
+          + '<div style="width:32px;height:32px;border-radius:8px;background:#f1f5f9;display:grid;place-items:center;"><span style="width:8px;height:8px;border-radius:50%;background:#94a3b8;"></span></div>'
+          + '<div><div style="font-size:18px;font-weight:800;color:#64748b;line-height:1;">' + inactive + '</div><div style="font-size:10.5px;color:#94a3b8;margin-top:1px;">Inactive</div></div>'
+        + '</div>'
+      + '</div>'
+      // Table card
+      + '<div style="background:#fff;border-radius:14px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.05);">'
+        + '<div style="padding:14px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+          + '<div style="position:relative;flex:1;min-width:200px;">'
+            + '<svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#94a3b8;" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
+            + '<input id="cm-search" placeholder="Search name, mobile, email…" value="' + esc(_q) + '" style="width:100%;box-sizing:border-box;padding:8px 12px 8px 32px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;outline:none;background:#f8fafc;" onfocus="this.style.borderColor=\'#C4714A\';this.style.background=\'#fff\'" onblur="this.style.borderColor=\'#e2e8f0\';this.style.background=\'#f8fafc\'" />'
+          + '</div>'
+          + '<select id="cm-status-filter" style="padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;outline:none;background:#f8fafc;color:#374151;cursor:pointer;">'
+            + '<option ' + (_status==='All'?'selected':'') + '>All</option>'
+            + '<option ' + (_status==='Active'?'selected':'') + '>Active</option>'
+            + '<option ' + (_status==='Inactive'?'selected':'') + '>Inactive</option>'
+          + '</select>'
+          + '<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">' + rows.length + ' of ' + _list.length + '</span>'
+        + '</div>'
+        + '<div id="cm-table">' + _renderTable() + '</div>'
+      + '</div>'
+    + '</div>';
   }
 
-  /* ── Payment Management (entry-based) ───────────────────────── */
-  function _pmEntryHtml(entry, idx) {
-    const v   = entry.vendorId ? _list.find(x => String(x.id) === String(entry.vendorId)) : null;
-    if (!v) return '';
-    const tdS = 'padding:11px 14px;font-size:13px;color:#374151;';
-    const mS  = tdS + 'font-family:monospace;letter-spacing:.04em;';
-    return '<tr data-ei="'+idx+'" style="border-bottom:1px solid #f1f5f9;" onmouseenter="this.style.background=\'#fafafa\'" onmouseleave="this.style.background=\'transparent\'">'
-      +'<td style="'+tdS+'text-align:center;color:#94a3b8;min-width:44px;">'+(idx+1)+'</td>'
-      +'<td style="'+tdS+'">'
-        +'<div style="font-size:13px;font-weight:600;color:#1e293b;">'+esc(v.name)+'</div>'
-        +(v.mobile||v.contact_number ? '<div style="font-size:11px;color:#94a3b8;margin-top:1px;">'+esc(v.mobile||v.contact_number)+'</div>' : '')
-      +'</td>'
-      +'<td style="'+tdS+'font-weight:700;color:#059669;">&#x20B9; '+parseFloat(entry.amount||0).toFixed(2)+'</td>'
-      +'<td style="'+tdS+'">'+esc(v.bank_name||'—')+'</td>'
-      +'<td style="'+tdS+'">'+esc(v.account_holder||'—')+'</td>'
-      +'<td style="'+mS+'">'+esc(v.account_no||'—')+'</td>'
-      +'<td style="'+mS+'letter-spacing:.06em;">'+esc(v.ifsc_code||'—')+'</td>'
-      +'<td style="'+tdS+'">'+esc(v.branch_name||'—')+'</td>'
-      +'<td style="padding:8px 14px;text-align:center;">'
-        +'<button class="pm-del-entry" data-ei="'+idx+'" title="Remove" style="background:transparent;border:none;cursor:pointer;color:#cbd5e1;padding:4px;line-height:1;" onmouseenter="this.style.color=\'#ef4444\'" onmouseleave="this.style.color=\'#cbd5e1\'">'
-          +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>'
-        +'</button>'
-      +'</td>'
-      +'</tr>';
-  }
+  /* ── Payment Management – Excel grid ───────────────────────── */
+  function _pmRowHtml(row, i) {
+    const v   = row.vendorId ? _list.find(x => String(x.id) === String(row.vendorId)) : null;
+    const hasData = !!(row.vendorId || row.vendorSearch || row.amount);
+    const cellS = 'padding:5px 8px;border-right:1px solid #f0f4f8;';
+    const autoS = 'font-size:12.5px;color:' + (v ? '#374151' : '#cbd5e1') + ';padding:7px 10px;';
+    const monoS = autoS + 'font-family:monospace;letter-spacing:.04em;';
 
-  function _pmEntriesTbody() {
-    if (!_pmEntries.length) return '<tr><td colspan="9" style="padding:40px;text-align:center;color:#94a3b8;font-size:13px;">No entries yet — search a vendor above and add.</td></tr>';
-    return _pmEntries.map(function(e,i){ return _pmEntryHtml(e,i); }).join('');
-  }
-
-  function _pmDetailHtml(v) {
-    if (!v) return '';
-    const thS = 'padding:10px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;text-align:left;white-space:nowrap;border-bottom:2px solid #f1f5f9;background:#f8fafc;';
-    const tdS = 'padding:12px 14px;color:#374151;font-size:13px;';
-    const canTick = !!(v && _pmDraft.amount && parseFloat(_pmDraft.amount) > 0);
-    const tickStyle = 'width:32px;height:32px;border:none;border-radius:50%;cursor:'+(canTick?'pointer':'not-allowed')+';'
-      +'background:'+(canTick?'#059669':'#e2e8f0')+';color:'+(canTick?'#fff':'#9ca3af')+';'
-      +'font-size:16px;font-weight:700;line-height:1;transition:background .15s;';
-    return '<div style="margin-top:20px;border-top:1px solid #f1f5f9;padding-top:20px;overflow-x:auto;">'
-      +'<table style="width:100%;border-collapse:collapse;">'
-        +'<thead><tr>'
-          +'<th style="'+thS+'">Name</th>'
-          +'<th style="'+thS+'">Mobile</th>'
-          +'<th style="'+thS+'">Bank Name</th>'
-          +'<th style="'+thS+'">Account Holder</th>'
-          +'<th style="'+thS+'">Account No.</th>'
-          +'<th style="'+thS+'">IFSC Code</th>'
-          +'<th style="'+thS+'">Branch</th>'
-          +'<th style="'+thS+'width:52px;"></th>'
-        +'</tr></thead>'
-        +'<tbody><tr>'
-          +'<td style="'+tdS+'font-weight:600;color:#1e293b;">'+esc(v.name)+'</td>'
-          +'<td style="'+tdS+'">'+esc(v.mobile||v.contact_number||'—')+'</td>'
-          +'<td style="'+tdS+'">'+esc(v.bank_name||'—')+'</td>'
-          +'<td style="'+tdS+'">'+esc(v.account_holder||'—')+'</td>'
-          +'<td style="'+tdS+'font-family:monospace;letter-spacing:.04em;">'+esc(v.account_no||'—')+'</td>'
-          +'<td style="'+tdS+'font-family:monospace;letter-spacing:.06em;">'+esc(v.ifsc_code||'—')+'</td>'
-          +'<td style="'+tdS+'">'+esc(v.branch_name||'—')+'</td>'
-          +'<td style="padding:8px 14px;text-align:center;">'
-            +'<button id="pm-tick-btn" title="Add entry" '+(canTick?'':'disabled')+' style="'+tickStyle+'">&#10003;</button>'
-          +'</td>'
-        +'</tr></tbody>'
-      +'</table>'
-    +'</div>';
-  }
-
-  function _pmSavedHtml() {
-    if (!_pmEntries.length) return '';
-    const thS = 'padding:10px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;text-align:left;white-space:nowrap;border-bottom:2px solid #f1f5f9;background:#f8fafc;';
-    return '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">'
-      +'<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #f1f5f9;background:#fafafa;">'
-        +'<span style="font-size:13px;font-weight:700;color:#1e293b;">Added Entries '
-          +'<span style="color:#94a3b8;font-weight:400;font-size:12px;">('+_pmEntries.length+')</span></span>'
-        +'<div style="display:flex;gap:8px;">'
-          +'<button id="pm-save-btn" style="padding:6px 14px;font-size:12px;font-weight:600;border:1.5px solid #C4714A;border-radius:7px;background:#fff;color:#C4714A;cursor:pointer;">Save</button>'
-          +'<button id="pm-excel-btn" style="padding:6px 14px;font-size:12px;font-weight:600;border:none;border-radius:7px;background:#059669;color:#fff;cursor:pointer;">&#8675; Excel</button>'
-        +'</div>'
-      +'</div>'
-      +'<div style="overflow-x:auto;">'
-        +'<table style="width:100%;border-collapse:collapse;">'
-          +'<thead><tr>'
-            +'<th style="'+thS+'text-align:center;width:44px;">#</th>'
-            +'<th style="'+thS+'">Name</th>'
-            +'<th style="'+thS+'">Amount</th>'
-            +'<th style="'+thS+'">Bank Name</th>'
-            +'<th style="'+thS+'">Account Holder</th>'
-            +'<th style="'+thS+'">Account No.</th>'
-            +'<th style="'+thS+'">IFSC Code</th>'
-            +'<th style="'+thS+'">Branch</th>'
-            +'<th style="'+thS+'width:44px;"></th>'
-          +'</tr></thead>'
-          +'<tbody id="pm-entries-tbody">'
-            +_pmEntries.map(function(e,i){ return _pmEntryHtml(e,i); }).join('')
-          +'</tbody>'
-        +'</table>'
-      +'</div>'
-    +'</div>';
+    return '<tr data-ri="' + i + '" style="border-bottom:1px solid #eef2f7;' + (i % 2 === 1 ? 'background:#fafbfc;' : '') + '">'
+      // S.No
+      + '<td style="' + cellS + 'text-align:center;width:42px;color:#94a3b8;font-size:12px;font-weight:600;padding:5px 4px;">' + (i+1) + '</td>'
+      // Name - editable with search
+      + '<td style="' + cellS + 'min-width:190px;padding:4px 6px;">'
+        + '<div style="position:relative;">'
+          + '<input class="pm-name-inp" data-ri="' + i + '" type="text" placeholder="Search vendor…" autocomplete="off" value="' + esc(row.vendorSearch) + '" '
+            + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (v ? '#C4714A' : '#e9ecef') + ';border-radius:7px;font-size:13px;font-weight:' + (v?'600':'400') + ';color:#1e293b;outline:none;background:' + (v?'#fff8f5':'#fff') + ';transition:border-color .15s;" />'
+          + '<div class="pm-dd" data-ri="' + i + '" style="display:none;position:absolute;top:calc(100% + 3px);left:0;right:0;min-width:230px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:200px;overflow-y:auto;"></div>'
+        + '</div>'
+      + '</td>'
+      // Amount - editable
+      + '<td style="' + cellS + 'min-width:130px;padding:4px 6px;">'
+        + '<div style="display:flex;align-items:center;gap:4px;border:1.5px solid #e9ecef;border-radius:7px;padding:6px 10px;background:' + (row.amount?'#f8fff9':'#fff') + ';transition:border-color .15s;" onfocusin="this.style.borderColor=\'#059669\';this.style.background=\'#f0fdf4\'" onfocusout="this.style.borderColor=\'#e9ecef\';this.style.background=\'' + (row.amount?'#f8fff9':'#fff') + '\'">'
+          + '<span style="color:#94a3b8;font-size:12px;font-weight:600;">₹</span>'
+          + '<input class="pm-amount-inp" data-ri="' + i + '" type="number" min="0" step="0.01" placeholder="0.00" value="' + esc(row.amount) + '" '
+            + 'style="border:none;outline:none;background:transparent;font-size:13px;font-weight:700;color:#1e293b;width:100%;" />'
+        + '</div>'
+      + '</td>'
+      // Auto-filled cells
+      + '<td style="' + cellS + 'min-width:110px;"><span style="' + autoS + '">' + esc(v?.bank_name||'—') + '</span></td>'
+      + '<td style="' + cellS + 'min-width:130px;"><span style="' + autoS + '">' + esc(v?.account_holder||'—') + '</span></td>'
+      + '<td style="' + cellS + 'min-width:140px;"><span style="' + monoS + '">' + esc(v?.account_no||'—') + '</span></td>'
+      + '<td style="' + cellS + 'min-width:100px;"><span style="' + monoS + '">' + esc(v?.ifsc_code||'—') + '</span></td>'
+      + '<td style="' + cellS + 'min-width:110px;border-right:none;"><span style="' + autoS + '">' + esc(v?.branch_name||'—') + '</span></td>'
+      // Clear
+      + '<td style="padding:5px 8px;text-align:center;width:36px;">'
+        + (hasData
+          ? '<button class="pm-clear-row" data-ri="' + i + '" title="Clear row" style="background:transparent;border:none;cursor:pointer;color:#d1d5db;padding:3px;line-height:1;" onmouseenter="this.style.color=\'#ef4444\'" onmouseleave="this.style.color=\'#d1d5db\'">'
+              + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
+            + '</button>'
+          : '')
+      + '</td>'
+    + '</tr>';
   }
 
   function _renderPaymentTab() {
-    const dv = _pmDraft.vendorId ? _list.find(v => String(v.id) === String(_pmDraft.vendorId)) : null;
-    return '<div style="display:flex;flex-direction:column;gap:16px;">'
-      +'<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:24px;">'
-        +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">'
-          +'<div>'
-            +'<label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:6px;">Vendor Name</label>'
-            +'<div style="position:relative;">'
-              +'<div id="pm-search-wrap" style="display:flex;align-items:center;gap:8px;border:1.5px solid '+(dv?'#C4714A':'#e2e8f0')+';border-radius:9px;padding:9px 12px;background:#fff;transition:border-color .15s;">'
-                +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
-                +'<input id="pm-vendor-search" type="text" placeholder="Search vendor name…" autocomplete="off" value="'+esc(dv?dv.name:'')+'" '
-                  +'style="border:none;outline:none;background:transparent;font-size:13px;font-weight:'+(dv?'600':'400')+';color:#1e293b;width:100%;" />'
-              +'</div>'
-              +'<div id="pm-vendor-dd" style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;min-width:260px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:200;box-shadow:0 8px 28px rgba(0,0,0,.12);max-height:260px;overflow-y:auto;"></div>'
-            +'</div>'
-          +'</div>'
-          +'<div>'
-            +'<label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:6px;">Amount</label>'
-            +'<div style="display:flex;align-items:center;gap:6px;border:1.5px solid #e2e8f0;border-radius:9px;padding:9px 12px;background:#f8fafc;transition:border-color .15s;" '
-              +'onfocusin="this.style.borderColor=\'#C4714A\'" onfocusout="this.style.borderColor=\'#e2e8f0\'">'
-              +'<span style="font-size:13px;color:#94a3b8;font-weight:600;">&#x20B9;</span>'
-              +'<input id="pm-amount-input" type="number" min="0" step="0.01" placeholder="0.00" value="'+esc(_pmDraft.amount)+'" '
-                +'style="border:none;outline:none;background:transparent;font-size:14px;font-weight:700;color:#1e293b;width:100%;" />'
-            +'</div>'
-          +'</div>'
-        +'</div>'
-        +'<div id="pm-detail">'+_pmDetailHtml(dv)+'</div>'
-      +'</div>'
-      +'<div id="pm-saved">'+_pmSavedHtml()+'</div>'
-    +'</div>';
+    const filledRows = _pmRows.filter(r => r.vendorId && r.amount && parseFloat(r.amount) > 0);
+    const total = filledRows.reduce((s, r) => s + parseFloat(r.amount||0), 0);
+
+    const thS = 'padding:10px 12px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;background:#f4f6f9;text-align:left;white-space:nowrap;border-bottom:2px solid #e2e8f0;border-right:1px solid #eaecef;';
+
+    return '<div style="background:#fff;border-radius:14px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);">'
+      // Header
+      + '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #f0f4f8;background:linear-gradient(to right,#fafbfc,#f8fafc);">'
+        + '<div style="display:flex;align-items:center;gap:14px;">'
+          + '<div>'
+            + '<div style="font-size:14px;font-weight:700;color:#1e293b;">Payment Entries</div>'
+            + '<div id="pm-subheader" style="font-size:11px;color:#94a3b8;margin-top:1px;">' + _pmRows.length + ' rows &nbsp;·&nbsp; <span style="color:#059669;font-weight:600;">' + filledRows.length + ' filled</span>'
+              + (filledRows.length ? ' &nbsp;·&nbsp; Total: <strong style="color:#1e293b;">₹' + total.toLocaleString('en-IN', {minimumFractionDigits:2}) + '</strong>' : '')
+            + '</div>'
+          + '</div>'
+        + '</div>'
+        + '<div style="display:flex;gap:8px;align-items:center;">'
+          + '<button id="pm-save-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;font-size:12px;font-weight:600;border:1.5px solid #C4714A;border-radius:8px;background:#fff;color:#C4714A;cursor:pointer;" onmouseenter="this.style.background=\'#fff8f5\'" onmouseleave="this.style.background=\'#fff\'">'
+            + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save'
+          + '</button>'
+          + '<button id="pm-excel-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;font-size:12px;font-weight:600;border:none;border-radius:8px;background:#059669;color:#fff;cursor:pointer;" onmouseenter="this.style.background=\'#047857\'" onmouseleave="this.style.background=\'#059669\'">'
+            + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Excel'
+          + '</button>'
+        + '</div>'
+      + '</div>'
+      // Table
+      + '<div style="overflow-x:auto;">'
+        + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
+          + '<thead><tr>'
+            + '<th style="' + thS + 'text-align:center;width:42px;">#</th>'
+            + '<th style="' + thS + 'min-width:190px;">Name</th>'
+            + '<th style="' + thS + 'min-width:130px;">Amount</th>'
+            + '<th style="' + thS + 'min-width:110px;">Bank Name</th>'
+            + '<th style="' + thS + 'min-width:130px;">Account Holder</th>'
+            + '<th style="' + thS + 'min-width:140px;">Account No.</th>'
+            + '<th style="' + thS + 'min-width:100px;">IFSC Code</th>'
+            + '<th style="' + thS + 'min-width:110px;border-right:none;">Branch</th>'
+            + '<th style="' + thS + 'width:36px;border-right:none;"></th>'
+          + '</tr></thead>'
+          + '<tbody id="pm-tbody">'
+            + _pmRows.map((r, i) => _pmRowHtml(r, i)).join('')
+          + '</tbody>'
+        + '</table>'
+      + '</div>'
+      // Add row button
+      + '<div style="padding:10px 14px;border-top:1px solid #f0f4f8;background:#fafbfc;">'
+        + '<button id="pm-add-rows-btn" style="display:flex;align-items:center;gap:6px;padding:6px 14px;font-size:12px;font-weight:600;border:1.5px dashed #d1d5db;border-radius:7px;background:transparent;color:#64748b;cursor:pointer;" onmouseenter="this.style.borderColor=\'#C4714A\';this.style.color=\'#C4714A\'" onmouseleave="this.style.borderColor=\'#d1d5db\';this.style.color=\'#64748b\'">'
+          + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>'
+          + 'Add 5 more rows'
+        + '</button>'
+      + '</div>'
+    + '</div>';
   }
 
-  function _refreshSaved() {
-    const saved = document.getElementById('pm-saved');
-    if (saved) saved.innerHTML = _pmSavedHtml();
-    _bindSavedEvents();
+  function _refreshPmTbody() {
+    const tbody = document.getElementById('pm-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = _pmRows.map((r, i) => _pmRowHtml(r, i)).join('');
+    _bindPaymentRowEvents();
   }
 
-  function _bindSavedEvents() {
-    document.querySelectorAll('.pm-del-entry').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        const idx = parseInt(btn.dataset.ei);
-        if (!isNaN(idx) && idx >= 0 && idx < _pmEntries.length) {
-          _pmEntries.splice(idx, 1);
-          _refreshSaved();
+  function _updatePmHeader() {
+    const filledRows = _pmRows.filter(r => r.vendorId && r.amount && parseFloat(r.amount) > 0);
+    const total = filledRows.reduce((s, r) => s + parseFloat(r.amount||0), 0);
+    const sub = document.querySelector('#pm-subheader');
+    if (sub) {
+      sub.innerHTML = _pmRows.length + ' rows &nbsp;·&nbsp; <span style="color:#059669;font-weight:600;">' + filledRows.length + ' filled</span>'
+        + (filledRows.length ? ' &nbsp;·&nbsp; Total: <strong style="color:#1e293b;">₹' + total.toLocaleString('en-IN', {minimumFractionDigits:2}) + '</strong>' : '');
+    }
+  }
+
+  /* ── Payment event binding ─────────────────────────────────── */
+  function _buildDropdown(ddEl, q, excludeRows) {
+    const qt = q.trim().toLowerCase();
+    const usedIds = _pmRows.filter((r,ri) => !excludeRows.includes(ri)).map(r => String(r.vendorId));
+    let matches = qt
+      ? _list.filter(v => v.name.toLowerCase().includes(qt) || (v.mobile||'').includes(qt))
+      : _list.slice();
+    if (!matches.length) {
+      ddEl.innerHTML = '<div style="padding:12px 16px;font-size:13px;color:#94a3b8;">No vendors found</div>';
+      return;
+    }
+    matches.sort((a, b) => {
+      const aU = usedIds.includes(String(a.id));
+      const bU = usedIds.includes(String(b.id));
+      return aU === bU ? 0 : (aU ? 1 : -1);
+    });
+    ddEl.innerHTML = matches.slice(0, 40).map(v => {
+      const used = usedIds.includes(String(v.id));
+      return '<div class="pm-dd-opt" data-vid="' + v.id + '" style="padding:9px 14px;cursor:pointer;border-bottom:1px solid #f8fafc;">'
+        + '<div style="font-size:13px;font-weight:600;color:' + (used ? '#94a3b8' : '#1e293b') + ';">' + esc(v.name) + (used ? ' <span style="font-size:10px;font-weight:400;">(added)</span>' : '') + '</div>'
+        + (v.mobile ? '<div style="font-size:11px;color:#94a3b8;margin-top:1px;">' + esc(v.mobile) + '</div>' : '')
+      + '</div>';
+    }).join('');
+  }
+
+  function _bindPaymentRowEvents() {
+    document.querySelectorAll('.pm-name-inp').forEach(inp => {
+      const ri = parseInt(inp.dataset.ri);
+      const ddEl = document.querySelector('.pm-dd[data-ri="' + ri + '"]');
+      if (!ddEl) return;
+
+      inp.addEventListener('focus', () => {
+        _buildDropdown(ddEl, inp.value, [ri]);
+        ddEl.style.display = 'block';
+      });
+      inp.addEventListener('input', () => {
+        _pmRows[ri].vendorId     = null;
+        _pmRows[ri].vendorSearch = inp.value;
+        inp.style.fontWeight     = '400';
+        inp.style.borderColor    = '#e9ecef';
+        inp.style.background     = '#fff';
+        _buildDropdown(ddEl, inp.value, [ri]);
+        ddEl.style.display = 'block';
+        // Clear auto-filled cells in this row
+        const tr = document.querySelector('tr[data-ri="' + ri + '"]');
+        if (tr) {
+          const cells = tr.querySelectorAll('td:nth-child(n+4)');
+          cells.forEach(c => { const span = c.querySelector('span'); if (span) { span.textContent = '—'; span.style.color = '#cbd5e1'; } });
         }
       });
-    });
-    document.getElementById('pm-save-btn')?.addEventListener('click', function() {
-      try {
-        localStorage.setItem('pm_entries', JSON.stringify(_pmEntries.map(function(e){ return {vendorId:e.vendorId,amount:e.amount}; })));
-        Utils.showToast('Payment entries saved');
-      } catch(err) { Utils.showToast('Failed to save','error'); }
-    });
-    document.getElementById('pm-excel-btn')?.addEventListener('click', function() {
-      const today=new Date(), dd=String(today.getDate()).padStart(2,'0'), mm=String(today.getMonth()+1).padStart(2,'0'), yyyy=today.getFullYear();
-      const dateStr=dd+'/'+mm+'/'+yyyy;
-      function q(s){ return '"'+String(s||'').replace(/"/g,'""')+'"'; }
-      const hdr=['Transaction Type','Beneficiary Code','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Drawee Location in case of Demand Draft','DD Printing Location','Beneficiary Address 1','Beneficiary Address 2','Beneficiary Address 3','Beneficiary Address 4','Beneficiary Address 5','Instruction Reference Number','Customer Reference Number','Payment details 1','Payment details 2','Payment details 3','Payment details 4','Payment details 5','Payment details 6','Payment details 7','Cheque Number','Chq / Trn Date','MICR Number','IFSC Code','Beneficiary Bank Name','Beneficiary Bank Branch Name','Beneficiary email id'];
-      const csvRows=[hdr.join(',')]; var sno=1;
-      _pmEntries.forEach(function(entry) {
-        var v=_list.find(function(x){ return String(x.id)===String(entry.vendorId); });
-        if(!v) return;
-        csvRows.push(['N',sno++,q(v.account_no),parseFloat(entry.amount||0).toFixed(2),q(v.name),'','','','','','','','','','','','','','','','','',dateStr,'',q(v.ifsc_code),q(v.bank_name),q(v.branch_name),''].join(','));
+      inp.addEventListener('blur', () => {
+        setTimeout(() => {
+          ddEl.style.display = 'none';
+          if (!_pmRows[ri].vendorId) {
+            _pmRows[ri].vendorSearch = '';
+            inp.value = '';
+          }
+        }, 160);
       });
-      var csv='﻿'+csvRows.join('\r\n');
-      var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
-      var url=URL.createObjectURL(blob);
-      var a=document.createElement('a');
-      a.href=url; a.download='neft_payment_'+yyyy+mm+dd+'.csv';
+      inp.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { ddEl.style.display = 'none'; inp.blur(); }
+      });
+
+      ddEl.querySelectorAll('.pm-dd-opt').forEach(opt => {
+        opt.addEventListener('mouseenter', () => { opt.style.background = '#f1f5f9'; });
+        opt.addEventListener('mouseleave', () => { opt.style.background = ''; });
+        opt.addEventListener('mousedown', e => {
+          e.preventDefault();
+          const v = _list.find(x => String(x.id) === String(opt.dataset.vid));
+          if (!v) return;
+          _pmRows[ri].vendorId     = v.id;
+          _pmRows[ri].vendorSearch = v.name;
+          inp.value             = v.name;
+          inp.style.fontWeight  = '600';
+          inp.style.borderColor = '#C4714A';
+          inp.style.background  = '#fff8f5';
+          ddEl.style.display    = 'none';
+          // Update auto-filled cells live
+          const tr = document.querySelector('tr[data-ri="' + ri + '"]');
+          if (tr) {
+            const spans = tr.querySelectorAll('td:nth-child(n+4) span');
+            const vals  = [v.bank_name, v.account_holder, v.account_no, v.ifsc_code, v.branch_name];
+            spans.forEach((span, si) => {
+              if (si < vals.length) { span.textContent = vals[si] || '—'; span.style.color = '#374151'; }
+            });
+          }
+          // Update clear button
+          const clearCell = tr?.querySelector('td:last-child');
+          if (clearCell && !clearCell.querySelector('.pm-clear-row')) {
+            clearCell.innerHTML = '<button class="pm-clear-row" data-ri="' + ri + '" title="Clear row" style="background:transparent;border:none;cursor:pointer;color:#d1d5db;padding:3px;line-height:1;" onmouseenter="this.style.color=\'#ef4444\'" onmouseleave="this.style.color=\'#d1d5db\'">'
+              + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
+            + '</button>';
+            clearCell.querySelector('.pm-clear-row').addEventListener('click', () => {
+              _pmRows[ri] = _blankRow();
+              _refreshPmRow(ri);
+            });
+          }
+          // Focus amount
+          const amtInp = document.querySelector('.pm-amount-inp[data-ri="' + ri + '"]');
+          if (amtInp) amtInp.focus();
+          _updatePmHeader();
+        });
+      });
+    });
+
+    document.querySelectorAll('.pm-amount-inp').forEach(inp => {
+      const ri = parseInt(inp.dataset.ri);
+      inp.addEventListener('input', () => {
+        _pmRows[ri].amount = inp.value;
+        _updatePmHeader();
+      });
+    });
+
+    document.querySelectorAll('.pm-clear-row').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ri = parseInt(btn.dataset.ri);
+        _pmRows[ri] = _blankRow();
+        _refreshPmRow(ri);
+        _updatePmHeader();
+      });
+    });
+  }
+
+  function _refreshPmRow(ri) {
+    const tr = document.querySelector('tr[data-ri="' + ri + '"]');
+    if (!tr) return;
+    const newTr = document.createElement('tbody');
+    newTr.innerHTML = _pmRowHtml(_pmRows[ri], ri);
+    const newEl = newTr.firstElementChild;
+    tr.replaceWith(newEl);
+    // Re-bind events for the replaced row
+    const inp   = newEl.querySelector('.pm-name-inp');
+    const amtInp = newEl.querySelector('.pm-amount-inp');
+    const ddEl   = newEl.querySelector('.pm-dd');
+    const clearBtn = newEl.querySelector('.pm-clear-row');
+    if (inp && ddEl) {
+      inp.addEventListener('focus', () => { _buildDropdown(ddEl, inp.value, [ri]); ddEl.style.display = 'block'; });
+      inp.addEventListener('input', () => {
+        _pmRows[ri].vendorId = null; _pmRows[ri].vendorSearch = inp.value;
+        inp.style.fontWeight = '400'; inp.style.borderColor = '#e9ecef'; inp.style.background = '#fff';
+        _buildDropdown(ddEl, inp.value, [ri]); ddEl.style.display = 'block';
+      });
+      inp.addEventListener('blur', () => { setTimeout(() => { ddEl.style.display = 'none'; if (!_pmRows[ri].vendorId) { _pmRows[ri].vendorSearch = ''; inp.value = ''; } }, 160); });
+      inp.addEventListener('keydown', e => { if (e.key === 'Escape') { ddEl.style.display = 'none'; inp.blur(); } });
+      ddEl.querySelectorAll('.pm-dd-opt').forEach(opt => {
+        opt.addEventListener('mouseenter', () => { opt.style.background = '#f1f5f9'; });
+        opt.addEventListener('mouseleave', () => { opt.style.background = ''; });
+        opt.addEventListener('mousedown', e => {
+          e.preventDefault();
+          const v = _list.find(x => String(x.id) === String(opt.dataset.vid));
+          if (!v) return;
+          _pmRows[ri].vendorId = v.id; _pmRows[ri].vendorSearch = v.name;
+          inp.value = v.name; inp.style.fontWeight = '600'; inp.style.borderColor = '#C4714A'; inp.style.background = '#fff8f5';
+          ddEl.style.display = 'none';
+          const spans = newEl.querySelectorAll('td:nth-child(n+4) span');
+          const vals  = [v.bank_name, v.account_holder, v.account_no, v.ifsc_code, v.branch_name];
+          spans.forEach((span, si) => { if (si < vals.length) { span.textContent = vals[si] || '—'; span.style.color = '#374151'; } });
+          const amtI = newEl.querySelector('.pm-amount-inp');
+          if (amtI) amtI.focus();
+          _updatePmHeader();
+        });
+      });
+    }
+    if (amtInp) amtInp.addEventListener('input', () => { _pmRows[ri].amount = amtInp.value; _updatePmHeader(); });
+    if (clearBtn) clearBtn.addEventListener('click', () => { _pmRows[ri] = _blankRow(); _refreshPmRow(ri); _updatePmHeader(); });
+  }
+
+  function _bindPaymentTabEvents() {
+    _bindPaymentRowEvents();
+
+    document.getElementById('pm-add-rows-btn')?.addEventListener('click', () => {
+      for (let i = 0; i < 5; i++) _pmRows.push(_blankRow());
+      _refreshPmTbody();
+      _updatePmHeader();
+    });
+
+    document.getElementById('pm-save-btn')?.addEventListener('click', () => {
+      try {
+        const toSave = _pmRows.filter(r => r.vendorId || r.amount).map(r => ({ vendorId: r.vendorId, amount: r.amount }));
+        localStorage.setItem('pm_entries', JSON.stringify(toSave));
+        Utils.showToast('Payment entries saved');
+      } catch { Utils.showToast('Failed to save', 'error'); }
+    });
+
+    document.getElementById('pm-excel-btn')?.addEventListener('click', () => {
+      const filled = _pmRows.filter(r => r.vendorId && r.amount && parseFloat(r.amount) > 0);
+      if (!filled.length) { Utils.showToast('No filled entries to export', 'error'); return; }
+      const today = new Date();
+      const dd = String(today.getDate()).padStart(2,'0'), mm = String(today.getMonth()+1).padStart(2,'0'), yyyy = today.getFullYear();
+      const dateStr = dd + '/' + mm + '/' + yyyy;
+      function q(s) { return '"' + String(s||'').replace(/"/g,'""') + '"'; }
+      const hdr = ['Transaction Type','Beneficiary Code','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Drawee Location in case of Demand Draft','DD Printing Location','Beneficiary Address 1','Beneficiary Address 2','Beneficiary Address 3','Beneficiary Address 4','Beneficiary Address 5','Instruction Reference Number','Customer Reference Number','Payment details 1','Payment details 2','Payment details 3','Payment details 4','Payment details 5','Payment details 6','Payment details 7','Cheque Number','Chq / Trn Date','MICR Number','IFSC Code','Beneficiary Bank Name','Beneficiary Bank Branch Name','Beneficiary email id'];
+      const csvRows = [hdr.join(',')];
+      let sno = 1;
+      filled.forEach(entry => {
+        const v = _list.find(x => String(x.id) === String(entry.vendorId));
+        if (!v) return;
+        csvRows.push(['N', sno++, q(v.account_no), parseFloat(entry.amount||0).toFixed(2), q(v.name), '','','','','','','','','','','','','','','','','', dateStr, '', q(v.ifsc_code), q(v.bank_name), q(v.branch_name), ''].join(','));
+      });
+      const csv = '﻿' + csvRows.join('\r\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = 'neft_payment_' + yyyy + mm + dd + '.csv';
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
       Utils.showToast('NEFT payment file downloaded');
     });
   }
 
-  function _bindPaymentEvents() {
-    const searchInp = document.getElementById('pm-vendor-search');
-    if (!searchInp) return;
-    const ddMenu = document.getElementById('pm-vendor-dd');
-    const wrap   = document.getElementById('pm-search-wrap');
-
-    function _updateTick() {
-      const tickBtn = document.getElementById('pm-tick-btn');
-      if (!tickBtn) return;
-      const canTick = !!(  _pmDraft.vendorId && _pmDraft.amount && parseFloat(_pmDraft.amount) > 0);
-      tickBtn.disabled         = !canTick;
-      tickBtn.style.background = canTick ? '#059669' : '#e2e8f0';
-      tickBtn.style.color      = canTick ? '#fff'    : '#9ca3af';
-      tickBtn.style.cursor     = canTick ? 'pointer' : 'not-allowed';
-    }
-
-    function _bindTickEvent() {
-      const tickBtn = document.getElementById('pm-tick-btn');
-      if (!tickBtn) return;
-      tickBtn.addEventListener('click', function() {
-        const dv = _pmDraft.vendorId ? _list.find(function(x){ return String(x.id)===String(_pmDraft.vendorId); }) : null;
-        if (!dv || !_pmDraft.amount || parseFloat(_pmDraft.amount) <= 0) return;
-        _pmEntries.push({ vendorId: _pmDraft.vendorId, amount: _pmDraft.amount });
-        _pmDraft = { vendorId: null, amount: '' };
-        searchInp.value = ''; searchInp.style.fontWeight = '400';
-        var amtInp = document.getElementById('pm-amount-input');
-        if (amtInp) amtInp.value = '';
-        if (wrap) wrap.style.borderColor = '#e2e8f0';
-        var detail = document.getElementById('pm-detail');
-        if (detail) detail.innerHTML = '';
-        _refreshSaved();
-        Utils.showToast('Entry added');
-        setTimeout(function(){ searchInp.focus(); }, 80);
-      });
-    }
-
-    function _showDetail() {
-      const detail = document.getElementById('pm-detail');
-      if (!detail) return;
-      const dv = _pmDraft.vendorId ? _list.find(function(x){ return String(x.id)===String(_pmDraft.vendorId); }) : null;
-      detail.innerHTML = _pmDetailHtml(dv);
-      if (wrap) wrap.style.borderColor = dv ? '#C4714A' : '#e2e8f0';
-      _updateTick();
-      _bindTickEvent();
-    }
-
-    function _buildMenu(q) {
-      if (!ddMenu) return;
-      var qt      = q.trim().toLowerCase();
-      var matches = qt ? _list.filter(function(v){ return v.name.toLowerCase().includes(qt)||(v.mobile||'').includes(qt); }) : _list.slice();
-      if (!matches.length) { ddMenu.innerHTML='<div style="padding:12px 16px;font-size:13px;color:#94a3b8;">No vendors found</div>'; return; }
-      var usedIds = _pmEntries.map(function(e){ return String(e.vendorId); });
-      matches.sort(function(a, b) {
-        var aUsed = usedIds.includes(String(a.id));
-        var bUsed = usedIds.includes(String(b.id));
-        if (aUsed === bUsed) return 0;
-        return aUsed ? 1 : -1;
-      });
-      ddMenu.innerHTML = matches.slice(0,50).map(function(v){
-        var used = usedIds.includes(String(v.id));
-        return '<div class="pm-dd-opt" data-id="'+v.id+'" style="padding:10px 16px;cursor:pointer;border-bottom:1px solid #f8fafc;">'
-          +'<div style="font-size:13px;font-weight:600;color:'+(used?'#94a3b8':'#1e293b')+';">'+esc(v.name)+'</div>'
-          +(v.mobile ? '<div style="font-size:11px;color:#94a3b8;margin-top:1px;">'+esc(v.mobile)+'</div>' : '')
-        +'</div>';
-      }).join('');
-      ddMenu.querySelectorAll('.pm-dd-opt').forEach(function(opt) {
-        opt.addEventListener('mouseenter', function() { opt.style.background='#f1f5f9'; });
-        opt.addEventListener('mouseleave', function() { opt.style.background=''; });
-        opt.addEventListener('mousedown', function(e) {
-          e.preventDefault();
-          var vendor = _list.find(function(v){ return String(v.id)===String(opt.dataset.id); });
-          if (!vendor) return;
-          _pmDraft.vendorId  = vendor.id;
-          searchInp.value    = vendor.name;
-          searchInp.style.fontWeight = '600';
-          ddMenu.style.display = 'none';
-          _showDetail();
-        });
-      });
-    }
-
-    searchInp.addEventListener('focus', function() { ddMenu.style.display='block'; _buildMenu(searchInp.value); });
-    searchInp.addEventListener('input', function() {
-      _pmDraft.vendorId = null;
-      searchInp.style.fontWeight = '400';
-      ddMenu.style.display = 'block';
-      _buildMenu(searchInp.value);
-      _showDetail();
-    });
-    searchInp.addEventListener('blur', function() {
-      setTimeout(function() {
-        ddMenu.style.display = 'none';
-        if (_pmDraft.vendorId) {
-          var v = _list.find(function(x){ return String(x.id)===String(_pmDraft.vendorId); });
-          if (v && searchInp.value !== v.name) searchInp.value = v.name;
-        } else { searchInp.value = ''; _showDetail(); }
-      }, 160);
-    });
-    searchInp.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape') { ddMenu.style.display='none'; searchInp.blur(); }
-    });
-
-    document.getElementById('pm-amount-input')?.addEventListener('input', function(e) {
-      _pmDraft.amount = e.target.value;
-      _updateTick();
-    });
-
-    _bindSavedEvents();
-  }
-
-  /* ── Main render ──────────────────────────────────────────── */
+  /* ── Main render ────────────────────────────────────────────── */
   function _render() {
     const el = document.getElementById('main-content');
     if (!el) return;
 
     const tabBtn = (id, label, active) =>
-      '<button id="'+id+'" style="padding:7px 18px;border-radius:7px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all .15s;'
-      +'background:'+(active?'#fff':'transparent')+';color:'+(active?'#C4714A':'#64748b')+';'
-      +'box-shadow:'+(active?'0 1px 4px rgba(0,0,0,.1)':'none')+';">'+label+'</button>';
+      '<button id="' + id + '" style="padding:7px 18px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all .15s;'
+      + 'background:' + (active ? '#fff' : 'transparent') + ';color:' + (active ? '#C4714A' : '#64748b') + ';'
+      + 'box-shadow:' + (active ? '0 1px 4px rgba(0,0,0,.08)' : 'none') + ';">' + label + '</button>';
 
-    el.innerHTML = '<div style="padding:20px;max-width:1200px;margin:0 auto;">'
-      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px;">'
-        +'<div><h1 style="font-size:18px;font-weight:700;color:#1e293b;margin:0;">Vendor Master</h1>'
-        +'<p style="font-size:12px;color:#94a3b8;margin:2px 0 0;">Manage vendors and payment information</p></div>'
-        +(_tab==='vendors' && _canEdit
-          ? '<button id="cm-add-btn" style="padding:9px 20px;border-radius:9px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;">'
-            +'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Add Vendor</button>'
+    el.innerHTML = '<div style="padding:20px;max-width:1280px;margin:0 auto;">'
+      // Page header
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:10px;">'
+        + '<div>'
+          + '<h1 style="font-size:20px;font-weight:800;color:#1e293b;margin:0;letter-spacing:-.3px;">Vendor Master</h1>'
+          + '<p style="font-size:12px;color:#94a3b8;margin:3px 0 0;">Manage vendors and payment information</p>'
+        + '</div>'
+        + (_tab === 'vendors' && _canEdit
+          ? '<button id="cm-add-btn" style="display:flex;align-items:center;gap:6px;padding:9px 20px;border-radius:10px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(196,113,74,.3);" onmouseenter="this.style.background=\'#b5603a\'" onmouseleave="this.style.background=\'#C4714A\'">'
+            + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Add Vendor'
+          + '</button>'
           : '')
-      +'</div>'
-      +'<div style="display:flex;gap:4px;padding:4px;background:#f1f5f9;border-radius:10px;width:fit-content;margin-bottom:20px;">'
-        +tabBtn('tab-vendors','Vendor List',_tab==='vendors')
-        +tabBtn('tab-payments','Payment Management',_tab==='payments')
-      +'</div>'
-      +'<div id="cm-tab-content">'+(_tab==='vendors' ? _renderVendorTab() : _renderPaymentTab())+'</div>'
-      +'<div id="cm-modal"></div>'
-    +'</div>';
+      + '</div>'
+      // Tabs
+      + '<div style="display:flex;gap:3px;padding:4px;background:#f1f5f9;border-radius:11px;width:fit-content;margin-bottom:20px;">'
+        + tabBtn('tab-vendors', 'Vendor List', _tab === 'vendors')
+        + tabBtn('tab-payments', 'Payment Management', _tab === 'payments')
+      + '</div>'
+      // Content
+      + '<div id="cm-tab-content">' + (_tab === 'vendors' ? _renderVendorTab() : _renderPaymentTab()) + '</div>'
+      + '<div id="cm-modal"></div>'
+    + '</div>';
 
-    document.getElementById('tab-vendors').addEventListener('click', () => { _tab='vendors'; _render(); });
-    document.getElementById('tab-payments').addEventListener('click', () => { _tab='payments'; _render(); });
+    document.getElementById('tab-vendors').addEventListener('click', () => { _tab = 'vendors'; _render(); });
+    document.getElementById('tab-payments').addEventListener('click', () => { _tab = 'payments'; _render(); });
     document.getElementById('cm-add-btn')?.addEventListener('click', _openAdd);
 
     _bindTableButtons();
-    _bindPaymentEvents();
+    if (_tab === 'payments') _bindPaymentTabEvents();
     _renderModal();
   }
 
@@ -546,15 +665,15 @@ window.Pages['client-master'] = (() => {
     });
   }
 
-  /* ── Public API ───────────────────────────────────────────── */
+  /* ── Public API ─────────────────────────────────────────────── */
   return {
     async render() {
-      _canEdit = (window.currentUser?.roles||[]).some
-        ? (window.currentUser?.roles||[]).some(r => r==='Admin'||r==='HOD')
-        : String(window.currentUser?.roles||'').includes('Admin');
-      _q=''; _status='All'; _open=false; _editing=null; _saving=false;
-      _form=_blankForm(); _list=[];
-      try { _initPmEntries(JSON.parse(localStorage.getItem('pm_entries')||'[]')); } catch { _initPmEntries([]); }
+      _canEdit = (window.currentUser?.roles || []).some
+        ? (window.currentUser?.roles || []).some(r => r === 'Admin' || r === 'HOD')
+        : String(window.currentUser?.roles || '').includes('Admin');
+      _q = ''; _status = 'All'; _open = false; _editing = null; _saving = false;
+      _form = _blankForm(); _list = [];
+      try { _initRows(JSON.parse(localStorage.getItem('pm_entries') || '[]')); } catch { _initRows([]); }
       const el = document.getElementById('main-content');
       if (el) el.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:13px;">Loading vendors…</div>';
       await _load();
