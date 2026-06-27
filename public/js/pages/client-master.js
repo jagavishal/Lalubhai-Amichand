@@ -697,7 +697,7 @@ window.Pages['client-master'] = (() => {
       _form = _blankForm(); _list = [];
       try { _initRows(JSON.parse(localStorage.getItem('pm_entries') || '[]')); } catch { _initRows([]); }
       const el = document.getElementById('main-content');
-      if (el) el.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:13px;">Loading vendors…</div>';
+      if (el) el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;"><div style="text-align:center;"><div style="width:40px;height:40px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:#C4714A;animation:spin .7s linear infinite;margin:0 auto 14px;"></div><div style="font-size:13px;color:#94a3b8;font-weight:500;">Loading…</div></div></div>';
       await _load();
     },
   };

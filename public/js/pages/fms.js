@@ -424,7 +424,7 @@ window.Pages.fms = (() => {
     async render() {
       const el = document.getElementById('main-content');
       if (!el) return;
-      el.innerHTML = `<div class="flex items-center justify-center h-48 text-slate-400 text-sm">Loading FMS…</div>`;
+      el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;"><div style="text-align:center;"><div style="width:40px;height:40px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:#C4714A;animation:spin .7s linear infinite;margin:0 auto 14px;"></div><div style="font-size:13px;color:#94a3b8;font-weight:500;">Loading…</div></div></div>';
       await loadRows();
       renderPage();
     },
