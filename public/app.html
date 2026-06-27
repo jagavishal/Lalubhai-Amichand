@@ -157,30 +157,17 @@
     }
     #sb-signout-btn:hover { color: #f87171; background: rgba(220,38,38,0.1); }
 
-    /* ── Topbar — hidden ─────────────────────────────────────────── */
-    #topbar { display: none !important; }
-    #topbar-inner {
-      padding: 0 24px;
-      height: 56px;
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
-    #topbar-title {
-      font-size: 15px;
-      font-weight: 600;
-      letter-spacing: -0.015em;
-      color: #1e293b;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    #topbar-date {
-      font-size: 12px;
-      color: #94a3b8;
-      display: flex;
-      align-items: center;
-      white-space: nowrap;
+    /* ── Topbar ──────────────────────────────────────────────────── */
+    #topbar {
+      flex-shrink: 0;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(255,255,255,0.95);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-bottom: 1px solid #e8edf3;
+      box-shadow: 0 1px 0 rgba(0,0,0,0.04);
     }
 
     /* ── App Shell layout ────────────────────────────────────────── */
@@ -193,15 +180,16 @@
       flex-direction: column;
       min-height: 100vh;
       width: calc(100vw - 64px);
+      background: #f4f6f9;
     }
     #main-content {
       flex: 1;
-      padding: 16px;
+      padding: 20px 20px 32px;
       width: 100%;
       box-sizing: border-box;
     }
     @media (min-width: 1024px) {
-      #main-content { padding: 24px; }
+      #main-content { padding: 28px 32px 40px; }
     }
     #main-content-inner {
       width: 100%;
@@ -277,7 +265,7 @@
     @media (max-width: 767px) {
       #sidebar        { display: none !important; }
       #topbar         { display: none !important; }
-      #shell-body     { margin-left: 0 !important; width: 100vw !important; }
+      #shell-body     { margin-left: 0 !important; width: 100vw !important; background: #f4f6f9; }
       #main-content   { padding: 12px 12px 74px !important; }
       #bottom-nav     { display: flex !important; }
     }
@@ -718,30 +706,30 @@
 <!-- ═══════════════════════════════════════════════════════════════
      SCRIPTS  (order matters)
 ════════════════════════════════════════════════════════════════ -->
-<script src="/js/utils.js?v=4"></script>
-<script src="/js/router.js?v=4"></script>
-<script src="/js/components/sidebar.js?v=4"></script>
-<script src="/js/components/topbar.js?v=4"></script>
+<script src="/js/utils.js?v=5"></script>
+<script src="/js/router.js?v=5"></script>
+<script src="/js/components/sidebar.js?v=5"></script>
+<script src="/js/components/topbar.js?v=5"></script>
 
 <!-- Pages -->
-<script src="/js/pages/login.js?v=4"></script>
-<script src="/js/pages/dashboard.js?v=4"></script>
-<script src="/js/pages/all-tasks.js?v=4"></script>
-<script src="/js/pages/daily-task.js?v=4"></script>
-<script src="/js/pages/approvals.js?v=4"></script>
-<script src="/js/pages/fms.js?v=4"></script>
-<script src="/js/pages/race-tracker.js?v=4"></script>
-<script src="/js/pages/meetings.js?v=4"></script>
-<script src="/js/pages/leave-tracker.js?v=4"></script>
-<script src="/js/pages/daily-reports.js?v=4"></script>
-<script src="/js/pages/mis.js?v=4"></script>
-<script src="/js/pages/users.js?v=4"></script>
-<script src="/js/pages/client-master.js?v=4"></script>
-<script src="/js/pages/profile.js?v=4"></script>
-<script src="/js/pages/developer.js?v=4"></script>
+<script src="/js/pages/login.js?v=5"></script>
+<script src="/js/pages/dashboard.js?v=5"></script>
+<script src="/js/pages/all-tasks.js?v=5"></script>
+<script src="/js/pages/daily-task.js?v=5"></script>
+<script src="/js/pages/approvals.js?v=5"></script>
+<script src="/js/pages/fms.js?v=5"></script>
+<script src="/js/pages/race-tracker.js?v=5"></script>
+<script src="/js/pages/meetings.js?v=5"></script>
+<script src="/js/pages/leave-tracker.js?v=5"></script>
+<script src="/js/pages/daily-reports.js?v=5"></script>
+<script src="/js/pages/mis.js?v=5"></script>
+<script src="/js/pages/users.js?v=5"></script>
+<script src="/js/pages/client-master.js?v=5"></script>
+<script src="/js/pages/profile.js?v=5"></script>
+<script src="/js/pages/developer.js?v=5"></script>
 
 <!-- Bootstrap -->
-<script src="/js/main.js?v=4"></script>
+<script src="/js/main.js?v=5"></script>
 
 </body>
 </html>

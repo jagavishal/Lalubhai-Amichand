@@ -35,78 +35,72 @@ window.Topbar = {
   },
 
   _roleBadge(roles) {
-    if (!roles || !roles.length) return '';
-    // Pick the most prominent role for the badge
+    if (!roles || !roles.length) return '<span style="color:#94a3b8;">Member</span>';
     const role = roles.includes('Admin') ? 'Admin'
                : roles.includes('HOD')   ? 'HOD'
                : roles[0];
-
-    const color = (role === 'Admin' || role === 'HOD')
-      ? { bg: 'rgba(46,114,181,0.15)', text: '#5B9ED7', border: 'rgba(46,114,181,0.3)' }
-      : { bg: 'rgba(100,116,139,0.12)', text: '#94a3b8', border: 'rgba(100,116,139,0.25)' };
-
-    return `<span style="
-      font-size:10px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;
-      padding:2px 8px;border-radius:9999px;
-      background:${color.bg};color:${color.text};
-      border:1px solid ${color.border};
-      white-space:nowrap;
-    ">${role}</span>`;
+    const isElevated = role === 'Admin' || role === 'HOD';
+    return `<span style="font-size:10px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${isElevated ? '#C4714A' : '#94a3b8'};">${role}</span>`;
   },
 
   _buildHTML(user) {
-    const title   = this._getTitle();
-    const today   = this._formatDate();
-    const roles   = user?.roles || [];
-    const name    = user?.name || 'User';
+    const title  = this._getTitle();
+    const today  = this._formatDate();
+    const roles  = user?.roles || [];
+    const name   = user?.name || 'User';
+    const initials = (name).split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
 
     return `
-      <div style="padding:0 24px;height:56px;display:flex;align-items:center;gap:16px;">
+      <div style="padding:0 28px;height:56px;display:flex;align-items:center;gap:14px;">
 
         <!-- Page title -->
         <h1 style="
-          font-size:15px;font-weight:600;letter-spacing:-0.02em;
-          color:#1e293b;margin:0;
-          white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-          flex-shrink:0;
+          font-size:16px;font-weight:700;letter-spacing:-0.025em;
+          color:#0f172a;margin:0;
+          white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;
         " id="topbar-title">${title}</h1>
 
-        <div style="flex:1;"></div>
+        <div style="flex:1;min-width:0;"></div>
 
-        <!-- Date (hidden on narrow screens via inline check — always shown here) -->
-        <div style="display:flex;align-items:center;font-size:12px;color:#94a3b8;white-space:nowrap;flex-shrink:0;">
+        <!-- Date -->
+        <div style="display:flex;align-items:center;gap:5px;font-size:12px;color:#94a3b8;white-space:nowrap;flex-shrink:0;">
           ${this._calendarIcon}
-          ${today}
+          <span>${today}</span>
         </div>
 
         <!-- Divider -->
-        <div style="width:1px;height:20px;background:#e2e8f0;flex-shrink:0;"></div>
+        <div style="width:1px;height:20px;background:#e8edf3;flex-shrink:0;margin:0 2px;"></div>
 
-        <!-- User info -->
-        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
-          <span style="font-size:13px;font-weight:500;color:#374151;white-space:nowrap;">${name}</span>
-          ${this._roleBadge(roles)}
+        <!-- Avatar + name + role -->
+        <div style="display:flex;align-items:center;gap:9px;flex-shrink:0;">
+          <div style="width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#C4714A,#d4894f);display:grid;place-items:center;color:#fff;font-size:11px;font-weight:700;flex-shrink:0;">${initials}</div>
+          <div style="line-height:1.25;">
+            <div style="font-size:13px;font-weight:600;color:#1e293b;white-space:nowrap;">${name}</div>
+            <div style="font-size:10px;color:#94a3b8;white-space:nowrap;">${this._roleBadge(roles)}</div>
+          </div>
         </div>
 
-        <!-- Logout button -->
+        <!-- Divider -->
+        <div style="width:1px;height:20px;background:#e8edf3;flex-shrink:0;margin:0 2px;"></div>
+
+        <!-- Sign out -->
         <button
           onclick="window.Topbar._logout()"
           title="Sign out"
           style="
-            display:flex;align-items:center;gap:6px;
-            padding:6px 12px;border-radius:7px;
-            background:transparent;border:1px solid #e2e8f0;
-            font-size:12px;font-weight:500;color:#64748b;
+            display:flex;align-items:center;gap:5px;
+            padding:6px 12px;border-radius:8px;
+            background:transparent;border:1.5px solid #e8edf3;
+            font-size:12px;font-weight:600;color:#64748b;
             cursor:pointer;flex-shrink:0;
-            transition:background 0.15s,color 0.15s,border-color 0.15s;
+            transition:all 0.15s;
           "
-          onmouseenter="this.style.background='rgba(239,68,68,0.06)';this.style.color='#ef4444';this.style.borderColor='rgba(239,68,68,0.3)';"
-          onmouseleave="this.style.background='transparent';this.style.color='#64748b';this.style.borderColor='#e2e8f0';"
+          onmouseenter="this.style.background='#fff1f2';this.style.color='#e11d48';this.style.borderColor='#fecdd3';"
+          onmouseleave="this.style.background='transparent';this.style.color='#64748b';this.style.borderColor='#e8edf3';"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-            <path d="m16 17 5-5-5-5"/>
-            <path d="M21 12H9"/>
+            <path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>
           </svg>
           Sign out
         </button>
@@ -132,19 +126,7 @@ window.Topbar = {
     this._user = user;
     const el = document.getElementById('topbar');
     if (!el) return;
-
-    // Apply topbar shell styles
-    el.style.cssText = `
-      position:sticky;top:0;z-index:20;
-      background:rgba(255,255,255,0.92);
-      backdrop-filter:blur(8px);
-      -webkit-backdrop-filter:blur(8px);
-      border-bottom:1px solid #e2e8f0;
-    `;
-
     el.innerHTML = this._buildHTML(user);
-
-    // Keep the page title in sync when the user navigates
     window.addEventListener('hashchange', () => this._syncTitle());
   },
 };
