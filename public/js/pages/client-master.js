@@ -318,12 +318,12 @@ window.Pages['client-master'] = (() => {
           + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (row.narration?'#6366f1':'#e9ecef') + ';border-radius:7px;font-size:12px;color:#374151;outline:none;background:' + (row.narration?'#f5f5ff':'#fff') + ';transition:border-color .15s;" '
           + 'onfocus="this.style.borderColor=\'#6366f1\';this.style.background=\'#f5f5ff\'" onblur="this.style.borderColor=\'' + (row.narration?'#6366f1':'#e9ecef') + '\';this.style.background=\'' + (row.narration?'#f5f5ff':'#fff') + '\'" />'
       + '</td>'
-      // Auto-filled cells
-      + '<td style="' + cellS + 'min-width:100px;"><span style="' + autoS + '">' + esc(v?.bank_name||'—') + '</span></td>'
-      + '<td style="' + cellS + 'min-width:120px;"><span style="' + autoS + '">' + esc(v?.account_holder||'—') + '</span></td>'
-      + '<td style="' + cellS + 'min-width:140px;"><span style="' + monoS + '">' + esc(v?.account_no||'—') + '</span></td>'
-      + '<td style="' + cellS + 'min-width:100px;"><span style="' + monoS + '">' + esc(v?.ifsc_code||'—') + '</span></td>'
-      + '<td style="' + cellS + 'min-width:100px;border-right:none;"><span style="' + autoS + '">' + esc(v?.branch_name||'—') + '</span></td>'
+      // Auto-filled cells — class pm-auto-span used for targeted update on vendor select
+      + '<td style="' + cellS + 'min-width:100px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.bank_name||'—') + '</span></td>'
+      + '<td style="' + cellS + 'min-width:120px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.account_holder||'—') + '</span></td>'
+      + '<td style="' + cellS + 'min-width:140px;"><span class="pm-auto-span" style="' + monoS + '">' + esc(v?.account_no||'—') + '</span></td>'
+      + '<td style="' + cellS + 'min-width:100px;"><span class="pm-auto-span" style="' + monoS + '">' + esc(v?.ifsc_code||'—') + '</span></td>'
+      + '<td style="' + cellS + 'min-width:100px;border-right:none;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.branch_name||'—') + '</span></td>'
       // Clear
       + '<td style="padding:5px 6px;text-align:center;width:32px;">'
         + (hasData
@@ -456,7 +456,7 @@ window.Pages['client-master'] = (() => {
         ddEl.style.display = 'block';
         const tr = rowEl.closest ? rowEl : document.querySelector('tr[data-ri="' + ri + '"]');
         if (tr) {
-          tr.querySelectorAll('td:nth-child(n+4) span').forEach(span => {
+          tr.querySelectorAll('.pm-auto-span').forEach(span => {
             span.textContent = '—'; span.style.color = '#cbd5e1';
           });
         }
@@ -497,7 +497,7 @@ window.Pages['client-master'] = (() => {
         // Fill auto cells in this row
         const tr = document.querySelector('tr[data-ri="' + ri + '"]');
         if (tr) {
-          const spans = tr.querySelectorAll('td:nth-child(n+4) span');
+          const spans = tr.querySelectorAll('.pm-auto-span');
           const vals  = [v.bank_name, v.account_holder, v.account_no, v.ifsc_code, v.branch_name];
           spans.forEach((span, si) => {
             if (si < vals.length) { span.textContent = vals[si] || '—'; span.style.color = '#374151'; }
