@@ -13,7 +13,9 @@ window.Pages['client-master'] = (() => {
   let _tab     = 'vendors';
 
   // Payment grid state
-  let _pmRows = [];   // [{ vendorId, vendorSearch, amount }]
+  let _pmRows     = [];   // [{ id, vendorId, vendorSearch, amount, txnType, narration, checked }]
+  let _pmSaving   = false;
+  let _pmSaved    = false;
 
   /* ── Helpers ────────────────────────────────────────────────── */
   function _blankForm() {
@@ -24,11 +26,11 @@ window.Pages['client-master'] = (() => {
     };
   }
 
-  function _blankRow() { return { vendorId: null, vendorSearch: '', amount: '', txnType: 'N', narration: '' }; }
+  function _blankRow() { return { id: null, vendorId: null, vendorSearch: '', amount: '', txnType: 'N', narration: '', checked: false }; }
 
   function _initRows(saved) {
     _pmRows = (Array.isArray(saved) ? saved : [])
-      .map(e => ({ vendorId: e.vendorId || null, vendorSearch: '', amount: e.amount || '', txnType: e.txnType || 'N', narration: e.narration || '' }));
+      .map(e => ({ id: e.id || null, vendorId: e.vendor_id || e.vendorId || null, vendorSearch: '', amount: e.amount || '', txnType: e.txn_type || e.txnType || 'N', narration: e.narration || '', checked: false }));
     _resolveVendorNames();
     while (_pmRows.length < 10) _pmRows.push(_blankRow());
   }
@@ -55,13 +57,13 @@ window.Pages['client-master'] = (() => {
   }
 
   /* ── API ────────────────────────────────────────────────────── */
-  async function _load() {
+  async function _load(skipRender) {
     try {
       const res = await Utils.apiFetch('/api/clients');
       _list = Array.isArray(res) ? res : [];
     } catch { _list = []; }
     _resolveVendorNames();
-    _render();
+    if (!skipRender) _render();
   }
 
   async function _save() {
@@ -277,6 +279,15 @@ window.Pages['client-master'] = (() => {
   }
 
   /* ── Payment Management – Excel grid ───────────────────────── */
+  function _pmAllChecked() {
+    const filled = _pmRows.filter(r => r.vendorId && r.amount && parseFloat(r.amount) > 0);
+    return filled.length > 0 && filled.every(r => r.checked);
+  }
+
+  function _pmCheckedCount() {
+    return _pmRows.filter(r => r.checked && r.vendorId && r.amount && parseFloat(r.amount) > 0).length;
+  }
+
   function _pmRowHtml(row, i) {
     const v       = row.vendorId ? _list.find(x => String(x.id) === String(row.vendorId)) : null;
     const hasData = !!(row.vendorId || row.vendorSearch || row.amount || row.narration);
@@ -284,10 +295,18 @@ window.Pages['client-master'] = (() => {
     const autoS   = 'font-size:12.5px;color:' + (v ? '#374151' : '#cbd5e1') + ';padding:7px 10px;';
     const monoS   = autoS + 'font-family:monospace;letter-spacing:.04em;';
     const txn     = row.txnType || 'N';
+    const chkd    = row.checked && v && row.amount;
+    const rowBg   = chkd ? 'background:#f0fff8;' : (i % 2 === 1 ? 'background:#fafbfc;' : '');
 
-    return '<tr data-ri="' + i + '" style="border-bottom:1px solid #eef2f7;' + (i % 2 === 1 ? 'background:#fafbfc;' : '') + '">'
+    return '<tr data-ri="' + i + '" style="border-bottom:1px solid #eef2f7;' + rowBg + '">'
+      // Checkbox
+      + '<td style="' + cellS + 'text-align:center;width:36px;padding:5px 4px;">'
+        + (hasData
+          ? '<input type="checkbox" class="pm-row-chk" data-ri="' + i + '" ' + (chkd ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;accent-color:var(--color-primary);" />'
+          : '<span style="display:block;width:15px;height:15px;border:1.5px solid #e2e8f0;border-radius:3px;margin:auto;background:#f8fafc;"></span>')
+      + '</td>'
       // S.No
-      + '<td style="' + cellS + 'text-align:center;width:38px;color:#94a3b8;font-size:12px;font-weight:600;padding:5px 4px;">' + (i+1) + '</td>'
+      + '<td style="' + cellS + 'text-align:center;width:32px;color:#94a3b8;font-size:12px;font-weight:600;padding:5px 4px;">' + (i+1) + '</td>'
       // Txn Type - N / R / I
       + '<td style="' + cellS + 'width:64px;padding:4px 5px;">'
         + '<select class="pm-txn-inp" data-ri="' + i + '" style="width:100%;padding:6px 6px;border:1.5px solid #e9ecef;border-radius:7px;font-size:13px;font-weight:700;color:#1e293b;outline:none;background:#fff;cursor:pointer;">'
@@ -300,7 +319,7 @@ window.Pages['client-master'] = (() => {
       + '<td style="' + cellS + 'min-width:180px;padding:4px 5px;">'
         + '<div style="position:relative;">'
           + '<input class="pm-name-inp" data-ri="' + i + '" type="text" placeholder="Search vendor…" autocomplete="off" value="' + esc(row.vendorSearch) + '" '
-            + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (v ? '#C4714A' : '#e9ecef') + ';border-radius:7px;font-size:13px;font-weight:' + (v?'600':'400') + ';color:#1e293b;outline:none;background:' + (v?'#fff8f5':'#fff') + ';transition:border-color .15s;" />'
+            + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (v ? 'var(--color-primary)' : '#e9ecef') + ';border-radius:7px;font-size:13px;font-weight:' + (v?'600':'400') + ';color:#1e293b;outline:none;background:' + (v?'#fff8f5':'#fff') + ';transition:border-color .15s;" />'
           + '<div class="pm-dd" data-ri="' + i + '" style="display:none;position:absolute;top:calc(100% + 3px);left:0;right:0;min-width:230px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:200px;overflow-y:auto;"></div>'
         + '</div>'
       + '</td>'
@@ -312,13 +331,13 @@ window.Pages['client-master'] = (() => {
             + 'style="border:none;outline:none;background:transparent;font-size:13px;font-weight:700;color:#1e293b;width:100%;" />'
         + '</div>'
       + '</td>'
-      // Narration / Reference (Instruction Reference Number in bank format)
+      // Narration
       + '<td style="' + cellS + 'min-width:150px;padding:4px 5px;">'
         + '<input class="pm-narr-inp" data-ri="' + i + '" type="text" placeholder="Bill no / narration…" value="' + esc(row.narration) + '" '
           + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (row.narration?'#6366f1':'#e9ecef') + ';border-radius:7px;font-size:12px;color:#374151;outline:none;background:' + (row.narration?'#f5f5ff':'#fff') + ';transition:border-color .15s;" '
           + 'onfocus="this.style.borderColor=\'#6366f1\';this.style.background=\'#f5f5ff\'" onblur="this.style.borderColor=\'' + (row.narration?'#6366f1':'#e9ecef') + '\';this.style.background=\'' + (row.narration?'#f5f5ff':'#fff') + '\'" />'
       + '</td>'
-      // Auto-filled cells — class pm-auto-span used for targeted update on vendor select
+      // Auto-filled cells
       + '<td style="' + cellS + 'min-width:100px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.bank_name||'—') + '</span></td>'
       + '<td style="' + cellS + 'min-width:120px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.account_holder||'—') + '</span></td>'
       + '<td style="' + cellS + 'min-width:140px;"><span class="pm-auto-span" style="' + monoS + '">' + esc(v?.account_no||'—') + '</span></td>'
@@ -336,44 +355,57 @@ window.Pages['client-master'] = (() => {
   }
 
   function _renderPaymentTab() {
-    const filledRows = _pmRows.filter(r => r.vendorId && r.amount && parseFloat(r.amount) > 0);
-    const total = filledRows.reduce((s, r) => s + parseFloat(r.amount||0), 0);
+    const filledRows  = _pmRows.filter(r => r.vendorId && r.amount && parseFloat(r.amount) > 0);
+    const checkedRows = filledRows.filter(r => r.checked);
+    const total       = filledRows.reduce((s, r) => s + parseFloat(r.amount||0), 0);
+    const selTotal    = checkedRows.reduce((s, r) => s + parseFloat(r.amount||0), 0);
+    const allChk      = _pmAllChecked();
 
     const thS = 'padding:10px 12px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;background:#f4f6f9;text-align:left;white-space:nowrap;border-bottom:2px solid #e2e8f0;border-right:1px solid #eaecef;';
 
+    const saveLabel = _pmSaving ? 'Saving…' : (_pmSaved ? '✓ Saved' : 'Save Draft');
+
     return '<div style="background:#fff;border-radius:14px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);">'
       // Header
-      + '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #f0f4f8;background:linear-gradient(to right,#fafbfc,#f8fafc);">'
-        + '<div style="display:flex;align-items:center;gap:14px;">'
+      + '<div style="padding:14px 20px;border-bottom:1px solid #f0f4f8;background:linear-gradient(to right,#fafbfc,#f8fafc);">'
+        + '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
           + '<div>'
             + '<div style="font-size:14px;font-weight:700;color:#1e293b;">Payment Entries</div>'
-            + '<div id="pm-subheader" style="font-size:11px;color:#94a3b8;margin-top:1px;">' + _pmRows.length + ' rows &nbsp;·&nbsp; <span style="color:#059669;font-weight:600;">' + filledRows.length + ' filled</span>'
-              + (filledRows.length ? ' &nbsp;·&nbsp; Total: <strong style="color:#1e293b;">₹' + total.toLocaleString('en-IN', {minimumFractionDigits:2}) + '</strong>' : '')
+            + '<div id="pm-subheader" style="font-size:11px;color:#94a3b8;margin-top:2px;">'
+              + filledRows.length + ' filled &nbsp;·&nbsp; Total: <strong style="color:#1e293b;">₹' + total.toLocaleString('en-IN', {minimumFractionDigits:2}) + '</strong>'
+              + (checkedRows.length ? ' &nbsp;·&nbsp; <span style="color:#059669;font-weight:600;">' + checkedRows.length + ' selected ₹' + selTotal.toLocaleString('en-IN', {minimumFractionDigits:2}) + '</span>' : '')
             + '</div>'
           + '</div>'
+          + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+            + '<button id="pm-save-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;font-size:12px;font-weight:600;border:1.5px solid var(--color-primary);border-radius:8px;background:#fff;color:var(--color-primary);cursor:pointer;" ' + (_pmSaving ? 'disabled' : '') + ' onmouseenter="this.style.background=\'var(--color-primary-light)\'" onmouseleave="this.style.background=\'#fff\'">'
+              + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>' + saveLabel
+            + '</button>'
+            + '<button id="pm-excel-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;font-size:12px;font-weight:600;border:none;border-radius:8px;background:#059669;color:#fff;cursor:pointer;" onmouseenter="this.style.background=\'#047857\'" onmouseleave="this.style.background=\'#059669\'">'
+              + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'
+              + (checkedRows.length ? 'Export ' + checkedRows.length + ' Selected' : 'Export Excel')
+            + '</button>'
+          + '</div>'
         + '</div>'
-        + '<div style="display:flex;gap:8px;align-items:center;">'
-          + '<button id="pm-save-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;font-size:12px;font-weight:600;border:1.5px solid #C4714A;border-radius:8px;background:#fff;color:#C4714A;cursor:pointer;" onmouseenter="this.style.background=\'#fff8f5\'" onmouseleave="this.style.background=\'#fff\'">'
-            + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save'
-          + '</button>'
-          + '<button id="pm-excel-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;font-size:12px;font-weight:600;border:none;border-radius:8px;background:#059669;color:#fff;cursor:pointer;" onmouseenter="this.style.background=\'#047857\'" onmouseleave="this.style.background=\'#059669\'">'
-            + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Excel'
-          + '</button>'
-        + '</div>'
+        + (checkedRows.length === 0 && filledRows.length > 0
+          ? '<div style="margin-top:10px;padding:8px 12px;border-radius:8px;background:#fef3c7;border:1px solid #fde68a;font-size:11.5px;color:#92400e;">Tick checkboxes on left to select rows for export</div>'
+          : '')
       + '</div>'
       // Table
       + '<div style="overflow-x:auto;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
+        + '<table style="width:100%;border-collapse:collapse;min-width:960px;">'
           + '<thead><tr>'
-            + '<th style="' + thS + 'text-align:center;width:38px;">#</th>'
-            + '<th style="' + thS + 'width:64px;">Txn Type</th>'
+            + '<th style="' + thS + 'text-align:center;width:36px;">'
+              + '<input type="checkbox" id="pm-chk-all" ' + (allChk ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;accent-color:var(--color-primary);" />'
+            + '</th>'
+            + '<th style="' + thS + 'text-align:center;width:32px;">#</th>'
+            + '<th style="' + thS + 'width:64px;">Txn</th>'
             + '<th style="' + thS + 'min-width:180px;">Beneficiary Name</th>'
             + '<th style="' + thS + 'min-width:120px;">Amount</th>'
             + '<th style="' + thS + 'min-width:150px;">Narration / Ref No.</th>'
-            + '<th style="' + thS + 'min-width:100px;">Bank Name</th>'
+            + '<th style="' + thS + 'min-width:100px;">Bank</th>'
             + '<th style="' + thS + 'min-width:120px;">Account Holder</th>'
             + '<th style="' + thS + 'min-width:140px;">Account No.</th>'
-            + '<th style="' + thS + 'min-width:100px;">IFSC Code</th>'
+            + '<th style="' + thS + 'min-width:100px;">IFSC</th>'
             + '<th style="' + thS + 'min-width:100px;border-right:none;">Branch</th>'
             + '<th style="' + thS + 'width:32px;border-right:none;"></th>'
           + '</tr></thead>'
@@ -382,12 +414,13 @@ window.Pages['client-master'] = (() => {
           + '</tbody>'
         + '</table>'
       + '</div>'
-      // Add row button
-      + '<div style="padding:10px 14px;border-top:1px solid #f0f4f8;background:#fafbfc;">'
-        + '<button id="pm-add-rows-btn" style="display:flex;align-items:center;gap:6px;padding:6px 14px;font-size:12px;font-weight:600;border:1.5px dashed #d1d5db;border-radius:7px;background:transparent;color:#64748b;cursor:pointer;" onmouseenter="this.style.borderColor=\'#C4714A\';this.style.color=\'#C4714A\'" onmouseleave="this.style.borderColor=\'#d1d5db\';this.style.color=\'#64748b\'">'
+      // Footer
+      + '<div style="padding:10px 14px;border-top:1px solid #f0f4f8;background:#fafbfc;display:flex;align-items:center;gap:12px;">'
+        + '<button id="pm-add-rows-btn" style="display:flex;align-items:center;gap:6px;padding:6px 14px;font-size:12px;font-weight:600;border:1.5px dashed #d1d5db;border-radius:7px;background:transparent;color:#64748b;cursor:pointer;" onmouseenter="this.style.borderColor=\'var(--color-primary)\';this.style.color=\'var(--color-primary)\'" onmouseleave="this.style.borderColor=\'#d1d5db\';this.style.color=\'#64748b\'">'
           + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>'
           + 'Add 5 more rows'
         + '</button>'
+        + '<span style="font-size:11px;color:#94a3b8;margin-left:auto;">Entries are saved to server — accessible from any device</span>'
       + '</div>'
     + '</div>';
   }
@@ -400,13 +433,24 @@ window.Pages['client-master'] = (() => {
   }
 
   function _updatePmHeader() {
-    const filledRows = _pmRows.filter(r => r.vendorId && r.amount && parseFloat(r.amount) > 0);
-    const total = filledRows.reduce((s, r) => s + parseFloat(r.amount||0), 0);
+    const filledRows  = _pmRows.filter(r => r.vendorId && r.amount && parseFloat(r.amount) > 0);
+    const checkedRows = filledRows.filter(r => r.checked);
+    const total    = filledRows.reduce((s, r) => s + parseFloat(r.amount||0), 0);
+    const selTotal = checkedRows.reduce((s, r) => s + parseFloat(r.amount||0), 0);
     const sub = document.querySelector('#pm-subheader');
     if (sub) {
-      sub.innerHTML = _pmRows.length + ' rows &nbsp;·&nbsp; <span style="color:#059669;font-weight:600;">' + filledRows.length + ' filled</span>'
-        + (filledRows.length ? ' &nbsp;·&nbsp; Total: <strong style="color:#1e293b;">₹' + total.toLocaleString('en-IN', {minimumFractionDigits:2}) + '</strong>' : '');
+      sub.innerHTML = filledRows.length + ' filled &nbsp;·&nbsp; Total: <strong style="color:#1e293b;">₹' + total.toLocaleString('en-IN', {minimumFractionDigits:2}) + '</strong>'
+        + (checkedRows.length ? ' &nbsp;·&nbsp; <span style="color:#059669;font-weight:600;">' + checkedRows.length + ' selected ₹' + selTotal.toLocaleString('en-IN', {minimumFractionDigits:2}) + '</span>' : '');
     }
+    // Update Export button label
+    const excelBtn = document.getElementById('pm-excel-btn');
+    if (excelBtn) {
+      const svg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+      excelBtn.innerHTML = svg + (checkedRows.length ? 'Export ' + checkedRows.length + ' Selected' : 'Export Excel');
+    }
+    // Update select-all checkbox
+    const allChk = document.getElementById('pm-chk-all');
+    if (allChk) allChk.checked = _pmAllChecked();
   }
 
   /* ── Payment event binding ─────────────────────────────────── */
@@ -440,6 +484,15 @@ window.Pages['client-master'] = (() => {
     const ddEl   = rowEl.querySelector('.pm-dd[data-ri="' + ri + '"]');
     const amtInp = rowEl.querySelector('.pm-amount-inp[data-ri="' + ri + '"]');
     const clearBtn = rowEl.querySelector('.pm-clear-row[data-ri="' + ri + '"]');
+    const chkBox = rowEl.querySelector('.pm-row-chk[data-ri="' + ri + '"]');
+
+    if (chkBox) {
+      chkBox.addEventListener('change', () => {
+        _pmRows[ri].checked = chkBox.checked;
+        rowEl.style.background = chkBox.checked ? '#f0fff8' : (ri % 2 === 1 ? '#fafbfc' : '');
+        _updatePmHeader();
+      });
+    }
 
     if (inp && ddEl) {
       inp.addEventListener('focus', () => {
@@ -551,65 +604,89 @@ window.Pages['client-master'] = (() => {
   function _bindPaymentTabEvents() {
     _bindPaymentRowEvents();
 
+    // Select All checkbox
+    document.getElementById('pm-chk-all')?.addEventListener('change', (e) => {
+      const check = e.target.checked;
+      _pmRows.forEach((r, i) => {
+        if (r.vendorId && r.amount && parseFloat(r.amount) > 0) {
+          r.checked = check;
+          const tr = document.querySelector('tr[data-ri="' + i + '"]');
+          if (tr) {
+            tr.style.background = check ? '#f0fff8' : (i % 2 === 1 ? '#fafbfc' : '');
+            const chk = tr.querySelector('.pm-row-chk');
+            if (chk) chk.checked = check;
+          }
+        }
+      });
+      _updatePmHeader();
+    });
+
     document.getElementById('pm-add-rows-btn')?.addEventListener('click', () => {
       for (let i = 0; i < 5; i++) _pmRows.push(_blankRow());
       _refreshPmTbody();
       _updatePmHeader();
     });
 
-    document.getElementById('pm-save-btn')?.addEventListener('click', () => {
+    document.getElementById('pm-save-btn')?.addEventListener('click', async () => {
+      if (_pmSaving) return;
+      _pmSaving = true; _pmSaved = false;
+      const saveBtn = document.getElementById('pm-save-btn');
+      if (saveBtn) saveBtn.textContent = 'Saving…';
       try {
-        const toSave = _pmRows
-          .filter(r => r.vendorId || r.amount || r.narration)
+        const entries = _pmRows
+          .filter(r => r.vendorId && r.amount)
           .map(r => ({ vendorId: r.vendorId, amount: r.amount, txnType: r.txnType || 'N', narration: r.narration || '' }));
-        localStorage.setItem('pm_entries', JSON.stringify(toSave));
-        Utils.showToast('Payment entries saved');
+        const res = await fetch('/api/payment-entries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entries }),
+        });
+        if (!res.ok) throw new Error('Server error');
+        _pmSaved = true;
+        Utils.showToast('Draft entries saved to server', 'success');
       } catch { Utils.showToast('Failed to save', 'error'); }
+      finally { _pmSaving = false; }
+      if (saveBtn) {
+        saveBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>✓ Saved';
+        setTimeout(() => {
+          if (saveBtn.textContent.includes('Saved')) saveBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save Draft';
+        }, 2500);
+      }
     });
 
-    document.getElementById('pm-excel-btn')?.addEventListener('click', () => {
-      const filled = _pmRows.filter(r => r.vendorId && r.amount && parseFloat(r.amount) > 0);
-      if (!filled.length) { Utils.showToast('No filled entries to export', 'error'); return; }
+    document.getElementById('pm-excel-btn')?.addEventListener('click', async () => {
+      const toExport = _pmRows.filter(r => r.checked && r.vendorId && r.amount && parseFloat(r.amount) > 0);
+      // Fall back: if nothing checked but rows exist, warn
+      if (!toExport.length) {
+        const allFilled = _pmRows.filter(r => r.vendorId && r.amount && parseFloat(r.amount) > 0);
+        if (!allFilled.length) { Utils.showToast('No filled entries to export', 'warning'); return; }
+        Utils.showToast('Please tick the checkboxes for rows you want to export', 'warning');
+        return;
+      }
 
       const today = new Date();
-      const dd = String(today.getDate()).padStart(2,'0');
-      const mm = String(today.getMonth()+1).padStart(2,'0');
-      const yyyy = today.getFullYear();
-      const dateStr = dd + '/' + mm + '/' + yyyy;
+      const dd    = String(today.getDate()).padStart(2,'0');
+      const mm    = String(today.getMonth()+1).padStart(2,'0');
+      const yyyy  = today.getFullYear();
+      const dateStr   = dd + '/' + mm + '/' + yyyy;
+      const batchLabel = 'Export ' + dd + '/' + mm + '/' + yyyy;
 
-      // Exact RBI CBX Bulk Upload format — 10 columns
-      // Col 3 (Account No) must start with ' to prevent Excel from stripping leading zeros
       function qf(s) { return '"' + String(s||'').replace(/"/g,'""') + '"'; }
 
-      const hdr = [
-        'Transaction Type',
-        'Beneficiary Code',
-        'Beneficiary Account Number',
-        'Transaction Amount',
-        'Beneficiary Name',
-        'Instruction Reference Number',
-        'Debit Statement Narration',
-        'Chq / Trn Date',
-        'IFSC Code',
-        'Beneficiary email id',
-      ];
-
+      const hdr = ['Transaction Type','Beneficiary Code','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Instruction Reference Number','Debit Statement Narration','Chq / Trn Date','IFSC Code','Beneficiary email id'];
       const csvRows = [hdr.join(',')];
       let sno = 1;
-      filled.forEach(entry => {
+      const exportedIds = [];
+      toExport.forEach(entry => {
         const v = _list.find(x => String(x.id) === String(entry.vendorId));
         if (!v) return;
+        if (entry.id) exportedIds.push(entry.id);
         csvRows.push([
-          entry.txnType || 'N',                          // Transaction Type
-          sno++,                                          // Beneficiary Code (serial)
-          qf("'" + (v.account_no || '')),                // Account No — prefixed ' per bank spec
-          parseFloat(entry.amount || 0).toFixed(2),      // Amount
-          qf(v.name),                                     // Beneficiary Name
-          qf(entry.narration || ''),                      // Instruction Reference Number
-          '',                                             // Debit Statement Narration (blank)
-          dateStr,                                        // Chq / Trn Date DD/MM/YYYY
-          qf(v.ifsc_code || ''),                          // IFSC Code
-          '',                                             // Beneficiary email id (blank)
+          entry.txnType || 'N', sno++,
+          qf("'" + (v.account_no || '')),
+          parseFloat(entry.amount || 0).toFixed(2),
+          qf(v.name), qf(entry.narration || ''), '',
+          dateStr, qf(v.ifsc_code || ''), '',
         ].join(','));
       });
 
@@ -619,7 +696,23 @@ window.Pages['client-master'] = (() => {
       const a    = document.createElement('a');
       a.href = url; a.download = 'RBI_Bulk_' + yyyy + mm + dd + '.csv';
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-      Utils.showToast('RBI bulk payment file downloaded');
+
+      // Mark exported rows in DB (best-effort)
+      if (exportedIds.length) {
+        try {
+          await fetch('/api/payment-entries', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: exportedIds, batchLabel }),
+          });
+          // Remove exported rows from draft grid
+          _pmRows = _pmRows.filter(r => !exportedIds.includes(r.id));
+          while (_pmRows.length < 10) _pmRows.push(_blankRow());
+          _refreshPmTbody();
+          _updatePmHeader();
+        } catch { /* silently ignore — file is already downloaded */ }
+      }
+      Utils.showToast('RBI bulk file downloaded — ' + toExport.length + ' entries exported', 'success');
     });
   }
 
@@ -694,11 +787,17 @@ window.Pages['client-master'] = (() => {
         ? (window.currentUser?.roles || []).some(r => r === 'Admin' || r === 'HOD')
         : String(window.currentUser?.roles || '').includes('Admin');
       _q = ''; _status = 'All'; _open = false; _editing = null; _saving = false;
+      _pmSaving = false; _pmSaved = false;
       _form = _blankForm(); _list = [];
-      try { _initRows(JSON.parse(localStorage.getItem('pm_entries') || '[]')); } catch { _initRows([]); }
       const el = document.getElementById('main-content');
       if (el) el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;"><div style="text-align:center;"><div style="width:40px;height:40px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 14px;"></div><div style="font-size:13px;color:#94a3b8;font-weight:500;">Loading…</div></div></div>';
-      await _load();
+      // Load vendor list + draft payment entries in parallel, then render once
+      const [, draftRes] = await Promise.all([
+        _load(true),
+        fetch('/api/payment-entries').then(r => r.ok ? r.json() : []).catch(() => []),
+      ]);
+      _initRows(Array.isArray(draftRes) ? draftRes : []);
+      _render();
     },
   };
 })();

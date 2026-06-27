@@ -141,6 +141,9 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS clients (id VARCHAR(16) PRIMARY KEY, name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', contact_number VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', industry VARCHAR(128) DEFAULT '', status VARCHAR(32) DEFAULT 'active', notes TEXT DEFAULT NULL, mobile VARCHAR(64) DEFAULT '', state VARCHAR(128) DEFAULT '', district VARCHAR(128) DEFAULT '', address TEXT DEFAULT NULL, pin VARCHAR(16) DEFAULT '', bank_name VARCHAR(255) DEFAULT '', account_holder VARCHAR(255) DEFAULT '', account_no VARCHAR(64) DEFAULT '', ifsc_code VARCHAR(32) DEFAULT '', branch_name VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS dev_backups (id VARCHAR(64) PRIMARY KEY, label VARCHAR(128) NOT NULL DEFAULT '', data TEXT NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS user_sessions (sid VARCHAR(128) PRIMARY KEY, data TEXT NOT NULL, expires_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS payment_entries (id VARCHAR(16) PRIMARY KEY, vendor_id VARCHAR(16) NOT NULL, amount DECIMAL(15,2) NOT NULL DEFAULT 0, txn_type VARCHAR(4) DEFAULT 'N', narration VARCHAR(500) DEFAULT '', status VARCHAR(16) DEFAULT 'draft', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, exported_at DATETIME DEFAULT NULL, batch_label VARCHAR(128) DEFAULT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_pe_status ON payment_entries (status)`,
+  `CREATE INDEX idx_pe_exported ON payment_entries (exported_at)`,
 ];
 
 async function seedIfEmpty() {
@@ -1218,6 +1221,77 @@ app.delete('/api/clients', requireAuth, async (req, res) => {
     await pool.query('DELETE FROM clients WHERE id = $1', [id]);
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+// ── Payment Entries ───────────────────────────────────────────────────────────
+
+// GET /api/payment-entries — return all draft entries
+app.get('/api/payment-entries', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const rows = await q(`SELECT id, vendor_id, amount, txn_type, narration, status, created_by, created_at FROM payment_entries WHERE status='draft' ORDER BY created_at ASC`);
+    return res.json(rows);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/payment-entries — replace all drafts with submitted array
+app.post('/api/payment-entries', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const entries = req.body?.entries;
+    if (!Array.isArray(entries)) return res.status(400).json({ error: 'entries array required' });
+    const user = req.session?.user?.name || req.session?.user?.email || '';
+    // Delete all current drafts then re-insert
+    await pool.query(`DELETE FROM payment_entries WHERE status='draft'`);
+    let counter = 0;
+    const cnt = await q('SELECT COUNT(*) AS c FROM payment_entries');
+    let base = Number(cnt[0]?.c || 0);
+    for (const e of entries) {
+      if (!e.vendorId || !e.amount) continue;
+      counter++;
+      const eid = 'PE' + String(base + counter).padStart(6, '0');
+      await pool.query(
+        `INSERT INTO payment_entries (id, vendor_id, amount, txn_type, narration, status, created_by) VALUES ($1,$2,$3,$4,$5,'draft',$6)`,
+        [eid, String(e.vendorId), parseFloat(e.amount) || 0, e.txnType || 'N', e.narration || '', user]
+      );
+    }
+    return res.json({ success: true, saved: counter });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// PATCH /api/payment-entries — mark selected ids as exported
+app.patch('/api/payment-entries', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const { ids, batchLabel } = req.body || {};
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' });
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const label = batchLabel || ('Export ' + new Date().toLocaleDateString('en-IN'));
+    for (const id of ids) {
+      await pool.query(
+        `UPDATE payment_entries SET status='exported', exported_at=$1, batch_label=$2 WHERE id=$3`,
+        [now, label, id]
+      );
+    }
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/payment-history — exported entries with vendor info
+app.get('/api/payment-history', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const rows = await q(`
+      SELECT pe.id, pe.vendor_id, pe.amount, pe.txn_type, pe.narration,
+             pe.batch_label, pe.exported_at, pe.created_by,
+             c.name AS vendor_name, c.account_no, c.ifsc_code, c.bank_name, c.account_holder
+      FROM payment_entries pe
+      LEFT JOIN clients c ON c.id = pe.vendor_id
+      WHERE pe.status = 'exported'
+      ORDER BY pe.exported_at DESC
+    `);
+    return res.json(rows);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
 // ── MIS ───────────────────────────────────────────────────────────────────────
