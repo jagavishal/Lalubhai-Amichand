@@ -13,9 +13,14 @@ window.Pages['client-master'] = (() => {
   let _tab     = 'vendors';
 
   // Payment grid state
-  let _pmRows     = [];   // [{ id, vendorId, vendorSearch, amount, txnType, narration, checked }]
+  let _pmRows     = [];
   let _pmSaving   = false;
   let _pmSaved    = false;
+
+  // Payment History state
+  let _phRows       = [];
+  let _phMonth      = '';
+  let _phOpenBatch  = null;
 
   /* ── Helpers ────────────────────────────────────────────────── */
   function _blankForm() {
@@ -716,6 +721,214 @@ window.Pages['client-master'] = (() => {
     });
   }
 
+  /* ── Payment History helpers ────────────────────────────────── */
+  async function _phLoad() {
+    try {
+      const res = await fetch('/api/payment-history');
+      _phRows = res.ok ? (await res.json()) : [];
+    } catch { _phRows = []; }
+  }
+
+  function _phBatches() {
+    const map = {};
+    for (const r of _phRows) {
+      const key   = r.batch_label || _phFmt(r.exported_at);
+      const dateY = (r.exported_at || '').slice(0, 7);
+      if (_phMonth && dateY !== _phMonth) continue;
+      if (!map[key]) map[key] = { label: key, exportedAt: r.exported_at, entries: [] };
+      map[key].entries.push(r);
+    }
+    return Object.values(map).sort((a, b) => new Date(b.exportedAt) - new Date(a.exportedAt));
+  }
+
+  function _phFmt(iso) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleDateString('en-IN', { day:'2-digit', month:'2-digit', year:'numeric' });
+  }
+
+  function _phAmt(v) {
+    return '₹' + parseFloat(v || 0).toLocaleString('en-IN', { minimumFractionDigits:2, maximumFractionDigits:2 });
+  }
+
+  function _renderHistoryTab() {
+    const batches = _phBatches();
+    const curM  = new Date().toISOString().slice(0, 7);
+    const thisM = _phRows.filter(r => (r.exported_at || '').slice(0, 7) === curM);
+    const allAmt = _phRows.reduce((s, r) => s + parseFloat(r.amount || 0), 0);
+    const mAmt   = thisM.reduce((s, r) => s + parseFloat(r.amount || 0), 0);
+    const vendors = new Set(_phRows.map(r => r.vendor_id)).size;
+
+    const months = [...new Set(_phRows.map(r => (r.exported_at || '').slice(0, 7)).filter(Boolean))].sort().reverse();
+
+    const statCard = (label, val, sub, color) =>
+      '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:14px 18px;box-shadow:0 1px 3px rgba(0,0,0,.04);">'
+      + '<div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8;">' + label + '</div>'
+      + '<div style="font-size:20px;font-weight:800;color:' + (color||'#1e293b') + ';margin-top:4px;line-height:1;">' + val + '</div>'
+      + (sub ? '<div style="font-size:11px;color:#94a3b8;margin-top:2px;">' + sub + '</div>' : '')
+      + '</div>';
+
+    const statsHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">'
+      + statCard('Total Payments', _phRows.length, 'all time', 'var(--color-primary)')
+      + statCard('Total Amount', _phAmt(allAmt), 'all time', '#1e293b')
+      + statCard('This Month', thisM.length + ' entries', _phAmt(mAmt), '#059669')
+      + statCard('Unique Vendors', vendors, 'paid to', '#6366f1')
+      + '</div>';
+
+    // Vendor top list
+    const vMap = {};
+    for (const r of _phRows) {
+      const vn = r.vendor_name || r.vendor_id || 'Unknown';
+      if (!vMap[vn]) vMap[vn] = { name: vn, count: 0, total: 0 };
+      vMap[vn].count++; vMap[vn].total += parseFloat(r.amount || 0);
+    }
+    const topVendors = Object.values(vMap).sort((a,b) => b.total - a.total).slice(0, 8);
+
+    // Monthly trend
+    const mMap = {};
+    for (const r of _phRows) {
+      const m = (r.exported_at || '').slice(0, 7);
+      if (!m) continue;
+      if (!mMap[m]) mMap[m] = { month: m, count: 0, total: 0 };
+      mMap[m].count++; mMap[m].total += parseFloat(r.amount || 0);
+    }
+    const trend = Object.values(mMap).sort((a,b) => a.month.localeCompare(b.month)).slice(-6);
+    const maxAmt = Math.max(...trend.map(t => t.total), 1);
+
+    const thS = 'padding:9px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;background:#f8fafc;text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;';
+    const tdS = 'padding:9px 14px;font-size:12.5px;color:#374151;border-bottom:1px solid #f1f5f9;';
+
+    const trendHtml = trend.length === 0 ? '' :
+      '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;margin-bottom:12px;">'
+      + '<div style="padding:12px 16px;border-bottom:1px solid #f1f5f9;font-size:13px;font-weight:700;color:#1e293b;">Monthly Trend</div>'
+      + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+        + '<thead><tr><th style="' + thS + '">Month</th><th style="' + thS + 'text-align:right;">Entries</th><th style="' + thS + 'text-align:right;">Amount</th><th style="' + thS + '">Bar</th></tr></thead>'
+        + '<tbody>' + trend.map((t, i) => {
+            const [y, mo] = t.month.split('-');
+            const label = new Date(+y, +mo-1, 1).toLocaleString('en-IN', { month:'short', year:'2-digit' });
+            const pct = Math.round((t.total / maxAmt) * 100);
+            return '<tr style="' + (i%2===1?'background:#fafbfc;':'') + '">'
+              + '<td style="' + tdS + 'font-weight:600;">' + label + '</td>'
+              + '<td style="' + tdS + 'text-align:right;">' + t.count + '</td>'
+              + '<td style="' + tdS + 'font-weight:700;text-align:right;color:#1e293b;">' + _phAmt(t.total) + '</td>'
+              + '<td style="' + tdS + '"><div style="background:#f1f5f9;border-radius:9999px;height:7px;min-width:60px;overflow:hidden;"><div style="width:' + pct + '%;height:100%;background:var(--color-primary);border-radius:9999px;"></div></div></td>'
+              + '</tr>';
+          }).join('')
+        + '</tbody></table></div></div>';
+
+    const vendorHtml = topVendors.length === 0 ? '' :
+      '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;margin-bottom:12px;">'
+      + '<div style="padding:12px 16px;border-bottom:1px solid #f1f5f9;font-size:13px;font-weight:700;color:#1e293b;">Top Vendors</div>'
+      + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+        + '<thead><tr><th style="' + thS + '">#</th><th style="' + thS + '">Vendor</th><th style="' + thS + 'text-align:right;">Payments</th><th style="' + thS + 'text-align:right;">Total Amount</th></tr></thead>'
+        + '<tbody>' + topVendors.map((v, i) =>
+            '<tr style="' + (i%2===1?'background:#fafbfc;':'') + '">'
+            + '<td style="' + tdS + 'color:#94a3b8;font-weight:600;">' + (i+1) + '</td>'
+            + '<td style="' + tdS + 'font-weight:600;color:#1e293b;">' + esc(v.name) + '</td>'
+            + '<td style="' + tdS + 'text-align:right;">' + v.count + '</td>'
+            + '<td style="' + tdS + 'font-weight:700;color:#059669;text-align:right;">' + _phAmt(v.total) + '</td>'
+            + '</tr>'
+          ).join('')
+        + '</tbody></table></div></div>';
+
+    const batchesHtml = batches.length === 0
+      ? '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:40px 24px;text-align:center;"><div style="font-size:14px;font-weight:600;color:#374151;margin-bottom:4px;">No exports yet</div><div style="font-size:12px;color:#94a3b8;">Go to Payment Management tab, fill entries and click Export</div></div>'
+      : batches.map(batch => {
+          const bTotal = batch.entries.reduce((s, e) => s + parseFloat(e.amount || 0), 0);
+          const isOpen = _phOpenBatch === batch.label;
+          let detailHtml = '';
+          if (isOpen) {
+            detailHtml = '<div style="border-top:1px solid #f1f5f9;overflow-x:auto;">'
+              + '<table style="width:100%;border-collapse:collapse;min-width:600px;">'
+              + '<thead><tr>'
+                + '<th style="' + thS + '">#</th>'
+                + '<th style="' + thS + '">Vendor</th>'
+                + '<th style="' + thS + '">Bank</th>'
+                + '<th style="' + thS + '">Account No.</th>'
+                + '<th style="' + thS + '">IFSC</th>'
+                + '<th style="' + thS + '">Txn</th>'
+                + '<th style="' + thS + 'text-align:right;">Amount</th>'
+              + '</tr></thead>'
+              + '<tbody>' + batch.entries.map((e, i) =>
+                  '<tr style="' + (i%2===1?'background:#fafbfc;':'') + 'border-bottom:1px solid #f1f5f9;">'
+                  + '<td style="' + tdS + 'color:#94a3b8;">' + (i+1) + '</td>'
+                  + '<td style="' + tdS + 'font-weight:600;color:#1e293b;">' + esc(e.vendor_name || '—') + '</td>'
+                  + '<td style="' + tdS + '">' + esc(e.bank_name || '—') + '</td>'
+                  + '<td style="' + tdS + 'font-family:monospace;">' + esc(e.account_no || '—') + '</td>'
+                  + '<td style="' + tdS + 'font-family:monospace;">' + esc(e.ifsc_code || '—') + '</td>'
+                  + '<td style="' + tdS + '">' + esc(e.txn_type || 'N') + '</td>'
+                  + '<td style="' + tdS + 'font-weight:700;color:#059669;text-align:right;">' + _phAmt(e.amount) + '</td>'
+                  + '</tr>'
+                ).join('')
+              + '<tr style="border-top:2px solid #e2e8f0;background:#f8fafc;">'
+                + '<td colspan="6" style="' + tdS + 'font-weight:700;">Total</td>'
+                + '<td style="' + tdS + 'font-weight:800;color:#059669;font-size:14px;text-align:right;">' + _phAmt(bTotal) + '</td>'
+              + '</tr></tbody></table></div>';
+          }
+          return '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;margin-bottom:10px;">'
+            + '<div class="ph-batch-hdr" data-batch="' + esc(batch.label) + '" style="display:flex;align-items:center;justify-content:space-between;padding:13px 18px;cursor:pointer;" onmouseenter="this.style.background=\'#f8fafc\'" onmouseleave="this.style.background=\'\'">'
+              + '<div style="display:flex;align-items:center;gap:12px;">'
+                + '<div style="width:34px;height:34px;border-radius:9px;background:var(--color-primary-light);display:grid;place-items:center;flex-shrink:0;">'
+                  + '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>'
+                + '</div>'
+                + '<div>'
+                  + '<div style="font-size:13px;font-weight:700;color:#1e293b;">' + esc(batch.label) + '</div>'
+                  + '<div style="font-size:11px;color:#94a3b8;margin-top:1px;">' + batch.entries.length + ' entries &nbsp;·&nbsp; ' + _phFmt(batch.exportedAt) + '</div>'
+                + '</div>'
+              + '</div>'
+              + '<div style="display:flex;align-items:center;gap:14px;">'
+                + '<div style="font-size:15px;font-weight:800;color:#059669;">' + _phAmt(bTotal) + '</div>'
+                + '<svg style="transition:transform .2s;' + (isOpen ? 'transform:rotate(180deg);' : '') + '" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>'
+              + '</div>'
+            + '</div>'
+            + detailHtml
+          + '</div>';
+        }).join('');
+
+    const monthSel = '<select id="ph-month-sel" style="padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:12.5px;outline:none;background:#fff;color:#374151;cursor:pointer;">'
+      + '<option value="">All Time</option>'
+      + months.map(m => {
+          const [y, mo] = m.split('-');
+          const lbl = new Date(+y, +mo-1, 1).toLocaleString('en-IN', { month:'long', year:'numeric' });
+          return '<option value="' + m + '" ' + (m === _phMonth ? 'selected' : '') + '>' + lbl + '</option>';
+        }).join('')
+      + '</select>';
+
+    return '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">'
+      + '<div style="font-size:13px;font-weight:700;color:#1e293b;">Payment History</div>'
+      + '<div style="display:flex;gap:8px;align-items:center;">'
+        + monthSel
+        + '<button id="ph-refresh-btn" style="display:flex;align-items:center;gap:5px;padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:9px;background:#fff;font-size:12px;font-weight:600;color:#64748b;cursor:pointer;" onmouseenter="this.style.background=\'#f8fafc\'" onmouseleave="this.style.background=\'#fff\'">'
+          + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>Refresh'
+        + '</button>'
+      + '</div>'
+    + '</div>'
+    + statsHtml
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">' + trendHtml + vendorHtml + '</div>'
+    + batchesHtml;
+  }
+
+  function _bindHistoryTabEvents() {
+    document.getElementById('ph-month-sel')?.addEventListener('change', e => {
+      _phMonth = e.target.value;
+      document.getElementById('cm-tab-content').innerHTML = _renderHistoryTab();
+      _bindHistoryTabEvents();
+    });
+    document.getElementById('ph-refresh-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('ph-refresh-btn');
+      if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+      await _phLoad();
+      document.getElementById('cm-tab-content').innerHTML = _renderHistoryTab();
+      _bindHistoryTabEvents();
+    });
+    document.querySelectorAll('.ph-batch-hdr').forEach(hdr => {
+      hdr.addEventListener('click', () => {
+        _phOpenBatch = _phOpenBatch === hdr.dataset.batch ? null : hdr.dataset.batch;
+        document.getElementById('cm-tab-content').innerHTML = _renderHistoryTab();
+        _bindHistoryTabEvents();
+      });
+    });
+  }
+
   /* ── Main render ────────────────────────────────────────────── */
   function _render() {
     const el = document.getElementById('main-content');
@@ -723,38 +936,51 @@ window.Pages['client-master'] = (() => {
 
     const tabBtn = (id, label, active) =>
       '<button id="' + id + '" style="padding:7px 18px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600;transition:all .15s;'
-      + 'background:' + (active ? '#fff' : 'transparent') + ';color:' + (active ? '#C4714A' : '#64748b') + ';'
+      + 'background:' + (active ? '#fff' : 'transparent') + ';color:' + (active ? 'var(--color-primary)' : '#64748b') + ';'
       + 'box-shadow:' + (active ? '0 1px 4px rgba(0,0,0,.08)' : 'none') + ';">' + label + '</button>';
 
+    let tabContent;
+    if (_tab === 'vendors')   tabContent = _renderVendorTab();
+    else if (_tab === 'payments') tabContent = _renderPaymentTab();
+    else                      tabContent = _renderHistoryTab();
+
     el.innerHTML = '<div style="padding:20px;max-width:1280px;margin:0 auto;">'
-      // Page header
       + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:10px;">'
         + '<div>'
           + '<h1 style="font-size:20px;font-weight:800;color:#1e293b;margin:0;letter-spacing:-.3px;">Vendor Master</h1>'
-          + '<p style="font-size:12px;color:#94a3b8;margin:3px 0 0;">Manage vendors and payment information</p>'
+          + '<p style="font-size:12px;color:#94a3b8;margin:3px 0 0;">Vendors, payment entries and history</p>'
         + '</div>'
         + (_tab === 'vendors' && _canEdit
-          ? '<button id="cm-add-btn" style="display:flex;align-items:center;gap:6px;padding:9px 20px;border-radius:10px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(196,113,74,.3);" onmouseenter="this.style.background=\'#b5603a\'" onmouseleave="this.style.background=\'#C4714A\'">'
+          ? '<button id="cm-add-btn" style="display:flex;align-items:center;gap:6px;padding:9px 20px;border-radius:10px;background:var(--color-primary);color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px var(--color-primary-ring);" onmouseenter="this.style.filter=\'brightness(.92)\'" onmouseleave="this.style.filter=\'none\'">'
             + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Add Vendor'
           + '</button>'
           : '')
       + '</div>'
-      // Tabs
       + '<div style="display:flex;gap:3px;padding:4px;background:#f1f5f9;border-radius:11px;width:fit-content;margin-bottom:20px;">'
-        + tabBtn('tab-vendors', 'Vendor List', _tab === 'vendors')
+        + tabBtn('tab-vendors',  'Vendor List',        _tab === 'vendors')
         + tabBtn('tab-payments', 'Payment Management', _tab === 'payments')
+        + tabBtn('tab-history',  'Payment History',    _tab === 'history')
       + '</div>'
-      // Content
-      + '<div id="cm-tab-content">' + (_tab === 'vendors' ? _renderVendorTab() : _renderPaymentTab()) + '</div>'
+      + '<div id="cm-tab-content">' + tabContent + '</div>'
       + '<div id="cm-modal"></div>'
     + '</div>';
 
-    document.getElementById('tab-vendors').addEventListener('click', () => { _tab = 'vendors'; _render(); });
+    document.getElementById('tab-vendors') .addEventListener('click', () => { _tab = 'vendors';  _render(); });
     document.getElementById('tab-payments').addEventListener('click', () => { _tab = 'payments'; _render(); });
+    document.getElementById('tab-history') .addEventListener('click', async () => {
+      _tab = 'history'; _phOpenBatch = null;
+      // Show spinner while loading history
+      const content = document.getElementById('cm-tab-content');
+      if (content) content.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:300px;"><div style="text-align:center;"><div style="width:36px;height:36px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 12px;"></div><div style="font-size:13px;color:#94a3b8;">Loading history…</div></div></div>';
+      await _phLoad();
+      if (content) content.innerHTML = _renderHistoryTab();
+      _bindHistoryTabEvents();
+    });
     document.getElementById('cm-add-btn')?.addEventListener('click', _openAdd);
 
     _bindTableButtons();
     if (_tab === 'payments') _bindPaymentTabEvents();
+    if (_tab === 'history')  _bindHistoryTabEvents();
     _renderModal();
   }
 

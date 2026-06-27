@@ -33,9 +33,8 @@ window.Sidebar = {
       { route: 'approvals',     label: 'Approvals',    icon: 'approve', badge: true },
     ]},
     { title: 'Operations', items: [
-      { route: 'mis',             label: 'MIS Report',      icon: 'mis',          adminOnly: true },
-      { route: 'client-master',  label: 'Vendor Master',   icon: 'clientmaster', adminOnly: true },
-      { route: 'payment-history',label: 'Payment History', icon: 'payment',      adminOnly: true },
+      { route: 'mis',           label: 'MIS Report',    icon: 'mis',          adminOnly: true },
+      { route: 'client-master', label: 'Vendor Master', icon: 'clientmaster', adminOnly: true },
     ]},
     { title: 'Administration', items: [
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
