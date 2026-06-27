@@ -427,15 +427,6 @@ window.Pages['client-master'] = (() => {
         + '</button>'
         + '<span style="font-size:11px;color:#94a3b8;margin-left:auto;">Entries are saved to server — accessible from any device</span>'
       + '</div>'
-    + '</div>'
-    // Payment History loads here below the entries grid
-    + '<div id="cm-history-section">'
-      + '<div style="display:flex;align-items:center;justify-content:center;min-height:180px;">'
-        + '<div style="text-align:center;">'
-          + '<div style="width:30px;height:30px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 10px;"></div>'
-          + '<div style="font-size:12px;color:#94a3b8;">Loading history…</div>'
-        + '</div>'
-      + '</div>'
     + '</div>';
   }
 
@@ -959,15 +950,18 @@ window.Pages['client-master'] = (() => {
     const el = document.getElementById('main-content');
     if (!el) return;
 
-    const tabContent = _tab === 'vendors' ? _renderVendorTab() : _renderPaymentTab();
+    let tabContent;
+    if (_tab === 'vendors')       tabContent = _renderVendorTab();
+    else if (_tab === 'payments') tabContent = _renderPaymentTab();
+    else                          tabContent = _renderHistoryTab();
 
     const iconVendor  = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
     const iconPayment = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>';
+    const iconHistory = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 16 4-6 4 4 4-8"/></svg>';
 
     el.innerHTML =
       '<div style="display:flex;flex-direction:column;gap:20px;">'
 
-      // ── Header card — 2 tabs, Payment History is inline under Payment Management
       + '<div style="background:#fff;border-radius:16px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,.05);overflow:hidden;">'
 
         + (_tab === 'vendors' && _canEdit
@@ -981,40 +975,31 @@ window.Pages['client-master'] = (() => {
         + '<div style="display:flex;gap:0;border-top:1px solid #f1f5f9;padding:0 10px;">'
           + _tabBtn('tab-vendors',  'Vendor List',        iconVendor,  _tab === 'vendors')
           + _tabBtn('tab-payments', 'Payment Management', iconPayment, _tab === 'payments')
+          + _tabBtn('tab-history',  'Payment History',    iconHistory, _tab === 'history')
         + '</div>'
 
       + '</div>'
 
-      // ── Content area
       + '<div id="cm-tab-content">' + tabContent + '</div>'
 
       + '<div id="cm-modal"></div>'
     + '</div>';
 
-    document.getElementById('tab-vendors') .addEventListener('click', () => { _tab = 'vendors'; _render(); });
-    document.getElementById('tab-payments').addEventListener('click', () => { _tab = 'payments'; _render(); _loadHistoryIntoSection(); });
+    document.getElementById('tab-vendors') .addEventListener('click', () => { _tab = 'vendors';  _render(); });
+    document.getElementById('tab-payments').addEventListener('click', () => { _tab = 'payments'; _render(); });
+    document.getElementById('tab-history') .addEventListener('click', async () => {
+      _tab = 'history'; _phOpenBatch = null;
+      const content = document.getElementById('cm-tab-content');
+      if (content) content.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:300px;"><div style="text-align:center;"><div style="width:36px;height:36px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 12px;"></div><div style="font-size:13px;color:#94a3b8;">Loading history…</div></div></div>';
+      await _phLoad();
+      if (content) { content.innerHTML = _renderHistoryTab(); _bindHistoryTabEvents(); }
+    });
     document.getElementById('cm-add-btn')?.addEventListener('click', _openAdd);
 
     _bindTableButtons();
-    if (_tab === 'payments') {
-      _bindPaymentTabEvents();
-      _loadHistoryIntoSection();
-    }
+    if (_tab === 'payments') _bindPaymentTabEvents();
+    if (_tab === 'history')  _bindHistoryTabEvents();
     _renderModal();
-  }
-
-  function _loadHistoryIntoSection() {
-    const el = document.getElementById('cm-history-section');
-    if (!el) return;
-    if (_phRows.length) {
-      el.innerHTML = _renderHistoryTab();
-      _bindHistoryTabEvents();
-    } else {
-      _phLoad().then(() => {
-        const h = document.getElementById('cm-history-section');
-        if (h) { h.innerHTML = _renderHistoryTab(); _bindHistoryTabEvents(); }
-      });
-    }
   }
 
   function _bindTableButtons() {
