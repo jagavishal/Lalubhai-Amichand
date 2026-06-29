@@ -4,6 +4,49 @@ const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const path = require('path');
+const nodemailer = require('nodemailer');
+
+let _mailer = null;
+function getMailer() {
+  if (_mailer) return _mailer;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!user || !pass) return null;
+  _mailer = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user, pass },
+  });
+  return _mailer;
+}
+
+async function sendDelegationEmail({ toEmail, toName, description, dueDate, priority, delegatedByName, url, remarks }) {
+  const mailer = getMailer();
+  if (!mailer || !toEmail) return;
+  try {
+    await mailer.sendMail({
+      from: `"Task Manager" <${process.env.SMTP_USER}>`,
+      to: toEmail,
+      subject: `New Task Assigned: ${description.slice(0, 60)}`,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:520px;padding:24px;border:1px solid #e2e8f0;border-radius:8px">
+          <h2 style="color:#6366f1;margin:0 0 16px">New Task Assigned to You</h2>
+          <p style="color:#374151">Hi <b>${toName}</b>,</p>
+          <p style="color:#374151">A new task has been delegated to you by <b>${delegatedByName || 'Admin'}</b>.</p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0">
+            <tr><td style="padding:8px;background:#f8fafc;font-weight:600;color:#374151;width:130px">Description</td><td style="padding:8px;color:#374151">${description}</td></tr>
+            <tr><td style="padding:8px;background:#f8fafc;font-weight:600;color:#374151">Due Date</td><td style="padding:8px;color:#374151">${dueDate || '—'}</td></tr>
+            <tr><td style="padding:8px;background:#f8fafc;font-weight:600;color:#374151">Priority</td><td style="padding:8px;color:#374151">${priority || 'Low'}</td></tr>
+            ${url ? `<tr><td style="padding:8px;background:#f8fafc;font-weight:600;color:#374151">URL</td><td style="padding:8px"><a href="${url}" style="color:#6366f1">${url}</a></td></tr>` : ''}
+            ${remarks ? `<tr><td style="padding:8px;background:#f8fafc;font-weight:600;color:#374151">Remarks</td><td style="padding:8px;color:#374151">${remarks}</td></tr>` : ''}
+          </table>
+          <p style="color:#94a3b8;font-size:12px;margin-top:24px">This is an automated notification from Task Manager.</p>
+        </div>
+      `,
+    });
+  } catch (e) {
+    console.error('[email] Failed to send delegation email:', e.message);
+  }
+}
 
 const DEFAULT_PASSWORD = 'India@123';
 const FMS_ENABLED = false;
@@ -663,6 +706,8 @@ app.post('/api/delegations', requireAuth, async (req, res) => {
       delegations.push(newDel);
       store.delegations = delegations;
       await writeStore(store);
+      const doerEmail = doerUser?.email || '';
+      sendDelegationEmail({ toEmail:doerEmail, toName:doerName, description:body.description, dueDate:normDate(body.dueDate)||body.dueDate, priority:body.priority||'Low', delegatedByName:req.session?.user?.name, url:body.url, remarks:body.remarks });
       return res.status(201).json(newDel);
     }
 
@@ -686,6 +731,7 @@ app.post('/api/delegations', requireAuth, async (req, res) => {
     if (!body.description||!body.doerId||!body.dueDate) return res.status(400).json({ error:'description, doerId, dueDate required' });
     const users = await q('SELECT * FROM users WHERE id = $1', [body.doerId]);
     const row = await insertDelegation({ description:body.description, doerId:body.doerId, doerName:users[0]?.name, delegatedBy:body.delegatedBy, dueDate:normDate(body.dueDate)||body.dueDate, client:body.client, priority:body.priority, approval:resolvedApproval, url:body.url, remarks:body.remarks });
+    sendDelegationEmail({ toEmail:users[0]?.email, toName:users[0]?.name, description:body.description, dueDate:normDate(body.dueDate)||body.dueDate, priority:body.priority||'Low', delegatedByName:req.session?.user?.name, url:body.url, remarks:body.remarks });
     return res.status(201).json(row);
   } catch (err) { console.error(err); return res.status(500).json({ error:err.message }); }
 });

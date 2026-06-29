@@ -601,15 +601,9 @@ window.Pages['all-tasks'] = (function () {
             <input type="date" id="atd-due" class="at-input" style="width:100%" />
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div>
-            <label class="at-label">Priority</label>
-            <select id="atd-priority" class="at-input" style="width:100%"><option>Low</option><option>Medium</option><option>High</option></select>
-          </div>
-          <div>
-            <label class="at-label">Client</label>
-            <input id="atd-client" class="at-input" style="width:100%" placeholder="Client name" />
-          </div>
+        <div>
+          <label class="at-label">Priority</label>
+          <select id="atd-priority" class="at-input" style="width:100%"><option>Low</option><option>Medium</option><option>High</option></select>
         </div>
         <div>
           <label class="at-label">URL <span style="color:#94a3b8;font-weight:400">(optional)</span></label>
@@ -632,7 +626,6 @@ window.Pages['all-tasks'] = (function () {
       const doerId   = document.getElementById('atd-doer').value;
       const dueDate  = document.getElementById('atd-due').value;
       const priority = document.getElementById('atd-priority').value;
-      const client   = document.getElementById('atd-client').value.trim();
       const url      = document.getElementById('atd-url').value.trim();
       const remarks  = document.getElementById('atd-remarks').value.trim();
       const errEl    = document.getElementById('atd-err');
@@ -646,7 +639,7 @@ window.Pages['all-tasks'] = (function () {
       try {
         await Utils.apiFetch('/api/delegations', {
           method: 'POST',
-          body: JSON.stringify({ description: desc, doerId, dueDate, priority, client, url, remarks, delegatedBy: currentUserId() }),
+          body: JSON.stringify({ description: desc, doerId, dueDate, priority, url, remarks, delegatedBy: currentUserId() }),
         });
         div.remove();
         Utils.showToast('Task delegated successfully');
@@ -736,19 +729,13 @@ window.Pages['all-tasks'] = (function () {
             <input type="date" id="ate-due" value="${esc((task.dueDate || '').split('T')[0])}" class="at-input" style="width:100%" />
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div>
-            <label class="at-label">Priority</label>
-            <select id="ate-priority" class="at-input" style="width:100%">
-              <option${task.priority === 'Low'    ? ' selected' : ''}>Low</option>
-              <option${task.priority === 'Medium' ? ' selected' : ''}>Medium</option>
-              <option${task.priority === 'High'   ? ' selected' : ''}>High</option>
-            </select>
-          </div>
-          <div>
-            <label class="at-label">Client</label>
-            <input id="ate-client" value="${esc(task.client || '')}" class="at-input" style="width:100%" placeholder="Client name" />
-          </div>
+        <div>
+          <label class="at-label">Priority</label>
+          <select id="ate-priority" class="at-input" style="width:100%">
+            <option${task.priority === 'Low'    ? ' selected' : ''}>Low</option>
+            <option${task.priority === 'Medium' ? ' selected' : ''}>Medium</option>
+            <option${task.priority === 'High'   ? ' selected' : ''}>High</option>
+          </select>
         </div>
         <div>
           <label class="at-label">URL <span style="color:#94a3b8;font-weight:400">(optional)</span></label>
@@ -771,7 +758,6 @@ window.Pages['all-tasks'] = (function () {
       const doerId   = document.getElementById('ate-doer').value;
       const dueDate  = document.getElementById('ate-due').value;
       const priority = document.getElementById('ate-priority').value;
-      const client   = document.getElementById('ate-client').value.trim();
       const url      = document.getElementById('ate-url').value.trim();
       const remarks  = document.getElementById('ate-remarks').value.trim();
       const errEl    = document.getElementById('ate-err');
@@ -788,7 +774,7 @@ window.Pages['all-tasks'] = (function () {
             id: task.id,
             description: desc,
             dueDate:  dueDate  || undefined,
-            priority, client, url, remarks,
+            priority, url, remarks,
             ...(selectedUser ? { doer: selectedUser.name, doerId: selectedUser.id } : {}),
           }),
         });
@@ -871,7 +857,6 @@ window.Pages['all-tasks'] = (function () {
               <div style="font-size:12.5px;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}</div>
               <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
                 ${t.dueDate ? `<span style="font-size:10.5px;color:#94a3b8">${new Date(t.dueDate).toLocaleDateString('en-IN')}</span>` : ''}
-                ${t.client  ? `<span style="font-size:10.5px;color:#94a3b8">· ${esc(t.client)}</span>` : ''}
                 <span style="font-size:10px;padding:1px 6px;border-radius:999px;font-weight:500;background:${t.status === 'revise' ? '#fef3c7' : '#f1f5f9'};color:${t.status === 'revise' ? '#92400e' : '#64748b'}">${t.status}</span>
               </div>
             </div>
@@ -972,7 +957,6 @@ window.Pages['all-tasks'] = (function () {
               <div style="font-size:12.5px;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}</div>
               <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
                 ${t.dueDate ? `<span style="font-size:10.5px;color:#94a3b8">${new Date(t.dueDate).toLocaleDateString('en-IN')}</span>` : ''}
-                ${t.client  ? `<span style="font-size:10.5px;color:#94a3b8">· ${esc(t.client)}</span>` : ''}
                 <span style="font-size:10px;padding:1px 6px;border-radius:999px;font-weight:500;background:${t.status === 'revise' ? '#fef3c7' : '#f1f5f9'};color:${t.status === 'revise' ? '#92400e' : '#64748b'}">${t.status}</span>
               </div>
             </div>
