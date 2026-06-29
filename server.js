@@ -923,14 +923,15 @@ app.post('/api/users', requireAuth, async (req, res) => {
         return res.status(201).json({ success:true, inserted, errors });
       }
       await ensureSchema();
+      const lastRow = await q('SELECT id FROM users ORDER BY LENGTH(id) DESC, id DESC LIMIT 1');
+      let lastNum = lastRow.length ? parseInt((lastRow[0].id||'U000').replace(/[^0-9]/g,''))||0 : 0;
       for (const [i,row] of body.bulk.entries()) {
         const name=(row.name||'').trim(); const email=(row.email||'').trim().toLowerCase();
         if (!name||!email) { errors.push(`Row ${i+1}: name/email missing`); continue; }
         const ex = await q('SELECT id FROM users WHERE email = $1', [email]);
         if (ex.length) { errors.push(`Row ${i+1}: ${email} already exists`); continue; }
-        const last = await q('SELECT id FROM users ORDER BY id DESC LIMIT 1');
-        const lastNum = last.length ? parseInt((last[0].id||'U000').replace('U',''))||0 : 0;
-        const id = 'U'+(lastNum+1).toString().padStart(3,'0');
+        lastNum++;
+        const id = 'U'+lastNum.toString().padStart(3,'0');
         const roles = parseRoles(row.role||'', row.user_role||'');
         const hash = row.password ? await bcrypt.hash(row.password, 10) : null;
         await pool.query('INSERT INTO users (id,name,email,phone,department,roles,active,password_hash,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,NOW())', [id,name,email,row.phone||'',row.department||'',roles.join(','),hash]);
