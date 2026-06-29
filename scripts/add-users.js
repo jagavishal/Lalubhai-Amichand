@@ -7,33 +7,36 @@ require('dotenv').config({ path: require('path').join(__dirname, '../.env.local'
 
 const bcrypt = require('bcryptjs');
 
-// NOTE: 3 users skipped (no email — cannot login without email):
-//   MAHENDRA CHANDULAL SHAH, SHAIKH OBAIDULLA HABIBULLA, HIRAL R. SHAH
-// NOTE: Duplicate emails — only first occurrence inserted per email:
-//   mis@laltd.in      → MANOHAR BABAN PENDURKAR  (MARUTI NAGUJI MOHOL skipped)
-//   trading@laltd.in  → SURESH K. SHAH            (SACHIN YASHWANT BHOSALE, JANHAVI VIJAY GORAKH skipped)
-//   queen1911@laltd.in→ K V PUSHPAN               (KANAIYALAL NATWARLAL SHAH skipped)
-
+// All 26 users from CSV.
+// Users without email → generated from name (@laltd.in)
+// Duplicate email → unique name-based email assigned
 const USERS = [
-  { name: 'ARCHANA SACHIN YERLA',     email: 'inquiry@laltd.in',       password: 'pass123', role: 'admin', user_role: 'hod',  phone: '9833103624', department: 'REC. EXECUTIVE ASSISTANCE' },
-  { name: 'MANOHAR BABAN PENDURKAR',  email: 'mis@laltd.in',           password: 'pass123', role: 'user',  user_role: 'user', phone: '8097560231', department: 'LIASIONING OFFICER'       },
-  { name: 'JAYESH UDANI',             email: 'jayeshudani@laltd.in',   password: 'pass123', role: 'user',  user_role: 'user', phone: '',           department: 'SR. ACCOUNTANT'           },
-  { name: 'RAJESH NATVARLAL JOSHI',   email: 'rajeshjoshi@laltd.in',   password: 'pass123', role: 'user',  user_role: 'user', phone: '',           department: 'ACCOUNTANT'               },
-  { name: 'SHRAVAN NANDLAL PASSI',    email: 'shravanpassi@laltd.in',  password: 'pass123', role: 'user',  user_role: 'user', phone: '',           department: 'ACCOUNTANT'               },
-  { name: 'SHAILESH SURESH MANE',     email: 'shaileshmane@laltd.in',  password: 'pass123', role: 'user',  user_role: 'user', phone: '',           department: 'ACCOUNTANT'               },
-  { name: 'SUSHIL KUMAR KALOYA',      email: 'sushilkaloya@laltd.in',  password: 'pass123', role: 'user',  user_role: 'user', phone: '',           department: 'ACCOUNTANT'               },
-  { name: 'TRUPTI KOLI',              email: 'accounts@laltd.in',      password: 'pass123', role: 'user',  user_role: 'user', phone: '',           department: 'ACCOUNTANT'               },
-  { name: 'MAHESH B. SHAH',           email: 'maheshshah@laltd.in',    password: 'pass123', role: 'user',  user_role: 'user', phone: '',           department: 'FACTORY MANAGER'          },
-  { name: 'SURESH K. SHAH',           email: 'trading@laltd.in',       password: 'pass123', role: 'user',  user_role: 'user', phone: '9322948163', department: 'SALES EXECUTIVE'          },
-  { name: 'KALPANA ARYA',             email: 'export@laltd.in',        password: 'pass123', role: 'user',  user_role: 'user', phone: '9821196079', department: 'EXPORT EXECUTIVE'         },
-  { name: 'K V PUSHPAN',              email: 'queen1911@laltd.in',     password: 'pass123', role: 'user',  user_role: 'user', phone: '9892182447', department: 'EXPORT EXECUTIVE'         },
-  { name: 'RAMESHCHANDRA M. SHAH',    email: 'production@laltd.in',    password: 'pass123', role: 'user',  user_role: 'user', phone: '9930818415', department: 'PURCHASE EXECUTIVE'       },
-  { name: 'Paresh Shah',              email: 'pareshshah@laltd.in',    password: 'pass123', role: 'admin', user_role: 'admin', phone: '',          department: 'Director'                 },
-  { name: 'Dhiren Shah',              email: 'dhirenshah@laltd.in',    password: 'pass123', role: 'admin', user_role: 'admin', phone: '',          department: 'Director'                 },
-  { name: 'Saloni Anchan',            email: 'salonianchan@laltd.in',  password: 'pass123', role: 'admin', user_role: 'admin', phone: '',          department: 'Director'                 },
-  { name: 'Shival Shah',              email: 'shivalshah@laltd.in',    password: 'pass123', role: 'admin', user_role: 'admin', phone: '',          department: 'Business Manager'         },
-  { name: 'Sajil Shah',               email: 'sajilshah@laltd.in',     password: 'pass123', role: 'admin', user_role: 'admin', phone: '',          department: 'Business Manager'         },
-  { name: 'Brinda Kapur',             email: 'brindakapur@laltd.in',   password: 'pass123', role: 'admin', user_role: 'admin', phone: '',          department: 'Business Manager'         },
+  { name: 'MAHENDRA CHANDULAL SHAH',    email: 'mahendrashah@laltd.in',      password: 'pass123', role: 'user',  user_role: 'user',  phone: '9833781475', department: 'ADMIN & CASHIER'           },
+  { name: 'ARCHANA SACHIN YERLA',        email: 'inquiry@laltd.in',            password: 'pass123', role: 'admin', user_role: 'hod',   phone: '9833103624', department: 'REC. EXECUTIVE ASSISTANCE'  },
+  { name: 'MANOHAR BABAN PENDURKAR',     email: 'mis@laltd.in',                password: 'pass123', role: 'user',  user_role: 'user',  phone: '8097560231', department: 'LIASIONING OFFICER'         },
+  { name: 'MARUTI NAGUJI MOHOL',         email: 'marutimohol@laltd.in',        password: 'pass123', role: 'user',  user_role: 'user',  phone: '9594888359', department: 'CLEARK'                     },
+  { name: 'JAYESH UDANI',                email: 'jayeshudani@laltd.in',        password: 'pass123', role: 'user',  user_role: 'user',  phone: '',           department: 'SR. ACCOUNTANT'             },
+  { name: 'RAJESH NATVARLAL JOSHI',      email: 'rajeshjoshi@laltd.in',        password: 'pass123', role: 'user',  user_role: 'user',  phone: '',           department: 'ACCOUNTANT'                 },
+  { name: 'SHRAVAN NANDLAL PASSI',       email: 'shravanpassi@laltd.in',       password: 'pass123', role: 'user',  user_role: 'user',  phone: '',           department: 'ACCOUNTANT'                 },
+  { name: 'SHAILESH SURESH MANE',        email: 'shaileshmane@laltd.in',       password: 'pass123', role: 'user',  user_role: 'user',  phone: '',           department: 'ACCOUNTANT'                 },
+  { name: 'SUSHIL KUMAR KALOYA',         email: 'sushilkaloya@laltd.in',       password: 'pass123', role: 'user',  user_role: 'user',  phone: '',           department: 'ACCOUNTANT'                 },
+  { name: 'TRUPTI KOLI',                 email: 'accounts@laltd.in',           password: 'pass123', role: 'user',  user_role: 'user',  phone: '',           department: 'ACCOUNTANT'                 },
+  { name: 'MAHESH B. SHAH',              email: 'maheshshah@laltd.in',         password: 'pass123', role: 'user',  user_role: 'user',  phone: '',           department: 'FACTORY MANAGER'            },
+  { name: 'SURESH K. SHAH',              email: 'trading@laltd.in',            password: 'pass123', role: 'user',  user_role: 'user',  phone: '9322948163', department: 'SALES EXECUTIVE'            },
+  { name: 'SACHIN YASHWANT BHOSALE',     email: 'sachinbhosale@laltd.in',      password: 'pass123', role: 'user',  user_role: 'user',  phone: '9967700845', department: 'ACCOUNTANT'                 },
+  { name: 'JANHAVI VIJAY GORAKH',        email: 'janhavigorakh@laltd.in',      password: 'pass123', role: 'user',  user_role: 'user',  phone: '9594618204', department: 'ACCOUNTANT'                 },
+  { name: 'SHAIKH OBAIDULLA HABIBULLA',  email: 'shaikhhobaidulla@laltd.in',   password: 'pass123', role: 'user',  user_role: 'user',  phone: '9321468700', department: 'EXPORT MANAGER'             },
+  { name: 'KALPANA ARYA',                email: 'export@laltd.in',             password: 'pass123', role: 'user',  user_role: 'user',  phone: '9821196079', department: 'EXPORT EXECUTIVE'           },
+  { name: 'K V PUSHPAN',                 email: 'queen1911@laltd.in',          password: 'pass123', role: 'user',  user_role: 'user',  phone: '9892182447', department: 'EXPORT EXECUTIVE'           },
+  { name: 'KANAIYALAL NATWARLAL SHAH',   email: 'kanaiyalalshah@laltd.in',     password: 'pass123', role: 'user',  user_role: 'user',  phone: '9324369723', department: 'PURCHASE MANAGER'           },
+  { name: 'RAMESHCHANDRA M. SHAH',       email: 'production@laltd.in',         password: 'pass123', role: 'user',  user_role: 'user',  phone: '9930818415', department: 'PURCHASE EXECUTIVE'         },
+  { name: 'HIRAL R. SHAH',               email: 'hiralshah@laltd.in',          password: 'pass123', role: 'user',  user_role: 'user',  phone: '8237404260', department: 'TRUST ACCOUNTANT'           },
+  { name: 'Paresh Shah',                 email: 'pareshshah@laltd.in',         password: 'pass123', role: 'admin', user_role: 'admin', phone: '',           department: 'Director'                   },
+  { name: 'Dhiren Shah',                 email: 'dhirenshah@laltd.in',         password: 'pass123', role: 'admin', user_role: 'admin', phone: '',           department: 'Director'                   },
+  { name: 'Saloni Anchan',               email: 'salonianchan@laltd.in',       password: 'pass123', role: 'admin', user_role: 'admin', phone: '',           department: 'Director'                   },
+  { name: 'Shival Shah',                 email: 'shivalshah@laltd.in',         password: 'pass123', role: 'admin', user_role: 'admin', phone: '',           department: 'Business Manager'           },
+  { name: 'Sajil Shah',                  email: 'sajilshah@laltd.in',          password: 'pass123', role: 'admin', user_role: 'admin', phone: '',           department: 'Business Manager'           },
+  { name: 'Brinda Kapur',                email: 'brindakapur@laltd.in',        password: 'pass123', role: 'admin', user_role: 'admin', phone: '',           department: 'Business Manager'           },
 ];
 
 function parseRoles(role, userRole) {
