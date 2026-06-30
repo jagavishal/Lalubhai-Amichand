@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vendor Registration — Lallubhai Amichand</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Segoe UI', ui-sans-serif, system-ui, sans-serif; background: #f4f6f9; color: #1e293b; }
+    .page { min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; padding: 32px 16px 64px; }
+    .card { background: #fff; border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.08); width: 100%; max-width: 580px; overflow: hidden; }
+    .header { background: linear-gradient(135deg, #C4714A, #D4895A); padding: 28px 32px; }
+    .header h1 { margin: 0 0 4px; font-size: 20px; font-weight: 700; color: #fff; }
+    .header p { margin: 0; font-size: 13px; color: rgba(255,255,255,0.8); }
+    .body { padding: 28px 32px; display: flex; flex-direction: column; gap: 16px; }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #64748b; }
+    .field input, .field textarea { width: 100%; padding: 10px 12px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 13px; color: #1e293b; outline: none; transition: border-color .15s, box-shadow .15s; background: #f8fafc; resize: vertical; font-family: inherit; }
+    .field input:focus, .field textarea:focus { border-color: #C4714A; box-shadow: 0 0 0 3px rgba(196,113,74,.14); background: #fff; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .btn { width: 100%; padding: 13px; background: linear-gradient(135deg,#C4714A,#D4895A); color: #fff; font-size: 14px; font-weight: 700; border: none; border-radius: 10px; cursor: pointer; letter-spacing: .02em; transition: opacity .15s; margin-top: 4px; }
+    .btn:hover { opacity: .92; }
+    .btn:disabled { opacity: .6; cursor: not-allowed; }
+    .success { display: none; text-align: center; padding: 40px 32px; }
+    .success .icon { font-size: 48px; margin-bottom: 12px; }
+    .success h2 { font-size: 20px; font-weight: 700; color: #059669; margin: 0 0 8px; }
+    .success p { font-size: 13px; color: #64748b; margin: 0; }
+    .req { color: #ef4444; }
+    .err { display: none; background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; font-size: 13px; }
+    @media (max-width: 480px) { .row2 { grid-template-columns: 1fr; } .body, .header { padding: 20px; } }
+  </style>
+</head>
+<body>
+<div class="page">
+  <div class="card">
+    <div class="header">
+      <h1>Vendor Registration</h1>
+      <p>Lallubhai Amichand &amp; Co. — Please fill in your details below</p>
+    </div>
+
+    <div id="form-area">
+      <form id="vf" class="body" onsubmit="submitForm(event)">
+
+        <div class="row2">
+          <div class="field">
+            <label>Business Name <span class="req">*</span></label>
+            <input name="business_name" placeholder="Your company / firm name" required />
+          </div>
+          <div class="field">
+            <label>GST Number</label>
+            <input name="gst_no" placeholder="e.g. 27AAAPL1234C1Z5" />
+          </div>
+        </div>
+
+        <div class="row2">
+          <div class="field">
+            <label>Contact Person <span class="req">*</span></label>
+            <input name="contact_person" placeholder="Full name" required />
+          </div>
+          <div class="field">
+            <label>Phone <span class="req">*</span></label>
+            <input name="phone" type="tel" placeholder="Mobile number" required />
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Email Address</label>
+          <input name="email" type="email" placeholder="yourmail@example.com" />
+        </div>
+
+        <div class="field">
+          <label>Address</label>
+          <textarea name="address" rows="2" placeholder="Street, city, state, pin"></textarea>
+        </div>
+
+        <div class="field">
+          <label>Products / Services Offered</label>
+          <textarea name="products" rows="3" placeholder="Describe what you supply or offer..."></textarea>
+        </div>
+
+        <div class="field">
+          <label>Additional Notes</label>
+          <textarea name="notes" rows="2" placeholder="Any other information..."></textarea>
+        </div>
+
+        <div class="err" id="err-msg"></div>
+        <button type="submit" class="btn" id="submit-btn">Submit Registration</button>
+      </form>
+    </div>
+
+    <div class="success" id="success-area">
+      <div class="icon">✅</div>
+      <h2>Registration Submitted!</h2>
+      <p>Thank you! We have received your details and will get in touch with you soon.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+async function submitForm(e) {
+  e.preventDefault();
+  const btn  = document.getElementById('submit-btn');
+  const err  = document.getElementById('err-msg');
+  const form = e.target;
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+  err.style.display = 'none';
+  const data = {};
+  new FormData(form).forEach((v, k) => { data[k] = v.trim(); });
+  try {
+    const res = await fetch('/api/vendor-public', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Submission failed');
+    document.getElementById('form-area').style.display = 'none';
+    document.getElementById('success-area').style.display = 'block';
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = 'Submit Registration';
+  }
+}
+</script>
+</body>
+</html>

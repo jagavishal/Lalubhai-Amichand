@@ -190,6 +190,10 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS payment_entries (id VARCHAR(16) PRIMARY KEY, vendor_id VARCHAR(16) NOT NULL, amount DECIMAL(15,2) NOT NULL DEFAULT 0, txn_type VARCHAR(4) DEFAULT 'N', narration VARCHAR(500) DEFAULT '', status VARCHAR(16) DEFAULT 'draft', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, exported_at DATETIME DEFAULT NULL, batch_label VARCHAR(128) DEFAULT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_pe_status ON payment_entries (status)`,
   `CREATE INDEX idx_pe_exported ON payment_entries (exported_at)`,
+  `CREATE TABLE IF NOT EXISTS help_tickets (id VARCHAR(16) PRIMARY KEY, subject VARCHAR(255) NOT NULL, description TEXT DEFAULT NULL, priority VARCHAR(16) DEFAULT 'Medium', status VARCHAR(32) DEFAULT 'open', submitted_by VARCHAR(255) NOT NULL DEFAULT '', submitted_by_id VARCHAR(16) DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_ht_status ON help_tickets (status)`,
+  `CREATE TABLE IF NOT EXISTS announcements (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, message TEXT DEFAULT NULL, posted_by VARCHAR(255) NOT NULL DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS vendor_submissions (id VARCHAR(16) PRIMARY KEY, business_name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', phone VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', gst_no VARCHAR(32) DEFAULT '', address TEXT DEFAULT NULL, products TEXT DEFAULT NULL, notes TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 ];
 
 async function seedIfEmpty() {
@@ -773,11 +777,8 @@ app.patch('/api/delegations', requireAuth, async (req, res) => {
       const del = (store.delegations||[]).find(d=>d.id===body.id);
       if (!del) return res.status(404).json({ error:'Not found' });
       let newStatus = body.status;
-      if (newStatus==='revise') {
-        if (body._grantRevise) { del.reviseAction='granted'; }
-        else { newStatus='revise_requested'; del.reviseAction='pending'; }
-      } else if (newStatus==='pending'&&body._denyRevise) { del.reviseAction='denied'; }
-      if (newStatus) del.status=newStatus;
+      if (newStatus) del.status = newStatus;
+      if (newStatus==='done') del.completedAt = new Date().toISOString();
       if (body.dueDate) del.dueDate=body.dueDate;
       if (body.remarks!==undefined) del.remarks=body.remarks;
       if (body.approval!==undefined) del.approval=body.approval;
@@ -801,20 +802,46 @@ app.patch('/api/delegations', requireAuth, async (req, res) => {
     }
 
     if (!body.id) return res.status(400).json({ error:'id required' });
-    let status = body.status;
-    let reviseAction = null;
-    if (status==='revise') {
-      if (body._grantRevise) { reviseAction='granted'; }
-      else { status='revise_requested'; reviseAction='pending'; }
-    } else if (status==='pending'&&body._denyRevise) { reviseAction='denied'; }
-
+    const status = body.status ?? null;
     const completedAt = status === 'done' ? new Date() : null;
     await pool.query(
-      `UPDATE delegations SET status=COALESCE($1,status), description=COALESCE($2,description), due_date=COALESCE($3,due_date), client=COALESCE($4,client), priority=COALESCE($5,priority), approval=COALESCE($6,approval), url=COALESCE($7,url), remarks=COALESCE($8,remarks), revise_action=COALESCE($9,revise_action), completed_at=COALESCE($10,completed_at) WHERE id=$11`,
-      [status??null, body.description??null, body.dueDate??null, body.client??null, body.priority??null, body.approval??null, body.url??null, body.remarks??null, reviseAction, completedAt, body.id]
+      `UPDATE delegations SET status=COALESCE($1,status), description=COALESCE($2,description), due_date=COALESCE($3,due_date), client=COALESCE($4,client), priority=COALESCE($5,priority), approval=COALESCE($6,approval), url=COALESCE($7,url), remarks=COALESCE($8,remarks), completed_at=COALESCE($9,completed_at) WHERE id=$10`,
+      [status, body.description??null, body.dueDate??null, body.client??null, body.priority??null, body.approval??null, body.url??null, body.remarks??null, completedAt, body.id]
     );
     const result = await q('SELECT * FROM delegations WHERE id = $1', [body.id]);
     if (!result.length) return res.status(404).json({ error:'Not found' });
+    /* done reminder email → delegator */
+    if (status === 'done') {
+      try {
+        const task = result[0];
+        const delegatorId = task.delegated_by || task.delegatedBy;
+        let toEmail = null, toName = null;
+        if (delegatorId) {
+          const uRows = await q('SELECT email, name FROM users WHERE id=$1 OR email=$1 LIMIT 1', [delegatorId]);
+          if (uRows[0]) { toEmail = uRows[0].email; toName = uRows[0].name; }
+        }
+        if (toEmail) {
+          const mailer = getMailer();
+          if (mailer) {
+            await mailer.sendMail({
+              from: `"Task Manager" <${process.env.SMTP_USER}>`,
+              to: toEmail,
+              subject: `Task Completed: ${(task.description||'').slice(0,60)}`,
+              html: `<div style="font-family:sans-serif;max-width:520px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
+                <div style="background:#10b981;padding:20px 24px">
+                  <h2 style="color:#fff;margin:0;font-size:16px">✅ Task Marked Done</h2>
+                </div>
+                <div style="padding:24px">
+                  <p style="margin:0 0 12px;font-size:14px;color:#1e293b"><strong>Task:</strong> ${task.description||''}</p>
+                  <p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Done by:</strong> ${task.doer||''}</p>
+                  <p style="margin:0;font-size:13px;color:#94a3b8">Hi ${toName||''}, the above task has been completed.</p>
+                </div>
+              </div>`,
+            });
+          }
+        }
+      } catch (e) { console.error('[email] Done reminder failed:', e.message); }
+    }
     return res.json(result[0]);
   } catch (err) { console.error(err); return res.status(500).json({ error:err.message }); }
 });
@@ -833,6 +860,108 @@ app.delete('/api/delegations', requireAuth, async (req, res) => {
     await pool.query('DELETE FROM delegations WHERE id = $1', [id]);
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+// ── Help Tickets ─────────────────────────────────────────────────────────────
+app.get('/api/help-tickets', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const user = req.session.user;
+    const isAdmin = (user.roles||[]).includes('Admin') || (user.roles||[]).includes('HOD');
+    const rows = isAdmin
+      ? await q('SELECT * FROM help_tickets ORDER BY created_at DESC', [])
+      : await q('SELECT * FROM help_tickets WHERE submitted_by_id=$1 ORDER BY created_at DESC', [user.id]);
+    return res.json(rows);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/help-tickets', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const { subject, description, priority } = req.body;
+    if (!subject) return res.status(400).json({ error: 'Subject required' });
+    const user = req.session.user;
+    const id = 'HT' + Date.now().toString(36).toUpperCase();
+    await pool.query(
+      'INSERT INTO help_tickets (id,subject,description,priority,status,submitted_by,submitted_by_id) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [id, subject, description||'', priority||'Medium', 'open', user.name, user.id]
+    );
+    return res.status(201).json({ id });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/help-tickets', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const { id, status } = req.body;
+    if (!id) return res.status(400).json({ error: 'id required' });
+    await pool.query('UPDATE help_tickets SET status=COALESCE($1,status) WHERE id=$2', [status??null, id]);
+    return res.json({ success: true });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// ── Announcements ─────────────────────────────────────────────────────────────
+app.get('/api/announcements', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const rows = await q('SELECT * FROM announcements ORDER BY created_at DESC', []);
+    return res.json(rows);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/announcements', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const { title, message } = req.body;
+    if (!title) return res.status(400).json({ error: 'Title required' });
+    const user = req.session.user;
+    const roles = user.roles || [];
+    const isAdmin = roles.includes('Admin') || roles.includes('HOD');
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
+    const id = 'AN' + Date.now().toString(36).toUpperCase();
+    await pool.query(
+      'INSERT INTO announcements (id,title,message,posted_by) VALUES ($1,$2,$3,$4)',
+      [id, title, message||'', user.name]
+    );
+    return res.status(201).json({ id });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/announcements', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: 'id required' });
+    await pool.query('DELETE FROM announcements WHERE id=$1', [id]);
+    return res.json({ success: true });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// ── Vendor Public Form (no auth) ──────────────────────────────────────────────
+app.get('/vendor-form', (req, res) => {
+  res.sendFile(require('path').join(__dirname, 'public', 'vendor-form.html'));
+});
+
+app.post('/api/vendor-public', async (req, res) => {
+  try {
+    await ensureSchema();
+    const { business_name, contact_person, phone, email, gst_no, address, products, notes } = req.body;
+    if (!business_name) return res.status(400).json({ error: 'Business name required' });
+    const id = 'VS' + Date.now().toString(36).toUpperCase();
+    await pool.query(
+      'INSERT INTO vendor_submissions (id,business_name,contact_person,phone,email,gst_no,address,products,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [id, business_name, contact_person||'', phone||'', email||'', gst_no||'', address||'', products||'', notes||'']
+    );
+    return res.status(201).json({ success: true });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/vendor-submissions', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const rows = await q('SELECT * FROM vendor_submissions ORDER BY created_at DESC', []);
+    return res.json(rows);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
 // ── Masters (Checklist Masters) ───────────────────────────────────────────────

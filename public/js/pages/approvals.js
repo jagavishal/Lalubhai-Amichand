@@ -2,7 +2,7 @@ window.Pages = window.Pages || {};
 
 window.Pages.approvals = {
   /* ── state ─────────────────────────────────────────────── */
-  _tab: 'Revise Requests',          // admin: 'Revise Requests' | 'Task Approvals'
+  _tab: 'Shift Requests',          // admin: 'Shift Requests' | 'Task Approvals'
   _reviseRequests: [],
   _taskApprovals: [],
   _myRequests: [],
@@ -40,7 +40,7 @@ window.Pages.approvals = {
   _startSeenTimer() {
     clearTimeout(this._seenTimer);
     this._seenTimer = setTimeout(() => {
-      if (this._tab === 'Revise Requests') {
+      if (this._tab === 'Shift Requests') {
         const updated = new Set([...this._seenRevise, ...this._reviseRequests.map(r => r.id)]);
         this._seenRevise = updated;
         this._saveSeen('seen_revise_ids', updated);
@@ -153,7 +153,7 @@ window.Pages.approvals = {
     this._seenApprovals = this._loadSeen('seen_approval_ids');
 
     // Reset tab default per role
-    this._tab = isAdmin ? 'Revise Requests' : 'My Requests';
+    this._tab = isAdmin ? 'Shift Requests' : 'My Requests';
     this._grantTask = null;
     this._granting  = false;
 
@@ -196,7 +196,7 @@ window.Pages.approvals = {
   /* ── ADMIN VIEW ────────────────────────────────────────── */
   _buildAdminView() {
     const tabs = [
-      { key: 'Revise Requests', count: this._reviseRequests.length, icon: 'revise' },
+      { key: 'Shift Requests', count: this._reviseRequests.length, icon: 'revise' },
       { key: 'Task Approvals',  count: this._taskApprovals.length,  icon: 'task'   },
     ];
 
@@ -216,7 +216,7 @@ window.Pages.approvals = {
     }).join('');
 
     let contentHtml = '';
-    if (this._tab === 'Revise Requests') {
+    if (this._tab === 'Shift Requests') {
       contentHtml = this._buildReviseTable();
     } else {
       contentHtml = this._buildTaskApprovalsTable();
@@ -333,7 +333,7 @@ window.Pages.approvals = {
     const content = document.getElementById('approvals-content');
     if (!content) return;
 
-    // Revise Requests actions
+    // Shift Requests actions
     content.querySelectorAll('[data-action="grant"]').forEach(btn => {
       btn.addEventListener('click', () => {
         const task = this._reviseRequests.find(t => t.id === btn.dataset.id) ||
@@ -384,7 +384,7 @@ window.Pages.approvals = {
             ${this._reviseIconSvg('w-5 h-5')}
           </div>
           <div class="flex-1">
-            <h2 class="text-base font-semibold">Grant Revise Request</h2>
+            <h2 class="text-base font-semibold">Grant Shift Request</h2>
             <p class="text-xs text-slate-500 mt-0.5">Approve this revision request and send task back?</p>
           </div>
           <button id="grant-modal-close" ${this._granting ? 'disabled' : ''} class="w-8 h-8 grid place-items-center rounded-lg text-slate-400 hover:bg-slate-100">
@@ -398,11 +398,11 @@ window.Pages.approvals = {
             ${t.dueDate ? `
             <div class="flex items-center gap-1.5 text-xs text-slate-600 pt-2 border-t border-slate-200">
               <svg class="w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-              <span class="text-slate-400">Revise Until:</span>
+              <span class="text-slate-400">Shift Until:</span>
               <b class="text-primary-600">${this._fmt(t.dueDate)}</b>
             </div>` : ''}
             <div class="text-xs text-slate-600 pt-2 border-t border-slate-200">
-              <span class="text-slate-400">Revise Note:</span>
+              <span class="text-slate-400">Shift Note:</span>
               <span class="font-medium">${this._esc(t.remarks || '—')}</span>
             </div>
           </div>
@@ -410,7 +410,7 @@ window.Pages.approvals = {
         <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
           <button id="grant-modal-cancel" ${this._granting ? 'disabled' : ''} class="btn-secondary">Cancel</button>
           <button id="grant-modal-confirm" ${this._granting ? 'disabled' : ''} class="btn-success">
-            ${this._granting ? 'Granting…' : 'Grant Revise'}
+            ${this._granting ? 'Granting…' : 'Grant Shift'}
           </button>
         </div>
       </div>

@@ -215,8 +215,8 @@ window.Pages['all-tasks'] = (function () {
   function statusPill(status) {
     const map = {
       done:             { bg: '#d1fae5', color: '#065f46', label: 'Done' },
-      revise:           { bg: '#fef3c7', color: '#92400e', label: 'Revise' },
-      revise_requested: { bg: '#ffedd5', color: '#9a3412', label: 'Revise Req.' },
+      revise:           { bg: '#fef3c7', color: '#92400e', label: 'Shifted' },
+      revise_requested: { bg: '#ffedd5', color: '#9a3412', label: 'Shifted' },
       pending:          { bg: '#fee2e2', color: '#991b1b', label: 'Pending' },
     };
     const s = map[status] || map.pending;
@@ -226,7 +226,7 @@ window.Pages['all-tasks'] = (function () {
   /* ─── render task row ───────────────────────────────────────────────────── */
   function taskRowHTML(t, serial) {
     const canEdit   = t.type !== 'Checklist';
-    const canRevise = t.type !== 'Checklist' && t.status !== 'done' && t.status !== 'revise';
+    const canRevise = t.type !== 'Checklist' && t.status !== 'done' && t.status !== 'revise' && t.status !== 'revise_requested';
     const canDone   = t.status !== 'done';
 
     const editBtn = (canEdit && hasFeature('edit'))
@@ -248,7 +248,7 @@ window.Pages['all-tasks'] = (function () {
       : '';
 
     const reviseBtn = (canRevise && t.type !== 'Checklist')
-      ? `<button class="at-pill-btn at-pill-amber" onclick="window._atMarkRevise('${esc(t.id)}')">Revise</button>`
+      ? `<button class="at-pill-btn at-pill-amber" onclick="window._atMarkRevise('${esc(t.id)}')">Shifted</button>`
       : '';
 
     const urlLink = t.url
@@ -297,7 +297,7 @@ window.Pages['all-tasks'] = (function () {
     const pills = [
       completed > 0 ? `<span class="at-pill" style="background:#d1fae5;color:#065f46">${completed} done</span>`     : '',
       pending   > 0 ? `<span class="at-pill" style="background:#fee2e2;color:#991b1b">${pending} pending</span>`   : '',
-      revised   > 0 ? `<span class="at-pill" style="background:#fef3c7;color:#92400e">${revised} revised</span>` : '',
+      revised   > 0 ? `<span class="at-pill" style="background:#fef3c7;color:#92400e">${revised} shifted</span>` : '',
     ].join('');
 
     const tableHTML = open ? `
