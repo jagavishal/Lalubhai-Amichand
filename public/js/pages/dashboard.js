@@ -990,6 +990,78 @@ window.Pages.dashboard = (function () {
     });
   }
 
+  /* ── Announcement quick modal ────────────────────────────────────── */
+  function _openAnnouncementModal(admin) {
+    if (!admin) { Utils.showToast('Only Admin/HOD can post announcements', 'error'); return; }
+    const existing = document.getElementById('db-ann-modal');
+    if (existing) existing.remove();
+    const html = `
+      <div id="db-ann-modal" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);backdrop-filter:blur(4px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
+        <div style="background:#fff;border-radius:20px;box-shadow:0 20px 48px rgba(0,0,0,0.14);width:100%;max-width:440px;overflow:hidden;" onclick="event.stopPropagation()">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid #f1f5f9;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="width:34px;height:34px;border-radius:10px;background:#ede9fe;color:#7c3aed;display:flex;align-items:center;justify-content:center;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
+              </div>
+              <div>
+                <div style="font-size:15px;font-weight:700;color:#0f172a;">Post Announcement</div>
+                <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">Visible to all employees</div>
+              </div>
+            </div>
+            <button id="db-ann-close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;color:#64748b;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div style="padding:20px 22px;display:flex;flex-direction:column;gap:14px;">
+            <div>
+              <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Title <span style="color:#ef4444">*</span></label>
+              <input id="db-ann-title" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" placeholder="Announcement title" />
+            </div>
+            <div>
+              <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Message <span style="color:#94a3b8;font-weight:400">(optional)</span></label>
+              <textarea id="db-ann-message" rows="4" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;resize:none;box-sizing:border-box;" placeholder="Write the announcement details..."></textarea>
+            </div>
+            <div id="db-ann-err" style="display:none;font-size:12px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:8px 12px;"></div>
+          </div>
+          <div style="padding:16px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;">
+            <button id="db-ann-cancel" class="btn-secondary">Cancel</button>
+            <button id="db-ann-submit" style="display:inline-flex;align-items:center;gap:6px;padding:7px 16px;border-radius:8px;font-size:13px;font-weight:600;background:#8b5cf6;color:#fff;border:none;cursor:pointer;">Post Announcement</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+
+    const closeModal = () => { document.getElementById('db-ann-modal')?.remove(); };
+    document.getElementById('db-ann-modal').addEventListener('click', closeModal);
+    document.getElementById('db-ann-close').addEventListener('click', closeModal);
+    document.getElementById('db-ann-cancel').addEventListener('click', closeModal);
+    document.getElementById('db-ann-title')?.focus();
+
+    document.getElementById('db-ann-submit').addEventListener('click', async () => {
+      const title   = document.getElementById('db-ann-title')?.value.trim();
+      const message = document.getElementById('db-ann-message')?.value.trim();
+      const errEl   = document.getElementById('db-ann-err');
+      const btn     = document.getElementById('db-ann-submit');
+
+      if (!title) { errEl.textContent = 'Title is required.'; errEl.style.display = 'block'; return; }
+      errEl.style.display = 'none';
+
+      btn.disabled = true; btn.textContent = 'Posting…';
+      try {
+        await Utils.apiFetch('/api/announcements', {
+          method: 'POST',
+          body: JSON.stringify({ title, message }),
+        });
+        closeModal();
+        Utils.showToast('Announcement posted!', 'success');
+      } catch (e) {
+        errEl.textContent = e.message || 'Failed to post announcement.';
+        errEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Post Announcement';
+      }
+    });
+  }
+
   function _attachEvents(el, admin) {
 
     /* ── tab buttons ── */
@@ -1206,7 +1278,7 @@ window.Pages.dashboard = (function () {
     if (btnHelpTicket) btnHelpTicket.addEventListener('click', () => _openHelpTicketModal());
 
     const btnAnnouncement = el.querySelector('#db-btn-announcement');
-    if (btnAnnouncement) btnAnnouncement.addEventListener('click', () => Router.navigate('announcements'));
+    if (btnAnnouncement) btnAnnouncement.addEventListener('click', () => _openAnnouncementModal(admin));
     el.querySelector('#modal-checklist-close')?.addEventListener('click', () => hideModal('modal-checklist'));
     el.querySelector('#modal-checklist-cancel')?.addEventListener('click', () => hideModal('modal-checklist'));
     el.querySelector('#modal-checklist')?.addEventListener('click', () => hideModal('modal-checklist'));
