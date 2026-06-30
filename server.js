@@ -196,10 +196,18 @@ async function seedIfEmpty() {
   const adminName  = process.env.ADMIN_NAME  || 'Admin';
   const adminPass  = process.env.ADMIN_PASSWORD || 'admin';
   const hash = await bcrypt.hash(adminPass, 10);
-  await pool.query(
-    'INSERT INTO users (id,name,email,roles,active,password_hash) VALUES ($1,$2,$3,$4,1,$5) ON CONFLICT (id) DO UPDATE SET email=$3, roles=$4, active=1, password_hash=$5',
-    ['A001', adminName, adminEmail, 'Admin', hash]
-  );
+  const existing = await q('SELECT id FROM users WHERE id = $1', ['A001']);
+  if (existing.length === 0) {
+    await pool.query(
+      'INSERT INTO users (id,name,email,roles,active,password_hash) VALUES ($1,$2,$3,$4,1,$5)',
+      ['A001', adminName, adminEmail, 'Admin', hash]
+    );
+  } else {
+    await pool.query(
+      'UPDATE users SET email=$1, roles=$2, active=1, password_hash=$3 WHERE id=$4',
+      [adminEmail, 'Admin', hash, 'A001']
+    );
+  }
   console.log('[db] Admin user ensured:', adminEmail);
 }
 
