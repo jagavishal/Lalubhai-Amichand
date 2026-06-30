@@ -30,10 +30,10 @@ window.Pages.users = (() => {
   let _bulkSaving = false;
   let _bulkMsg    = '';
 
-  // permission modal
-  let _permUser     = null;
-  let _permData     = { pages: [], features: {} };
-  let _permSaving   = false;
+  // inline permissions
+  let _expandedUserId = null;
+  let _permData       = { pages: [], features: {} };
+  let _permSaving     = false;
 
   const ALL_PAGES = [
     { key: 'dashboard',     label: 'Dashboard' },
@@ -167,127 +167,40 @@ window.Pages.users = (() => {
     }
   }
 
-  function openPermModal(user) {
-    _permUser   = user;
-    _permSaving = false;
-    const existing = user.permissions;
+  function openPermRow(user) {
+    if (_expandedUserId === user.id) { _expandedUserId = null; renderPage(); return; }
+    _expandedUserId = user.id;
+    _permSaving     = false;
+    const existing  = user.permissions;
     if (existing && existing.pages) {
       _permData = { pages: [...existing.pages], features: existing.features ? JSON.parse(JSON.stringify(existing.features)) : {} };
     } else {
-      // default: all pages + all features enabled
       _permData = {
         pages: ALL_PAGES.map(p => p.key),
         features: Object.fromEntries(Object.entries(ALL_FEATURES).map(([k, arr]) => [k, arr.map(f => f.key)])),
       };
     }
-    renderPermModal();
+    renderPage();
   }
 
-  async function savePermissions() {
+  async function savePermissions(userId) {
     _permSaving = true;
-    renderPermModal();
+    renderPage();
     try {
       await Utils.apiFetch('/api/users', {
         method: 'PATCH',
-        body: JSON.stringify({ id: _permUser.id, permissions: _permData }),
+        body: JSON.stringify({ id: userId, permissions: _permData }),
       });
       await loadData();
-      _permUser = null;
-      renderPermModal();
+      _expandedUserId = null;
+      _permSaving     = false;
       renderPage();
       Utils.showToast('Permissions saved');
     } catch (e) {
       _permSaving = false;
-      renderPermModal();
+      renderPage();
       Utils.showToast(e.message || 'Failed to save permissions', 'error');
     }
-  }
-
-  function renderPermModal() {
-    const existing = document.getElementById('perm-modal-overlay');
-    if (!_permUser) { if (existing) existing.remove(); return; }
-
-    const pagesHtml = ALL_PAGES.map(p => {
-      const checked = _permData.pages.includes(p.key);
-      const featuresForPage = ALL_FEATURES[p.key];
-      const featHtml = (checked && featuresForPage) ? `
-        <div style="margin:6px 0 2px 24px;display:flex;flex-wrap:wrap;gap:6px;">
-          ${featuresForPage.map(f => {
-            const fChecked = (_permData.features[p.key] || []).includes(f.key);
-            return `<label style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#475569;cursor:pointer;">
-              <input type="checkbox" class="perm-feat-chk" data-page="${esc(p.key)}" data-feat="${esc(f.key)}" ${fChecked ? 'checked' : ''} style="accent-color:#6366f1;cursor:pointer;" />
-              ${esc(f.label)}
-            </label>`;
-          }).join('')}
-        </div>` : '';
-      return `
-        <div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#1e293b;">
-            <input type="checkbox" class="perm-page-chk" data-page="${esc(p.key)}" ${checked ? 'checked' : ''} style="width:15px;height:15px;accent-color:#6366f1;cursor:pointer;" />
-            ${esc(p.label)}
-          </label>
-          ${featHtml}
-        </div>`;
-    }).join('');
-
-    const html = `
-      <div id="perm-modal-overlay" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col">
-          <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-            <div>
-              <h2 class="text-[15px] font-semibold text-slate-900">Page & Button Access</h2>
-              <p class="text-[11px] text-slate-400 mt-0.5">${esc(_permUser.name)}</p>
-            </div>
-            <button id="perm-close" class="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:bg-slate-100">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          </div>
-          <div class="px-6 py-4 overflow-y-auto flex-1">
-            <p class="text-[11.5px] text-slate-500 mb-4">Check karo kaunse pages aur buttons yeh user dekh sakta hai.</p>
-            ${pagesHtml}
-          </div>
-          <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
-            <button id="perm-cancel" class="btn-secondary">Cancel</button>
-            <button id="perm-save" class="btn-primary" ${_permSaving ? 'disabled' : ''}>${_permSaving ? 'Saving…' : 'Save Permissions'}</button>
-          </div>
-        </div>
-      </div>`;
-
-    if (existing) existing.remove();
-    document.body.insertAdjacentHTML('beforeend', html);
-
-    document.getElementById('perm-close')?.addEventListener('click', () => { _permUser = null; renderPermModal(); });
-    document.getElementById('perm-cancel')?.addEventListener('click', () => { _permUser = null; renderPermModal(); });
-    document.getElementById('perm-save')?.addEventListener('click', savePermissions);
-
-    document.querySelectorAll('.perm-page-chk').forEach(chk => {
-      chk.addEventListener('change', () => {
-        const page = chk.dataset.page;
-        if (chk.checked) {
-          if (!_permData.pages.includes(page)) _permData.pages.push(page);
-          if (ALL_FEATURES[page] && !_permData.features[page]) {
-            _permData.features[page] = ALL_FEATURES[page].map(f => f.key);
-          }
-        } else {
-          _permData.pages = _permData.pages.filter(p => p !== page);
-          delete _permData.features[page];
-        }
-        renderPermModal();
-      });
-    });
-
-    document.querySelectorAll('.perm-feat-chk').forEach(chk => {
-      chk.addEventListener('change', () => {
-        const page = chk.dataset.page;
-        const feat = chk.dataset.feat;
-        if (!_permData.features[page]) _permData.features[page] = [];
-        if (chk.checked) {
-          if (!_permData.features[page].includes(feat)) _permData.features[page].push(feat);
-        } else {
-          _permData.features[page] = _permData.features[page].filter(f => f !== feat);
-        }
-      });
-    });
   }
 
   async function saveUser() {
@@ -518,7 +431,39 @@ window.Pages.users = (() => {
         btn.addEventListener('click', () => {
           const u = _users.find(x => String(x.id) === String(btn.dataset.id));
           if (!u) return;
-          openPermModal(u);
+          openPermRow(u);
+        });
+      });
+      el.querySelectorAll('[data-action="cancel-perm"]').forEach(btn => {
+        btn.addEventListener('click', () => { _expandedUserId = null; renderPage(); });
+      });
+      el.querySelectorAll('[data-action="save-perm"]').forEach(btn => {
+        btn.addEventListener('click', () => savePermissions(btn.dataset.id));
+      });
+      /* live checkbox update — no re-render needed */
+      el.querySelectorAll('.pi-page').forEach(chk => {
+        chk.addEventListener('change', () => {
+          const page = chk.dataset.page;
+          if (chk.checked) {
+            if (!_permData.pages.includes(page)) _permData.pages.push(page);
+            if (ALL_FEATURES[page] && !_permData.features[page])
+              _permData.features[page] = ALL_FEATURES[page].map(f => f.key);
+          } else {
+            _permData.pages = _permData.pages.filter(p => p !== page);
+            delete _permData.features[page];
+          }
+          /* toggle feature checkboxes visibility */
+          el.querySelectorAll(`.pi-feat[data-page="${page}"]`).forEach(fc => {
+            fc.closest('label').style.display = chk.checked ? '' : 'none';
+          });
+        });
+      });
+      el.querySelectorAll('.pi-feat').forEach(chk => {
+        chk.addEventListener('change', () => {
+          const page = chk.dataset.page, feat = chk.dataset.feat;
+          if (!_permData.features[page]) _permData.features[page] = [];
+          if (chk.checked) { if (!_permData.features[page].includes(feat)) _permData.features[page].push(feat); }
+          else _permData.features[page] = _permData.features[page].filter(f => f !== feat);
         });
       });
     }
@@ -576,11 +521,34 @@ window.Pages.users = (() => {
       </div>`;
   }
 
+  function renderPermInline() {
+    const pagesHtml = ALL_PAGES.map(p => {
+      const checked = _permData.pages.includes(p.key);
+      const feats   = ALL_FEATURES[p.key] || [];
+      const featHtml = feats.map(f => {
+        const fc = (_permData.features[p.key] || []).includes(f.key);
+        return `<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;color:#64748b;">
+          <input type="checkbox" class="pi-feat" data-page="${esc(p.key)}" data-feat="${esc(f.key)}" ${fc ? 'checked' : ''} style="accent-color:#6366f1;" />
+          ${esc(f.label)}
+        </label>`;
+      }).join('');
+      return `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9;">
+        <label style="display:flex;align-items:center;gap:6px;min-width:130px;cursor:pointer;font-size:13px;font-weight:600;color:#1e293b;">
+          <input type="checkbox" class="pi-page" data-page="${esc(p.key)}" ${checked ? 'checked' : ''} style="width:14px;height:14px;accent-color:#6366f1;" />
+          ${esc(p.label)}
+        </label>
+        ${feats.length ? `<div style="display:flex;flex-wrap:wrap;gap:10px;padding-top:1px;">${featHtml}</div>` : ''}
+      </div>`;
+    }).join('');
+    return pagesHtml;
+  }
+
   function renderAccessTab() {
     const sorted = _users.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     const rows = sorted.map(u => {
-      const isActive = u.active !== false;
-      return `
+      const isActive   = u.active !== false;
+      const isExpanded = _expandedUserId === u.id;
+      const userRow = `
         <tr class="table-row">
           <td class="table-td">
             <div class="flex items-center gap-2.5">
@@ -605,19 +573,36 @@ window.Pages.users = (() => {
                 ${isActive ? 'Revoke Access' : 'Grant Access'}
               </button>
               <button data-action="manage-perm" data-id="${esc(u.id)}"
-                class="pill border cursor-pointer bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100">
-                Manage Access
+                class="pill border cursor-pointer ${isExpanded ? 'bg-violet-600 text-white border-violet-600' : 'bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100'}">
+                Permissions
               </button>
             </div>
           </td>
         </tr>`;
+
+      const permRow = isExpanded ? `
+        <tr>
+          <td colspan="5" style="padding:0;background:#faf5ff;border-bottom:2px solid #e9d5ff;">
+            <div style="padding:14px 20px;">
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#7c3aed;margin-bottom:10px;">
+                Pages &amp; Actions — ${esc(u.name)}
+              </div>
+              ${renderPermInline()}
+              <div style="margin-top:12px;display:flex;gap:8px;">
+                <button data-action="save-perm" data-id="${esc(u.id)}" class="btn-primary !py-1.5 !px-4 text-xs" ${_permSaving ? 'disabled' : ''}>
+                  ${_permSaving ? 'Saving…' : 'Save'}
+                </button>
+                <button data-action="cancel-perm" class="btn-secondary !py-1.5 !px-4 text-xs">Cancel</button>
+              </div>
+            </div>
+          </td>
+        </tr>` : '';
+
+      return userRow + permRow;
     }).join('');
 
     return `
       <div class="card overflow-hidden">
-        <div class="px-5 py-3 border-b border-slate-100">
-          <p class="text-[12px] text-slate-500">Grant or revoke login access for team members. Inactive users cannot log in.</p>
-        </div>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead class="bg-slate-50/80">
