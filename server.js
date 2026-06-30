@@ -186,6 +186,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS clients (id VARCHAR(16) PRIMARY KEY, name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', contact_number VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', industry VARCHAR(128) DEFAULT '', status VARCHAR(32) DEFAULT 'active', notes TEXT DEFAULT NULL, mobile VARCHAR(64) DEFAULT '', state VARCHAR(128) DEFAULT '', district VARCHAR(128) DEFAULT '', address TEXT DEFAULT NULL, pin VARCHAR(16) DEFAULT '', bank_name VARCHAR(255) DEFAULT '', account_holder VARCHAR(255) DEFAULT '', account_no VARCHAR(64) DEFAULT '', ifsc_code VARCHAR(32) DEFAULT '', branch_name VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS dev_backups (id VARCHAR(64) PRIMARY KEY, label VARCHAR(128) NOT NULL DEFAULT '', data TEXT NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS user_sessions (sid VARCHAR(128) PRIMARY KEY, data TEXT NOT NULL, expires_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT DEFAULT NULL`,
   `CREATE TABLE IF NOT EXISTS payment_entries (id VARCHAR(16) PRIMARY KEY, vendor_id VARCHAR(16) NOT NULL, amount DECIMAL(15,2) NOT NULL DEFAULT 0, txn_type VARCHAR(4) DEFAULT 'N', narration VARCHAR(500) DEFAULT '', status VARCHAR(16) DEFAULT 'draft', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, exported_at DATETIME DEFAULT NULL, batch_label VARCHAR(128) DEFAULT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_pe_status ON payment_entries (status)`,
   `CREATE INDEX idx_pe_exported ON payment_entries (exported_at)`,
@@ -300,7 +301,9 @@ function userOut(r) {
   if (Array.isArray(r.roles)) roles = r.roles;
   else if (typeof r.roles === 'string') roles = r.roles.split(',').map(x => x.trim()).filter(Boolean);
   else roles = ['User'];
-  return { id:r.id, name:r.name, email:r.email, phone:r.phone||'', department:r.department||'', roles, active:!!r.active, picture:r.picture||null, createdAt:toIso(r.created_at) };
+  let permissions = null;
+  try { if (r.permissions) permissions = typeof r.permissions === 'string' ? JSON.parse(r.permissions) : r.permissions; } catch {}
+  return { id:r.id, name:r.name, email:r.email, phone:r.phone||'', department:r.department||'', roles, active:!!r.active, picture:r.picture||null, permissions, createdAt:toIso(r.created_at) };
 }
 
 async function readStoreDb() {
@@ -613,17 +616,19 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/session', async (req, res) => {
   const u = req.session?.user || null;
   if (!u) return res.json({ user: null });
-  // fetch picture separately (not stored in cookie to keep session small)
   try {
-    let picture = null;
+    let picture = null, permissions = null;
     if (USE_DB) {
-      const rows = await q('SELECT picture FROM users WHERE id = $1', [u.id]);
+      const rows = await q('SELECT picture, permissions FROM users WHERE id = $1', [u.id]);
       picture = rows[0]?.picture || null;
+      try { if (rows[0]?.permissions) permissions = JSON.parse(rows[0].permissions); } catch {}
     } else {
       const store = await readStoreJson();
-      picture = (store.users || []).find(x => x.id === u.id)?.picture || null;
+      const su = (store.users || []).find(x => x.id === u.id);
+      picture = su?.picture || null;
+      permissions = su?.permissions || null;
     }
-    return res.json({ user: { ...u, picture } });
+    return res.json({ user: { ...u, picture, permissions } });
   } catch {
     return res.json({ user: u });
   }
@@ -1060,6 +1065,7 @@ app.patch('/api/users', requireAuth, async (req, res) => {
       if (body.department!==undefined) user.department=body.department;
       if (body.roles!==undefined) user.roles=Array.isArray(body.roles)?body.roles:body.roles.split(',').map(r=>r.trim());
       if (body.active!==undefined) user.active=body.active;
+      if (body.permissions!==undefined) user.permissions=body.permissions;
       await writeStore(store);
       return res.json(user);
     }
@@ -1072,6 +1078,10 @@ app.patch('/api/users', requireAuth, async (req, res) => {
     if (body.picture!==undefined) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,body.id]);
+    }
+    if (body.permissions!==undefined) {
+      const permStr = body.permissions === null ? null : JSON.stringify(body.permissions);
+      await pool.query('UPDATE users SET permissions=$1 WHERE id=$2', [permStr, body.id]);
     }
     const result = await q('SELECT * FROM users WHERE id = $1', [body.id]);
     if (!result.length) return res.status(404).json({ error:'Not found' });

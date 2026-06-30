@@ -61,8 +61,9 @@ window.Sidebar = {
     } catch { return 0; }
   },
 
-  _buildNavItem(item, isAdmin, pendingCount, activeRoute) {
+  _buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions) {
     if (item.adminOnly && !isAdmin) return '';
+    if (permissions && permissions.pages && !permissions.pages.includes(item.route)) return '';
 
     const active = activeRoute === item.route;
     const icon   = this._icons[item.icon] || '';
@@ -114,10 +115,11 @@ window.Sidebar = {
     const activeRoute = (window.location.hash || '').replace('#', '') || 'dashboard';
     const initials   = this._initials(user?.name);
     const roles      = (user?.roles || ['User']).join(' · ');
+    const permissions = isAdmin ? null : (user?.permissions || null);
 
     const sectionsHTML = this._sections.map(sec => {
       const itemsHTML = sec.items
-        .map(item => this._buildNavItem(item, isAdmin, pendingCount, activeRoute))
+        .map(item => this._buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions))
         .join('');
       if (!itemsHTML.trim()) return '';
       return `

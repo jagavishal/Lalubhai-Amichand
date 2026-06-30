@@ -13,6 +13,17 @@ window.Pages.approvals = {
   _seenTimer: null,
 
   /* ── helpers ───────────────────────────────────────────── */
+  _hasFeature(feat) {
+    const roles = window.currentUser?.roles || [];
+    const isAdmin = Array.isArray(roles) ? roles.includes('Admin') || roles.includes('HOD') : String(roles).includes('Admin') || String(roles).includes('HOD');
+    if (isAdmin) return true;
+    const perms = window.currentUser?.permissions;
+    if (!perms || !perms.features) return true;
+    const pageFeats = perms.features['approvals'];
+    if (!pageFeats) return false;
+    return pageFeats.includes(feat);
+  },
+
   _fmt(iso) {
     if (!iso) return '—';
     return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -237,8 +248,8 @@ window.Pages.approvals = {
         <td class="table-td text-slate-500">${this._esc(t.remarks || '—')}</td>
         <td class="table-td">
           <div class="flex gap-1.5">
-            <button data-action="grant" data-id="${t.id}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer">Grant</button>
-            <button data-action="deny"  data-id="${t.id}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer">Deny</button>
+            ${this._hasFeature('grant_revise') ? `<button data-action="grant" data-id="${t.id}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer">Grant</button>` : ''}
+            ${this._hasFeature('reject') ? `<button data-action="deny" data-id="${t.id}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer">Deny</button>` : ''}
           </div>
         </td>
       </tr>`;
@@ -282,8 +293,8 @@ window.Pages.approvals = {
         <td class="table-td"><span class="pill ${priCls}">${this._esc(t.priority || 'Low')}</span></td>
         <td class="table-td">
           <div class="flex gap-1.5">
-            <button data-action="approve" data-id="${t.id}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer">Approve</button>
-            <button data-action="reject"  data-id="${t.id}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer">Reject</button>
+            ${this._hasFeature('approve') ? `<button data-action="approve" data-id="${t.id}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer">Approve</button>` : ''}
+            ${this._hasFeature('reject') ? `<button data-action="reject" data-id="${t.id}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer">Reject</button>` : ''}
           </div>
         </td>
       </tr>`;

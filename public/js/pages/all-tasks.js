@@ -18,6 +18,15 @@ window.Pages['all-tasks'] = (function () {
     return String(roles).includes('Admin') || String(roles).includes('HOD');
   };
 
+  const hasFeature = (feat) => {
+    if (isAdmin()) return true;
+    const perms = window.currentUser?.permissions;
+    if (!perms || !perms.features) return true;
+    const pageFeats = perms.features['all-tasks'];
+    if (!pageFeats) return false;
+    return pageFeats.includes(feat);
+  };
+
   const currentUserName = () => window.currentUser?.name || '';
   const currentUserId   = () => window.currentUser?.id   || '';
 
@@ -220,15 +229,17 @@ window.Pages['all-tasks'] = (function () {
     const canRevise = t.type !== 'Checklist' && t.status !== 'done' && t.status !== 'revise';
     const canDone   = t.status !== 'done';
 
-    const editBtn = canEdit
+    const editBtn = (canEdit && hasFeature('edit'))
       ? `<button class="at-action-btn at-btn-amber" title="Edit" onclick="window._atEditTask('${esc(t.id)}')">
            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
          </button>`
       : '';
 
-    const delBtn = `<button class="at-action-btn at-btn-red" title="Delete" onclick="window._atDeleteTask('${esc(t.id)}','${esc(t.type)}')">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
-      </button>`;
+    const delBtn = hasFeature('delete')
+      ? `<button class="at-action-btn at-btn-red" title="Delete" onclick="window._atDeleteTask('${esc(t.id)}','${esc(t.type)}')">
+           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+         </button>`
+      : '';
 
     const doneBtn = canDone
       ? (t.type === 'Checklist'
@@ -343,18 +354,18 @@ window.Pages['all-tasks'] = (function () {
     /* top action buttons */
     const actionBtns = admin
       ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-           <button id="at-transfer-btn" class="at-btn at-btn-secondary">
+           ${hasFeature('transfer') ? `<button id="at-transfer-btn" class="at-btn at-btn-secondary">
              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 3 4 4-4 4"/><path d="M21 7H4"/><path d="m7 21-4-4 4-4"/><path d="M3 17h17"/></svg>
              Transfer
-           </button>
+           </button>` : ''}
            <button id="at-checklist-btn" class="at-btn" style="background:#10b981;color:#fff;border-color:#10b981">
              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
              Checklist
            </button>
-           <button id="at-delegate-btn" class="at-btn at-btn-primary">
+           ${hasFeature('delegate') ? `<button id="at-delegate-btn" class="at-btn at-btn-primary">
              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
              Delegate Task
-           </button>
+           </button>` : ''}
          </div>`
       : `<button id="at-my-transfer-btn" class="at-btn at-btn-secondary">
            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 3 4 4-4 4"/><path d="M21 7H4"/><path d="m7 21-4-4 4-4"/><path d="M3 17h17"/></svg>
