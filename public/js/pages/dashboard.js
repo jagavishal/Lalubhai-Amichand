@@ -286,6 +286,10 @@ window.Pages.dashboard = (function () {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               Help Ticket
             </button>
+            <button id="db-btn-announcement" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#8b5cf6;color:#fff;border:none;cursor:pointer;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
+              Announcement
+            </button>
             ${admin ? `<button id="db-btn-transfer" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:#7c3aed;color:#fff;border:none;cursor:pointer;">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
               Transfer
@@ -898,6 +902,94 @@ window.Pages.dashboard = (function () {
   }
 
   /* ── event attachments ───────────────────────────────────────────── */
+  /* ── Help Ticket quick modal ─────────────────────────────────────── */
+  function _openHelpTicketModal() {
+    const existing = document.getElementById('db-ht-modal');
+    if (existing) existing.remove();
+    const userName = window.currentUser?.name || '';
+    const today = new Date().toISOString().slice(0,10);
+    const html = `
+      <div id="db-ht-modal" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);backdrop-filter:blur(4px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
+        <div style="background:#fff;border-radius:20px;box-shadow:0 20px 48px rgba(0,0,0,0.14);width:100%;max-width:440px;overflow:hidden;" onclick="event.stopPropagation()">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid #f1f5f9;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="width:34px;height:34px;border-radius:10px;background:#e0f2fe;color:#0284c7;display:flex;align-items:center;justify-content:center;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              </div>
+              <div>
+                <div style="font-size:15px;font-weight:700;color:#0f172a;">Raise Help Ticket</div>
+                <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">Submit your issue to the admin team</div>
+              </div>
+            </div>
+            <button id="db-ht-close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;color:#64748b;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div style="padding:20px 22px;display:flex;flex-direction:column;gap:14px;">
+            <div>
+              <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Your Name</label>
+              <input id="db-ht-name" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${userName}" placeholder="Your name" />
+            </div>
+            <div>
+              <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Issue <span style="color:#ef4444">*</span></label>
+              <textarea id="db-ht-issue" rows="3" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;resize:none;box-sizing:border-box;" placeholder="Describe your issue clearly..."></textarea>
+            </div>
+            <div>
+              <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Date <span style="color:#ef4444">*</span></label>
+              <input id="db-ht-date" type="date" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${today}" />
+            </div>
+            <div>
+              <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Priority</label>
+              <select id="db-ht-priority" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;">
+                <option value="Medium" selected>Medium</option>
+                <option value="High">High</option>
+                <option value="Low">Low</option>
+              </select>
+            </div>
+            <div id="db-ht-err" style="display:none;font-size:12px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:8px 12px;"></div>
+          </div>
+          <div style="padding:16px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;">
+            <button id="db-ht-cancel" class="btn-secondary">Cancel</button>
+            <button id="db-ht-submit" class="btn-primary">Submit Ticket</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+
+    const closeModal = () => { document.getElementById('db-ht-modal')?.remove(); };
+    document.getElementById('db-ht-modal').addEventListener('click', closeModal);
+    document.getElementById('db-ht-close').addEventListener('click', closeModal);
+    document.getElementById('db-ht-cancel').addEventListener('click', closeModal);
+    document.getElementById('db-ht-issue')?.focus();
+
+    document.getElementById('db-ht-submit').addEventListener('click', async () => {
+      const name     = document.getElementById('db-ht-name')?.value.trim();
+      const issue    = document.getElementById('db-ht-issue')?.value.trim();
+      const date     = document.getElementById('db-ht-date')?.value;
+      const priority = document.getElementById('db-ht-priority')?.value;
+      const errEl    = document.getElementById('db-ht-err');
+      const btn      = document.getElementById('db-ht-submit');
+
+      if (!issue) { errEl.textContent = 'Please describe your issue.'; errEl.style.display = 'block'; return; }
+      if (!date)  { errEl.textContent = 'Please select a date.';       errEl.style.display = 'block'; return; }
+      errEl.style.display = 'none';
+
+      btn.disabled = true; btn.textContent = 'Submitting…';
+      try {
+        await Utils.apiFetch('/api/help-tickets', {
+          method: 'POST',
+          body: JSON.stringify({ name, subject: issue, date, priority }),
+        });
+        closeModal();
+        Utils.showToast('Help ticket submitted!', 'success');
+      } catch (e) {
+        errEl.textContent = e.message || 'Failed to submit ticket.';
+        errEl.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Submit Ticket';
+      }
+    });
+  }
+
   function _attachEvents(el, admin) {
 
     /* ── tab buttons ── */
@@ -1111,7 +1203,10 @@ window.Pages.dashboard = (function () {
     if (btnChecklist) btnChecklist.addEventListener('click', () => { resetChecklistForm(); showModal('modal-checklist'); });
 
     const btnHelpTicket = el.querySelector('#db-btn-help-ticket');
-    if (btnHelpTicket) btnHelpTicket.addEventListener('click', () => Router.navigate('help-ticket'));
+    if (btnHelpTicket) btnHelpTicket.addEventListener('click', () => _openHelpTicketModal());
+
+    const btnAnnouncement = el.querySelector('#db-btn-announcement');
+    if (btnAnnouncement) btnAnnouncement.addEventListener('click', () => Router.navigate('announcements'));
     el.querySelector('#modal-checklist-close')?.addEventListener('click', () => hideModal('modal-checklist'));
     el.querySelector('#modal-checklist-cancel')?.addEventListener('click', () => hideModal('modal-checklist'));
     el.querySelector('#modal-checklist')?.addEventListener('click', () => hideModal('modal-checklist'));
