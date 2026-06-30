@@ -3,8 +3,10 @@ window.Pages = window.Pages || {};
 window.Pages['help-ticket'] = (() => {
   let _tickets    = [];
   let _modalOpen  = false;
-  let _form       = { subject: '', description: '', priority: 'Medium' };
+  let _form       = { name: '', subject: '', description: '', date: '', priority: 'Medium' };
   let _saving     = false;
+
+  function todayISO() { const d = new Date(); return d.toISOString().slice(0,10); }
 
   const isAdmin = () => {
     const r = window.currentUser?.roles || [];
@@ -51,7 +53,8 @@ window.Pages['help-ticket'] = (() => {
   }
 
   async function submitTicket() {
-    if (!_form.subject.trim()) { Utils.showToast('Subject required', 'error'); return; }
+    if (!_form.subject.trim()) { Utils.showToast('Issue required', 'error'); return; }
+    if (!_form.date) { Utils.showToast('Date required', 'error'); return; }
     _saving = true;
     renderModal();
     try {
@@ -61,7 +64,7 @@ window.Pages['help-ticket'] = (() => {
       });
       _modalOpen = false;
       _saving    = false;
-      _form      = { subject: '', description: '', priority: 'Medium' };
+      _form      = { name: '', subject: '', description: '', date: '', priority: 'Medium' };
       await loadData();
       renderPage();
       Utils.showToast('Ticket submitted');
@@ -75,32 +78,47 @@ window.Pages['help-ticket'] = (() => {
   function renderModal() {
     const ex = document.getElementById('ht-modal');
     if (!_modalOpen) { if (ex) ex.remove(); return; }
+    const userName = window.currentUser?.name || '';
+    if (!_form.name) _form.name = userName;
+    if (!_form.date) _form.date = todayISO();
     const html = `
-      <div id="ht-modal" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-          <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-            <h2 class="text-[15px] font-semibold text-slate-900">New Help Ticket</h2>
-            <button id="ht-modal-close" class="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:bg-slate-100">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      <div id="ht-modal" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);backdrop-filter:blur(4px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
+        <div style="background:#fff;border-radius:20px;box-shadow:0 20px 48px rgba(0,0,0,0.14);width:100%;max-width:440px;overflow:hidden;">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid #f1f5f9;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="width:34px;height:34px;border-radius:10px;background:#e0f2fe;color:#0284c7;display:flex;align-items:center;justify-content:center;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              </div>
+              <div>
+                <div style="font-size:15px;font-weight:700;color:#0f172a;">Raise Help Ticket</div>
+                <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">Submit your issue to the admin team</div>
+              </div>
+            </div>
+            <button id="ht-modal-close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;color:#64748b;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <div class="px-6 py-5 space-y-3">
+          <div style="padding:20px 22px;display:flex;flex-direction:column;gap:14px;">
             <div>
-              <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Subject *</label>
-              <input id="ht-subject" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-[13px] outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100" placeholder="Describe the issue briefly" value="${esc(_form.subject)}" />
+              <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Your Name</label>
+              <input id="ht-name" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${esc(_form.name)}" placeholder="Your name" />
             </div>
             <div>
-              <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Description</label>
-              <textarea id="ht-desc" rows="3" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-[13px] outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 resize-none" placeholder="Provide more details...">${esc(_form.description)}</textarea>
+              <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Issue <span style="color:#ef4444">*</span></label>
+              <textarea id="ht-subject" rows="3" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;resize:none;box-sizing:border-box;" placeholder="Describe your issue clearly...">${esc(_form.subject)}</textarea>
             </div>
             <div>
-              <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">Priority</label>
-              <select id="ht-priority" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-[13px] outline-none focus:border-primary-500">
+              <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Date <span style="color:#ef4444">*</span></label>
+              <input id="ht-date" type="date" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${esc(_form.date)}" />
+            </div>
+            <div>
+              <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Priority</label>
+              <select id="ht-priority" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;">
                 ${['High','Medium','Low'].map(p => `<option value="${p}" ${_form.priority===p?'selected':''}>${p}</option>`).join('')}
               </select>
             </div>
           </div>
-          <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
+          <div style="padding:16px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;">
             <button id="ht-cancel" class="btn-secondary">Cancel</button>
             <button id="ht-submit" class="btn-primary" ${_saving?'disabled':''}>${_saving?'Submitting…':'Submit Ticket'}</button>
           </div>
@@ -109,11 +127,14 @@ window.Pages['help-ticket'] = (() => {
     if (ex) ex.remove();
     document.body.insertAdjacentHTML('beforeend', html);
     document.getElementById('ht-modal-close')?.addEventListener('click', () => { _modalOpen = false; renderModal(); });
-    document.getElementById('ht-cancel')?.addEventListener('click', () => { _modalOpen = false; renderModal(); });
-    document.getElementById('ht-subject')?.addEventListener('input', e => { _form.subject = e.target.value; });
-    document.getElementById('ht-desc')?.addEventListener('input', e => { _form.description = e.target.value; });
-    document.getElementById('ht-priority')?.addEventListener('change', e => { _form.priority = e.target.value; });
+    document.getElementById('ht-cancel')?.addEventListener('click',      () => { _modalOpen = false; renderModal(); });
+    document.getElementById('ht-name')?.addEventListener('input',     e => { _form.name     = e.target.value; });
+    document.getElementById('ht-subject')?.addEventListener('input',  e => { _form.subject  = e.target.value; });
+    document.getElementById('ht-date')?.addEventListener('change',    e => { _form.date     = e.target.value; });
+    document.getElementById('ht-priority')?.addEventListener('change',e => { _form.priority = e.target.value; });
     document.getElementById('ht-submit')?.addEventListener('click', submitTicket);
+    /* focus on issue field */
+    setTimeout(() => document.getElementById('ht-subject')?.focus(), 50);
   }
 
   function renderPage() {
@@ -125,18 +146,19 @@ window.Pages['help-ticket'] = (() => {
     const rows = _tickets.map(t => {
       const ss  = STATUS_STYLE[t.status] || STATUS_STYLE.open;
       const ps  = PRI_STYLE[t.priority]  || PRI_STYLE.Medium;
+      const displayName = t.name || t.submitted_by || '—';
+      const displayDate = t.date ? fmt(t.date) : fmt(t.created_at);
       const actions = admin ? `
-        <select class="ht-status-sel text-[11px] border border-slate-200 rounded-lg px-2 py-1 cursor-pointer" data-id="${esc(t.id)}">
+        <select class="ht-status-sel" data-id="${esc(t.id)}" style="font-size:11px;border:1.5px solid #e2e8f0;border-radius:7px;padding:3px 8px;cursor:pointer;background:#fff;">
           ${['open','in-progress','resolved'].map(s => `<option value="${s}" ${t.status===s?'selected':''}>${STATUS_STYLE[s]?.label||s}</option>`).join('')}
         </select>` : `<span style="font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;background:${ss.bg};color:${ss.color}">${ss.label}</span>`;
-      return `<tr class="table-row">
-        <td class="table-td font-medium text-slate-900">${esc(t.subject||'')}</td>
-        <td class="table-td text-slate-500 text-[12px]">${esc(t.submitted_by||'')}</td>
-        <td class="table-td"><span style="font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;background:${ps.bg};color:${ps.color}">${esc(t.priority||'Medium')}</span></td>
-        <td class="table-td text-slate-500 text-[12px]">${fmt(t.created_at)}</td>
-        <td class="table-td">${actions}</td>
-      </tr>
-      ${t.description ? `<tr><td colspan="5" class="px-4 pb-3 text-[12px] text-slate-500">${esc(t.description)}</td></tr>` : ''}`;
+      return `<tr style="transition:background .1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+        <td style="padding:11px 14px;font-size:13px;font-weight:600;color:#0f172a;">${esc(displayName)}</td>
+        <td style="padding:11px 14px;font-size:13px;color:#374151;max-width:260px;"><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(t.subject||'')}">${esc(t.subject||'—')}</div></td>
+        <td style="padding:11px 14px;font-size:12px;color:#64748b;white-space:nowrap;">${displayDate}</td>
+        <td style="padding:11px 14px;"><span style="font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;background:${ps.bg};color:${ps.color}">${esc(t.priority||'Medium')}</span></td>
+        <td style="padding:11px 14px;">${actions}</td>
+      </tr>`;
     }).join('');
 
     el.innerHTML = `
@@ -154,13 +176,13 @@ window.Pages['help-ticket'] = (() => {
         <div class="card overflow-hidden">
           <div class="overflow-x-auto">
             <table class="w-full text-sm">
-              <thead class="bg-slate-50/80">
-                <tr>
-                  <th class="table-th">Subject</th>
-                  <th class="table-th">Submitted By</th>
-                  <th class="table-th">Priority</th>
-                  <th class="table-th">Date</th>
-                  <th class="table-th">Status</th>
+              <thead>
+                <tr style="background:#f8fafc;">
+                  <th style="padding:10px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:700;color:#64748b;text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;">Name</th>
+                  <th style="padding:10px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:700;color:#64748b;text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;">Issue</th>
+                  <th style="padding:10px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:700;color:#64748b;text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;">Date</th>
+                  <th style="padding:10px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:700;color:#64748b;text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;">Priority</th>
+                  <th style="padding:10px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:700;color:#64748b;text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;">Status</th>
                 </tr>
               </thead>
               <tbody>${rows || '<tr><td colspan="5" class="table-td text-center text-slate-400 py-10">No tickets yet</td></tr>'}</tbody>
