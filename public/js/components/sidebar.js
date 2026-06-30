@@ -21,16 +21,20 @@ window.Sidebar = {
     payment:      '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/><circle cx="12" cy="15" r="1.5" fill="currentColor"/></svg>',
     race:         '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 21V4"/><path d="M4 4h13l-2 4 2 4H4"/></svg>',
     compliance:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>',
-    signout:      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
+    signout:        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
+    helpticket:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+    announcements:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>',
   },
 
   // Nav sections — matches SECTIONS in Sidebar.jsx
   // route = hash fragment used by Router (href without leading slash)
   _sections: [
     { title: 'Workspace', items: [
-      { route: 'dashboard',     label: 'Dashboard',    icon: 'dashboard' },
-      { route: 'all-tasks',     label: 'All Tasks',    icon: 'tasks' },
-      { route: 'approvals',     label: 'Approvals',    icon: 'approve', badge: true },
+      { route: 'dashboard',     label: 'Dashboard',      icon: 'dashboard' },
+      { route: 'all-tasks',     label: 'All Tasks',      icon: 'tasks' },
+      { route: 'approvals',     label: 'Approvals',      icon: 'approve',       badge: true },
+      { route: 'announcements', label: 'Announcements',  icon: 'announcements', alwaysShow: true },
+      { route: 'help-ticket',   label: 'Help Ticket',    icon: 'helpticket',    alwaysShow: true },
     ]},
     { title: 'Operations', items: [
       { route: 'mis',           label: 'MIS Report',    icon: 'mis',          adminOnly: true },
@@ -63,7 +67,7 @@ window.Sidebar = {
 
   _buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions) {
     if (item.adminOnly && !isAdmin) return '';
-    if (permissions && permissions.pages && !permissions.pages.includes(item.route)) return '';
+    if (!item.alwaysShow && permissions && permissions.pages && !permissions.pages.includes(item.route)) return '';
 
     const active = activeRoute === item.route;
     const icon   = this._icons[item.icon] || '';
