@@ -15,6 +15,7 @@ window.Pages.users = (() => {
   let _departments = [];
   let _search      = '';
   let _isAdmin     = false;
+  let _tab         = 'Users'; // 'Users' | 'Access'
 
   // add / edit modal
   let _modalOpen      = false;
@@ -121,6 +122,20 @@ window.Pages.users = (() => {
       Utils.showToast('User deleted');
     } catch (e) {
       Utils.showToast(e.message || 'Failed to delete user', 'error');
+    }
+  }
+
+  async function toggleAccess(id, currentActive) {
+    try {
+      await Utils.apiFetch('/api/users', {
+        method: 'PATCH',
+        body: JSON.stringify({ id, active: !currentActive }),
+      });
+      await loadData();
+      renderPage();
+      Utils.showToast(currentActive ? 'Access revoked' : 'Access granted');
+    } catch (e) {
+      Utils.showToast(e.message || 'Failed to update access', 'error');
     }
   }
 
@@ -279,8 +294,80 @@ window.Pages.users = (() => {
     const el = document.getElementById('main-content');
     if (!el) return;
 
-    const rows = filtered();
+    const tabBtns = ['Users', 'Access'].map(t => {
+      const active = t === _tab;
+      return `<button data-tab="${esc(t)}" class="px-4 py-2 text-[13px] font-medium rounded-lg transition ${active ? 'bg-primary-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'}">${esc(t)}</button>`;
+    }).join('');
 
+    const topBar = `
+      <div class="flex items-center gap-3 flex-wrap">
+        <div class="flex items-center gap-1 bg-slate-100 rounded-lg p-1">${tabBtns}</div>
+        ${_tab === 'Users' ? `
+          <div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 w-64 shadow-sm">
+            <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input id="users-search" type="text" value="${esc(_search)}" placeholder="Search…"
+              class="bg-transparent border-none outline-none text-[13px] text-slate-700 placeholder:text-slate-400 w-full" />
+          </div>
+          ${_isAdmin ? `<button id="users-add-btn" class="btn-primary flex items-center gap-1.5 shrink-0">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+            Add User
+          </button>` : ''}
+        ` : ''}
+      </div>`;
+
+    el.innerHTML = `<div class="space-y-4 animate-fade-in">${topBar}${_tab === 'Users' ? renderUsersTab() : renderAccessTab()}</div>`;
+
+    /* tab switch */
+    el.querySelectorAll('[data-tab]').forEach(btn => {
+      btn.addEventListener('click', () => { _tab = btn.dataset.tab; renderPage(); });
+    });
+
+    if (_tab === 'Users') {
+      document.getElementById('users-search')?.addEventListener('input', e => { _search = e.target.value; renderPage(); });
+
+      document.getElementById('users-add-btn')?.addEventListener('click', () => {
+        _editingUser = null; _form = blankForm(); _picture = null; _pictureChanged = false; _bulkFile = null; _bulkMsg = ''; _modalOpen = true;
+        renderModal();
+      });
+
+      el.querySelectorAll('[data-action="edit"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const u = _users.find(x => String(x.id) === String(btn.dataset.id));
+          if (!u) return;
+          _editingUser = u;
+          _form = { id: u.id, name: u.name || '', email: u.email || '', phone: u.phone || '', department: u.department || '', roles: normalizeRoles(u.roles), active: u.active !== false, notifEmail: u.notifEmail || '' };
+          _picture = u.picture || null; _pictureChanged = false; _modalOpen = true;
+          renderModal();
+        });
+      });
+
+      el.querySelectorAll('[data-action="setpwd"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const u = _users.find(x => String(x.id) === String(btn.dataset.id));
+          if (!u) return;
+          _pwdUser = u; _pwdPassword = ''; _pwdConfirm = ''; _pwdShowPass = false; _pwdShowConf = false; _pwdSaving = false; _pwdError = ''; _pwdModalOpen = true;
+          renderPwdModal();
+        });
+      });
+
+      el.querySelectorAll('[data-action="delete"]').forEach(btn => {
+        btn.addEventListener('click', () => deleteUser(btn.dataset.id));
+      });
+    }
+
+    if (_tab === 'Access') {
+      el.querySelectorAll('[data-action="toggle-access"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const u = _users.find(x => String(x.id) === String(btn.dataset.id));
+          if (!u) return;
+          toggleAccess(u.id, u.active !== false);
+        });
+      });
+    }
+  }
+
+  function renderUsersTab() {
+    const rows = filtered();
     const tableRows = rows.length === 0
       ? `<tr><td colspan="${_isAdmin ? 6 : 5}" class="table-td text-center text-slate-400 py-10">No users found</td></tr>`
       : rows.map(u => {
@@ -311,99 +398,77 @@ window.Pages.users = (() => {
             </tr>`;
         }).join('');
 
-    const addBtnHtml = _isAdmin
-      ? `<button id="users-add-btn" class="btn-primary flex items-center gap-1.5 shrink-0">
-           <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-           Add User
-         </button>`
-      : '';
-
-    el.innerHTML = `
-      <div class="space-y-4 animate-fade-in">
-        <div class="flex items-center gap-3 flex-wrap">
-          <div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 w-72 shadow-sm">
-            <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-            <input id="users-search" type="text" value="${esc(_search)}"
-              placeholder="Name, Email, Phone, Department…"
-              class="bg-transparent border-none outline-none text-[13px] text-slate-700 placeholder:text-slate-400 w-full" />
-          </div>
-          ${addBtnHtml}
-        </div>
-
-        <div class="card overflow-hidden">
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-              <thead class="bg-slate-50/80">
-                <tr>
-                  <th class="table-th">User</th>
-                  <th class="table-th">Email</th>
-                  <th class="table-th">Phone</th>
-                  <th class="table-th">Department</th>
-                  <th class="table-th">Roles</th>
-                  ${_isAdmin ? '<th class="table-th">Action</th>' : ''}
-                </tr>
-              </thead>
-              <tbody>${tableRows}</tbody>
-            </table>
-          </div>
+    return `
+      <div class="card overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-50/80">
+              <tr>
+                <th class="table-th">User</th>
+                <th class="table-th">Email</th>
+                <th class="table-th">Phone</th>
+                <th class="table-th">Department</th>
+                <th class="table-th">Roles</th>
+                ${_isAdmin ? '<th class="table-th">Action</th>' : ''}
+              </tr>
+            </thead>
+            <tbody>${tableRows}</tbody>
+          </table>
         </div>
       </div>`;
+  }
 
-    /* bind events */
-    document.getElementById('users-search')?.addEventListener('input', e => {
-      _search = e.target.value;
-      renderPage();
-    });
+  function renderAccessTab() {
+    const sorted = _users.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const rows = sorted.map(u => {
+      const isActive = u.active !== false;
+      return `
+        <tr class="table-row">
+          <td class="table-td">
+            <div class="flex items-center gap-2.5">
+              ${avatarHtml(u.name, u.picture, 9)}
+              <div>
+                <div class="font-medium text-slate-900">${esc(u.name || 'Unknown')}</div>
+                <div class="text-[11px] text-slate-500">${esc(u.department || '—')}</div>
+              </div>
+            </div>
+          </td>
+          <td class="table-td text-slate-600">${esc(u.email || '—')}</td>
+          <td class="table-td"><div class="flex flex-wrap gap-1">${rolePillsHtml(u.roles)}</div></td>
+          <td class="table-td">
+            <span class="pill border ${isActive ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-600 border-red-200'}">
+              ${isActive ? 'Active' : 'Inactive'}
+            </span>
+          </td>
+          <td class="table-td">
+            <button data-action="toggle-access" data-id="${esc(u.id)}"
+              class="pill border cursor-pointer ${isActive ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100' : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'}">
+              ${isActive ? 'Revoke Access' : 'Grant Access'}
+            </button>
+          </td>
+        </tr>`;
+    }).join('');
 
-    document.getElementById('users-add-btn')?.addEventListener('click', () => {
-      _editingUser    = null;
-      _form           = blankForm();
-      _picture        = null;
-      _pictureChanged = false;
-      _bulkFile       = null;
-      _bulkMsg        = '';
-      _modalOpen      = true;
-      renderModal();
-    });
-
-    el.querySelectorAll('[data-action="edit"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const u = _users.find(x => String(x.id) === String(btn.dataset.id));
-        if (!u) return;
-        _editingUser    = u;
-        _form           = {
-          id: u.id, name: u.name || '', email: u.email || '', phone: u.phone || '',
-          department: u.department || '', roles: normalizeRoles(u.roles),
-          active: u.active !== false, notifEmail: u.notifEmail || '',
-        };
-        _picture        = u.picture || null;
-        _pictureChanged = false;
-        _modalOpen      = true;
-        renderModal();
-      });
-    });
-
-    el.querySelectorAll('[data-action="setpwd"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const u = _users.find(x => String(x.id) === String(btn.dataset.id));
-        if (!u) return;
-        _pwdUser      = u;
-        _pwdPassword  = '';
-        _pwdConfirm   = '';
-        _pwdShowPass  = false;
-        _pwdShowConf  = false;
-        _pwdSaving    = false;
-        _pwdError     = '';
-        _pwdModalOpen = true;
-        renderPwdModal();
-      });
-    });
-
-    el.querySelectorAll('[data-action="delete"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        deleteUser(btn.dataset.id);
-      });
-    });
+    return `
+      <div class="card overflow-hidden">
+        <div class="px-5 py-3 border-b border-slate-100">
+          <p class="text-[12px] text-slate-500">Grant or revoke login access for team members. Inactive users cannot log in.</p>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-50/80">
+              <tr>
+                <th class="table-th">User</th>
+                <th class="table-th">Email</th>
+                <th class="table-th">Roles</th>
+                <th class="table-th">Status</th>
+                <th class="table-th">Action</th>
+              </tr>
+            </thead>
+            <tbody>${rows.length ? rows : '<tr><td colspan="5" class="table-td text-center text-slate-400 py-10">No users found</td></tr>'}</tbody>
+          </table>
+        </div>
+      </div>`;
   }
 
   /* ── render: add/edit modal ─────────────────────────────────────────── */
@@ -849,6 +914,7 @@ window.Pages.users = (() => {
       _isAdmin = userRoles.includes('Admin') || userRoles.includes('HOD');
 
       // Reset state on each navigation to this page
+      _tab            = 'Users';
       _search         = '';
       _modalOpen      = false;
       _pwdModalOpen   = false;
