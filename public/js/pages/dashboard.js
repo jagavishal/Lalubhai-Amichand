@@ -903,11 +903,23 @@ window.Pages.dashboard = (function () {
 
   /* ── event attachments ───────────────────────────────────────────── */
   /* ── Help Ticket quick modal ─────────────────────────────────────── */
-  function _openHelpTicketModal() {
+  async function _openHelpTicketModal() {
     const existing = document.getElementById('db-ht-modal');
     if (existing) existing.remove();
     const userName = window.currentUser?.name || '';
     const today = new Date().toISOString().slice(0,10);
+    let userOpts = `<option value="${userName}">${userName}</option>`;
+    try {
+      const res = await fetch('/api/users');
+      if (res.ok) {
+        const users = await res.json();
+        userOpts = users
+          .filter(u => u.active !== false)
+          .sort((a, b) => (a.name||'').localeCompare(b.name||''))
+          .map(u => `<option value="${u.name||''}" ${u.name===userName?'selected':''}>${u.name||u.email}</option>`)
+          .join('');
+      }
+    } catch {}
     const html = `
       <div id="db-ht-modal" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);backdrop-filter:blur(4px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
         <div style="background:#fff;border-radius:20px;box-shadow:0 20px 48px rgba(0,0,0,0.14);width:100%;max-width:440px;overflow:hidden;" onclick="event.stopPropagation()">
@@ -929,7 +941,9 @@ window.Pages.dashboard = (function () {
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
                 <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Ticket For</label>
-                <input id="db-ht-name" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${userName}" placeholder="Ticket for whom" />
+                <select id="db-ht-name" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;">
+                  ${userOpts}
+                </select>
               </div>
               <div>
                 <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Filed By</label>

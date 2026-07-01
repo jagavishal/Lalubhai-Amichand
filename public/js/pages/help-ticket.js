@@ -162,7 +162,9 @@ window.Pages['help-ticket'] = (() => {
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
                 <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Ticket For</label>
-                <input id="ht-name" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${esc(_form.name)}" placeholder="Ticket for whom" />
+                <select id="ht-name" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;">
+                  ${_users.filter(u=>u.active!==false).sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(u=>`<option value="${esc(u.name||u.email)}" ${(_form.name||window.currentUser?.name)===u.name?'selected':''}>${esc(u.name||u.email)}</option>`).join('')}
+                </select>
               </div>
               <div>
                 <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Filed By</label>
