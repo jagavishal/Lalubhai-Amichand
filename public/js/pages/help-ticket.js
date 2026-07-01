@@ -4,7 +4,7 @@ window.Pages['help-ticket'] = (() => {
   let _tickets   = [];
   let _users     = [];
   let _modalOpen = false;
-  let _form      = { name: '', subject: '', description: '', date: '', priority: 'Medium' };
+  let _form      = { name: '', filedBy: '', subject: '', description: '', date: '', priority: 'Medium' };
   let _saving    = false;
 
   const isAdmin = () => {
@@ -71,7 +71,7 @@ window.Pages['help-ticket'] = (() => {
     try {
       await Utils.apiFetch('/api/help-tickets', { method: 'POST', body: JSON.stringify(_form) });
       _modalOpen = false; _saving = false;
-      _form = { name: '', subject: '', description: '', date: '', priority: 'Medium' };
+      _form = { name: '', filedBy: '', subject: '', description: '', date: '', priority: 'Medium' };
       await loadData(); renderPage();
       Utils.showToast('Ticket submitted');
     } catch (e) {
@@ -138,8 +138,9 @@ window.Pages['help-ticket'] = (() => {
     const ex = document.getElementById('ht-modal');
     if (!_modalOpen) { if (ex) ex.remove(); return; }
     const userName = window.currentUser?.name || '';
-    if (!_form.name) _form.name = userName;
-    if (!_form.date) _form.date = todayISO();
+    if (!_form.name)    _form.name    = userName;
+    if (!_form.filedBy) _form.filedBy = userName;
+    if (!_form.date)    _form.date    = todayISO();
     const html = `
       <div id="ht-modal" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);backdrop-filter:blur(4px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
         <div style="background:#fff;border-radius:20px;box-shadow:0 20px 48px rgba(0,0,0,0.14);width:100%;max-width:440px;overflow:hidden;" onclick="event.stopPropagation()">
@@ -158,9 +159,15 @@ window.Pages['help-ticket'] = (() => {
             </button>
           </div>
           <div style="padding:20px 22px;display:flex;flex-direction:column;gap:14px;">
-            <div>
-              <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Your Name</label>
-              <input id="ht-name" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${esc(_form.name)}" placeholder="Your name" />
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div>
+                <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Your Name</label>
+                <input id="ht-name" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${esc(_form.name)}" placeholder="Your name" />
+              </div>
+              <div>
+                <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Filed By</label>
+                <input id="ht-filed-by" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#64748b;outline:none;box-sizing:border-box;background:#f8fafc;" value="${esc(_form.filedBy)}" placeholder="Raised by" readonly />
+              </div>
             </div>
             <div>
               <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Issue <span style="color:#ef4444">*</span></label>

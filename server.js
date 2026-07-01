@@ -881,14 +881,15 @@ app.get('/api/help-tickets', requireAuth, async (req, res) => {
 app.post('/api/help-tickets', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    const { subject, description, priority, name, date } = req.body;
+    const { subject, description, priority, name, date, filedBy } = req.body;
     if (!subject) return res.status(400).json({ error: 'Subject required' });
     const user = req.session.user;
     const id = 'HT' + Date.now().toString(36).toUpperCase();
     const displayName = name || user.name;
+    const filer = filedBy || user.name;
     await pool.query(
       'INSERT INTO help_tickets (id,subject,description,priority,status,submitted_by,submitted_by_id,ticket_date,name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-      [id, subject, description||'', priority||'Medium', 'open', displayName, user.id, date||null, displayName]
+      [id, subject, description||'', priority||'Medium', 'open', filer, user.id, date||null, displayName]
     );
     return res.status(201).json({ id });
   } catch (e) { return res.status(500).json({ error: e.message }); }
