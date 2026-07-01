@@ -34,13 +34,20 @@ window.Pages.users = (() => {
   let _expandedUserId = null;
   let _permData       = { pages: [], features: {} };
   let _permSaving     = false;
+  let _searchAccess   = '';
 
   const ALL_PAGES = [
-    { key: 'dashboard',     label: 'Dashboard' },
     { key: 'all-tasks',     label: 'All Tasks' },
     { key: 'approvals',     label: 'Approvals' },
+    { key: 'daily-task',    label: 'Daily Task' },
     { key: 'mis',           label: 'MIS Report' },
+    { key: 'fms',           label: 'FMS Master' },
     { key: 'client-master', label: 'Vendor Master' },
+    { key: 'meetings',      label: 'Meetings' },
+    { key: 'leave-tracker', label: 'Leave Tracker' },
+    { key: 'race-tracker',  label: 'Race Tracker' },
+    { key: 'announcements', label: 'Announcements' },
+    { key: 'help-ticket',   label: 'Help Ticket' },
     { key: 'profile',       label: 'Profile' },
   ];
 
@@ -420,50 +427,48 @@ window.Pages.users = (() => {
     }
 
     if (_tab === 'Access') {
+      /* search */
+      const accSearch = el.querySelector('#acc-search');
+      if (accSearch) {
+        accSearch.addEventListener('input', e => { _searchAccess = e.target.value; renderPage(); });
+      }
+
+      /* grid checkboxes — auto-save on change */
+      el.querySelectorAll('.acc-chk').forEach(chk => {
+        chk.addEventListener('change', async () => {
+          const uid  = chk.dataset.uid;
+          const page = chk.dataset.page;
+          const u    = _users.find(x => String(x.id) === String(uid));
+          if (!u) return;
+
+          /* build updated permissions for this user */
+          const existing = u.permissions || { pages: ALL_PAGES.map(p => p.key), features: {} };
+          let pages = [...(existing.pages || ALL_PAGES.map(p => p.key))];
+          if (chk.checked) { if (!pages.includes(page)) pages.push(page); }
+          else              { pages = pages.filter(p => p !== page); }
+
+          /* optimistically update local state */
+          u.permissions = { ...existing, pages };
+
+          try {
+            await Utils.apiFetch('/api/users', {
+              method: 'PATCH',
+              body: JSON.stringify({ id: uid, permissions: u.permissions }),
+            });
+          } catch (e) {
+            /* revert on failure */
+            u.permissions = existing;
+            chk.checked = !chk.checked;
+            Utils.showToast(e.message || 'Failed to save', 'error');
+          }
+        });
+      });
+
+      /* old handlers kept for backward compat (no-op if elements absent) */
       el.querySelectorAll('[data-action="toggle-access"]').forEach(btn => {
         btn.addEventListener('click', () => {
           const u = _users.find(x => String(x.id) === String(btn.dataset.id));
-          if (!u) return;
-          toggleAccess(u.id, u.active !== false);
-        });
-      });
-      el.querySelectorAll('[data-action="manage-perm"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const u = _users.find(x => String(x.id) === String(btn.dataset.id));
-          if (!u) return;
-          openPermRow(u);
-        });
-      });
-      el.querySelectorAll('[data-action="cancel-perm"]').forEach(btn => {
-        btn.addEventListener('click', () => { _expandedUserId = null; renderPage(); });
-      });
-      el.querySelectorAll('[data-action="save-perm"]').forEach(btn => {
-        btn.addEventListener('click', () => savePermissions(btn.dataset.id));
-      });
-      /* live checkbox update — no re-render needed */
-      el.querySelectorAll('.pi-page').forEach(chk => {
-        chk.addEventListener('change', () => {
-          const page = chk.dataset.page;
-          if (chk.checked) {
-            if (!_permData.pages.includes(page)) _permData.pages.push(page);
-            if (ALL_FEATURES[page] && !_permData.features[page])
-              _permData.features[page] = ALL_FEATURES[page].map(f => f.key);
-          } else {
-            _permData.pages = _permData.pages.filter(p => p !== page);
-            delete _permData.features[page];
-          }
-          /* toggle feature checkboxes visibility */
-          el.querySelectorAll(`.pi-feat[data-page="${page}"]`).forEach(fc => {
-            fc.closest('label').style.display = chk.checked ? '' : 'none';
-          });
-        });
-      });
-      el.querySelectorAll('.pi-feat').forEach(chk => {
-        chk.addEventListener('change', () => {
-          const page = chk.dataset.page, feat = chk.dataset.feat;
-          if (!_permData.features[page]) _permData.features[page] = [];
-          if (chk.checked) { if (!_permData.features[page].includes(feat)) _permData.features[page].push(feat); }
-          else _permData.features[page] = _permData.features[page].filter(f => f !== feat);
+          if (u) toggleAccess(u.id, u.active !== false);
         });
       });
     }
@@ -544,77 +549,94 @@ window.Pages.users = (() => {
   }
 
   function renderAccessTab() {
-    const sorted = _users.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const allPageKeys = ALL_PAGES.map(p => p.key);
+
+    const isAdminOrHod = u => {
+      const r = Array.isArray(u.roles) ? u.roles : String(u.roles||'').split(',').map(x=>x.trim());
+      return r.includes('Admin') || r.includes('HOD');
+    };
+
+    const hasAll = u => {
+      if (isAdminOrHod(u)) return true;
+      const perm = u.permissions;
+      if (!perm || !perm.pages) return false;
+      return allPageKeys.every(k => perm.pages.includes(k));
+    };
+
+    const userHasPage = (u, pageKey) => {
+      if (isAdminOrHod(u)) return true;
+      const perm = u.permissions;
+      if (!perm || !perm.pages) return false;
+      return perm.pages.includes(pageKey);
+    };
+
+    const q = _searchAccess.toLowerCase();
+    const sorted = _users
+      .slice()
+      .sort((a, b) => (a.name||'').localeCompare(b.name||''))
+      .filter(u => !q || (u.name||'').toLowerCase().includes(q) || (u.email||'').toLowerCase().includes(q));
+
+    const thStyle = 'padding:10px 12px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#e4e4e7;text-align:center;white-space:nowrap;border-right:1px solid #2d2d3a;';
+    const thFirst = 'padding:10px 16px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#e4e4e7;text-align:left;white-space:nowrap;position:sticky;left:0;z-index:2;background:#18181b;';
+
     const rows = sorted.map(u => {
-      const isActive   = u.active !== false;
-      const isExpanded = _expandedUserId === u.id;
-      const userRow = `
-        <tr class="table-row">
-          <td class="table-td">
-            <div class="flex items-center gap-2.5">
-              ${avatarHtml(u.name, u.picture, 9)}
-              <div>
-                <div class="font-medium text-slate-900">${esc(u.name || 'Unknown')}</div>
-                <div class="text-[11px] text-slate-500">${esc(u.department || '—')}</div>
-              </div>
-            </div>
-          </td>
-          <td class="table-td text-slate-600">${esc(u.email || '—')}</td>
-          <td class="table-td"><div class="flex flex-wrap gap-1">${rolePillsHtml(u.roles)}</div></td>
-          <td class="table-td">
-            <span class="pill border ${isActive ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-600 border-red-200'}">
-              ${isActive ? 'Active' : 'Inactive'}
-            </span>
-          </td>
-          <td class="table-td">
-            <div class="flex gap-1.5 flex-wrap">
-              <button data-action="toggle-access" data-id="${esc(u.id)}"
-                class="pill border cursor-pointer ${isActive ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100' : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'}">
-                ${isActive ? 'Revoke Access' : 'Grant Access'}
-              </button>
-              <button data-action="manage-perm" data-id="${esc(u.id)}"
-                class="pill border cursor-pointer ${isExpanded ? 'bg-violet-600 text-white border-violet-600' : 'bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100'}">
-                Permissions
-              </button>
-            </div>
-          </td>
-        </tr>`;
+      const isHod    = isAdminOrHod(u);
+      const allOn    = hasAll(u);
+      const roleTags = (Array.isArray(u.roles) ? u.roles : String(u.roles||'').split(',')).map(r => r.trim()).filter(Boolean);
 
-      const permRow = isExpanded ? `
-        <tr>
-          <td colspan="5" style="padding:0;background:#faf5ff;border-bottom:2px solid #e9d5ff;">
-            <div style="padding:14px 20px;">
-              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#7c3aed;margin-bottom:10px;">
-                Pages &amp; Actions — ${esc(u.name)}
-              </div>
-              ${renderPermInline()}
-              <div style="margin-top:12px;display:flex;gap:8px;">
-                <button data-action="save-perm" data-id="${esc(u.id)}" class="btn-primary !py-1.5 !px-4 text-xs" ${_permSaving ? 'disabled' : ''}>
-                  ${_permSaving ? 'Saving…' : 'Save'}
-                </button>
-                <button data-action="cancel-perm" class="btn-secondary !py-1.5 !px-4 text-xs">Cancel</button>
-              </div>
-            </div>
-          </td>
-        </tr>` : '';
+      const roleChips = roleTags.map(r => {
+        const colors = { Admin: '#92400e::#fffbeb', HOD: '#5b21b6::#ede9fe' }[r] || '#1e40af::#eff6ff';
+        const [col, bg] = colors.split('::');
+        return `<span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:999px;background:${bg};color:${col};">${r}</span>`;
+      }).join(' ');
 
-      return userRow + permRow;
+      const nameTd = `
+        <td style="padding:10px 16px;border-bottom:1px solid #f1f5f9;background:#fff;position:sticky;left:0;z-index:1;min-width:180px;max-width:220px;">
+          <div style="font-size:13px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(u.name||'?')}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(u.email||'')}</div>
+          <div style="margin-top:4px;display:flex;gap:3px;flex-wrap:wrap;">
+            ${roleChips}
+            ${allOn ? '<span style="font-size:10px;font-weight:500;padding:1px 7px;border-radius:999px;background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;">default (all)</span>' : ''}
+          </div>
+        </td>`;
+
+      const pageCells = ALL_PAGES.map(p => {
+        const checked = userHasPage(u, p.key);
+        if (isHod) {
+          return `<td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;text-align:center;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </td>`;
+        }
+        return `<td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;text-align:center;">
+          <input type="checkbox" class="acc-chk" data-uid="${esc(u.id)}" data-page="${esc(p.key)}" ${checked ? 'checked' : ''}
+            style="width:16px;height:16px;accent-color:#5e6ad2;cursor:pointer;" />
+        </td>`;
+      }).join('');
+
+      return `<tr style="transition:background .1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">${nameTd}${pageCells}</tr>`;
     }).join('');
 
+    const colHeaders = ALL_PAGES.map(p => `<th style="${thStyle}">${p.label}</th>`).join('');
+
     return `
-      <div class="card overflow-hidden">
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead class="bg-slate-50/80">
-              <tr>
-                <th class="table-th">User</th>
-                <th class="table-th">Email</th>
-                <th class="table-th">Roles</th>
-                <th class="table-th">Status</th>
-                <th class="table-th">Action</th>
+      <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:16px 20px;border-bottom:1px solid #f1f5f9;">
+          <div>
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">Page Access</div>
+            <div style="font-size:12px;color:#64748b;margin-top:2px;">Tick the pages each user can open. Admin / HOD always have full access. ${_users.length} users</div>
+          </div>
+          <input id="acc-search" type="text" placeholder="Search user..." value="${esc(_searchAccess)}"
+            style="padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;outline:none;width:200px;" />
+        </div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+            <thead>
+              <tr style="background:#18181b;">
+                <th style="${thFirst}">User</th>
+                ${colHeaders}
               </tr>
             </thead>
-            <tbody>${rows.length ? rows : '<tr><td colspan="5" class="table-td text-center text-slate-400 py-10">No users found</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="' + (ALL_PAGES.length+1) + '" style="padding:40px;text-align:center;color:#94a3b8;">No users found</td></tr>'}</tbody>
           </table>
         </div>
       </div>`;
