@@ -531,19 +531,28 @@ app.use(session({
   },
 }));
 
-// ── Sample CSV downloads (application/octet-stream stops Chrome from sniffing
-//    the plain-text CSV content and renaming the download to .txt). Headers are
-//    set manually and res.sendFile() used directly — res.download()/res.attachment()
-//    would reset Content-Type based on the file extension and undo this. ──
-for (const name of ['checklist_bulk_sample.csv', 'delegation_sample.csv', 'holiday_sample.csv']) {
-  app.get('/' + name, (req, res) => {
-    res.set({
-      'Content-Type': 'application/octet-stream',
-      'Content-Disposition': `attachment; filename="${name}"`,
-    });
-    res.sendFile(path.join(__dirname, 'public', name));
+// ── Sample CSV downloads ──────────────────────────────────────────────────
+// Served from /api/samples/* (not /public) and as application/octet-stream:
+// Hostinger's hcdn edge layer intercepts and serves any request matching a
+// static file under /public directly, bypassing Express entirely — so a
+// route at the bare /*.csv path (or relying on res.download()'s Content-Type,
+// which is reset by extension) never actually runs. Routing under /api/
+// guarantees this hits the Node app, and octet-stream stops the browser from
+// sniffing the plain-text CSV content and renaming the download to .txt.
+const SAMPLE_FILES = {
+  'checklist-bulk': 'checklist_bulk_sample.csv',
+  'delegation':     'delegation_sample.csv',
+  'holiday':        'holiday_sample.csv',
+};
+app.get('/api/samples/:key', (req, res) => {
+  const name = SAMPLE_FILES[req.params.key];
+  if (!name) return res.status(404).end();
+  res.set({
+    'Content-Type': 'application/octet-stream',
+    'Content-Disposition': `attachment; filename="${name}"`,
   });
-}
+  res.sendFile(path.join(__dirname, 'samples', name));
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
