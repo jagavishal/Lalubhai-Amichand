@@ -530,6 +530,15 @@ app.use(session({
     maxAge: SESSION_TTL_MS,
   },
 }));
+
+// ── Sample CSV downloads (explicit headers so browsers save as .csv, not .txt) ──
+for (const name of ['checklist_bulk_sample.csv', 'delegation_sample.csv', 'holiday_sample.csv']) {
+  app.get('/' + name, (req, res) => {
+    res.type('text/csv');
+    res.download(path.join(__dirname, 'public', name), name);
+  });
+}
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Middleware ────────────────────────────────────────────────────────────────
