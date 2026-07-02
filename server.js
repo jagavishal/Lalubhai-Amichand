@@ -531,11 +531,17 @@ app.use(session({
   },
 }));
 
-// ── Sample CSV downloads (explicit headers so browsers save as .csv, not .txt) ──
+// ── Sample CSV downloads (application/octet-stream stops Chrome from sniffing
+//    the plain-text CSV content and renaming the download to .txt). Headers are
+//    set manually and res.sendFile() used directly — res.download()/res.attachment()
+//    would reset Content-Type based on the file extension and undo this. ──
 for (const name of ['checklist_bulk_sample.csv', 'delegation_sample.csv', 'holiday_sample.csv']) {
   app.get('/' + name, (req, res) => {
-    res.type('text/csv');
-    res.download(path.join(__dirname, 'public', name), name);
+    res.set({
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${name}"`,
+    });
+    res.sendFile(path.join(__dirname, 'public', name));
   });
 }
 
