@@ -1342,6 +1342,23 @@ window.Pages.dashboard = (function () {
         'next due date': 'start_date', 'due date': 'start_date', 'start date': 'start_date',
       };
       const FREQUENCY_ALIASES = { y: 'yearly', m: 'monthly', q: 'quarterly', w: 'weekly', d: 'daily', aw: 'alternative_week' };
+      const MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
+      function parseFlexibleDate(s) {
+        if (!s) return null;
+        s = s.trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+        let m = s.match(/^(\d{1,2})-([A-Za-z]{3,})-(\d{2,4})$/);
+        if (m) {
+          const mon = MONTHS[m[2].toLowerCase().slice(0, 3)];
+          if (mon) {
+            const year = m[3].length === 2 ? '20' + m[3] : m[3];
+            return `${year}-${String(mon).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+          }
+        }
+        m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+        if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+        return null;
+      }
       const text = (await file.text()).replace(/^﻿/, '');
       const lines = text.trim().split('\n').filter(Boolean);
       const headers = lines[0].split(',').map(h => { const k = h.trim().toLowerCase(); return HEADER_ALIASES[k] || k; });
@@ -1363,6 +1380,8 @@ window.Pages.dashboard = (function () {
               task: obj['description'],
               assignedTo: user.name,
               frequency: FREQUENCY_ALIASES[freqRaw] || freqRaw,
+              startDate: parseFlexibleDate(obj['start_date']),
+              remarks: obj['remarks'] || '',
             }),
           });
           ok++;
