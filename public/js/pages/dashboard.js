@@ -1347,13 +1347,8 @@ window.Pages.dashboard = (function () {
             method: 'POST',
             body: JSON.stringify({
               task: obj['description'],
-              assignedTo: user.id,
-              assignedEmail: user.email,
+              assignedTo: user.name,
               frequency: obj['frequency'] || 'daily',
-              startDate: obj['start_date'] || todayISO(),
-              endDate: null,
-              client: '',
-              remarks: obj['remarks'] || '',
             }),
           });
           ok++;
