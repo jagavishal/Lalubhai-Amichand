@@ -19,10 +19,6 @@ window.Pages.developer = {
     let resetInput    = '';
     let resetting     = false;
     let resetDone     = false;
-    let checklistResetOpen  = false;
-    let checklistResetInput = '';
-    let checklistResetting  = false;
-    let checklistResetDone  = false;
     let usersOpen     = false;
     let usersInput    = '';
     let deletingUsers = false;
@@ -156,16 +152,7 @@ window.Pages.developer = {
             </button>
           </div>
 
-          <button id="dev-reset-checklist-btn" style="
-            width:100%;padding:12px;border-radius:12px;margin-top:8px;
-            border:1.5px solid #fecaca;background:#fff5f5;
-            cursor:pointer;font-size:13px;font-weight:600;color:#ef4444;
-          ">
-            🗑️ Delete All Checklist Tasks
-          </button>
-
           ${resetDone ? `<p style="color:#16a34a;font-size:13px;margin-top:10px;font-weight:600;">✓ All tasks deleted successfully.</p>` : ''}
-          ${checklistResetDone ? `<p style="color:#16a34a;font-size:13px;margin-top:10px;font-weight:600;">✓ All checklist tasks deleted successfully.</p>` : ''}
           ${usersDone && newAdminCreds ? `
             <div style="
               margin-top:12px;padding:14px 16px;border-radius:12px;
@@ -372,72 +359,6 @@ window.Pages.developer = {
       `;
     }
 
-    function renderChecklistResetModal() {
-      if (!checklistResetOpen) return '';
-      return `
-        <div id="dev-checklist-reset-overlay" style="
-          position:fixed;inset:0;background:rgba(15,23,42,0.5);
-          display:flex;align-items:center;justify-content:center;
-          z-index:50;padding:24px;
-        ">
-          <div id="dev-checklist-reset-dialog" style="
-            background:#fff;border-radius:16px;padding:32px 28px;
-            max-width:360px;width:100%;text-align:center;
-            box-shadow:0 20px 60px rgba(0,0,0,0.2);
-          ">
-            <div style="
-              width:48px;height:48px;border-radius:12px;margin:0 auto 16px;
-              background:#fef2f2;display:flex;align-items:center;justify-content:center;
-            ">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="3 6 5 6 21 6"/>
-                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                <path d="M10 11v6M14 11v6"/>
-                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-              </svg>
-            </div>
-            <h2 style="font-size:16px;font-weight:700;color:#0f172a;margin:0 0 8px;">
-              Delete All Checklist Tasks?
-            </h2>
-            <p style="font-size:13px;color:#64748b;margin:0 0 20px;line-height:1.5;">
-              This will permanently delete all Checklist task entries (created via "Add Checklist Task").
-              Delegation tasks and completion history are <strong>not</strong> affected.
-              A backup is saved first, but this action <strong>cannot be undone</strong> from the UI.
-            </p>
-            <p style="font-size:13px;color:#0f172a;margin:0 0 8px;font-weight:600;">
-              Type <span style="color:#ef4444;font-family:monospace;">DELETE</span> to confirm
-            </p>
-            <input
-              id="dev-checklist-reset-input"
-              value="${checklistResetInput}"
-              placeholder="Type DELETE here"
-              autofocus
-              style="
-                width:100%;padding:10px 12px;border-radius:8px;box-sizing:border-box;
-                border:1.5px solid ${checklistResetInput === 'DELETE' ? '#fca5a5' : '#e2e8f0'};
-                font-size:14px;outline:none;margin-bottom:20px;
-                text-align:center;font-weight:600;letter-spacing:1px;
-              "
-            />
-            <div style="display:flex;gap:10px;">
-              <button id="dev-checklist-reset-cancel" style="
-                flex:1;padding:10px;border-radius:10px;border:1.5px solid #e2e8f0;
-                background:#fff;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;
-              ">Cancel</button>
-              <button id="dev-checklist-reset-ok" ${checklistResetInput !== 'DELETE' || checklistResetting ? 'disabled' : ''} style="
-                flex:1;padding:10px;border-radius:10px;border:none;
-                background:${checklistResetInput === 'DELETE' ? '#ef4444' : '#fca5a5'};
-                color:#fff;font-size:13px;font-weight:700;
-                cursor:${checklistResetInput !== 'DELETE' || checklistResetting ? 'not-allowed' : 'pointer'};
-              ">
-                ${checklistResetting ? 'Deleting…' : 'Delete All'}
-              </button>
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
     function renderConfirmRestoreModal() {
       if (!confirmRestore) return '';
       return `
@@ -610,7 +531,6 @@ window.Pages.developer = {
         <!-- Modals -->
         ${renderConfirmModal()}
         ${renderResetModal()}
-        ${renderChecklistResetModal()}
         ${renderConfirmRestoreModal()}
         ${renderUsersModal()}
       `;
@@ -713,15 +633,6 @@ window.Pages.developer = {
         wireModalEvents();
       });
 
-      const resetChecklistBtn = el.querySelector('#dev-reset-checklist-btn');
-      if (resetChecklistBtn) resetChecklistBtn.addEventListener('click', () => {
-        checklistResetOpen  = true;
-        checklistResetInput = '';
-        checklistResetDone  = false;
-        reRenderModals();
-        wireModalEvents();
-      });
-
       const loadBackupsBtn = el.querySelector('#dev-load-backups-btn');
       if (loadBackupsBtn) loadBackupsBtn.addEventListener('click', loadBackups);
 
@@ -788,33 +699,6 @@ window.Pages.developer = {
         if (okBtn) okBtn.addEventListener('click', resetData);
       }
 
-      // Reset checklist tasks modal
-      const checklistResetOverlay = el.querySelector('#dev-checklist-reset-overlay');
-      if (checklistResetOverlay) {
-        checklistResetOverlay.addEventListener('click', (e) => {
-          if (e.target === checklistResetOverlay) { checklistResetOpen = false; reRenderModals(); }
-        });
-        const cancelBtn = el.querySelector('#dev-checklist-reset-cancel');
-        if (cancelBtn) cancelBtn.addEventListener('click', () => { checklistResetOpen = false; reRenderModals(); });
-
-        const checklistResetInputEl = el.querySelector('#dev-checklist-reset-input');
-        if (checklistResetInputEl) {
-          checklistResetInputEl.focus();
-          checklistResetInputEl.addEventListener('input', (e) => {
-            checklistResetInput = e.target.value;
-            const okBtn = el.querySelector('#dev-checklist-reset-ok');
-            if (okBtn) {
-              okBtn.disabled = checklistResetInput !== 'DELETE' || checklistResetting;
-              okBtn.style.background = checklistResetInput === 'DELETE' ? '#ef4444' : '#fca5a5';
-              okBtn.style.cursor = checklistResetInput !== 'DELETE' || checklistResetting ? 'not-allowed' : 'pointer';
-            }
-            checklistResetInputEl.style.borderColor = checklistResetInput === 'DELETE' ? '#fca5a5' : '#e2e8f0';
-          });
-        }
-        const checklistOkBtn = el.querySelector('#dev-checklist-reset-ok');
-        if (checklistOkBtn) checklistOkBtn.addEventListener('click', resetChecklistData);
-      }
-
       // Confirm restore modal
       const crestoreOverlay = el.querySelector('#dev-crestore-overlay');
       if (crestoreOverlay) {
@@ -879,7 +763,6 @@ window.Pages.developer = {
       modalRoot.innerHTML =
         renderConfirmModal() +
         renderResetModal() +
-        renderChecklistResetModal() +
         renderConfirmRestoreModal() +
         renderUsersModal();
       wireModalEvents();
@@ -929,30 +812,6 @@ window.Pages.developer = {
         resetOpen = false;
       }
       resetting = false;
-      reRenderBody();
-    }
-
-    async function resetChecklistData() {
-      if (checklistResetInput !== 'DELETE') return;
-      checklistResetting = true;
-      errorMsg = '';
-      reRenderModals();
-      try {
-        const res = await fetch(`/api/developer/reset-checklist?secret=${encodeURIComponent(secret)}`, { method: 'POST' });
-        if (res.ok) {
-          checklistResetDone  = true;
-          checklistResetOpen  = false;
-          checklistResetInput = '';
-        } else {
-          const d  = await res.json();
-          errorMsg = d.error || 'Reset failed';
-          checklistResetOpen = false;
-        }
-      } catch {
-        errorMsg = 'Network error.';
-        checklistResetOpen = false;
-      }
-      checklistResetting = false;
       reRenderBody();
     }
 
