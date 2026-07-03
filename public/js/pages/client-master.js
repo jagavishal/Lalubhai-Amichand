@@ -1,6 +1,9 @@
 window.Pages = window.Pages || {};
 
 window.Pages['client-master'] = (() => {
+  /* ── Constants ──────────────────────────────────────────────── */
+  const DIVISIONS = ['Export', 'Others', 'Trading', 'Wirerod', 'SSCD Ahd', 'Retail (Satelite)', 'Retail (Bopal)'];
+
   /* ── State ──────────────────────────────────────────────────── */
   let _list    = [];
   let _q       = '';
@@ -27,7 +30,7 @@ window.Pages['client-master'] = (() => {
     return {
       name:'', mobile:'', email:'', state:'', district:'', address:'', pin:'',
       bankName:'', accountHolder:'', accountNo:'', ifscCode:'', branchName:'',
-      status:'active',
+      status:'active', division:'',
     };
   }
 
@@ -102,7 +105,7 @@ window.Pages['client-master'] = (() => {
       state: c.state||'', district: c.district||'', address: c.address||'', pin: c.pin||'',
       bankName: c.bank_name||'', accountHolder: c.account_holder||'',
       accountNo: c.account_no||'', ifscCode: c.ifsc_code||'', branchName: c.branch_name||'',
-      status: c.status||'active',
+      status: c.status||'active', division: c.division||'',
     };
     _open = true; _render();
   }
@@ -140,8 +143,14 @@ window.Pages['client-master'] = (() => {
             + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-mobile','Mobile No.',_form.mobile,'tel','10-digit mobile') + _fld('cm-email','Email',_form.email,'email','vendor@email.com') + '</div>'
             + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-state','State',_form.state,'text','e.g. Rajasthan') + _fld('cm-district','District',_form.district,'text','e.g. Jaipur') + '</div>'
             + '<div style="display:grid;grid-template-columns:1fr 120px;gap:12px;">' + _fld('cm-address','Address',_form.address,'text','Street / Area') + _fld('cm-pin','Pin Code',_form.pin,'text','6-digit PIN') + '</div>'
-            + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Status</label>'
-              + '<select class="input" id="cm-status" style="width:100%;box-sizing:border-box;"><option value="active" ' + (_form.status==='active'?'selected':'') + '>Active</option><option value="inactive" ' + (_form.status==='inactive'?'selected':'') + '>Inactive</option></select></div>'
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'
+              + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Status</label>'
+                + '<select class="input" id="cm-status" style="width:100%;box-sizing:border-box;"><option value="active" ' + (_form.status==='active'?'selected':'') + '>Active</option><option value="inactive" ' + (_form.status==='inactive'?'selected':'') + '>Inactive</option></select></div>'
+              + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Division</label>'
+                + '<select class="input" id="cm-division" style="width:100%;box-sizing:border-box;"><option value="">Select division…</option>'
+                  + DIVISIONS.map(d => '<option value="' + esc(d) + '" ' + (_form.division===d?'selected':'') + '>' + esc(d) + '</option>').join('')
+                + '</select></div>'
+            + '</div>'
           + '</div>'
         + '</div>'
         + '<div style="height:1px;background:#f1f5f9;"></div>'
@@ -177,6 +186,7 @@ window.Pages['client-master'] = (() => {
       _form.address       = document.getElementById('cm-address').value.trim();
       _form.pin           = document.getElementById('cm-pin').value.trim();
       _form.status        = document.getElementById('cm-status').value;
+      _form.division      = document.getElementById('cm-division').value;
       _form.bankName      = document.getElementById('cm-bankName').value.trim();
       _form.accountHolder = document.getElementById('cm-accountHolder').value.trim();
       _form.accountNo     = document.getElementById('cm-accountNo').value.trim();
@@ -210,6 +220,7 @@ window.Pages['client-master'] = (() => {
         + '<th style="' + thS + '">Email</th>'
         + '<th style="' + thS + '">State</th>'
         + '<th style="' + thS + '">District</th>'
+        + '<th style="' + thS + '">Division</th>'
         + '<th style="' + thS + '">Bank</th>'
         + '<th style="' + thS + '">Status</th>'
         + actionTh
@@ -235,6 +246,7 @@ window.Pages['client-master'] = (() => {
             + '<td style="' + tdS + '">' + esc(c.email||'—') + '</td>'
             + '<td style="' + tdS + '">' + esc(c.state||'—') + '</td>'
             + '<td style="' + tdS + '">' + esc(c.district||'—') + '</td>'
+            + '<td style="' + tdS + '">' + esc(c.division||'—') + '</td>'
             + '<td style="' + tdS + '">' + esc(c.bank_name||'—') + '</td>'
             + '<td style="' + tdS + '">' + pill + '</td>'
             + actionTd
@@ -343,6 +355,7 @@ window.Pages['client-master'] = (() => {
           + 'onfocus="this.style.borderColor=\'#6366f1\';this.style.background=\'#f5f5ff\'" onblur="this.style.borderColor=\'' + (row.narration?'#6366f1':'#e9ecef') + '\';this.style.background=\'' + (row.narration?'#f5f5ff':'#fff') + '\'" />'
       + '</td>'
       // Auto-filled cells
+      + '<td style="' + cellS + 'min-width:110px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.division||'—') + '</span></td>'
       + '<td style="' + cellS + 'min-width:100px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.bank_name||'—') + '</span></td>'
       + '<td style="' + cellS + 'min-width:120px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.account_holder||'—') + '</span></td>'
       + '<td style="' + cellS + 'min-width:140px;"><span class="pm-auto-span" style="' + monoS + '">' + esc(v?.account_no||'—') + '</span></td>'
@@ -407,6 +420,7 @@ window.Pages['client-master'] = (() => {
             + '<th style="' + thS + 'min-width:180px;">Beneficiary Name</th>'
             + '<th style="' + thS + 'min-width:120px;">Amount</th>'
             + '<th style="' + thS + 'min-width:150px;">Narration / Ref No.</th>'
+            + '<th style="' + thS + 'min-width:110px;">Division</th>'
             + '<th style="' + thS + 'min-width:100px;">Bank</th>'
             + '<th style="' + thS + 'min-width:120px;">Account Holder</th>'
             + '<th style="' + thS + 'min-width:140px;">Account No.</th>'
@@ -556,7 +570,7 @@ window.Pages['client-master'] = (() => {
         const tr = document.querySelector('tr[data-ri="' + ri + '"]');
         if (tr) {
           const spans = tr.querySelectorAll('.pm-auto-span');
-          const vals  = [v.bank_name, v.account_holder, v.account_no, v.ifsc_code, v.branch_name];
+          const vals  = [v.division, v.bank_name, v.account_holder, v.account_no, v.ifsc_code, v.branch_name];
           spans.forEach((span, si) => {
             if (si < vals.length) { span.textContent = vals[si] || '—'; span.style.color = '#374151'; }
           });

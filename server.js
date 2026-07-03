@@ -183,7 +183,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS daily_tasks (id VARCHAR(16) PRIMARY KEY, entry_date DATE NOT NULL, doer_id VARCHAR(16), doer VARCHAR(255) NOT NULL DEFAULT '', client VARCHAR(255) DEFAULT '', department VARCHAR(128) DEFAULT '', description TEXT DEFAULT NULL, minutes INT DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_dt_doer ON daily_tasks (doer_id)`,
   `CREATE INDEX idx_dt_date ON daily_tasks (entry_date)`,
-  `CREATE TABLE IF NOT EXISTS clients (id VARCHAR(16) PRIMARY KEY, name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', contact_number VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', industry VARCHAR(128) DEFAULT '', status VARCHAR(32) DEFAULT 'active', notes TEXT DEFAULT NULL, mobile VARCHAR(64) DEFAULT '', state VARCHAR(128) DEFAULT '', district VARCHAR(128) DEFAULT '', address TEXT DEFAULT NULL, pin VARCHAR(16) DEFAULT '', bank_name VARCHAR(255) DEFAULT '', account_holder VARCHAR(255) DEFAULT '', account_no VARCHAR(64) DEFAULT '', ifsc_code VARCHAR(32) DEFAULT '', branch_name VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS clients (id VARCHAR(16) PRIMARY KEY, name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', contact_number VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', industry VARCHAR(128) DEFAULT '', status VARCHAR(32) DEFAULT 'active', notes TEXT DEFAULT NULL, mobile VARCHAR(64) DEFAULT '', state VARCHAR(128) DEFAULT '', district VARCHAR(128) DEFAULT '', address TEXT DEFAULT NULL, pin VARCHAR(16) DEFAULT '', bank_name VARCHAR(255) DEFAULT '', account_holder VARCHAR(255) DEFAULT '', account_no VARCHAR(64) DEFAULT '', ifsc_code VARCHAR(32) DEFAULT '', branch_name VARCHAR(255) DEFAULT '', division VARCHAR(64) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS dev_backups (id VARCHAR(64) PRIMARY KEY, label VARCHAR(128) NOT NULL DEFAULT '', data TEXT NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS user_sessions (sid VARCHAR(128) PRIMARY KEY, data TEXT NOT NULL, expires_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT DEFAULT NULL`,
@@ -242,6 +242,7 @@ async function fixCollations() {
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS account_no VARCHAR(64) DEFAULT ''`,
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS ifsc_code VARCHAR(32) DEFAULT ''`,
     `ALTER TABLE clients ADD COLUMN IF NOT EXISTS branch_name VARCHAR(255) DEFAULT ''`,
+    `ALTER TABLE clients ADD COLUMN IF NOT EXISTS division VARCHAR(64) DEFAULT ''`,
   ];
   for (const sql of vendorCols) {
     try { await pool.query(sql); } catch (_) {}
@@ -1065,6 +1066,22 @@ app.delete('/api/masters', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
+// Delete ALL checklist tasks in one go (Admin/HOD only) — leaves delegations + completion history intact
+app.delete('/api/masters/all', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    if (!USE_DB) {
+      const store = await readStore();
+      store.masters = [];
+      await writeStore(store);
+      return res.json({ success:true });
+    }
+    await ensureSchema();
+    const backupId = await createBackup('Before Delete All Checklist Tasks').catch(()=>null);
+    await pool.query('DELETE FROM masters');
+    return res.json({ success:true, backupId });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
 // ── Checklist Completions ─────────────────────────────────────────────────────
 app.post('/api/checklist-completions', requireAuth, async (req, res) => {
   try {
@@ -1431,7 +1448,7 @@ app.post('/api/fms/step', requireAuth, async (req, res) => {
 app.get('/api/clients', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    const rows = await q(`SELECT id, name, mobile, contact_number, email, state, district, address, pin, status, bank_name, account_holder, account_no, ifsc_code, branch_name, created_at AS createdAt FROM clients ORDER BY created_at DESC`);
+    const rows = await q(`SELECT id, name, mobile, contact_number, email, state, district, address, pin, status, bank_name, account_holder, account_no, ifsc_code, branch_name, division, created_at AS createdAt FROM clients ORDER BY created_at DESC`);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -1444,10 +1461,10 @@ app.post('/api/clients', requireAuth, async (req, res) => {
     const c = await q('SELECT COUNT(*) AS cnt FROM clients');
     const id = 'VN'+(Number(c[0].cnt)+1).toString().padStart(4,'0');
     await pool.query(
-      `INSERT INTO clients (id,name,mobile,email,state,district,address,pin,status,bank_name,account_holder,account_no,ifsc_code,branch_name)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      `INSERT INTO clients (id,name,mobile,email,state,district,address,pin,status,bank_name,account_holder,account_no,ifsc_code,branch_name,division)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
       [id, b.name.trim(), b.mobile||'', b.email||'', b.state||'', b.district||'', b.address||'', b.pin||'',
-       b.status||'active', b.bankName||'', b.accountHolder||'', b.accountNo||'', b.ifscCode||'', b.branchName||'']
+       b.status||'active', b.bankName||'', b.accountHolder||'', b.accountNo||'', b.ifscCode||'', b.branchName||'', b.division||'']
     );
     return res.status(201).json({ success:true, id });
   } catch (err) { return res.status(500).json({ error:err.message }); }
@@ -1462,10 +1479,11 @@ app.patch('/api/clients', requireAuth, async (req, res) => {
       `UPDATE clients SET name=COALESCE($1,name), mobile=COALESCE($2,mobile), email=COALESCE($3,email),
        state=COALESCE($4,state), district=COALESCE($5,district), address=COALESCE($6,address), pin=COALESCE($7,pin),
        status=COALESCE($8,status), bank_name=COALESCE($9,bank_name), account_holder=COALESCE($10,account_holder),
-       account_no=COALESCE($11,account_no), ifsc_code=COALESCE($12,ifsc_code), branch_name=COALESCE($13,branch_name)
-       WHERE id=$14`,
+       account_no=COALESCE($11,account_no), ifsc_code=COALESCE($12,ifsc_code), branch_name=COALESCE($13,branch_name),
+       division=COALESCE($14,division)
+       WHERE id=$15`,
       [b.name??null, b.mobile??null, b.email??null, b.state??null, b.district??null, b.address??null, b.pin??null,
-       b.status??null, b.bankName??null, b.accountHolder??null, b.accountNo??null, b.ifscCode??null, b.branchName??null, b.id]
+       b.status??null, b.bankName??null, b.accountHolder??null, b.accountNo??null, b.ifscCode??null, b.branchName??null, b.division??null, b.id]
     );
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
@@ -1714,6 +1732,16 @@ app.post('/api/developer/reset', async (req, res) => {
     const backupId = await createBackup('Before Delete All Tasks').catch(()=>null);
     await pool.query('DELETE FROM checklist_completions');
     await pool.query('DELETE FROM delegations');
+    await pool.query('DELETE FROM masters');
+    return res.json({ success:true, backupId });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+// ── Developer: reset checklist masters only (leaves delegations + completion history intact) ──
+app.post('/api/developer/reset-checklist', async (req, res) => {
+  if (!checkSecret(req)) return res.status(401).json({ error:'Unauthorized' });
+  try {
+    const backupId = await createBackup('Before Delete All Checklist Tasks').catch(()=>null);
     await pool.query('DELETE FROM masters');
     return res.json({ success:true, backupId });
   } catch (err) { return res.status(500).json({ error:err.message }); }
