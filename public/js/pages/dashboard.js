@@ -1331,9 +1331,15 @@ window.Pages.dashboard = (function () {
       const fileInput = el.querySelector('#chk-csv-file');
       const file = fileInput?.files?.[0];
       if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
+      const HEADER_ALIASES = {
+        email: 'user_email', 'user email': 'user_email',
+        task: 'description', 'task name': 'description', 'task name / description': 'description', 'task/description': 'description',
+        'next due date': 'start_date', 'due date': 'start_date', 'start date': 'start_date',
+      };
+      const FREQUENCY_ALIASES = { y: 'yearly', m: 'monthly', q: 'quarterly', w: 'weekly', d: 'daily', aw: 'alternative_week' };
       const text = (await file.text()).replace(/^﻿/, '');
       const lines = text.trim().split('\n').filter(Boolean);
-      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+      const headers = lines[0].split(',').map(h => { const k = h.trim().toLowerCase(); return HEADER_ALIASES[k] || k; });
       const rows = lines.slice(1);
       let ok = 0, fail = 0;
       for (const row of rows) {
@@ -1345,12 +1351,13 @@ window.Pages.dashboard = (function () {
           const userEmail = (obj['user_email'] || '').toLowerCase();
           const user = allUsers.find(u => (u.email || '').toLowerCase() === userEmail);
           if (!user || !obj['description']) { fail++; continue; }
+          const freqRaw = (obj['frequency'] || 'daily').trim().toLowerCase();
           await Utils.apiFetch('/api/masters', {
             method: 'POST',
             body: JSON.stringify({
               task: obj['description'],
               assignedTo: user.name,
-              frequency: obj['frequency'] || 'daily',
+              frequency: FREQUENCY_ALIASES[freqRaw] || freqRaw,
             }),
           });
           ok++;
