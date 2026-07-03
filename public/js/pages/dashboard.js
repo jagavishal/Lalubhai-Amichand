@@ -10,6 +10,24 @@ window.Pages.dashboard = (function () {
       .replace(/\//g, '-');
   }
 
+  function parseCsvLine(line) {
+    const out = [];
+    let cur = '', inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; }
+          else inQuotes = false;
+        } else cur += c;
+      } else if (c === '"') inQuotes = true;
+      else if (c === ',') { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out;
+  }
+
   function fmtDateInput(iso) {
     if (!iso) return '';
     const d = new Date(iso);
@@ -1236,11 +1254,11 @@ window.Pages.dashboard = (function () {
       if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
       const text = (await file.text()).replace(/^﻿/, '');
       const lines = text.trim().split('\n').filter(Boolean);
-      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+      const headers = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase());
       const rows = lines.slice(1);
       let ok = 0, fail = 0;
       for (const row of rows) {
-        const cols = row.split(',').map(c => c.trim());
+        const cols = parseCsvLine(row).map(c => c.trim());
         const obj = {};
         headers.forEach((h, i) => obj[h] = cols[i] || '');
         try {
@@ -1362,13 +1380,13 @@ window.Pages.dashboard = (function () {
       }
       const text = (await file.text()).replace(/^﻿/, '');
       const lines = text.trim().split('\n').filter(Boolean);
-      const headers = lines[0].split(',').map(h => { const k = h.trim().toLowerCase(); return HEADER_ALIASES[k] || k; });
+      const headers = parseCsvLine(lines[0]).map(h => { const k = h.trim().toLowerCase(); return HEADER_ALIASES[k] || k; });
       const rows = lines.slice(1);
       let ok = 0, fail = 0;
       const failures = [];
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const cols = row.split(',').map(c => c.trim());
+        const cols = parseCsvLine(row).map(c => c.trim());
         const obj = {};
         headers.forEach((h, idx) => obj[h] = cols[idx] || '');
         const rowLabel = `Row ${i + 2} (${obj['user_email'] || 'no email'})`;
