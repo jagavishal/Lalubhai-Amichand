@@ -1233,7 +1233,7 @@ window.Pages.dashboard = (function () {
       const fileInput = el.querySelector('#del-csv-file');
       const file = fileInput?.files?.[0];
       if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
-      const text = await file.text();
+      const text = (await file.text()).replace(/^﻿/, '');
       const lines = text.trim().split('\n').filter(Boolean);
       const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
       const rows = lines.slice(1);
@@ -1244,7 +1244,8 @@ window.Pages.dashboard = (function () {
         headers.forEach((h, i) => obj[h] = cols[i] || '');
         try {
           const allUsers = _state.users || [];
-          const doer = allUsers.find(u => u.email === obj['doer_email']);
+          const doerEmail = (obj['doer_email'] || '').toLowerCase();
+          const doer = allUsers.find(u => (u.email || '').toLowerCase() === doerEmail);
           if (!doer) { fail++; continue; }
           await Utils.apiFetch('/api/delegations', {
             method: 'POST',
@@ -1330,7 +1331,7 @@ window.Pages.dashboard = (function () {
       const fileInput = el.querySelector('#chk-csv-file');
       const file = fileInput?.files?.[0];
       if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
-      const text = await file.text();
+      const text = (await file.text()).replace(/^﻿/, '');
       const lines = text.trim().split('\n').filter(Boolean);
       const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
       const rows = lines.slice(1);
@@ -1341,7 +1342,8 @@ window.Pages.dashboard = (function () {
         headers.forEach((h, i) => obj[h] = cols[i] || '');
         try {
           const allUsers = _state.users || [];
-          const user = allUsers.find(u => u.email === obj['user_email']);
+          const userEmail = (obj['user_email'] || '').toLowerCase();
+          const user = allUsers.find(u => (u.email || '').toLowerCase() === userEmail);
           if (!user || !obj['description']) { fail++; continue; }
           await Utils.apiFetch('/api/masters', {
             method: 'POST',
@@ -1402,7 +1404,7 @@ window.Pages.dashboard = (function () {
       const fileInput = el.querySelector('#hol-csv-file');
       const file = fileInput?.files?.[0];
       if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
-      const text = await file.text();
+      const text = (await file.text()).replace(/^﻿/, '');
       const lines = text.trim().split('\n').filter(Boolean);
       const dataLines = lines[0].toLowerCase().includes('date') ? lines.slice(1) : lines;
       let ok = 0, fail = 0;
