@@ -1397,7 +1397,10 @@ window.Pages.dashboard = (function () {
       btn.innerHTML = btnOrigHtml;
       hideModal('modal-checklist');
       Utils.showToast(`${ok} checklist(s) created${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
-      if (failures.length) console.warn('Checklist CSV upload failures:\n' + failures.join('\n'));
+      if (failures.length) {
+        console.warn('Checklist CSV upload failures:\n' + failures.join('\n'));
+        alert(`${failures.length} row(s) failed to upload:\n\n${failures.join('\n')}`);
+      }
       await _refresh(admin);
     });
 
