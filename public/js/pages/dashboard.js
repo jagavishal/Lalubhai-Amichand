@@ -1327,10 +1327,15 @@ window.Pages.dashboard = (function () {
     });
 
     /* checklist CSV bulk upload */
-    el.querySelector('#chk-csv-upload')?.addEventListener('click', async () => {
+    el.querySelector('#chk-csv-upload')?.addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      if (btn.disabled) return;
       const fileInput = el.querySelector('#chk-csv-file');
       const file = fileInput?.files?.[0];
       if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
+      btn.disabled = true;
+      const btnOrigHtml = btn.innerHTML;
+      btn.textContent = 'Uploading…';
       const HEADER_ALIASES = {
         email: 'user_email', 'user email': 'user_email',
         task: 'description', 'task name': 'description', 'task name / description': 'description', 'task/description': 'description',
@@ -1363,6 +1368,8 @@ window.Pages.dashboard = (function () {
           ok++;
         } catch { fail++; }
       }
+      btn.disabled = false;
+      btn.innerHTML = btnOrigHtml;
       hideModal('modal-checklist');
       Utils.showToast(`${ok} checklist(s) created${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
       await _refresh(admin);
