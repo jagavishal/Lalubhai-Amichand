@@ -172,6 +172,7 @@ const SCHEMA = [
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS start_date DATE DEFAULT NULL`,
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS end_date DATE DEFAULT NULL`,
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS remarks TEXT DEFAULT NULL`,
+  `ALTER TABLE masters ADD COLUMN IF NOT EXISTS department VARCHAR(128) DEFAULT ''`,
   `CREATE TABLE IF NOT EXISTS holidays (id VARCHAR(16) PRIMARY KEY, date DATE NOT NULL, name VARCHAR(255) NOT NULL, type VARCHAR(64) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS fms (id VARCHAR(16) PRIMARY KEY, client_name VARCHAR(255) NOT NULL, platforms TEXT, mobile VARCHAR(64) DEFAULT '', doer VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS fms_steps (fms_id VARCHAR(16) NOT NULL, step_index INT NOT NULL, planned DATETIME DEFAULT NULL, actual DATETIME DEFAULT NULL, PRIMARY KEY (fms_id, step_index), CONSTRAINT fk_fms_steps FOREIGN KEY (fms_id) REFERENCES fms(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -319,7 +320,7 @@ function userOut(r) {
 
 async function readStoreDb() {
   await ensureSchema();
-  const [users, delegations, masters, holidays, fmsRows, stepRows, profileRows] = await Promise.all([
+  const [users, delegations, masters, holidays, fmsRows, stepRows, profileRows, completionsToday] = await Promise.all([
     q('SELECT * FROM users ORDER BY id ASC'),
     q('SELECT * FROM delegations ORDER BY id ASC'),
     q('SELECT * FROM masters ORDER BY id ASC'),
@@ -327,6 +328,7 @@ async function readStoreDb() {
     q('SELECT * FROM fms ORDER BY id ASC'),
     q('SELECT * FROM fms_steps ORDER BY fms_id ASC, step_index ASC'),
     q('SELECT * FROM profile LIMIT 1'),
+    q('SELECT master_id FROM checklist_completions WHERE date = CURRENT_DATE'),
   ]);
   const byFms = new Map();
   for (const s of stepRows) {
@@ -344,9 +346,10 @@ async function readStoreDb() {
   return {
     users: users.map(userOut),
     delegations: delegations.map(r => ({ id:r.id, description:r.description, doerId:r.doer_id, doer:r.doer, delegatedBy:r.delegated_by, dueDate:toDateStr(r.due_date), client:r.client||'', status:r.status, type:r.type, priority:r.priority||'Low', url:r.url||'', approval:r.approval||'No Approval', remarks:r.remarks||'', transferredBy:r.transferred_by||null, transferredFrom:r.transferred_from||null, createdAt:toIso(r.created_at), completedAt:toIso(r.completed_at) })),
-    masters: masters.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) })),
+    masters: masters.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) })),
     holidays: holidays.map(r => ({ id:r.id, date:toDateStr(r.date), name:r.name, type:r.type||'' })),
     fms, approvals:{ tasks:[], transfers:[], leaves:[] }, profile,
+    completedTodayIds: completionsToday.map(r => r.master_id),
   };
 }
 
@@ -369,8 +372,8 @@ async function writeStoreDb(data) {
         [d.id,d.description,d.doerId||null,d.doer||'',d.delegatedBy||null,d.dueDate||null,d.client||'',d.status||'pending',d.type||'delegation',d.createdAt||null]);
     }
     for (const m of data.masters||[]) {
-      await c.query(`INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8::timestamptz,NOW()))`,
-        [m.id,m.task,m.assignedTo||'',m.frequency||'Daily',m.startDate||null,m.endDate||null,m.remarks||'',m.createdAt||null]);
+      await c.query(`INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,department,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9::timestamptz,NOW()))`,
+        [m.id,m.task,m.assignedTo||'',m.frequency||'Daily',m.startDate||null,m.endDate||null,m.remarks||'',m.department||'',m.createdAt||null]);
     }
     for (const h of data.holidays||[]) { await c.query(`INSERT INTO holidays (id,date,name,type) VALUES ($1,$2,$3,$4)`, [h.id,h.date,h.name,h.type||'']); }
     for (const f of data.fms||[]) {
@@ -411,14 +414,17 @@ function computeDashboard(store, filter='all', doerFilter='') {
     });
   }
   if (filter==='all'||filter==='checklist') {
+    const doneToday = new Set(store.completedTodayIds || []);
     (store.masters||[]).forEach(m => {
       if (df && (m.assignedTo||'').toLowerCase() !== df) return;
-      total++; pending++;
+      total++;
+      if (doneToday.has(m.id)) { completed++; return; }
+      pending++;
       const dateStr = m.startDate || now.toISOString();
       const due = new Date(dateStr); due.setHours(0,0,0,0);
       const isOverdue = m.startDate ? due < now : false;
       if (m.startDate && due > now) upcoming++;
-      items.push({ id:m.id, doerId:m.doerId||null, type:'Checklist', description:m.task, doer:m.assignedTo, date:dateStr, client:'-', overdue:isOverdue, status:'pending', remarks:m.remarks||'', createdAt:m.createdAt||m.created_at });
+      items.push({ id:m.id, doerId:m.doerId||null, type:'Checklist', description:m.task, doer:m.assignedTo, department:m.department||'', frequency:m.frequency||'', date:dateStr, client:'-', overdue:isOverdue, status:'pending', remarks:m.remarks||'', createdAt:m.createdAt||m.created_at });
     });
   }
   return { total, completed, pending, revised, upcoming, pendingTasks:items.sort((a,b)=>new Date(b.createdAt||b.date)-new Date(a.createdAt||a.date)).slice(0,200) };
@@ -1023,16 +1029,15 @@ app.post('/api/masters', requireAuth, async (req, res) => {
     if (!USE_DB) {
       const store = await readStore();
       const masters = store.masters||[];
-      const id = 'CHK'+(masters.length+1).toString().padStart(3,'0');
-      masters.push({ id, task:body.task.trim(), assignedTo:body.assignedTo||'', frequency:body.frequency||'Daily', startDate:body.startDate||null, endDate:body.endDate||null, remarks:body.remarks||'', createdAt:new Date().toISOString() });
+      const id = 'CHK' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase();
+      masters.push({ id, task:body.task.trim(), assignedTo:body.assignedTo||'', frequency:body.frequency||'Daily', startDate:body.startDate||null, endDate:body.endDate||null, remarks:body.remarks||'', department:body.department||'', createdAt:new Date().toISOString() });
       store.masters = masters;
       await writeStore(store);
       return res.status(201).json({ success:true, id });
     }
     await ensureSchema();
-    const { rows:c } = await pool.query('SELECT COUNT(*) AS cnt FROM masters');
-    const id = 'CHK'+(Number(c[0].cnt)+1).toString().padStart(3,'0');
-    await pool.query('INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())', [id,body.task.trim(),body.assignedTo||'',body.frequency||'Daily',body.startDate||null,body.endDate||null,body.remarks||'']);
+    const id = 'CHK' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase();
+    await pool.query('INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,department,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())', [id,body.task.trim(),body.assignedTo||'',body.frequency||'Daily',body.startDate||null,body.endDate||null,body.remarks||'',body.department||'']);
     return res.status(201).json({ success:true, id });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -1051,11 +1056,12 @@ app.patch('/api/masters', requireAuth, async (req, res) => {
       if (body.startDate !== undefined) m.startDate=body.startDate;
       if (body.endDate !== undefined) m.endDate=body.endDate;
       if (body.remarks !== undefined) m.remarks=body.remarks;
+      if (body.department !== undefined) m.department=body.department;
       await writeStore(store);
       return res.json({ success:true });
     }
     await ensureSchema();
-    await pool.query('UPDATE masters SET task=COALESCE($1,task), assigned_to=COALESCE($2,assigned_to), frequency=COALESCE($3,frequency), start_date=COALESCE($4,start_date), end_date=COALESCE($5,end_date), remarks=COALESCE($6,remarks) WHERE id=$7', [body.task??null,body.assignedTo??null,body.frequency??null,body.startDate??null,body.endDate??null,body.remarks??null,body.id]);
+    await pool.query('UPDATE masters SET task=COALESCE($1,task), assigned_to=COALESCE($2,assigned_to), frequency=COALESCE($3,frequency), start_date=COALESCE($4,start_date), end_date=COALESCE($5,end_date), remarks=COALESCE($6,remarks), department=COALESCE($7,department) WHERE id=$8', [body.task??null,body.assignedTo??null,body.frequency??null,body.startDate??null,body.endDate??null,body.remarks??null,body.department??null,body.id]);
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -1803,7 +1809,7 @@ app.post('/api/developer/restore', async (req, res) => {
     await pool.query('DELETE FROM masters');
     if (backup.masters?.length) {
       for (const m of backup.masters) {
-        await pool.query(`INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO UPDATE SET task=EXCLUDED.task`, [m.id,m.task||'',m.assigned_to||'',m.frequency||'Daily',m.start_date||null,m.end_date||null,m.remarks||'',m.created_at||new Date()]).catch(()=>{});
+        await pool.query(`INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,department,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO UPDATE SET task=EXCLUDED.task`, [m.id,m.task||'',m.assigned_to||'',m.frequency||'Daily',m.start_date||null,m.end_date||null,m.remarks||'',m.department||'',m.created_at||new Date()]).catch(()=>{});
       }
     }
     await pool.query('DELETE FROM users');

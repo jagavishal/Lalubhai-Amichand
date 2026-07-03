@@ -798,6 +798,7 @@ window.Pages.dashboard = (function () {
             <span style="font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;" title="${t.description}">${t.description}</span>
             ${urlLink}
           </div>
+          ${t.type === 'Checklist' && (t.frequency || t.department) ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${[t.frequency ? t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1) : '', t.department].filter(Boolean).join(' · ')}</div>` : ''}
           ${transferred}
         </td>
         <td style="${tdStyle}">
@@ -1364,15 +1365,19 @@ window.Pages.dashboard = (function () {
       const headers = lines[0].split(',').map(h => { const k = h.trim().toLowerCase(); return HEADER_ALIASES[k] || k; });
       const rows = lines.slice(1);
       let ok = 0, fail = 0;
-      for (const row of rows) {
+      const failures = [];
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
         const cols = row.split(',').map(c => c.trim());
         const obj = {};
-        headers.forEach((h, i) => obj[h] = cols[i] || '');
+        headers.forEach((h, idx) => obj[h] = cols[idx] || '');
+        const rowLabel = `Row ${i + 2} (${obj['user_email'] || 'no email'})`;
         try {
           const allUsers = _state.users || [];
           const userEmail = (obj['user_email'] || '').toLowerCase();
           const user = allUsers.find(u => (u.email || '').toLowerCase() === userEmail);
-          if (!user || !obj['description']) { fail++; continue; }
+          if (!user) { fail++; failures.push(`${rowLabel}: email not found in Users list`); continue; }
+          if (!obj['description']) { fail++; failures.push(`${rowLabel}: description/task is empty`); continue; }
           const freqRaw = (obj['frequency'] || 'daily').trim().toLowerCase();
           await Utils.apiFetch('/api/masters', {
             method: 'POST',
@@ -1382,15 +1387,17 @@ window.Pages.dashboard = (function () {
               frequency: FREQUENCY_ALIASES[freqRaw] || freqRaw,
               startDate: parseFlexibleDate(obj['start_date']),
               remarks: obj['remarks'] || '',
+              department: obj['department'] || '',
             }),
           });
           ok++;
-        } catch { fail++; }
+        } catch (e) { fail++; failures.push(`${rowLabel}: ${e.message || 'server error'}`); }
       }
       btn.disabled = false;
       btn.innerHTML = btnOrigHtml;
       hideModal('modal-checklist');
       Utils.showToast(`${ok} checklist(s) created${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
+      if (failures.length) console.warn('Checklist CSV upload failures:\n' + failures.join('\n'));
       await _refresh(admin);
     });
 
