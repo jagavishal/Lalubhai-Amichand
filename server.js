@@ -1025,7 +1025,7 @@ app.get('/api/masters', requireAuth, async (req, res) => {
   }
   await ensureSchema();
   const { rows } = await pool.query('SELECT * FROM masters ORDER BY created_at DESC');
-  return res.json(rows);
+  return res.json(rows.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) })));
 });
 
 app.post('/api/masters', requireAuth, async (req, res) => {
