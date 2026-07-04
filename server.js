@@ -423,7 +423,6 @@ function computeDashboard(store, filter='all', doerFilter='') {
       const dateStr = m.startDate || now.toISOString();
       const due = new Date(dateStr); due.setHours(0,0,0,0);
       const isOverdue = m.startDate ? due < now : false;
-      if (m.startDate && due > now) upcoming++;
       items.push({ id:m.id, doerId:m.doerId||null, type:'Checklist', description:m.task, doer:m.assignedTo, department:m.department||'', frequency:m.frequency||'', date:dateStr, client:'-', overdue:isOverdue, status:'pending', remarks:m.remarks||'', createdAt:m.createdAt||m.created_at });
     });
   }
