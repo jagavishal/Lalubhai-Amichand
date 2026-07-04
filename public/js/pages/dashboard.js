@@ -153,11 +153,17 @@ window.Pages.dashboard = (function () {
     const { data, subTab, userFilter } = _state;
     if (!data) return [];
     const STATUS_RANK = { revise: 0, pending: 1, done: 2 };
+    const today = new Date(); today.setHours(0, 0, 0, 0);
     return data.pendingTasks
-      .filter(t =>
-        (subTab === 'All' || t.type === subTab) &&
-        (userFilter === 'All' || t.doer === userFilter)
-      )
+      .filter(t => {
+        if (subTab === 'Upcoming') {
+          const due = new Date(t.date); due.setHours(0, 0, 0, 0);
+          if (!(due > today)) return false;
+        } else if (subTab !== 'All' && t.type !== subTab) {
+          return false;
+        }
+        return userFilter === 'All' || t.doer === userFilter;
+      })
       .slice()
       .sort((a, b) => (STATUS_RANK[a.status] ?? 2) - (STATUS_RANK[b.status] ?? 2));
   }
@@ -354,7 +360,7 @@ window.Pages.dashboard = (function () {
                 <p id="db-tasks-count" style="font-size:11.5px;color:#64748b;margin:2px 0 0;"></p>
               </div>
               <div style="display:flex;align-items:center;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px;">
-                ${['All','Delegation','Checklist','FMS'].map(t =>
+                ${['All','Delegation','Checklist','FMS','Upcoming'].map(t =>
                   `<button class="db-tab-btn" data-tab="${t}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">${t}</button>`
                 ).join('')}
               </div>
