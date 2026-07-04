@@ -27,8 +27,8 @@ window.Pages.login = {
           animation: loginFadeSlide 0.5s cubic-bezier(0.16,1,0.3,1) both;
         }
         #login-page .login-input:focus {
-          border-color: #C4714A !important;
-          box-shadow: 0 0 0 3px rgba(196,113,74,0.12) !important;
+          border-color: var(--color-primary) !important;
+          box-shadow: 0 0 0 3px var(--color-primary-ring) !important;
           outline: none;
         }
         #login-page .login-input {
@@ -56,11 +56,12 @@ window.Pages.login = {
         <div class="login-card" style="width: 100%; max-width: 23rem;">
 
           <!-- Card -->
-          <div style="
-            background: #FFFFFF;
-            border-radius: 1.5rem;
+          <div class="card" style="
+            background: var(--surface);
+            border-radius: var(--radius-2xl);
             padding: 2.25rem 2rem;
-            box-shadow: 0 8px 40px rgba(180,120,50,0.12), 0 2px 8px rgba(0,0,0,0.06);
+            box-shadow: var(--shadow-xl);
+            border: none;
           ">
 
             <!-- Header / Logo area -->
@@ -84,12 +85,12 @@ window.Pages.login = {
               </div>
 
               <!-- Brand name -->
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:#C4714A;margin-bottom:8px;">Lallubhai Amichand</div>
+              <div style="font-size:11px;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:var(--color-primary);margin-bottom:8px;">Lallubhai Amichand</div>
 
-              <h1 style="font-size: 1.35rem; font-weight: 700; color: #1e293b; margin: 0 0 4px;">
+              <h1 style="font-size: 1.35rem; font-weight: 700; color: var(--text-primary); margin: 0 0 4px;">
                 Welcome back &#x1F44B;
               </h1>
-              <p style="font-size: 12.5px; color: #94a3b8; margin: 0;">
+              <p style="font-size: 12.5px; color: var(--text-muted); margin: 0;">
                 Sign in to your account
               </p>
             </div>
@@ -99,15 +100,11 @@ window.Pages.login = {
 
               <!-- Email -->
               <div>
-                <label style="
-                  display: block; font-size: 10.5px; font-weight: 600;
-                  letter-spacing: 0.08em; text-transform: uppercase;
-                  color: #64748b; margin-bottom: 6px;
-                ">Email Address</label>
+                <label class="label" style="margin-bottom:6px;">Email Address</label>
                 <div style="position: relative;">
                   <span style="
                     position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
-                    color: #94a3b8; display: flex; pointer-events: none;
+                    color: var(--text-muted); display: flex; pointer-events: none;
                   ">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
@@ -115,34 +112,25 @@ window.Pages.login = {
                   </span>
                   <input
                     id="login-email"
-                    class="login-input"
+                    class="input login-input"
                     type="text"
                     required
                     placeholder="Enter your email or ID"
                     autocomplete="off"
                     readonly
                     onfocus="this.removeAttribute('readonly')"
-                    style="
-                      width: 100%; box-sizing: border-box;
-                      padding: 10px 12px 10px 36px;
-                      background: #F8FAFC; border: 1.5px solid #E2E8F0; border-radius: 10px;
-                      color: #1e293b; font-size: 13px; transition: border-color 0.15s, box-shadow 0.15s;
-                    "
+                    style="padding-left: 36px; border-radius: 10px;"
                   />
                 </div>
               </div>
 
               <!-- Password -->
               <div>
-                <label style="
-                  display: block; font-size: 10.5px; font-weight: 600;
-                  letter-spacing: 0.08em; text-transform: uppercase;
-                  color: #64748b; margin-bottom: 6px;
-                ">Password</label>
+                <label class="label" style="margin-bottom:6px;">Password</label>
                 <div style="position: relative;">
                   <span style="
                     position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
-                    color: #94a3b8; display: flex; pointer-events: none;
+                    color: var(--text-muted); display: flex; pointer-events: none;
                   ">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
@@ -150,26 +138,21 @@ window.Pages.login = {
                   </span>
                   <input
                     id="login-password"
-                    class="login-input"
+                    class="input login-input"
                     type="password"
                     required
                     placeholder="Enter your password"
                     autocomplete="new-password"
                     readonly
                     onfocus="this.removeAttribute('readonly')"
-                    style="
-                      width: 100%; box-sizing: border-box;
-                      padding: 10px 42px 10px 36px;
-                      background: #F8FAFC; border: 1.5px solid #E2E8F0; border-radius: 10px;
-                      color: #1e293b; font-size: 13px; transition: border-color 0.15s, box-shadow 0.15s;
-                    "
+                    style="padding-left: 36px; padding-right: 42px; border-radius: 10px;"
                   />
                   <button
                     type="button"
                     id="login-toggle-pass"
                     style="
                       position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
-                      background: none; border: none; cursor: pointer; color: #94a3b8;
+                      background: none; border: none; cursor: pointer; color: var(--text-muted);
                       display: flex; padding: 2px;
                     "
                     aria-label="Toggle password visibility"
@@ -190,24 +173,19 @@ window.Pages.login = {
               <!-- Error message -->
               <p id="login-error" style="
                 display: none;
-                color: #ef4444; font-size: 12px; text-align: center; margin: 0;
-                background: #fef2f2; padding: 8px 12px; border-radius: 8px;
+                color: var(--color-danger-text); font-size: 12px; text-align: center; margin: 0;
+                background: var(--color-danger-bg); padding: 8px 12px; border-radius: 8px;
               "></p>
 
               <!-- Submit -->
               <button
                 type="submit"
                 id="login-submit"
-                class="login-submit"
+                class="btn-primary btn-lg login-submit"
                 style="
-                  width: 100%; padding: 12px;
-                  background: linear-gradient(135deg, #C4714A 0%, #D4895A 100%);
-                  color: white; font-weight: 700; font-size: 14px;
-                  border: none; border-radius: 10px;
-                  cursor: pointer;
-                  box-shadow: 0 4px 20px rgba(196,113,74,0.35);
-                  transition: all 0.15s; letter-spacing: 0.02em;
-                  display: flex; align-items: center; justify-content: center; gap: 8px;
+                  width: 100%;
+                  box-shadow: 0 4px 20px var(--color-primary-ring);
+                  letter-spacing: 0.02em;
                   margin-top: 4px;
                 "
               >
@@ -225,13 +203,13 @@ window.Pages.login = {
             <div style="text-align: center; margin-top: 1.5rem;">
               <div style="
                 width: 100%; height: 1px;
-                background: linear-gradient(90deg, transparent, #E2E8F0, transparent);
+                background: linear-gradient(90deg, transparent, var(--border-base), transparent);
                 margin-bottom: 1rem;
               "></div>
-              <p style="font-size: 11px; color: #94a3b8; margin: 0;">
-                <span style="color: #C4714A; font-weight: 600; letter-spacing: 0.05em;">Lallubhai Amichand</span>
-                <span style="margin: 0 6px; color: #cbd5e1;">&middot;</span>
-                <span style="color: #94a3b8;">Grow Your Business</span>
+              <p style="font-size: 11px; color: var(--text-muted); margin: 0;">
+                <span style="color: var(--color-primary); font-weight: 600; letter-spacing: 0.05em;">Lallubhai Amichand</span>
+                <span style="margin: 0 6px; color: var(--border-strong);">&middot;</span>
+                <span style="color: var(--text-muted);">Grow Your Business</span>
               </p>
             </div>
 
@@ -267,12 +245,8 @@ window.Pages.login = {
     // Helper: set loading state
     function setLoading(on) {
       submitBtn.disabled          = on;
-      submitBtn.style.cursor      = on ? 'not-allowed' : 'pointer';
-      submitBtn.style.opacity     = on ? '0.8' : '1';
-      submitBtn.style.background  = on
-        ? '#D4916A'
-        : 'linear-gradient(135deg, #C4714A 0%, #D4895A 100%)';
-      submitBtn.style.boxShadow   = on ? 'none' : '0 4px 20px rgba(196,113,74,0.35)';
+      submitBtn.disabled          = on;
+      submitBtn.style.boxShadow   = on ? 'none' : '0 4px 20px var(--color-primary-ring)';
       btnText.style.display       = on ? 'none'  : '';
       btnLoading.style.display    = on ? 'flex'  : 'none';
     }

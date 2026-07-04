@@ -207,17 +207,7 @@ window.Pages['all-tasks'] = (function () {
 
   /* ─── avatar ────────────────────────────────────────────────────────────── */
   function avatarHTML(name = '') {
-    const ini = name.split(' ').filter(Boolean).slice(0, 2).map(n => n[0]).join('').toUpperCase() || '·';
-    const palette = [
-      'linear-gradient(135deg,#f87171,#db2777)',
-      'linear-gradient(135deg,#fbbf24,#ea580c)',
-      'linear-gradient(135deg,#34d399,#0d9488)',
-      'linear-gradient(135deg,#60a5fa,#6366f1)',
-      'linear-gradient(135deg,#a78bfa,#9333ea)',
-    ];
-    const hash = name.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-    const grad = palette[hash % palette.length];
-    return `<div style="width:32px;height:32px;border-radius:50%;background:${grad};color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700;flex-shrink:0">${esc(ini)}</div>`;
+    return window.UI.avatar(name, { size: 32 });
   }
 
   /* ─── escape ────────────────────────────────────────────────────────────── */
@@ -228,13 +218,13 @@ window.Pages['all-tasks'] = (function () {
   /* ─── status pill ───────────────────────────────────────────────────────── */
   function statusPill(status) {
     const map = {
-      done:             { bg: '#d1fae5', color: '#065f46', label: 'Done' },
-      revise:           { bg: '#fef3c7', color: '#92400e', label: 'Shifted' },
-      revise_requested: { bg: '#ffedd5', color: '#9a3412', label: 'Shifted' },
-      pending:          { bg: '#fee2e2', color: '#991b1b', label: 'Pending' },
+      done:             { variant: 'success', label: 'Done' },
+      revise:           { variant: 'warning', label: 'Shifted' },
+      revise_requested: { variant: 'warning', label: 'Shifted' },
+      pending:          { variant: 'danger',  label: 'Pending' },
     };
     const s = map[status] || map.pending;
-    return `<span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:${s.bg};color:${s.color}">${s.label}</span>`;
+    return window.UI.pill(s.label, { variant: s.variant });
   }
 
   /* ─── render task row ───────────────────────────────────────────────────── */
@@ -309,9 +299,9 @@ window.Pages['all-tasks'] = (function () {
     const endSerial = startSerial + g.tasks.length - 1;
 
     const pills = [
-      completed > 0 ? `<span class="at-pill" style="background:#d1fae5;color:#065f46">${completed} done</span>`     : '',
-      pending   > 0 ? `<span class="at-pill" style="background:#fee2e2;color:#991b1b">${pending} pending</span>`   : '',
-      revised   > 0 ? `<span class="at-pill" style="background:#fef3c7;color:#92400e">${revised} shifted</span>` : '',
+      completed > 0 ? window.UI.pill(`${completed} done`, { variant: 'success' })  : '',
+      pending   > 0 ? window.UI.pill(`${pending} pending`, { variant: 'danger' })   : '',
+      revised   > 0 ? window.UI.pill(`${revised} shifted`, { variant: 'warning' })  : '',
     ].join('');
 
     const tableHTML = open ? `
@@ -443,26 +433,25 @@ window.Pages['all-tasks'] = (function () {
       <style>
         .at-btn { display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;font-size:13px;font-weight:500;border:1px solid transparent;cursor:pointer;transition:opacity 0.15s }
         .at-btn:hover { opacity:0.85 }
-        .at-btn-primary  { background:#6366f1;color:#fff;border-color:#6366f1 }
-        .at-btn-secondary { background:#fff;color:#374151;border-color:#e2e8f0 }
-        .at-seg { display:inline-flex;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden }
-        .at-seg-btn { padding:6px 14px;font-size:13px;font-weight:500;background:#fff;color:#64748b;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:background 0.15s }
-        .at-seg-btn:not(:last-child) { border-right:1px solid #e2e8f0 }
-        .at-seg-active { background:#6366f1;color:#fff }
-        .at-pill { display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600 }
+        .at-btn-primary  { background:var(--color-primary);color:#fff;border-color:var(--color-primary) }
+        .at-btn-secondary { background:var(--surface);color:var(--text-secondary);border-color:var(--border-base) }
+        .at-seg { display:inline-flex;border:1px solid var(--border-base);border-radius:8px;overflow:hidden }
+        .at-seg-btn { padding:6px 14px;font-size:13px;font-weight:500;background:var(--surface);color:var(--text-secondary);border:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:background 0.15s }
+        .at-seg-btn:not(:last-child) { border-right:1px solid var(--border-base) }
+        .at-seg-active { background:var(--color-primary);color:#fff }
         .at-pill-btn { display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;border:none;cursor:pointer;transition:opacity 0.15s }
         .at-pill-btn:hover { opacity:0.8 }
-        .at-pill-green { background:#d1fae5;color:#065f46 }
-        .at-pill-amber { background:#fef3c7;color:#92400e }
+        .at-pill-green { background:var(--color-success-bg);color:var(--color-success-text) }
+        .at-pill-amber { background:var(--color-warning-bg);color:var(--color-warning-text) }
         .at-action-btn { width:28px;height:28px;border-radius:6px;display:grid;place-items:center;border:none;cursor:pointer;background:transparent;transition:background 0.15s }
-        .at-btn-amber { color:#f59e0b } .at-btn-amber:hover { background:#fef3c7 }
-        .at-btn-red   { color:#ef4444 } .at-btn-red:hover   { background:#fee2e2 }
-        .at-th { padding:10px 12px;text-align:left;font-size:12px;font-weight:600;color:#64748b;white-space:nowrap;border-bottom:1px solid #f1f5f9 }
-        .at-td { padding:10px 12px;vertical-align:middle;border-bottom:1px solid #f8fafc }
-        .at-table-row:hover { background:#fafafa }
-        .at-card { background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden }
-        .at-input { height:34px;padding:0 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;background:#fff;outline:none }
-        .at-input:focus { border-color:#6366f1 }
+        .at-btn-amber { color:var(--color-warning) } .at-btn-amber:hover { background:var(--color-warning-bg) }
+        .at-btn-red   { color:var(--color-danger) }  .at-btn-red:hover   { background:var(--color-danger-bg) }
+        .at-th { padding:10px 12px;text-align:left;font-size:12px;font-weight:600;color:var(--text-secondary);white-space:nowrap;border-bottom:1px solid var(--border-light) }
+        .at-td { padding:10px 12px;vertical-align:middle;border-bottom:1px solid var(--border-light) }
+        .at-table-row:hover { background:var(--surface-alt) }
+        .at-card { background:var(--surface);border:1px solid var(--border-base);border-radius:12px;overflow:hidden }
+        .at-input { height:34px;padding:0 10px;border:1px solid var(--border-base);border-radius:6px;font-size:13px;background:var(--surface);outline:none;color:var(--text-primary) }
+        .at-input:focus { border-color:var(--color-primary) }
       </style>
 
       <div style="display:flex;flex-direction:column;gap:20px">

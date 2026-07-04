@@ -46,37 +46,18 @@ window.Pages.dashboard = (function () {
   }
 
   function avatarHTML(name) {
-    name = name || '';
-    const ini = name.split(' ').filter(Boolean).slice(0, 2).map(n => n[0]).join('').toUpperCase() || '·';
-    const palette = [
-      'background:linear-gradient(135deg,#f43f5e,#db2777)',
-      'background:linear-gradient(135deg,#f59e0b,#ea580c)',
-      'background:linear-gradient(135deg,#10b981,#0d9488)',
-      'background:linear-gradient(135deg,#C4714A,#D4895A)',
-      'background:linear-gradient(135deg,#8b5cf6,#7c3aed)',
-    ];
-    const hash = name.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-    const style = palette[hash % palette.length];
-    return `<div style="${style};width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:9px;font-weight:700;flex-shrink:0;">${ini}</div>`;
+    return window.UI.avatar(name || '', { size: 22 });
   }
 
   function typePillHTML(type) {
-    const map = {
-      Delegation: 'background:#eff6ff;color:#1d4ed8;',
-      FMS:        'background:#f5f3ff;color:#6d28d9;',
-      Checklist:  'background:#ecfdf5;color:#065f46;',
-    };
-    const style = map[type] || 'background:#f1f5f9;color:#475569;';
-    return `<span style="${style}display:inline-flex;align-items:center;padding:2px 8px;font-size:10.5px;font-weight:600;border-radius:9999px;">${type}</span>`;
+    const variantMap = { Delegation: 'info', FMS: 'purple', Checklist: 'success' };
+    return window.UI.pill(type, { variant: variantMap[type] || 'neutral', size: 'sm' });
   }
 
   function priorityHTML(type, priority) {
-    if (type === 'Checklist') return '<span style="color:#94a3b8;font-size:12px;">—</span>';
-    if (!priority || priority === 'Low') return '<span style="color:#94a3b8;font-size:12px;">Low</span>';
-    const style = priority === 'High'
-      ? 'background:#fef2f2;color:#dc2626;border:1px solid #fecaca;'
-      : 'background:#fffbeb;color:#d97706;border:1px solid #fde68a;';
-    return `<span style="${style}display:inline-flex;align-items:center;padding:2px 8px;font-size:10.5px;font-weight:600;border-radius:9999px;">${priority}</span>`;
+    if (type === 'Checklist') return '<span style="color:var(--text-muted);font-size:12px;">—</span>';
+    if (!priority || priority === 'Low') return '<span style="color:var(--text-muted);font-size:12px;">Low</span>';
+    return window.UI.pill(priority, { variant: priority === 'High' ? 'danger' : 'warning', size: 'sm' });
   }
 
   /* ── performance computation ─────────────────────────────────────── */
@@ -241,28 +222,13 @@ window.Pages.dashboard = (function () {
           #db-stat-cards::-webkit-scrollbar { height: 3px; }
           #db-stat-cards::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 2px; }
         }
-        .db-modal-overlay { position:fixed;inset:0;background:rgba(15,23,42,.5);backdrop-filter:blur(4px);z-index:100;display:none;align-items:center;justify-content:center;padding:1rem; }
-        .db-modal-box { background:#fff;border-radius:1.25rem;box-shadow:0 20px 60px rgba(0,0,0,.18);width:100%;max-width:440px;overflow:hidden; }
-        .db-modal-head { display:flex;align-items:center;gap:12px;padding:1rem 1.25rem;border-bottom:1px solid #e2e8f0; }
-        .db-modal-body { padding:1.25rem;display:flex;flex-direction:column;gap:12px; }
-        .db-modal-foot { display:flex;justify-content:flex-end;gap:8px;padding:.875rem 1.25rem;border-top:1px solid #e2e8f0; }
-        .db-input { width:100%;box-sizing:border-box;padding:7px 10px;background:#fff;border:1.5px solid #e2e8f0;border-radius:8px;font-size:12.5px;color:#1e293b;transition:border-color .15s; }
-        .db-input:focus { outline:none;border-color:#C4714A;box-shadow:0 0 0 3px rgba(196,113,74,.12); }
-        .db-label { display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px; }
-        .db-btn-primary { display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 14px;border-radius:8px;font-size:12.5px;font-weight:600;background:#C4714A;color:#fff;border:none;cursor:pointer;transition:background .15s; }
-        .db-btn-primary:hover { background:#b36040; }
-        .db-btn-secondary { display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 14px;border-radius:8px;font-size:12.5px;font-weight:600;background:#fff;color:#374151;border:1.5px solid #e2e8f0;cursor:pointer;transition:background .15s; }
-        .db-btn-secondary:hover { background:#f8fafc; }
-        .db-btn-danger { display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 14px;border-radius:8px;font-size:12.5px;font-weight:600;background:#dc2626;color:#fff;border:none;cursor:pointer;transition:background .15s; }
-        .db-btn-danger:hover { background:#b91c1c; }
-        .db-btn-success { display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 14px;border-radius:8px;font-size:12.5px;font-weight:600;background:#059669;color:#fff;border:none;cursor:pointer;transition:background .15s; }
-        .db-btn-success:hover { background:#047857; }
+        /* Modal shell, .input, .label, and .btn-* now come from the shared style.css design system (no local duplicates). */
         .pill-act { display:inline-flex;align-items:center;padding:2px 8px;font-size:10.5px;font-weight:600;border-radius:9999px;cursor:pointer;border:none;transition:background .12s; }
-        .pill-done { background:#ecfdf5;color:#065f46; } .pill-done:hover { background:#d1fae5; }
-        .pill-revise { background:#fef2f2;color:#991b1b; } .pill-revise:hover { background:#fee2e2; }
-        .pill-grant { background:#ecfdf5;color:#065f46; } .pill-grant:hover { background:#d1fae5; }
-        .pill-deny  { background:#f1f5f9;color:#475569; } .pill-deny:hover  { background:#e2e8f0; }
-        .pill-pending-wait { background:#fffbeb;color:#b45309;display:inline-flex;align-items:center;padding:2px 8px;font-size:10.5px;font-weight:600;border-radius:9999px; }
+        .pill-done { background:var(--color-success-bg);color:var(--color-success-text); } .pill-done:hover { background:var(--color-success-border); }
+        .pill-revise { background:var(--color-danger-bg);color:var(--color-danger-text); } .pill-revise:hover { background:var(--color-danger-border); }
+        .pill-grant { background:var(--color-success-bg);color:var(--color-success-text); } .pill-grant:hover { background:var(--color-success-border); }
+        .pill-deny  { background:var(--color-neutral-bg);color:var(--color-neutral-text); } .pill-deny:hover  { background:var(--border-base); }
+        .pill-pending-wait { background:var(--color-warning-bg);color:var(--color-warning-text);display:inline-flex;align-items:center;padding:2px 8px;font-size:10.5px;font-weight:600;border-radius:9999px; }
       </style>
 
       <div id="db-wrap">
@@ -333,25 +299,25 @@ window.Pages.dashboard = (function () {
         <!-- Stat cards -->
         <div id="db-stat-cards" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1rem;margin-bottom:20px;">
           <div class="card db-stat-card" data-filter="All" style="padding:20px;cursor:pointer;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Pending</div>
-            <div id="db-stat-pending" style="font-size:2.5rem;font-weight:800;color:#dc2626;">${data.pending || data.pendingTasks.length}</div>
-            <div id="db-stat-revised" style="font-size:11px;font-weight:600;color:#d97706;margin-top:4px;${data.revised > 0 ? '' : 'display:none;'}">+ ${data.revised} shifted</div>
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Pending</div>
+            <div id="db-stat-pending" style="font-size:2.5rem;font-weight:800;color:var(--color-danger);">${data.pending || data.pendingTasks.length}</div>
+            <div id="db-stat-revised" style="font-size:11px;font-weight:600;color:var(--color-warning);margin-top:4px;${data.revised > 0 ? '' : 'display:none;'}">+ ${data.revised} shifted</div>
           </div>
           <div class="card db-stat-card" data-filter="Shifted" style="padding:20px;cursor:pointer;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Shifted</div>
-            <div id="db-stat-revised-count" style="font-size:2.5rem;font-weight:800;color:#d97706;">${data.revised || 0}</div>
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Shifted</div>
+            <div id="db-stat-revised-count" style="font-size:2.5rem;font-weight:800;color:var(--color-warning);">${data.revised || 0}</div>
           </div>
           <div class="card db-stat-card" data-filter="Completed" style="padding:20px;cursor:pointer;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Completed</div>
-            <div id="db-stat-completed" style="font-size:2.5rem;font-weight:800;color:#059669;">${data.completed}</div>
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Completed</div>
+            <div id="db-stat-completed" style="font-size:2.5rem;font-weight:800;color:var(--color-success);">${data.completed}</div>
           </div>
           <div class="card db-stat-card" data-filter="Upcoming" style="padding:20px;cursor:pointer;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Upcoming</div>
-            <div id="db-stat-upcoming" style="font-size:2.5rem;font-weight:800;color:#7c3aed;">${data.upcoming || 0}</div>
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Upcoming</div>
+            <div id="db-stat-upcoming" style="font-size:2.5rem;font-weight:800;color:var(--color-purple);">${data.upcoming || 0}</div>
           </div>
           <div class="card db-stat-card" style="padding:20px;display:none;" id="db-stat-total-card">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Total</div>
-            <div id="db-stat-total" style="font-size:2.5rem;font-weight:800;color:#C4714A;">${admin ? data.total : data.pendingTasks.length}</div>
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Total</div>
+            <div id="db-stat-total" style="font-size:2.5rem;font-weight:800;color:var(--color-primary);">${admin ? data.total : data.pendingTasks.length}</div>
           </div>
         </div>
 
@@ -410,27 +376,27 @@ window.Pages.dashboard = (function () {
       </div>
 
       <!-- ── Add Delegate Modal ── -->
-      <div id="modal-delegate" class="db-modal-overlay">
-        <div class="db-modal-box" style="max-width:520px;" onclick="event.stopPropagation()">
-          <div class="db-modal-head">
+      <div id="modal-delegate" class="modal-overlay" style="display:none;">
+        <div class="modal-box" style="max-width:520px;" onclick="event.stopPropagation()">
+          <div class="modal-header">
             <h2 style="font-size:15px;font-weight:700;margin:0;flex:1;">+ Delegate Task</h2>
-            <button id="modal-delegate-close" style="width:28px;height:28px;border-radius:50%;background:#f1f5f9;border:none;cursor:pointer;color:#64748b;display:flex;align-items:center;justify-content:center;">
+            <button id="modal-delegate-close" style="width:28px;height:28px;border-radius:50%;background:var(--border-light);border:none;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;justify-content:center;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <div class="db-modal-body" style="max-height:70vh;overflow-y:auto;">
+          <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
             <!-- Row 1: Doer | Due Date -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label class="db-label">DOER (ASSIGN TO)</label>
-                <select id="del-doer" class="db-input">
+                <label class="label">DOER (ASSIGN TO)</label>
+                <select id="del-doer" class="input">
                   <option value="">Select Doer</option>
                   ${(users || []).map(u => `<option value="${u.id}" data-name="${u.name}">${u.name}</option>`).join('')}
                 </select>
               </div>
               <div>
-                <label class="db-label">DUE DATE</label>
-                <input type="date" id="del-due" class="db-input" value="${todayISO()}" />
+                <label class="label">DUE DATE</label>
+                <input type="date" id="del-due" class="input" value="${todayISO()}" />
               </div>
             </div>
             <!-- Doer-defined due date checkbox -->
@@ -441,16 +407,16 @@ window.Pages.dashboard = (function () {
             <!-- Row 2: Priority | Approval Required -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label class="db-label">PRIORITY</label>
-                <select id="del-priority" class="db-input">
+                <label class="label">PRIORITY</label>
+                <select id="del-priority" class="input">
                   <option value="Low">Low</option>
                   <option value="Medium">Medium</option>
                   <option value="High">High</option>
                 </select>
               </div>
               <div>
-                <label class="db-label">APPROVAL REQUIRED</label>
-                <select id="del-approval" class="db-input">
+                <label class="label">APPROVAL REQUIRED</label>
+                <select id="del-approval" class="input">
                   <option value="No Approval">No Approval</option>
                   <option value="Approval Required">Approval Required</option>
                 </select>
@@ -458,25 +424,25 @@ window.Pages.dashboard = (function () {
             </div>
             <!-- Description -->
             <div>
-              <label class="db-label">DESCRIPTION</label>
-              <textarea id="del-desc" rows="3" class="db-input" style="resize:vertical;" placeholder="Enter task description..."></textarea>
+              <label class="label">DESCRIPTION</label>
+              <textarea id="del-desc" rows="3" class="input" style="resize:vertical;" placeholder="Enter task description..."></textarea>
             </div>
             <!-- URL -->
             <div>
-              <label class="db-label">URL <span style="font-size:10px;color:#94a3b8;font-weight:400;text-transform:none;">(OPTIONAL)</span></label>
-              <input type="url" id="del-url" class="db-input" placeholder="https://docs.google.com/..." />
+              <label class="label">URL <span style="font-size:10px;color:#94a3b8;font-weight:400;text-transform:none;">(OPTIONAL)</span></label>
+              <input type="url" id="del-url" class="input" placeholder="https://docs.google.com/..." />
             </div>
             <!-- Remarks -->
             <div>
-              <label class="db-label">REMARKS</label>
-              <textarea id="del-remarks" rows="2" class="db-input" style="resize:vertical;" placeholder="Any remarks..."></textarea>
+              <label class="label">REMARKS</label>
+              <textarea id="del-remarks" rows="2" class="input" style="resize:vertical;" placeholder="Any remarks..."></textarea>
             </div>
             <p id="del-error" style="color:#dc2626;font-size:12px;display:none;margin:0;"></p>
           </div>
           <!-- Footer buttons -->
-          <div class="db-modal-foot" style="justify-content:space-between;">
-            <button id="modal-delegate-cancel" class="db-btn-secondary">Close</button>
-            <button id="modal-delegate-submit" class="db-btn-primary">Assign</button>
+          <div class="modal-footer" style="justify-content:space-between;">
+            <button id="modal-delegate-cancel" class="btn-secondary">Close</button>
+            <button id="modal-delegate-submit" class="btn-primary">Assign</button>
           </div>
           <!-- Bulk CSV upload -->
           <div style="border-top:1px solid #f1f5f9;padding:12px 20px 16px;background:#fafafa;">
@@ -498,27 +464,27 @@ window.Pages.dashboard = (function () {
       </div>
 
       <!-- ── Add Checklist Master Modal ── -->
-      <div id="modal-checklist" class="db-modal-overlay">
-        <div class="db-modal-box" style="max-width:520px;" onclick="event.stopPropagation()">
-          <div class="db-modal-head">
+      <div id="modal-checklist" class="modal-overlay" style="display:none;">
+        <div class="modal-box" style="max-width:520px;" onclick="event.stopPropagation()">
+          <div class="modal-header">
             <h2 style="font-size:15px;font-weight:700;margin:0;flex:1;">+ Add Checklist Task</h2>
-            <button id="modal-checklist-close" style="width:28px;height:28px;border-radius:50%;background:#f1f5f9;border:none;cursor:pointer;color:#64748b;display:flex;align-items:center;justify-content:center;">
+            <button id="modal-checklist-close" style="width:28px;height:28px;border-radius:50%;background:var(--border-light);border:none;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;justify-content:center;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <div class="db-modal-body" style="max-height:70vh;overflow-y:auto;">
+          <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
             <!-- Select Employee -->
             <div>
-              <label class="db-label">SELECT EMPLOYEE</label>
-              <select id="chk-assigned" class="db-input">
+              <label class="label">SELECT EMPLOYEE</label>
+              <select id="chk-assigned" class="input">
                 <option value="">Select Employee</option>
                 ${(users || []).map(u => `<option value="${u.id}" data-email="${u.email}" data-name="${u.name}">${u.name}</option>`).join('')}
               </select>
             </div>
             <!-- Frequency -->
             <div>
-              <label class="db-label">FREQUENCY</label>
-              <select id="chk-frequency" class="db-input">
+              <label class="label">FREQUENCY</label>
+              <select id="chk-frequency" class="input">
                 <option value="daily">Daily (365 tasks/year)</option>
                 <option value="alternative_week">Alternative Week (26 tasks/year)</option>
                 <option value="weekly">Weekly (52 tasks/year)</option>
@@ -530,29 +496,29 @@ window.Pages.dashboard = (function () {
             <!-- Start Date | End Date -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label class="db-label">START DATE</label>
-                <input type="date" id="chk-start" class="db-input" value="${todayISO()}" />
+                <label class="label">START DATE</label>
+                <input type="date" id="chk-start" class="input" value="${todayISO()}" />
               </div>
               <div>
-                <label class="db-label">END DATE <span style="font-size:10px;color:#94a3b8;font-weight:400;text-transform:none;">(OPTIONAL)</span></label>
-                <input type="date" id="chk-end" class="db-input" />
+                <label class="label">END DATE <span style="font-size:10px;color:#94a3b8;font-weight:400;text-transform:none;">(OPTIONAL)</span></label>
+                <input type="date" id="chk-end" class="input" />
               </div>
             </div>
             <!-- Task Name / Description -->
             <div>
-              <label class="db-label">TASK NAME / DESCRIPTION</label>
-              <input type="text" id="chk-task" class="db-input" placeholder="Enter task name..." />
+              <label class="label">TASK NAME / DESCRIPTION</label>
+              <input type="text" id="chk-task" class="input" placeholder="Enter task name..." />
             </div>
             <!-- Remarks -->
             <div>
-              <label class="db-label">REMARKS</label>
-              <input type="text" id="chk-remarks" class="db-input" placeholder="Any remarks..." />
+              <label class="label">REMARKS</label>
+              <input type="text" id="chk-remarks" class="input" placeholder="Any remarks..." />
             </div>
             <p id="chk-error" style="color:#dc2626;font-size:12px;display:none;margin:0;"></p>
           </div>
           <!-- Footer buttons -->
-          <div class="db-modal-foot" style="justify-content:space-between;">
-            <button id="modal-checklist-cancel" class="db-btn-secondary">Close</button>
+          <div class="modal-footer" style="justify-content:space-between;">
+            <button id="modal-checklist-cancel" class="btn-secondary">Close</button>
             <button id="modal-checklist-submit" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 18px;border-radius:8px;font-size:12.5px;font-weight:600;background:#2563eb;color:#fff;border:none;cursor:pointer;">
               Generate Tasks
             </button>
@@ -577,25 +543,25 @@ window.Pages.dashboard = (function () {
       </div>
 
       <!-- ── Holidays Modal ── -->
-      <div id="modal-holidays" class="db-modal-overlay">
-        <div class="db-modal-box" style="max-width:520px;" onclick="event.stopPropagation()">
-          <div class="db-modal-head">
+      <div id="modal-holidays" class="modal-overlay" style="display:none;">
+        <div class="modal-box" style="max-width:520px;" onclick="event.stopPropagation()">
+          <div class="modal-header">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
             <h2 style="font-size:15px;font-weight:700;margin:0;flex:1;padding-left:8px;">Holidays</h2>
-            <button id="modal-holidays-close" style="width:28px;height:28px;border-radius:50%;background:#f1f5f9;border:none;cursor:pointer;color:#64748b;display:flex;align-items:center;justify-content:center;">
+            <button id="modal-holidays-close" style="width:28px;height:28px;border-radius:50%;background:var(--border-light);border:none;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;justify-content:center;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <div class="db-modal-body" style="max-height:65vh;overflow-y:auto;">
+          <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
             <!-- Add holiday form -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label class="db-label">DATE</label>
-                <input type="date" id="hol-date" class="db-input" />
+                <label class="label">DATE</label>
+                <input type="date" id="hol-date" class="input" />
               </div>
               <div>
-                <label class="db-label">HOLIDAY NAME</label>
-                <input type="text" id="hol-name" class="db-input" placeholder="e.g. Diwali" />
+                <label class="label">HOLIDAY NAME</label>
+                <input type="text" id="hol-name" class="input" placeholder="e.g. Diwali" />
               </div>
             </div>
             <button id="hol-add-btn" style="width:100%;padding:9px;border-radius:8px;font-size:13px;font-weight:700;background:#2563eb;color:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
@@ -627,16 +593,16 @@ window.Pages.dashboard = (function () {
               <div id="hol-list"></div>
             </div>
           </div>
-          <div class="db-modal-foot">
-            <button id="modal-holidays-done" class="db-btn-secondary" style="width:100%;justify-content:center;">Close</button>
+          <div class="modal-footer">
+            <button id="modal-holidays-done" class="btn-secondary" style="width:100%;justify-content:center;">Close</button>
           </div>
         </div>
       </div>
 
       <!-- ── Shift Modal ── -->
-      <div id="modal-revise" class="db-modal-overlay">
-        <div class="db-modal-box" onclick="event.stopPropagation()">
-          <div class="db-modal-head">
+      <div id="modal-revise" class="modal-overlay" style="display:none;">
+        <div class="modal-box" onclick="event.stopPropagation()">
+          <div class="modal-header">
             <div id="revise-modal-icon" style="width:36px;height:36px;border-radius:10px;background:#fef3c7;color:#d97706;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2v6h6"/><path d="M3 8a9 9 0 1 0 2.6-5.6L3 8"/></svg>
             </div>
@@ -644,49 +610,49 @@ window.Pages.dashboard = (function () {
               <h2 style="font-size:14px;font-weight:700;margin:0;">Shift Task</h2>
               <p style="font-size:11.5px;color:#64748b;margin:2px 0 0;">Mark this task as shifted with an optional new date</p>
             </div>
-            <button id="modal-revise-close" style="background:none;border:none;cursor:pointer;color:#64748b;padding:4px;">
+            <button id="modal-revise-close" style="background:none;border:none;cursor:pointer;color:var(--text-secondary);padding:4px;">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <div class="db-modal-body">
+          <div class="modal-body">
             <div id="revise-task-info" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;font-size:12.5px;"></div>
             <div id="revise-date-wrap">
-              <label class="db-label">Shift until <span style="color:#94a3b8;font-weight:400">(optional)</span></label>
-              <input type="date" id="revise-date-input" class="db-input" />
+              <label class="label">Shift until <span style="color:#94a3b8;font-weight:400">(optional)</span></label>
+              <input type="date" id="revise-date-input" class="input" />
             </div>
             <div id="revise-note-wrap">
-              <label class="db-label">Note <span style="color:#94a3b8;font-weight:400">(optional)</span></label>
-              <textarea id="revise-note-input" rows="3" class="db-input" style="resize:none;" placeholder="Why is this being shifted?"></textarea>
+              <label class="label">Note <span style="color:#94a3b8;font-weight:400">(optional)</span></label>
+              <textarea id="revise-note-input" rows="3" class="input" style="resize:none;" placeholder="Why is this being shifted?"></textarea>
             </div>
           </div>
-          <div class="db-modal-foot">
-            <button id="modal-revise-cancel" class="db-btn-secondary">Cancel</button>
+          <div class="modal-footer">
+            <button id="modal-revise-cancel" class="btn-secondary">Cancel</button>
             <button id="modal-revise-confirm" class="db-btn-warn">Confirm Shift</button>
           </div>
         </div>
       </div>
 
       <!-- ── Transfer Modal ── -->
-      <div id="modal-transfer" class="db-modal-overlay">
-        <div class="db-modal-box" style="max-width:460px;" onclick="event.stopPropagation()">
-          <div class="db-modal-head">
+      <div id="modal-transfer" class="modal-overlay" style="display:none;">
+        <div class="modal-box" style="max-width:460px;" onclick="event.stopPropagation()">
+          <div class="modal-header">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             <h2 style="font-size:15px;font-weight:700;margin:0;flex:1;padding-left:8px;">Transfer Tasks</h2>
-            <button id="modal-transfer-close" style="width:28px;height:28px;border-radius:50%;background:#f1f5f9;border:none;cursor:pointer;color:#64748b;display:flex;align-items:center;justify-content:center;">
+            <button id="modal-transfer-close" style="width:28px;height:28px;border-radius:50%;background:var(--border-light);border:none;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;justify-content:center;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <div class="db-modal-body">
+          <div class="modal-body">
             <div>
-              <label class="db-label">FROM (Current Doer)</label>
-              <select id="tr-from" class="db-input">
+              <label class="label">FROM (Current Doer)</label>
+              <select id="tr-from" class="input">
                 <option value="">— Select Employee —</option>
                 ${(users || []).map(u => `<option value="${u.id}" data-name="${u.name}">${u.name}</option>`).join('')}
               </select>
             </div>
             <div>
-              <label class="db-label">TO (New Doer)</label>
-              <select id="tr-to" class="db-input">
+              <label class="label">TO (New Doer)</label>
+              <select id="tr-to" class="input">
                 <option value="">— Select Employee —</option>
                 ${(users || []).map(u => `<option value="${u.id}" data-name="${u.name}">${u.name}</option>`).join('')}
               </select>
@@ -699,8 +665,8 @@ window.Pages.dashboard = (function () {
             </div>
             <p id="tr-error" style="color:#dc2626;font-size:12px;display:none;margin:0;"></p>
           </div>
-          <div class="db-modal-foot" style="justify-content:space-between;">
-            <button id="modal-transfer-cancel" class="db-btn-secondary">Close</button>
+          <div class="modal-footer" style="justify-content:space-between;">
+            <button id="modal-transfer-cancel" class="btn-secondary">Close</button>
             <button id="modal-transfer-submit" style="display:inline-flex;align-items:center;gap:6px;padding:7px 18px;border-radius:8px;font-size:12.5px;font-weight:700;background:#7c3aed;color:#fff;border:none;cursor:pointer;">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
               Transfer

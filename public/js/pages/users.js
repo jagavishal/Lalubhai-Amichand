@@ -6,7 +6,7 @@ window.Pages.users = (() => {
 
   const ROLE_STYLE = {
     Admin: 'bg-amber-50 text-amber-700 border-amber-200',
-    User:  'bg-primary-50 text-primary-700 border-primary-200',
+    User:  '', // rendered via inline style (brand color) — see rolesHtml
     HOD:   'bg-violet-50 text-violet-700 border-violet-200',
   };
 
@@ -482,7 +482,7 @@ window.Pages.users = (() => {
           const actionCells = _isAdmin ? `
             <td class="table-td">
               <div class="flex gap-1.5 flex-wrap">
-                <button data-action="edit"   data-id="${esc(u.id)}" class="pill bg-primary-50 text-primary-700 hover:bg-primary-100 cursor-pointer">Edit</button>
+                <button data-action="edit"   data-id="${esc(u.id)}" class="pill pill-brand cursor-pointer" style="border:none;" onmouseenter="this.style.opacity='0.8'" onmouseleave="this.style.opacity='1'">Edit</button>
                 <button data-action="setpwd" data-id="${esc(u.id)}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer">Set Password</button>
                 <button data-action="delete" data-id="${esc(u.id)}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer">Delete</button>
               </div>
@@ -653,11 +653,9 @@ window.Pages.users = (() => {
     const isEdit   = !!_editingUser;
     const curRoles = normalizeRoles(_form.roles);
 
-    const initials = (_form.name || 'U').split(' ').filter(Boolean).slice(0, 2).map(n => n[0]).join('').toUpperCase() || 'U';
-
     const photoHtml = _picture
       ? `<img src="${esc(_picture)}" alt="" class="w-14 h-14 rounded-xl object-cover ring-2 ring-slate-100 shadow-sm" />`
-      : `<div class="w-14 h-14 rounded-xl bg-gradient-to-br from-primary-500 to-primary-700 grid place-items-center text-white text-base font-bold ring-2 ring-slate-100 shadow-sm">${esc(initials)}</div>`;
+      : window.UI.avatar(_form.name || 'U', { variant: 'brand', size: 56, shape: 'square' });
 
     const removePhotoBtn = _picture
       ? `<button id="um-remove-photo" type="button" class="text-xs text-red-500 hover:text-red-700 transition">Remove</button>`
@@ -667,8 +665,10 @@ window.Pages.users = (() => {
 
     const rolesHtml = ROLES.map(r => {
       const active = curRoles.includes(r);
-      const style  = active ? (ROLE_STYLE[r] || 'bg-primary-50 text-primary-700 border-primary-200') : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-600';
-      return `<button type="button" data-role="${esc(r)}" class="um-role-btn flex-1 py-2 text-xs rounded-xl border font-medium transition ${esc(style)}">${esc(r)}</button>`;
+      const isUser = r === 'User';
+      const style  = active ? (isUser ? '' : (ROLE_STYLE[r] || '')) : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-600';
+      const inlineStyle = active && isUser ? ' style="background:var(--color-primary-light);color:var(--color-primary-dark);border-color:var(--color-primary-ring);"' : '';
+      return `<button type="button" data-role="${esc(r)}" class="um-role-btn flex-1 py-2 text-xs rounded-xl border font-medium transition ${esc(style)}"${inlineStyle}>${esc(r)}</button>`;
     }).join('');
 
     const passwordField = !isEdit ? `
@@ -700,29 +700,11 @@ window.Pages.users = (() => {
         <div class="text-[10px] text-slate-400 mt-1.5">Format: name, email, password, role, user_role, phone, department</div>
       </div>` : '';
 
-    const html = `
-      <div id="users-modal-overlay" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-        <div id="users-modal-box" class="bg-white rounded-2xl shadow-2xl w-full max-w-[440px] overflow-hidden">
-
-          <!-- Header -->
-          <div class="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
-            <div class="w-9 h-9 rounded-xl bg-primary-50 text-primary-600 grid place-items-center shrink-0">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    const modalIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
-              </svg>
-            </div>
-            <div class="flex-1">
-              <h2 class="text-[15px] font-semibold text-slate-900">${isEdit ? 'Edit User' : 'Add User'}</h2>
-              <p class="text-[11px] text-slate-400 mt-0.5">${isEdit ? 'Update member details' : 'Create a new team member'}</p>
-            </div>
-            <button id="um-close" class="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          </div>
+              </svg>`;
 
-          <!-- Body -->
-          <div class="px-6 py-5 space-y-3 overflow-y-auto max-h-[calc(90vh-160px)]">
-
+    const bodyHTML = `
             <!-- Photo picker -->
             <div class="flex items-center gap-4 pb-1">
               <div class="shrink-0">${photoHtml}</div>
@@ -759,13 +741,13 @@ window.Pages.users = (() => {
                     <option value="__add_new__">+ Add new department</option>
                   </select>
                   <svg class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-                  <div id="um-dept-new-row" style="display:none;position:absolute;inset:0;z-index:10;background:#fff;border:1.5px solid #C4714A;border-radius:8px;padding:0 8px;align-items:center;gap:6px;">
+                  <div id="um-dept-new-row" style="display:none;position:absolute;inset:0;z-index:10;background:var(--surface);border:1.5px solid var(--color-primary);border-radius:8px;padding:0 8px;align-items:center;gap:6px;">
                     <input id="um-dept-new-input" type="text" placeholder="Type department name…"
-                      style="flex:1;border:none;outline:none;font-size:12.5px;color:#1e293b;background:transparent;width:100%;padding:0;" />
+                      style="flex:1;border:none;outline:none;font-size:12.5px;color:var(--text-primary);background:transparent;width:100%;padding:0;" />
                     <button type="button" id="um-dept-new-save"
-                      style="padding:3px 10px;background:#C4714A;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;">Add</button>
+                      style="padding:3px 10px;background:var(--color-primary);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;">Add</button>
                     <button type="button" id="um-dept-new-cancel"
-                      style="padding:3px 6px;background:transparent;color:#94a3b8;border:none;font-size:15px;cursor:pointer;line-height:1;flex-shrink:0;">✕</button>
+                      style="padding:3px 6px;background:transparent;color:var(--text-muted);border:none;font-size:15px;cursor:pointer;line-height:1;flex-shrink:0;">✕</button>
                   </div>
                 </div>
               </div>
@@ -778,16 +760,23 @@ window.Pages.users = (() => {
               <div class="flex gap-2">${rolesHtml}</div>
             </div>
 
-            ${bulkSection}
-          </div>
+            ${bulkSection}`;
 
-          <!-- Footer -->
-          <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
+    const footerHTML = `
             <button id="um-cancel" class="btn-secondary">Cancel</button>
-            <button id="um-save" class="btn-primary" ${_saving ? 'disabled' : ''}>${_saving ? 'Saving…' : 'Save'}</button>
-          </div>
-        </div>
-      </div>`;
+            <button id="um-save" class="btn-primary" ${_saving ? 'disabled' : ''}>${_saving ? 'Saving…' : 'Save'}</button>`;
+
+    const html = window.UI.modal({
+      id: 'users-modal-overlay',
+      title: isEdit ? 'Edit User' : 'Add User',
+      subtitle: isEdit ? 'Update member details' : 'Create a new team member',
+      icon: modalIcon,
+      width: 440,
+      closeButtonId: 'um-close',
+      hiddenByDefault: false,
+      bodyHTML,
+      footerHTML,
+    });
 
     if (existing) {
       existing.outerHTML = html;
@@ -955,13 +944,7 @@ window.Pages.users = (() => {
     const mismatch    = _pwdConfirm.length > 0 && _pwdPassword !== _pwdConfirm;
     const saveDisabled = _pwdSaving || mismatch;
 
-    const html = `
-      <div id="pwd-modal-overlay" class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-        <div id="pwd-modal-box" class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
-          <h2 class="text-lg font-semibold mb-1">Set Password</h2>
-          <p class="text-sm text-slate-500 mb-4">${esc(_pwdUser?.name || '')}</p>
-          <div class="space-y-4">
-
+    const bodyHTML = `
             <!-- New Password -->
             <div>
               <label class="label">New Password</label>
@@ -990,15 +973,21 @@ window.Pages.users = (() => {
               ${mismatch ? '<p class="text-red-500 text-xs mt-1">Passwords do not match</p>' : ''}
             </div>
 
-            ${_pwdError ? `<p class="text-red-500 text-sm">${esc(_pwdError)}</p>` : ''}
-          </div>
+            ${_pwdError ? `<p class="text-red-500 text-sm">${esc(_pwdError)}</p>` : ''}`;
 
-          <div class="flex justify-end gap-2 mt-6">
+    const footerHTML = `
             <button id="pwd-cancel" class="btn-secondary">Cancel</button>
-            <button id="pwd-save" class="btn-primary" ${saveDisabled ? 'disabled' : ''}>${_pwdSaving ? 'Saving...' : 'Set Password'}</button>
-          </div>
-        </div>
-      </div>`;
+            <button id="pwd-save" class="btn-primary" ${saveDisabled ? 'disabled' : ''}>${_pwdSaving ? 'Saving...' : 'Set Password'}</button>`;
+
+    const html = window.UI.modal({
+      id: 'pwd-modal-overlay',
+      title: 'Set Password',
+      subtitle: esc(_pwdUser?.name || ''),
+      width: 400,
+      hiddenByDefault: false,
+      bodyHTML,
+      footerHTML,
+    });
 
     if (existing) {
       existing.remove();
@@ -1012,8 +1001,8 @@ window.Pages.users = (() => {
     const mismatch = _pwdConfirm.length > 0 && _pwdPassword !== _pwdConfirm;
     const confInput = document.getElementById('pwd-confirm');
     if (confInput) {
-      confInput.style.borderColor = mismatch ? '#f87171' : '';
-      confInput.style.background  = mismatch ? '#fef2f2' : '';
+      confInput.style.borderColor = mismatch ? 'var(--color-danger-border)' : '';
+      confInput.style.background  = mismatch ? 'var(--color-danger-bg)' : '';
     }
     let errEl = document.getElementById('pwd-mismatch-err');
     if (mismatch) {
