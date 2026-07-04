@@ -156,12 +156,17 @@ window.Pages.dashboard = (function () {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     return data.pendingTasks
       .filter(t => {
-        if (subTab === 'Upcoming') {
-          if (t.type !== 'Delegation') return false;
+        if (subTab === 'Completed') {
+          if (t.status !== 'done') return false;
+        } else if (subTab === 'Shifted') {
+          if (t.status !== 'revise' && t.status !== 'revise_requested') return false;
+        } else if (subTab === 'Upcoming') {
+          if (t.type !== 'Delegation' || t.status === 'done') return false;
           const due = new Date(t.date); due.setHours(0, 0, 0, 0);
           if (!(due > today)) return false;
-        } else if (subTab !== 'All' && t.type !== subTab) {
-          return false;
+        } else {
+          if (t.status === 'done') return false;
+          if (subTab !== 'All' && t.type !== subTab) return false;
         }
         return userFilter === 'All' || t.doer === userFilter;
       })
@@ -327,20 +332,20 @@ window.Pages.dashboard = (function () {
 
         <!-- Stat cards -->
         <div id="db-stat-cards" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1rem;margin-bottom:20px;">
-          <div class="card db-stat-card" style="padding:20px;">
+          <div class="card db-stat-card" data-filter="All" style="padding:20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Pending</div>
             <div id="db-stat-pending" style="font-size:2.5rem;font-weight:800;color:#dc2626;">${data.pending || data.pendingTasks.length}</div>
             <div id="db-stat-revised" style="font-size:11px;font-weight:600;color:#d97706;margin-top:4px;${data.revised > 0 ? '' : 'display:none;'}">+ ${data.revised} shifted</div>
           </div>
-          <div class="card db-stat-card" style="padding:20px;">
+          <div class="card db-stat-card" data-filter="Shifted" style="padding:20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Shifted</div>
             <div id="db-stat-revised-count" style="font-size:2.5rem;font-weight:800;color:#d97706;">${data.revised || 0}</div>
           </div>
-          <div class="card db-stat-card" style="padding:20px;">
+          <div class="card db-stat-card" data-filter="Completed" style="padding:20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Completed</div>
             <div id="db-stat-completed" style="font-size:2.5rem;font-weight:800;color:#059669;">${data.completed}</div>
           </div>
-          <div class="card db-stat-card" style="padding:20px;">
+          <div class="card db-stat-card" data-filter="Upcoming" style="padding:20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:4px;">Upcoming</div>
             <div id="db-stat-upcoming" style="font-size:2.5rem;font-weight:800;color:#7c3aed;">${data.upcoming || 0}</div>
           </div>
@@ -780,7 +785,8 @@ window.Pages.dashboard = (function () {
     const countEl = document.getElementById('db-tasks-count');
     if (!table) return;
 
-    if (countEl) countEl.textContent = `${filtered.length} awaiting action`;
+    const countLabel = _state.subTab === 'Completed' ? 'completed' : _state.subTab === 'Shifted' ? 'shifted' : 'awaiting action';
+    if (countEl) countEl.textContent = `${filtered.length} ${countLabel}`;
 
     /* update tab button styles */
     document.querySelectorAll('.db-tab-btn').forEach(btn => {
@@ -796,8 +802,8 @@ window.Pages.dashboard = (function () {
           <div style="width:44px;height:44px;border-radius:14px;background:#ecfdf5;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
           </div>
-          <div style="font-size:13px;font-weight:600;color:#334155;">All caught up!</div>
-          <div style="font-size:12px;color:#94a3b8;margin-top:3px;">No pending tasks.</div>
+          <div style="font-size:13px;font-weight:600;color:#334155;">${_state.subTab === 'Completed' || _state.subTab === 'Shifted' ? 'Nothing here' : 'All caught up!'}</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:3px;">${_state.subTab === 'Completed' ? 'No completed tasks yet.' : _state.subTab === 'Shifted' ? 'No shifted tasks.' : 'No pending tasks.'}</div>
         </td></tr></tbody>`;
       return;
     }
@@ -811,9 +817,14 @@ window.Pages.dashboard = (function () {
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>` : '';
       const transferred = t.transferredFrom ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 6px;border-radius:5px;background:#fffbeb;color:#b45309;border:1px solid #fde68a;font-weight:600;" title="${t.transferredBy ? 'Transferred by ' + t.transferredBy : ''}">🔄 from ${t.transferredFrom}</span>` : '';
 
-      let actionHTML = `<button class="pill-act pill-done" data-action="done" data-id="${t.id}">Done</button>`;
-      if (t.type === 'Delegation') {
-        actionHTML += ` <button class="pill-act pill-revise" data-action="shift" data-id="${t.id}">Shift</button>`;
+      let actionHTML;
+      if (t.status === 'done') {
+        actionHTML = `<span style="color:#059669;font-weight:600;font-size:11.5px;">✓ Completed</span>`;
+      } else {
+        actionHTML = `<button class="pill-act pill-done" data-action="done" data-id="${t.id}">Done</button>`;
+        if (t.type === 'Delegation') {
+          actionHTML += ` <button class="pill-act pill-revise" data-action="shift" data-id="${t.id}">Shift</button>`;
+        }
       }
 
       return `<tr style="transition:background .1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
@@ -1105,6 +1116,15 @@ window.Pages.dashboard = (function () {
       btn.addEventListener('click', () => {
         _state.subTab = btn.dataset.tab;
         _updateTasksTable(admin);
+      });
+    });
+
+    /* ── stat cards (click to filter the tasks table) ── */
+    el.querySelectorAll('.db-stat-card[data-filter]').forEach(card => {
+      card.addEventListener('click', () => {
+        _state.subTab = card.dataset.filter;
+        _updateTasksTable(admin);
+        document.getElementById('db-tasks-table')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
     });
 

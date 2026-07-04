@@ -402,11 +402,13 @@ function computeDashboard(store, filter='all', doerFilter='') {
     (store.delegations||[]).forEach(d => {
       if (df && (d.doer||'').toLowerCase() !== df) return;
       total++;
-      if (d.status==='done') { completed++; }
-      else {
+      const due = new Date(d.dueDate||d.due_date); due.setHours(0,0,0,0);
+      if (d.status==='done') {
+        completed++;
+        items.push({ id:d.id, doerId:d.doerId, type:'Delegation', description:d.description, doer:d.doer, date:d.dueDate||d.due_date, client:d.client||'-', overdue:false, status:'done', priority:d.priority||'Low', url:d.url||'', remarks:d.remarks||'', transferredBy:d.transferredBy||null, transferredFrom:d.transferredFrom||null, createdAt:d.createdAt||d.created_at });
+      } else {
         pending++;
         if (d.status==='revise'||d.status==='revise_requested') revised++;
-        const due = new Date(d.dueDate||d.due_date); due.setHours(0,0,0,0);
         const isOverdue = due < now;
         if (due > now) upcoming++;
         items.push({ id:d.id, doerId:d.doerId, type:'Delegation', description:d.description, doer:d.doer, date:d.dueDate||d.due_date, client:d.client||'-', overdue:isOverdue, status:d.status||'pending', priority:d.priority||'Low', url:d.url||'', remarks:d.remarks||'', transferredBy:d.transferredBy||null, transferredFrom:d.transferredFrom||null, createdAt:d.createdAt||d.created_at });
@@ -418,9 +420,13 @@ function computeDashboard(store, filter='all', doerFilter='') {
     (store.masters||[]).forEach(m => {
       if (df && (m.assignedTo||'').toLowerCase() !== df) return;
       total++;
-      if (doneToday.has(m.id)) { completed++; return; }
-      pending++;
       const dateStr = m.startDate || now.toISOString();
+      if (doneToday.has(m.id)) {
+        completed++;
+        items.push({ id:m.id, doerId:m.doerId||null, type:'Checklist', description:m.task, doer:m.assignedTo, department:m.department||'', frequency:m.frequency||'', date:dateStr, client:'-', overdue:false, status:'done', remarks:m.remarks||'', createdAt:m.createdAt||m.created_at });
+        return;
+      }
+      pending++;
       const due = new Date(dateStr); due.setHours(0,0,0,0);
       const isOverdue = m.startDate ? due < now : false;
       items.push({ id:m.id, doerId:m.doerId||null, type:'Checklist', description:m.task, doer:m.assignedTo, department:m.department||'', frequency:m.frequency||'', date:dateStr, client:'-', overdue:isOverdue, status:'pending', remarks:m.remarks||'', createdAt:m.createdAt||m.created_at });
