@@ -157,6 +157,7 @@ window.Pages.dashboard = (function () {
     return data.pendingTasks
       .filter(t => {
         if (subTab === 'Upcoming') {
+          if (t.type !== 'Delegation') return false;
           const due = new Date(t.date); due.setHours(0, 0, 0, 0);
           if (!(due > today)) return false;
         } else if (subTab !== 'All' && t.type !== subTab) {
