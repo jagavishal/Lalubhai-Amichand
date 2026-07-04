@@ -426,9 +426,10 @@ function computeDashboard(store, filter='all', doerFilter='') {
         items.push({ id:m.id, doerId:m.doerId||null, type:'Checklist', description:m.task, doer:m.assignedTo, department:m.department||'', frequency:m.frequency||'', date:dateStr, client:'-', overdue:false, status:'done', remarks:m.remarks||'', createdAt:m.createdAt||m.created_at });
         return;
       }
-      pending++;
       const due = new Date(dateStr); due.setHours(0,0,0,0);
+      if (m.startDate && due > now) return; // not due yet — don't count as pending or show in the list
       const isOverdue = m.startDate ? due < now : false;
+      pending++;
       items.push({ id:m.id, doerId:m.doerId||null, type:'Checklist', description:m.task, doer:m.assignedTo, department:m.department||'', frequency:m.frequency||'', date:dateStr, client:'-', overdue:isOverdue, status:'pending', remarks:m.remarks||'', createdAt:m.createdAt||m.created_at });
     });
   }
