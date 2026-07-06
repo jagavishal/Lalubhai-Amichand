@@ -1104,6 +1104,41 @@ app.delete('/api/masters/all', requireAuth, requireAdmin, async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
+// Count checklist tasks whose due date (start_date) matches — used to preview before bulk delete
+app.get('/api/masters/count-by-date', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const date = req.query.date;
+    if (!date) return res.status(400).json({ error:'date required' });
+    if (!USE_DB) {
+      const store = await readStore();
+      const count = (store.masters||[]).filter(m => m.startDate === date).length;
+      return res.json({ count });
+    }
+    await ensureSchema();
+    const { rows } = await pool.query('SELECT COUNT(*) AS cnt FROM masters WHERE start_date = $1', [date]);
+    return res.json({ count: Number(rows[0].cnt) });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+// Delete all checklist tasks whose due date (start_date) matches (Admin/HOD only)
+app.delete('/api/masters/by-date', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const date = req.query.date;
+    if (!date) return res.status(400).json({ error:'date required' });
+    if (!USE_DB) {
+      const store = await readStore();
+      const before = (store.masters||[]).length;
+      store.masters = (store.masters||[]).filter(m => m.startDate !== date);
+      await writeStore(store);
+      return res.json({ success:true, deleted: before - store.masters.length });
+    }
+    await ensureSchema();
+    const backupId = await createBackup(`Before Delete Checklist Tasks due ${date}`).catch(()=>null);
+    const result = await pool.query('DELETE FROM masters WHERE start_date = $1', [date]);
+    return res.json({ success:true, deleted: result.rowCount, backupId });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
 // ── Checklist Completions ─────────────────────────────────────────────────────
 app.post('/api/checklist-completions', requireAuth, async (req, res) => {
   try {
