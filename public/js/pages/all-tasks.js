@@ -105,14 +105,24 @@ window.Pages['all-tasks'] = (function () {
 
   /* ─── data fetch ────────────────────────────────────────────────────────── */
   async function fetchData() {
-    const [delegations, masters, users] = await Promise.all([
+    const [delegations, masters, users, completions] = await Promise.all([
       Utils.apiFetch('/api/delegations'),
       Utils.apiFetch('/api/masters'),
       Utils.apiFetch('/api/users'),
+      Utils.apiFetch('/api/checklist-completions'),
     ]);
     if (!delegations || !masters || !users) return false;
 
     _users = users;
+
+    // A checklist master is "done" once it has a completion recorded for
+    // today — matches the doneToday logic computeDashboard() uses server-side.
+    const todayStr = new Date().toISOString().split('T')[0];
+    const doneTodayIds = new Set(
+      (completions || [])
+        .filter(c => (c.date || '').slice(0, 10) === todayStr)
+        .map(c => c.master_id || c.masterId)
+    );
 
     // Build grouped structure: merge delegations + checklist masters
     const allTasks = [
@@ -125,7 +135,7 @@ window.Pages['all-tasks'] = (function () {
         delegatedBy: null,
         dueDate:     m.startDate || null,
         client:      '',
-        status:      'pending',
+        status:      doneTodayIds.has(m.id) ? 'done' : 'pending',
         type:        'Checklist',
         priority:    'Low',
         remarks:     m.remarks || '',
