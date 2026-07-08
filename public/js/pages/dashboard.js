@@ -785,7 +785,8 @@ window.Pages.dashboard = (function () {
 
       let actionHTML;
       if (t.status === 'done') {
-        actionHTML = `<span style="color:#059669;font-weight:600;font-size:11.5px;">✓ Completed</span>`;
+        actionHTML = `<span style="color:#059669;font-weight:600;font-size:11.5px;">✓ Completed</span>
+          <button class="pill-act pill-deny" data-action="reopen" data-id="${t.id}">Reopen</button>`;
       } else {
         actionHTML = `<button class="pill-act pill-done" data-action="done" data-id="${t.id}">Done</button>`;
         if (t.type === 'Delegation') {
@@ -839,8 +840,9 @@ window.Pages.dashboard = (function () {
         const task = _state.data.pendingTasks.find(t => t.id === id);
         if (!task) return;
         const action = btn.dataset.action;
-        if (action === 'done')  markDone(task, admin);
-        if (action === 'shift') openShiftModal(task, admin);
+        if (action === 'done')   markDone(task, admin);
+        if (action === 'shift')  openShiftModal(task, admin);
+        if (action === 'reopen') reopenTask(task, admin);
       });
     });
   }
@@ -1599,6 +1601,24 @@ window.Pages.dashboard = (function () {
       await _refresh(admin);
     } catch (err) {
       Utils.showToast(err.message || 'Failed to mark done.', 'error');
+    }
+  }
+
+  async function reopenTask(task, admin) {
+    if (!await Utils.showConfirm('This will move the task back to pending.', { title: 'Reopen Task', confirmText: 'Reopen' })) return;
+    try {
+      if (task.type === 'Delegation') {
+        await Utils.apiFetch('/api/delegations', {
+          method: 'PATCH',
+          body: JSON.stringify({ id: task.id, status: 'pending' }),
+        });
+      } else if (task.type === 'Checklist') {
+        await Utils.apiFetch('/api/checklist-completions?masterId=' + encodeURIComponent(task.id), { method: 'DELETE' });
+      }
+      Utils.showToast('Task reopened.');
+      await _refresh(admin);
+    } catch (err) {
+      Utils.showToast(err.message || 'Failed to reopen task.', 'error');
     }
   }
 

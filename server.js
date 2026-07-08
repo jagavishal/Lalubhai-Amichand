@@ -826,10 +826,10 @@ app.patch('/api/delegations', requireAuth, async (req, res) => {
       let newStatus = body.status;
       if (newStatus) del.status = newStatus;
       if (newStatus==='done') del.completedAt = new Date().toISOString();
+      else if (newStatus) del.completedAt = null;
       if (body.dueDate) del.dueDate=body.dueDate;
       if (body.remarks!==undefined) del.remarks=body.remarks;
       if (body.approval!==undefined) del.approval=body.approval;
-      if (newStatus==='done') del.completedAt=new Date().toISOString();
       await writeStore(store);
       return res.json(del);
     }
@@ -850,10 +850,12 @@ app.patch('/api/delegations', requireAuth, async (req, res) => {
 
     if (!body.id) return res.status(400).json({ error:'id required' });
     const status = body.status ?? null;
-    const completedAt = status === 'done' ? new Date() : null;
+    // COALESCE can't express "clear this field" (a null param means "don't touch"),
+    // so reopening (status set to anything other than 'done') needs its own branch.
+    const completedAtSql = status === 'done' ? 'NOW()' : status ? 'NULL' : 'completed_at';
     await pool.query(
-      `UPDATE delegations SET status=COALESCE($1,status), description=COALESCE($2,description), due_date=COALESCE($3,due_date), client=COALESCE($4,client), priority=COALESCE($5,priority), approval=COALESCE($6,approval), url=COALESCE($7,url), remarks=COALESCE($8,remarks), completed_at=COALESCE($9,completed_at) WHERE id=$10`,
-      [status, body.description??null, body.dueDate??null, body.client??null, body.priority??null, body.approval??null, body.url??null, body.remarks??null, completedAt, body.id]
+      `UPDATE delegations SET status=COALESCE($1,status), description=COALESCE($2,description), due_date=COALESCE($3,due_date), client=COALESCE($4,client), priority=COALESCE($5,priority), approval=COALESCE($6,approval), url=COALESCE($7,url), remarks=COALESCE($8,remarks), completed_at=${completedAtSql} WHERE id=$9`,
+      [status, body.description??null, body.dueDate??null, body.client??null, body.priority??null, body.approval??null, body.url??null, body.remarks??null, body.id]
     );
     const result = await q('SELECT * FROM delegations WHERE id = $1', [body.id]);
     if (!result.length) return res.status(404).json({ error:'Not found' });
@@ -1157,6 +1159,18 @@ app.get('/api/checklist-completions', requireAuth, async (req, res) => {
   await ensureSchema();
   const { rows } = await pool.query('SELECT * FROM checklist_completions ORDER BY completed_at DESC');
   return res.json(rows);
+});
+
+// Reopen a checklist task: undo today's completion so it shows as pending again.
+app.delete('/api/checklist-completions', requireAuth, async (req, res) => {
+  try {
+    const masterId = req.query.masterId;
+    if (!masterId) return res.status(400).json({ error:'masterId required' });
+    if (!USE_DB) return res.json({ success:true });
+    await ensureSchema();
+    await pool.query('DELETE FROM checklist_completions WHERE master_id=$1 AND date=CURRENT_DATE', [masterId]);
+    return res.json({ success:true });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
 // ── Daily Tasks ───────────────────────────────────────────────────────────────

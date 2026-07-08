@@ -181,6 +181,24 @@ window.Pages['all-tasks'] = (function () {
     }
   }
 
+  async function reopenTask(id, type) {
+    if (!await Utils.showConfirm('This will move the task back to pending.', { title: 'Reopen Task', confirmText: 'Reopen' })) return;
+    try {
+      if (type === 'Checklist') {
+        await Utils.apiFetch('/api/checklist-completions?masterId=' + encodeURIComponent(id), { method: 'DELETE' });
+      } else {
+        await Utils.apiFetch('/api/delegations', {
+          method: 'PATCH',
+          body: JSON.stringify({ id, status: 'pending' }),
+        });
+      }
+      Utils.showToast('Task reopened');
+      await reload();
+    } catch (e) {
+      Utils.showToast(e.message, 'error');
+    }
+  }
+
   async function deleteTask(id, type) {
     if (!await Utils.showConfirm('This will permanently remove the task.', { title: 'Delete Task', confirmText: 'Delete', danger: true })) return;
     try {
@@ -289,7 +307,7 @@ window.Pages['all-tasks'] = (function () {
       ? (t.type === 'Checklist'
           ? `<button class="at-pill-btn at-pill-green" onclick="window._atChecklistDone('${esc(t.id)}')">Done</button>`
           : `<button class="at-pill-btn at-pill-green" onclick="window._atMarkDone('${esc(t.id)}')">Done</button>`)
-      : '';
+      : `<button class="at-pill-btn at-pill-gray" onclick="window._atReopenTask('${esc(t.id)}','${esc(t.type)}')">Reopen</button>`;
 
     const reviseBtn = (canRevise && t.type !== 'Checklist')
       ? `<button class="at-pill-btn at-pill-amber" onclick="window._atMarkRevise('${esc(t.id)}')">Shifted</button>`
@@ -489,6 +507,7 @@ window.Pages['all-tasks'] = (function () {
         .at-pill-btn:hover { opacity:0.8 }
         .at-pill-green { background:var(--color-success-bg);color:var(--color-success-text) }
         .at-pill-amber { background:var(--color-warning-bg);color:var(--color-warning-text) }
+        .at-pill-gray  { background:var(--color-neutral-bg);color:var(--color-neutral-text) }
         .at-action-btn { width:28px;height:28px;border-radius:6px;display:grid;place-items:center;border:none;cursor:pointer;background:transparent;transition:background 0.15s }
         .at-btn-amber { color:var(--color-warning) } .at-btn-amber:hover { background:var(--color-warning-bg) }
         .at-btn-red   { color:var(--color-danger) }  .at-btn-red:hover   { background:var(--color-danger-bg) }
@@ -618,6 +637,7 @@ window.Pages['all-tasks'] = (function () {
   window._atMarkDone = (id) => updateStatus(id, 'done');
   window._atMarkRevise = (id) => updateStatus(id, 'revise');
   window._atChecklistDone = (id) => markChecklistDone(id);
+  window._atReopenTask = (id, type) => reopenTask(id, type);
   window._atDeleteTask = (id, type) => deleteTask(id, type);
   window._atEditTask = (id) => {
     const task = _grouped.flatMap(g => g.tasks).find(t => t.id === id);
