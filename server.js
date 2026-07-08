@@ -688,7 +688,12 @@ app.get('/api/auth/session', async (req, res) => {
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 app.get('/api/dashboard', requireAuth, async (req, res) => {
   const store = await readStore();
-  const doer = req.query.doer || '';
+  const user = req.session.user;
+  const roles = Array.isArray(user.roles) ? user.roles : String(user.roles||'').split(',').map(r=>r.trim());
+  const isAdminUser = roles.includes('Admin') || roles.includes('HOD');
+  // Non-admins only ever see their own tasks — ignore any doer they pass in,
+  // admins can filter by any doer (or leave it blank to see everyone's).
+  const doer = isAdminUser ? (req.query.doer || '') : (user.name || '');
   return res.json(computeDashboard(store, 'all', doer));
 });
 
