@@ -124,6 +124,30 @@ window.Pages.login = {
                 </div>
               </div>
 
+              <!-- Name (only shown when the email is shared by more than one account) -->
+              <div id="login-name-field" style="display:none;">
+                <label class="label" style="margin-bottom:6px;">Full Name</label>
+                <div style="position: relative;">
+                  <span style="
+                    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+                    color: var(--text-muted); display: flex; pointer-events: none;
+                  ">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+                    </svg>
+                  </span>
+                  <input
+                    id="login-name"
+                    class="input login-input"
+                    type="text"
+                    placeholder="Enter your full name"
+                    autocomplete="off"
+                    style="padding-left: 36px; border-radius: 10px;"
+                  />
+                </div>
+                <p style="font-size:11px;color:var(--text-muted);margin:4px 0 0;">Multiple accounts use this email — enter your name to continue.</p>
+              </div>
+
               <!-- Password -->
               <div>
                 <label class="label" style="margin-bottom:6px;">Password</label>
@@ -222,6 +246,8 @@ window.Pages.login = {
 
     const form        = el.querySelector('#login-form');
     const emailInput  = el.querySelector('#login-email');
+    const nameField   = el.querySelector('#login-name-field');
+    const nameInput   = el.querySelector('#login-name');
     const passInput   = el.querySelector('#login-password');
     const toggleBtn   = el.querySelector('#login-toggle-pass');
     const eyeShow     = el.querySelector('#login-eye-show');
@@ -265,30 +291,27 @@ window.Pages.login = {
 
       const email    = emailInput.value.trim();
       const password = passInput.value;
+      const name     = nameInput.value.trim();
 
       try {
-        let res;
-        if (window.Utils && window.Utils.apiFetch) {
-          const raw = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password }),
-          });
-          const json = await raw.json();
-          if (!raw.ok) throw new Error(json.error || 'Invalid email or password');
-          res = json;
-        } else {
-          const raw = await fetch('/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password }),
-          });
-          const json = await raw.json();
-          if (!raw.ok) throw new Error(json.error || 'Invalid email or password');
-          res = json;
+        const raw = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(name ? { email, password, name } : { email, password }),
+        });
+        const json = await raw.json();
+        if (!raw.ok) {
+          if (json.needsName && nameField.style.display === 'none') {
+            nameField.style.display = '';
+            nameInput.focus();
+            showError(json.error || 'Multiple accounts use this email — please also enter your name.');
+            setLoading(false);
+            return;
+          }
+          throw new Error(json.error || 'Invalid email or password');
         }
 
-        const data = res;
+        const data = json;
 
         window.currentUser = data.user;
 

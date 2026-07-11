@@ -163,8 +163,9 @@ async function sql(strings, ...values) {
 }
 
 const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS users (id VARCHAR(16) PRIMARY KEY, name VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL UNIQUE, phone VARCHAR(64) DEFAULT '', department VARCHAR(128) DEFAULT '', roles VARCHAR(128) DEFAULT 'User', active SMALLINT NOT NULL DEFAULT 1, password_hash VARCHAR(255) DEFAULT NULL, picture TEXT DEFAULT NULL, force_logout_after DATETIME DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS users (id VARCHAR(16) PRIMARY KEY, name VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL, phone VARCHAR(64) DEFAULT '', department VARCHAR(128) DEFAULT '', roles VARCHAR(128) DEFAULT 'User', active SMALLINT NOT NULL DEFAULT 1, password_hash VARCHAR(255) DEFAULT NULL, picture TEXT DEFAULT NULL, force_logout_after DATETIME DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(name, email)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_users_name ON users (name)`,
+  `CREATE INDEX idx_users_email ON users (email)`,
   `CREATE TABLE IF NOT EXISTS delegations (id VARCHAR(16) PRIMARY KEY, description TEXT NOT NULL, doer_id VARCHAR(16), doer VARCHAR(255) NOT NULL DEFAULT '', delegated_by VARCHAR(16), due_date DATE, client VARCHAR(255) DEFAULT '', status VARCHAR(32) NOT NULL DEFAULT 'pending', type VARCHAR(32) NOT NULL DEFAULT 'delegation', priority VARCHAR(32) DEFAULT 'Low', approval VARCHAR(64) DEFAULT 'No Approval', url VARCHAR(500) DEFAULT '', remarks TEXT, completed_at DATETIME DEFAULT NULL, revise_action VARCHAR(32) DEFAULT NULL, transferred_by VARCHAR(255) DEFAULT NULL, transferred_from VARCHAR(255) DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_del_doer ON delegations (doer)`,
   `CREATE INDEX idx_del_status ON delegations (status)`,
@@ -253,6 +254,25 @@ async function fixCollations() {
   }
 }
 
+// One-time best-effort migration for pre-existing DBs: users.email used to be UNIQUE
+// on its own; multiple employees can now share one email (e.g. a shared department
+// inbox), so uniqueness moved to the (name, email) pair. Each statement is tried
+// independently so an already-migrated DB (or a fresh one created from SCHEMA above,
+// which never had the old constraint) just no-ops through every attempt.
+async function relaxEmailUnique() {
+  if (!USE_DB) return;
+  const attempts = [
+    `ALTER TABLE users DROP INDEX email`,
+    `ALTER TABLE users DROP CONSTRAINT users_email_key`,
+    `ALTER TABLE users ADD CONSTRAINT users_name_email_key UNIQUE (name, email)`,
+    `ALTER TABLE users ADD UNIQUE INDEX users_name_email_key (name, email)`,
+    `CREATE INDEX idx_users_email ON users (email)`,
+  ];
+  for (const sql of attempts) {
+    try { await pool.query(sql); } catch (_) {}
+  }
+}
+
 async function ensureSchema() {
   if (!USE_DB) return;
   if (g.__pg_schema_ready) return g.__pg_schema_ready;
@@ -267,6 +287,7 @@ async function ensureSchema() {
     }
     await seedIfEmpty();
     fixCollations().catch(() => {});
+    relaxEmailUnique().catch(() => {});
   })();
   return g.__pg_schema_ready;
 }
@@ -589,6 +610,12 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function isAdminUser(user) {
+  const roles = user?.roles || [];
+  const rolesArr = Array.isArray(roles) ? roles : String(roles).split(',').map(r=>r.trim());
+  return rolesArr.includes('Admin') || rolesArr.includes('HOD');
+}
+
 function checkSecret(req) {
   const secret = req.query.secret;
   return secret && secret === process.env.DEVELOPER_SECRET;
@@ -597,8 +624,10 @@ function checkSecret(req) {
 // ── Auth routes ───────────────────────────────────────────────────────────────
 app.post('/api/auth/login', async (req, res) => {
   try {
-    let { email, password } = req.body;
+    let { email, password, name } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'email and password required' });
+    email = email.trim();
+    name = (name || '').trim();
 
     // Check app_active
     let appActive = true;
@@ -610,27 +639,40 @@ app.post('/api/auth/login', async (req, res) => {
     }
     if (!appActive) return res.status(403).json({ error: 'App is currently disabled' });
 
-    let user = null;
+    // Multiple accounts can share the same email (e.g. a shared department inbox) —
+    // name only needs to be collected when the email alone doesn't resolve to one user.
+    let matches = [];
     if (USE_DB) {
       try {
         await ensureSchema();
-        const { rows } = await pool.query('SELECT * FROM users WHERE email = $1 AND active = 1', [email]);
-        user = rows[0] || null;
+        const { rows } = await pool.query('SELECT * FROM users WHERE LOWER(email) = LOWER($1) AND active = 1', [email]);
+        matches = rows;
       } catch (err) {
         console.error('[auth] Postgres error:', err.message);
       }
     }
-    if (!user) {
+    if (!matches.length) {
       try {
         // Auto-seed admin on first login attempt if store is empty
         await seedJsonFallback();
         const store = await readStore();
-        user = (store.users || []).find(u => u.email === email && u.active !== false) || null;
+        matches = (store.users || []).filter(u => (u.email||'').toLowerCase() === email.toLowerCase() && u.active !== false);
       } catch (err) {
         console.error('[auth] store error:', err.message);
       }
     }
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!matches.length) return res.status(401).json({ error: 'Invalid credentials' });
+
+    let user = null;
+    if (matches.length === 1) {
+      user = matches[0];
+    } else if (!name) {
+      return res.status(409).json({ error: 'Multiple accounts use this email. Please also enter your name.', needsName: true });
+    } else {
+      const named = matches.filter(u => (u.name||'').trim().toLowerCase() === name.toLowerCase());
+      if (named.length !== 1) return res.status(401).json({ error: 'Invalid credentials' });
+      user = named[0];
+    }
 
     if (!user.password_hash) {
       if (password !== DEFAULT_PASSWORD) return res.status(401).json({ error: 'Invalid credentials' });
@@ -704,6 +746,7 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
     const { filter, myRevise } = req.query;
     const userId = req.session?.user?.id;
     const userName = req.session?.user?.name || '';
+    const isAdmin = isAdminUser(req.session?.user);
 
     if (!USE_DB) {
       const store = await readStore();
@@ -718,6 +761,8 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
       if (filter === 'revise_requested') rows = rows.filter(d => d.status === 'revise_requested');
       else if (filter === 'approval_required') rows = rows.filter(d => d.approval === 'Approval Required' && d.status === 'pending');
       else if (myRevise === 'true') rows = rows.filter(d => (d.doerId === userId || d.doer === userName) && d.status === 'revise');
+      // Non-admins only ever see tasks assigned to them or delegated by them — never the whole company's.
+      else if (!isAdmin) rows = rows.filter(d => d.doerId === userId || (d.doer || '').toLowerCase() === userName.toLowerCase() || d.delegatedBy === userId);
       return res.json(rows);
     }
 
@@ -728,6 +773,9 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
     else if (myRevise === 'true') {
       sqlWhere = `WHERE (doer_id=$1 OR doer=$2) AND status='revise'`;
       params.push(userId, userName);
+    } else if (!isAdmin) {
+      sqlWhere = `WHERE (doer_id=$1 OR LOWER(doer)=LOWER($2) OR delegated_by=$3)`;
+      params.push(userId, userName, userId);
     }
 
     const rows = await q(`SELECT id, description, doer_id AS "doerId", doer, delegated_by AS "delegatedBy", due_date AS "dueDate", client, status, type, priority, approval, url, remarks, transferred_by AS "transferredBy", transferred_from AS "transferredFrom", created_at AS "createdAt", completed_at AS "completedAt" FROM delegations ${sqlWhere} ORDER BY created_at DESC`, params);
@@ -1026,13 +1074,19 @@ app.get('/api/vendor-submissions', requireAuth, async (req, res) => {
 
 // ── Masters (Checklist Masters) ───────────────────────────────────────────────
 app.get('/api/masters', requireAuth, async (req, res) => {
+  const isAdmin = isAdminUser(req.session?.user);
+  const userName = (req.session?.user?.name || '').toLowerCase();
   if (!USE_DB) {
     const store = await readStore();
-    return res.json(store.masters||[]);
+    let rows = store.masters||[];
+    if (!isAdmin) rows = rows.filter(m => (m.assignedTo||'').toLowerCase() === userName);
+    return res.json(rows);
   }
   await ensureSchema();
   const { rows } = await pool.query('SELECT * FROM masters ORDER BY created_at DESC');
-  return res.json(rows.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) })));
+  let mapped = rows.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) }));
+  if (!isAdmin) mapped = mapped.filter(m => m.assignedTo.toLowerCase() === userName);
+  return res.json(mapped);
 });
 
 app.post('/api/masters', requireAuth, async (req, res) => {
@@ -1162,6 +1216,13 @@ app.post('/api/checklist-completions', requireAuth, async (req, res) => {
 
 app.get('/api/checklist-completions', requireAuth, async (req, res) => {
   await ensureSchema();
+  if (!isAdminUser(req.session?.user)) {
+    const { rows } = await pool.query(
+      `SELECT cc.* FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(m.assigned_to) = LOWER($1) ORDER BY cc.completed_at DESC`,
+      [req.session?.user?.name || '']
+    );
+    return res.json(rows);
+  }
   const { rows } = await pool.query('SELECT * FROM checklist_completions ORDER BY completed_at DESC');
   return res.json(rows);
 });
@@ -1229,7 +1290,7 @@ app.post('/api/users', requireAuth, async (req, res) => {
         for (const [i,row] of body.bulk.entries()) {
           const name=(row.name||'').trim(); const email=(row.email||'').trim().toLowerCase();
           if (!name||!email) { errors.push(`Row ${i+1}: name/email missing`); continue; }
-          if (store.users.find(u=>u.email===email)) { errors.push(`Row ${i+1}: ${email} already exists`); continue; }
+          if (store.users.find(u=>(u.email||'').toLowerCase()===email && (u.name||'').trim().toLowerCase()===name.toLowerCase())) { errors.push(`Row ${i+1}: ${name} <${email}> already exists`); continue; }
           const lastNum = store.users.reduce((max,u)=>{ const n=parseInt((u.id||'').replace(/[^0-9]/g,''))||0; return n>max?n:max; },0);
           const id = 'U'+(lastNum+1).toString().padStart(3,'0');
           const roles = parseRoles(row.role||'', row.user_role||'');
@@ -1246,8 +1307,8 @@ app.post('/api/users', requireAuth, async (req, res) => {
       for (const [i,row] of body.bulk.entries()) {
         const name=(row.name||'').trim(); const email=(row.email||'').trim().toLowerCase();
         if (!name||!email) { errors.push(`Row ${i+1}: name/email missing`); continue; }
-        const ex = await q('SELECT id FROM users WHERE email = $1', [email]);
-        if (ex.length) { errors.push(`Row ${i+1}: ${email} already exists`); continue; }
+        const ex = await q('SELECT id FROM users WHERE LOWER(email) = $1 AND LOWER(name) = $2', [email, name.toLowerCase()]);
+        if (ex.length) { errors.push(`Row ${i+1}: ${name} <${email}> already exists`); continue; }
         lastNum++;
         const id = 'U'+lastNum.toString().padStart(3,'0');
         const roles = parseRoles(row.role||'', row.user_role||'');
@@ -1273,7 +1334,7 @@ app.post('/api/users', requireAuth, async (req, res) => {
   if (!USE_DB) {
     const store = await readStore();
     const users = store.users||[];
-    if (users.find(u=>u.email===body.email)) return res.status(400).json({ error:'Email already exists' });
+    if (users.find(u=>(u.email||'').toLowerCase()===body.email.trim().toLowerCase() && (u.name||'').trim().toLowerCase()===body.name.trim().toLowerCase())) return res.status(400).json({ error:'A user with this name and email already exists' });
     const lastNum = users.reduce((max,u)=>{ const n=parseInt((u.id||'').replace('U',''))||0; return n>max?n:max; },0);
     const id = 'U'+(lastNum+1).toString().padStart(3,'0');
     const roles = body.roles?.length ? body.roles : ['User'];
@@ -1285,8 +1346,8 @@ app.post('/api/users', requireAuth, async (req, res) => {
 
   try {
     await ensureSchema();
-    const ex = await q('SELECT id FROM users WHERE email = $1', [body.email.trim().toLowerCase()]);
-    if (ex.length) return res.status(400).json({ error: 'Email already exists' });
+    const ex = await q('SELECT id FROM users WHERE LOWER(email) = $1 AND LOWER(name) = $2', [body.email.trim().toLowerCase(), body.name.trim().toLowerCase()]);
+    if (ex.length) return res.status(400).json({ error: 'A user with this name and email already exists' });
     const last = await q('SELECT id FROM users ORDER BY id DESC LIMIT 1');
     const lastNum = last.length ? (parseInt((last[0].id||'U000').replace(/[^0-9]/g,''))||0) : 0;
     const id = 'U'+(lastNum+1).toString().padStart(3,'0');
