@@ -226,7 +226,7 @@ window.Pages['help-ticket'] = (() => {
       const transferredBadge = t.transferred_to
         ? `<div style="font-size:10px;color:#3b82f6;margin-top:2px;">→ ${esc(t.transferred_to)}</div>` : '';
 
-      const statusCell = admin
+      const statusCell = (admin && t.status !== 'resolved')
         ? `<select class="ht-status-sel" data-id="${esc(t.id)}" style="font-size:11px;font-weight:600;border:1.5px solid ${ss.color}33;border-radius:7px;padding:3px 8px;cursor:pointer;background:${ss.bg};color:${ss.color};">
             ${['open','in-progress','resolved'].map(s => `<option value="${s}" ${t.status===s?'selected':''}>${STATUS_STYLE[s]?.label||s}</option>`).join('')}
            </select>`
