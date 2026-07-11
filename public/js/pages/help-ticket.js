@@ -51,7 +51,14 @@ window.Pages['help-ticket'] = (() => {
       await Utils.apiFetch('/api/help-tickets', { method: 'PATCH', body: JSON.stringify({ id, status }) });
       const t = _tickets.find(x => x.id === id);
       if (t) t.status = status;
+      renderPage();
     } catch (e) { Utils.showToast(e.message || 'Failed', 'error'); }
+  }
+
+  async function reopenTicket(id) {
+    if (!await Utils.showConfirm('This will reopen the ticket and set its status back to Open.', { title: 'Reopen Ticket', confirmText: 'Reopen' })) return;
+    await updateStatus(id, 'open');
+    Utils.showToast('Ticket reopened');
   }
 
   async function transferTicket(id, toName) {
@@ -72,6 +79,7 @@ window.Pages['help-ticket'] = (() => {
       await Utils.apiFetch('/api/help-tickets', { method: 'POST', body: JSON.stringify(_form) });
       _modalOpen = false; _saving = false;
       _form = { name: '', filedBy: '', subject: '', description: '', date: '', priority: 'Medium' };
+      renderModal();
       await loadData(); renderPage();
       Utils.showToast('Ticket submitted');
     } catch (e) {
@@ -219,7 +227,7 @@ window.Pages['help-ticket'] = (() => {
         ? `<div style="font-size:10px;color:#3b82f6;margin-top:2px;">→ ${esc(t.transferred_to)}</div>` : '';
 
       const statusCell = admin
-        ? `<select class="ht-status-sel" data-id="${esc(t.id)}" style="font-size:11px;border:1.5px solid #e2e8f0;border-radius:7px;padding:3px 8px;cursor:pointer;background:#fff;">
+        ? `<select class="ht-status-sel" data-id="${esc(t.id)}" style="font-size:11px;font-weight:600;border:1.5px solid ${ss.color}33;border-radius:7px;padding:3px 8px;cursor:pointer;background:${ss.bg};color:${ss.color};">
             ${['open','in-progress','resolved'].map(s => `<option value="${s}" ${t.status===s?'selected':''}>${STATUS_STYLE[s]?.label||s}</option>`).join('')}
            </select>`
         : `<span style="font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;background:${ss.bg};color:${ss.color}">${ss.label}</span>`;
@@ -230,7 +238,15 @@ window.Pages['help-ticket'] = (() => {
             Transfer
            </button>` : '';
 
-      return `<tr style="transition:background .1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+      const reopenBtn = (admin && t.status === 'resolved')
+        ? `<button class="ht-reopen-btn" data-id="${esc(t.id)}" style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:600;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;cursor:pointer;">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v5h5"/></svg>
+            Reopen
+           </button>` : '';
+
+      const rowBg = t.status === 'resolved' ? '#f0fdf4' : '';
+
+      return `<tr style="transition:background .1s;background:${rowBg};" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='${rowBg}'">
         <td style="padding:11px 14px;font-size:13px;font-weight:600;color:#0f172a;">
           ${esc(displayName)}${transferredBadge}
         </td>
@@ -242,7 +258,7 @@ window.Pages['help-ticket'] = (() => {
           <span style="font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;background:${ps.bg};color:${ps.color}">${esc(t.priority||'Medium')}</span>
         </td>
         <td style="padding:11px 14px;">${statusCell}</td>
-        ${admin ? `<td style="padding:11px 14px;">${transferBtn}</td>` : ''}
+        ${admin ? `<td style="padding:11px 14px;"><div style="display:flex;align-items:center;gap:6px;">${transferBtn}${reopenBtn}</div></td>` : ''}
       </tr>`;
     }).join('');
 
@@ -285,6 +301,9 @@ window.Pages['help-ticket'] = (() => {
     });
     el.querySelectorAll('.ht-transfer-btn').forEach(btn => {
       btn.addEventListener('click', () => openTransferModal(btn.dataset.id));
+    });
+    el.querySelectorAll('.ht-reopen-btn').forEach(btn => {
+      btn.addEventListener('click', () => reopenTicket(btn.dataset.id));
     });
   }
 
