@@ -24,6 +24,7 @@ window.Pages['client-master'] = (() => {
   let _phRows       = [];
   let _phMonth      = '';
   let _phOpenBatch  = null;
+  let _phBillsVendor = null;
 
   /* ── Helpers ────────────────────────────────────────────────── */
   function _blankForm() {
@@ -835,10 +836,10 @@ window.Pages['client-master'] = (() => {
       + '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
         + '<thead><tr><th style="' + thS + '">#</th><th style="' + thS + '">Vendor</th><th style="' + thS + 'text-align:right;">Payments</th><th style="' + thS + 'text-align:right;">Total Amount</th></tr></thead>'
         + '<tbody>' + topVendors.map((v, i) =>
-            '<tr style="' + (i%2===1?'background:#fafbfc;':'') + '">'
+            '<tr class="ph-vendor-row" data-vendor="' + esc(v.name) + '" style="cursor:pointer;' + (i%2===1?'background:#fafbfc;':'') + '" title="Click to view this vendor\'s bills" onmouseenter="this.style.background=\'#f8fafc\'" onmouseleave="this.style.background=\'' + (i%2===1?'#fafbfc':'') + '\'">'
             + '<td style="' + tdS + 'color:#94a3b8;font-weight:600;">' + (i+1) + '</td>'
             + '<td style="' + tdS + 'font-weight:600;color:#1e293b;">' + esc(v.name) + '</td>'
-            + '<td style="' + tdS + 'text-align:right;">' + v.count + '</td>'
+            + '<td style="' + tdS + 'text-align:right;"><span style="color:var(--color-primary);font-weight:700;text-decoration:underline;text-underline-offset:2px;">' + v.count + '</span></td>'
             + '<td style="' + tdS + 'font-weight:700;color:#059669;text-align:right;">' + _phAmt(v.total) + '</td>'
             + '</tr>'
           ).join('')
@@ -941,6 +942,67 @@ window.Pages['client-master'] = (() => {
         _bindHistoryTabEvents();
       });
     });
+    document.querySelectorAll('.ph-vendor-row').forEach(row => {
+      row.addEventListener('click', () => {
+        _phBillsVendor = row.dataset.vendor;
+        _renderVendorBillsModal();
+      });
+    });
+  }
+
+  function _closeVendorBills() {
+    _phBillsVendor = null;
+    const modal = document.getElementById('cm-vendor-bills-modal');
+    if (modal) modal.innerHTML = '';
+  }
+
+  function _renderVendorBillsModal() {
+    const modal = document.getElementById('cm-vendor-bills-modal');
+    if (!modal) return;
+    if (!_phBillsVendor) { modal.innerHTML = ''; return; }
+
+    const rows = _phRows
+      .filter(r => (r.vendor_name || r.vendor_id || 'Unknown') === _phBillsVendor)
+      .sort((a, b) => new Date(b.exported_at) - new Date(a.exported_at));
+    const total = rows.reduce((s, r) => s + parseFloat(r.amount || 0), 0);
+
+    const thS = 'padding:9px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;background:#f8fafc;text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;';
+    const tdS = 'padding:9px 14px;font-size:12.5px;color:#374151;border-bottom:1px solid #f1f5f9;';
+
+    const rowsHtml = rows.length === 0
+      ? '<tr><td colspan="5" style="' + tdS + 'text-align:center;color:#94a3b8;padding:24px;">No bills found for this vendor.</td></tr>'
+      : rows.map((r, i) =>
+          '<tr style="' + (i%2===1?'background:#fafbfc;':'') + '">'
+          + '<td style="' + tdS + 'color:#94a3b8;">' + (i+1) + '</td>'
+          + '<td style="' + tdS + 'white-space:nowrap;">' + _phFmt(r.exported_at) + '</td>'
+          + '<td style="' + tdS + '">' + esc(r.narration || '—') + '</td>'
+          + '<td style="' + tdS + '">' + esc(r.txn_type || 'N') + '</td>'
+          + '<td style="' + tdS + 'font-weight:700;color:#059669;text-align:right;white-space:nowrap;">' + _phAmt(r.amount) + '</td>'
+          + '</tr>'
+        ).join('');
+
+    modal.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="cm-bills-backdrop">'
+      + '<div style="background:#fff;border-radius:18px;width:100%;max-width:640px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
+        + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;flex-shrink:0;">'
+          + '<div style="width:38px;height:38px;border-radius:10px;background:#fff8f5;display:grid;place-items:center;flex-shrink:0;">'
+            + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C4714A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>'
+          + '</div>'
+          + '<div style="flex:1;min-width:0;"><div style="font-size:15px;font-weight:700;color:#1e293b;">' + esc(_phBillsVendor) + '</div><div style="font-size:12px;color:#94a3b8;margin-top:1px;">' + rows.length + ' bill' + (rows.length===1?'':'s') + ' &middot; ' + _phAmt(total) + ' total</div></div>'
+          + '<button id="cm-bills-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;flex-shrink:0;" onmouseenter="this.style.background=\'#f1f5f9\'" onmouseleave="this.style.background=\'transparent\'">'
+            + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
+          + '</button>'
+        + '</div>'
+        + '<div style="overflow-y:auto;flex:1;">'
+          + '<table style="width:100%;border-collapse:collapse;">'
+            + '<thead><tr><th style="' + thS + '">#</th><th style="' + thS + '">Date</th><th style="' + thS + '">Bill No / Narration</th><th style="' + thS + '">Txn</th><th style="' + thS + 'text-align:right;">Amount</th></tr></thead>'
+            + '<tbody>' + rowsHtml + '</tbody>'
+          + '</table>'
+        + '</div>'
+      + '</div>'
+    + '</div>';
+
+    document.getElementById('cm-bills-backdrop').addEventListener('click', _closeVendorBills);
+    document.getElementById('cm-bills-close').addEventListener('click', _closeVendorBills);
   }
 
   /* ── Main render ────────────────────────────────────────────── */
@@ -997,12 +1059,13 @@ window.Pages['client-master'] = (() => {
       + '<div id="cm-tab-content">' + tabContent + '</div>'
 
       + '<div id="cm-modal"></div>'
+      + '<div id="cm-vendor-bills-modal"></div>'
     + '</div>';
 
     document.getElementById('tab-vendors') .addEventListener('click', () => { _tab = 'vendors';  _render(); });
     document.getElementById('tab-payments').addEventListener('click', () => { _tab = 'payments'; _render(); });
     document.getElementById('tab-history') .addEventListener('click', async () => {
-      _tab = 'history'; _phOpenBatch = null;
+      _tab = 'history'; _phOpenBatch = null; _phBillsVendor = null;
       ['tab-vendors','tab-payments','tab-history'].forEach(id => {
         const b = document.getElementById(id); if (!b) return;
         const a = id === 'tab-history';
