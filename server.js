@@ -784,8 +784,9 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
 });
 
 async function nextDelId() {
-  const c = await q('SELECT COUNT(*) AS cnt FROM delegations');
-  return 'DEL' + (Number(c[0].cnt)+1).toString().padStart(3,'0');
+  const rows = await q("SELECT MAX(CAST(SUBSTRING(id,4) AS UNSIGNED)) AS maxnum FROM delegations WHERE id REGEXP '^DEL[0-9]+'");
+  const lastNum = (rows.length && rows[0].maxnum) ? parseInt(rows[0].maxnum)||0 : 0;
+  return 'DEL' + (lastNum+1).toString().padStart(3,'0');
 }
 
 async function insertDelegation({ description, doerId, doerName, delegatedBy, dueDate, client, priority, approval, url, remarks }) {
@@ -822,7 +823,8 @@ app.post('/api/delegations', requireAuth, async (req, res) => {
       const delegations = store.delegations||[];
       const doerUser = (store.users||[]).find(u=>u.id===body.doerId);
       const doerName = doerUser?.name||body.doerName||body.doer||'';
-      const id = 'DEL'+String(delegations.length+1).padStart(3,'0');
+      const lastNum = delegations.reduce((max,d)=>{ const n=parseInt((d.id||'').replace(/[^0-9]/g,''))||0; return n>max?n:max; },0);
+      const id = 'DEL'+(lastNum+1).toString().padStart(3,'0');
       const newDel = { id, description:body.description, doerId:body.doerId, doer:doerName, delegatedBy:body.delegatedBy, dueDate:normDate(body.dueDate)||body.dueDate, client:body.client||'', status:'pending', type:'delegation', priority:body.priority||'Low', approval:resolvedApproval, url:body.url||'', remarks:body.remarks||'', createdAt:new Date().toISOString() };
       delegations.push(newDel);
       store.delegations = delegations;
