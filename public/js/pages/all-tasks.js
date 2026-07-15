@@ -9,6 +9,8 @@ window.Pages['all-tasks'] = (function () {
   let _employeeFilter = 'All';
   let _fromDate  = '';
   let _toDate    = '';
+  let _sortCol   = null;         // 'description' | 'doer' | 'assignee' | 'dueDate' | 'remarks' | 'status'
+  let _sortDir   = 'asc';        // 'asc' | 'desc'
 
   /* ─── helpers ───────────────────────────────────────────────────────────── */
   const isAdmin = () => {
@@ -38,6 +40,35 @@ window.Pages['all-tasks'] = (function () {
   const getUserName = (id) => _users.find(u => u.id === id)?.name || id || '—';
 
   const STATUS_RANK = { revise: 0, revise_requested: 1, pending: 2, done: 3 };
+
+  /* ─── column sort (click a header, like Google Sheets) ─────────────────── */
+  const SORT_ACCESSORS = {
+    description: t => (t.description || '').toLowerCase(),
+    doer:        t => (t.doer || '').toLowerCase(),
+    assignee:    t => getUserName(t.delegatedBy).toLowerCase(),
+    dueDate:     t => t.dueDate ? new Date(t.dueDate).getTime() : -Infinity,
+    remarks:     t => (t.remarks || '').toLowerCase(),
+    status:      t => STATUS_RANK[t.status] ?? 99,
+  };
+
+  function sortTasks(tasks) {
+    if (!_sortCol || !SORT_ACCESSORS[_sortCol]) return tasks;
+    const accessor = SORT_ACCESSORS[_sortCol];
+    const dir = _sortDir === 'desc' ? -1 : 1;
+    return [...tasks].sort((a, b) => {
+      const av = accessor(a), bv = accessor(b);
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return 0;
+    });
+  }
+
+  function sortIndicator(col) {
+    if (_sortCol !== col) return '';
+    return _sortDir === 'asc'
+      ? ' <span style="font-size:10px;">&#9650;</span>'
+      : ' <span style="font-size:10px;">&#9660;</span>';
+  }
 
   const TAB_TYPE = {
     'Delegation':     'delegation',
@@ -287,7 +318,7 @@ window.Pages['all-tasks'] = (function () {
 
   /* ─── render task row ───────────────────────────────────────────────────── */
   function taskRowHTML(t, serial) {
-    const canEdit   = t.type !== 'Checklist';
+    const canEdit   = true;
     const canRevise = t.type !== 'Checklist' && t.status !== 'done' && t.status !== 'revise' && t.status !== 'revise_requested';
     const canDone   = t.status !== 'done';
 
@@ -362,6 +393,9 @@ window.Pages['all-tasks'] = (function () {
       revised   > 0 ? window.UI.pill(`${revised} shifted`, { variant: 'warning' })  : '',
     ].join('');
 
+    const sortTh = (col, label) =>
+      `<th class="at-th at-th-sort" data-sort="${col}" style="cursor:pointer;user-select:none;white-space:nowrap;" title="Sort by ${label}">${label}${sortIndicator(col)}</th>`;
+
     const tableHTML = open ? `
       <div style="border-top:1px solid #f1f5f9;overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -369,16 +403,16 @@ window.Pages['all-tasks'] = (function () {
             <tr style="background:#f8fafc">
               <th class="at-th">#</th>
               <th class="at-th">Action</th>
-              <th class="at-th">Description</th>
-              <th class="at-th">Doer</th>
-              <th class="at-th">Assignee</th>
-              <th class="at-th">Due Date</th>
-              <th class="at-th">Remarks</th>
-              <th class="at-th">Status</th>
+              ${sortTh('description', 'Description')}
+              ${sortTh('doer', 'Doer')}
+              ${sortTh('assignee', 'Assignee')}
+              ${sortTh('dueDate', 'Due Date')}
+              ${sortTh('remarks', 'Remarks')}
+              ${sortTh('status', 'Status')}
             </tr>
           </thead>
           <tbody>
-            ${g.tasks.map((t, i) => taskRowHTML(t, startSerial + i)).join('')}
+            ${sortTasks(g.tasks).map((t, i) => taskRowHTML(t, startSerial + i)).join('')}
           </tbody>
         </table>
       </div>` : '';
@@ -512,6 +546,7 @@ window.Pages['all-tasks'] = (function () {
         .at-btn-amber { color:var(--color-warning) } .at-btn-amber:hover { background:var(--color-warning-bg) }
         .at-btn-red   { color:var(--color-danger) }  .at-btn-red:hover   { background:var(--color-danger-bg) }
         .at-th { padding:10px 12px;text-align:left;font-size:12px;font-weight:600;color:var(--text-secondary);white-space:nowrap;border-bottom:1px solid var(--border-light) }
+        .at-th-sort:hover { color:var(--color-primary) }
         .at-td { padding:10px 12px;vertical-align:middle;border-bottom:1px solid var(--border-light) }
         .at-table-row:hover { background:var(--surface-alt) }
         .at-card { background:var(--surface);border:1px solid var(--border-base);border-radius:12px;overflow:hidden }
@@ -582,6 +617,16 @@ window.Pages['all-tasks'] = (function () {
       });
     });
 
+    /* sortable column headers */
+    document.querySelectorAll('.at-th-sort').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.sort;
+        if (_sortCol === col) { _sortDir = _sortDir === 'asc' ? 'desc' : 'asc'; }
+        else { _sortCol = col; _sortDir = 'asc'; }
+        renderContent();
+      });
+    });
+
     /* employee filter */
     const empSel = document.getElementById('at-emp-filter');
     if (empSel) empSel.addEventListener('change', () => { _employeeFilter = empSel.value; renderContent(); });
@@ -641,7 +686,9 @@ window.Pages['all-tasks'] = (function () {
   window._atDeleteTask = (id, type) => deleteTask(id, type);
   window._atEditTask = (id) => {
     const task = _grouped.flatMap(g => g.tasks).find(t => t.id === id);
-    if (task) openEditModal(task);
+    if (!task) return;
+    if (task.type === 'Checklist') openChecklistEditModal(task);
+    else openEditModal(task);
   };
 
   /* ═══════════════════════════════════════════════════════════════════════════
@@ -788,6 +835,69 @@ window.Pages['all-tasks'] = (function () {
       } catch (e) {
         errEl.textContent = e.message;
         btn.disabled = false; btn.textContent = 'Add Checklist';
+      }
+    });
+  }
+
+  /* ─── Edit Checklist Task Modal ─────────────────────────────────────────── */
+  function openChecklistEditModal(task) {
+    const userOpts = _users.map(u =>
+      `<option value="${esc(u.id)}"${u.name === task.doer ? ' selected' : ''}>${esc(u.name)}</option>`
+    ).join('');
+
+    const div = modalOverlay('at-checklist-edit-modal', `
+      ${modalHeader('Edit Checklist Task', "document.getElementById('at-checklist-edit-modal').remove()")}
+      <div style="padding:20px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px">
+        <div>
+          <label class="at-label">Task *</label>
+          <textarea id="atce-task" rows="3" class="at-input" style="width:100%;height:auto;padding:8px 10px;resize:none">${esc(task.description || '')}</textarea>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <label class="at-label">Assigned To</label>
+            <select id="atce-assigned" class="at-input" style="width:100%"><option value="">— Select —</option>${userOpts}</select>
+          </div>
+          <div>
+            <label class="at-label">Frequency</label>
+            <select id="atce-freq" class="at-input" style="width:100%">
+              <option${task.frequency === 'Daily'   ? ' selected' : ''}>Daily</option>
+              <option${task.frequency === 'Weekly'  ? ' selected' : ''}>Weekly</option>
+              <option${task.frequency === 'Monthly' ? ' selected' : ''}>Monthly</option>
+            </select>
+          </div>
+        </div>
+        <p id="atce-err" style="color:#ef4444;font-size:12px;margin:0"></p>
+      </div>
+      <div style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0">
+        <button onclick="document.getElementById('at-checklist-edit-modal').remove()" class="at-btn at-btn-secondary">Cancel</button>
+        <button id="atce-save" class="at-btn at-btn-primary">Save Changes</button>
+      </div>
+    `);
+
+    document.getElementById('atce-save').addEventListener('click', async () => {
+      const taskText     = document.getElementById('atce-task').value.trim();
+      const assignedSel  = document.getElementById('atce-assigned');
+      const assignedId   = assignedSel.value;
+      const assignedTo   = assignedId ? (_users.find(u => u.id === assignedId)?.name || '') : '';
+      const frequency    = document.getElementById('atce-freq').value;
+      const errEl        = document.getElementById('atce-err');
+
+      if (!taskText) { errEl.textContent = 'Task is required.'; return; }
+      if (!assignedTo) { errEl.textContent = 'Assigned To is required.'; return; }
+
+      const btn = document.getElementById('atce-save');
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        await Utils.apiFetch('/api/masters', {
+          method: 'PATCH',
+          body: JSON.stringify({ id: task.id, task: taskText, assignedTo, frequency }),
+        });
+        div.remove();
+        Utils.showToast('Checklist task updated');
+        await reload();
+      } catch (e) {
+        errEl.textContent = e.message;
+        btn.disabled = false; btn.textContent = 'Save Changes';
       }
     });
   }

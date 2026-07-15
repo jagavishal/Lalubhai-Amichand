@@ -1158,6 +1158,21 @@ function isAdminUser(user) {
   return rolesArr.includes('Admin') || rolesArr.includes('HOD');
 }
 
+// Distinguishes "sees the whole company" (Admin) from "sees their own department's
+// team" (HOD) — isAdminUser() above intentionally treats them the same for feature
+// gating (edit/delete/etc.), but task VISIBILITY must not: only true Admin sees
+// everyone, HOD is scoped to their own department, plain User to just themselves.
+function isTrueAdminUser(user) {
+  const roles = user?.roles || [];
+  const rolesArr = Array.isArray(roles) ? roles : String(roles).split(',').map(r=>r.trim());
+  return rolesArr.includes('Admin');
+}
+function isHODUser(user) {
+  const roles = user?.roles || [];
+  const rolesArr = Array.isArray(roles) ? roles : String(roles).split(',').map(r=>r.trim());
+  return rolesArr.includes('HOD') && !isTrueAdminUser(user);
+}
+
 function checkSecret(req) {
   const secret = req.query.secret;
   return secret && secret === process.env.DEVELOPER_SECRET;
@@ -1286,9 +1301,12 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
     const { filter, myRevise } = req.query;
-    const userId = req.session?.user?.id;
-    const userName = req.session?.user?.name || '';
-    const isAdmin = isAdminUser(req.session?.user);
+    const sessUser = req.session?.user;
+    const userId = sessUser?.id;
+    const userName = sessUser?.name || '';
+    const userDept = sessUser?.department || '';
+    const isAdmin = isAdminUser(sessUser);
+    const isHOD = isHODUser(sessUser);
 
     if (!USE_DB) {
       const store = await readStore();
@@ -1303,7 +1321,12 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
       if (filter === 'revise_requested') rows = rows.filter(d => d.status === 'revise_requested');
       else if (filter === 'approval_required') rows = rows.filter(d => d.approval === 'Approval Required' && d.status === 'pending');
       else if (myRevise === 'true') rows = rows.filter(d => (d.doerId === userId || d.doer === userName) && d.status === 'revise');
-      // Non-admins only ever see tasks assigned to them or delegated by them — never the whole company's.
+      // HOD sees their department's team plus anything they personally own/delegated — not the whole company.
+      else if (isHOD) {
+        const teamNames = new Set((store.users || []).filter(u => (u.department || '') === userDept).map(u => (u.name || '').toLowerCase()));
+        rows = rows.filter(d => teamNames.has((d.doer || '').toLowerCase()) || d.doerId === userId || d.delegatedBy === userId);
+      }
+      // Plain users only ever see tasks assigned to them or delegated by them — never the whole company's.
       else if (!isAdmin) rows = rows.filter(d => d.doerId === userId || (d.doer || '').toLowerCase() === userName.toLowerCase() || d.delegatedBy === userId);
       return res.json(rows);
     }
@@ -1315,6 +1338,9 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
     else if (myRevise === 'true') {
       sqlWhere = `WHERE (doer_id=$1 OR doer=$2) AND status='revise'`;
       params.push(userId, userName);
+    } else if (isHOD) {
+      sqlWhere = `WHERE doer_id IN (SELECT id FROM users WHERE department=$1) OR doer_id=$2 OR LOWER(doer)=LOWER($3) OR delegated_by=$4`;
+      params.push(userDept, userId, userName, userId);
     } else if (!isAdmin) {
       sqlWhere = `WHERE (doer_id=$1 OR LOWER(doer)=LOWER($2) OR delegated_by=$3)`;
       params.push(userId, userName, userId);
@@ -1618,18 +1644,32 @@ app.get('/api/vendor-submissions', requireAuth, async (req, res) => {
 
 // ── Masters (Checklist Masters) ───────────────────────────────────────────────
 app.get('/api/masters', requireAuth, async (req, res) => {
-  const isAdmin = isAdminUser(req.session?.user);
-  const userName = (req.session?.user?.name || '').toLowerCase();
+  const sessUser = req.session?.user;
+  const isAdmin = isAdminUser(sessUser);
+  const isHOD = isHODUser(sessUser);
+  const userName = (sessUser?.name || '').toLowerCase();
+  const userDept = sessUser?.department || '';
   if (!USE_DB) {
     const store = await readStore();
     let rows = store.masters||[];
-    if (!isAdmin) rows = rows.filter(m => (m.assignedTo||'').toLowerCase() === userName);
+    if (isHOD) {
+      const teamNames = new Set((store.users || []).filter(u => (u.department || '') === userDept).map(u => (u.name || '').toLowerCase()));
+      rows = rows.filter(m => teamNames.has((m.assignedTo||'').toLowerCase()) || (m.assignedTo||'').toLowerCase() === userName);
+    } else if (!isAdmin) {
+      rows = rows.filter(m => (m.assignedTo||'').toLowerCase() === userName);
+    }
     return res.json(rows);
   }
   await ensureSchema();
   const { rows } = await pool.query('SELECT * FROM masters ORDER BY created_at DESC');
   let mapped = rows.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) }));
-  if (!isAdmin) mapped = mapped.filter(m => m.assignedTo.toLowerCase() === userName);
+  if (isHOD) {
+    const teamRows = await q('SELECT LOWER(name) AS n FROM users WHERE department=$1', [userDept]);
+    const teamNames = new Set(teamRows.map(r => r.n));
+    mapped = mapped.filter(m => teamNames.has(m.assignedTo.toLowerCase()) || m.assignedTo.toLowerCase() === userName);
+  } else if (!isAdmin) {
+    mapped = mapped.filter(m => m.assignedTo.toLowerCase() === userName);
+  }
   return res.json(mapped);
 });
 

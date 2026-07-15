@@ -112,9 +112,9 @@ window.Pages['client-master'] = (() => {
   }
   function _closeModal() { _open = false; _editing = null; _form = _blankForm(); _render(); }
 
-  function _fld(id, label, v, type, ph) {
+  function _fld(id, label, v, type, ph, maxlen) {
     return '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">' + label + '</label>'
-      + '<input class="input" id="' + id + '" type="' + (type||'text') + '" value="' + esc(v) + '" placeholder="' + (ph||'') + '" style="width:100%;box-sizing:border-box;" /></div>';
+      + '<input class="input" id="' + id + '" type="' + (type||'text') + '" value="' + esc(v) + '" placeholder="' + (ph||'') + '" ' + (maxlen ? 'maxlength="' + maxlen + '"' : '') + ' style="width:100%;box-sizing:border-box;" /></div>';
   }
 
   function _renderModal() {
@@ -140,8 +140,8 @@ window.Pages['client-master'] = (() => {
             + '<span style="font-size:12px;font-weight:700;color:#1e293b;letter-spacing:.01em;">Basic Details</span>'
           + '</div>'
           + '<div style="display:grid;gap:12px;">'
-            + _fld('cm-name', 'Name *', _form.name, 'text', 'Vendor / Company name')
-            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-mobile','Mobile No.',_form.mobile,'tel','10-digit mobile') + _fld('cm-email','Email',_form.email,'email','vendor@email.com') + '</div>'
+            + _fld('cm-name', 'Name *', _form.name, 'text', 'Vendor / Company name', 40)
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-mobile','Mobile No.',_form.mobile,'tel','10-digit mobile') + _fld('cm-email','Email',_form.email,'email','vendor@email.com', 100) + '</div>'
             + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-state','State',_form.state,'text','e.g. Rajasthan') + _fld('cm-district','District',_form.district,'text','e.g. Jaipur') + '</div>'
             + '<div style="display:grid;grid-template-columns:1fr 120px;gap:12px;">' + _fld('cm-address','Address',_form.address,'text','Street / Area') + _fld('cm-pin','Pin Code',_form.pin,'text','6-digit PIN') + '</div>'
             + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'
@@ -162,7 +162,7 @@ window.Pages['client-master'] = (() => {
           + '</div>'
           + '<div style="display:grid;gap:12px;">'
             + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-bankName','Bank Name',_form.bankName,'text','e.g. SBI, HDFC') + _fld('cm-accountHolder','Account Holder',_form.accountHolder,'text','As per bank records') + '</div>'
-            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-accountNo','Account No.',_form.accountNo,'text','Bank account number') + _fld('cm-ifscCode','IFSC Code',_form.ifscCode,'text','e.g. SBIN0001234') + '</div>'
+            + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-accountNo','Account No.',_form.accountNo,'text','Bank account number', 25) + _fld('cm-ifscCode','IFSC Code',_form.ifscCode,'text','e.g. SBIN0001234', 15) + '</div>'
             + _fld('cm-branchName','Branch Name',_form.branchName,'text','Branch location')
           + '</div>'
         + '</div>'
@@ -345,13 +345,13 @@ window.Pages['client-master'] = (() => {
       + '<td style="' + cellS + 'min-width:120px;padding:4px 5px;">'
         + '<div style="display:flex;align-items:center;gap:4px;border:1.5px solid #e9ecef;border-radius:7px;padding:6px 9px;background:' + (row.amount?'#f8fff9':'#fff') + ';transition:border-color .15s;" onfocusin="this.style.borderColor=\'#059669\';this.style.background=\'#f0fdf4\'" onfocusout="this.style.borderColor=\'#e9ecef\';this.style.background=\'' + (row.amount?'#f8fff9':'#fff') + '\'">'
           + '<span style="color:#94a3b8;font-size:12px;font-weight:600;">₹</span>'
-          + '<input class="pm-amount-inp" data-ri="' + i + '" type="number" min="0" step="0.01" placeholder="0.00" value="' + esc(row.amount) + '" '
+          + '<input class="pm-amount-inp" data-ri="' + i + '" type="number" min="0" step="0.01" max="99999999999999999.99" maxlength="20" placeholder="0.00" value="' + esc(row.amount) + '" '
             + 'style="border:none;outline:none;background:transparent;font-size:13px;font-weight:700;color:#1e293b;width:100%;" />'
         + '</div>'
       + '</td>'
       // Narration
       + '<td style="' + cellS + 'min-width:150px;padding:4px 5px;">'
-        + '<input class="pm-narr-inp" data-ri="' + i + '" type="text" placeholder="Bill no / narration…" value="' + esc(row.narration) + '" '
+        + '<input class="pm-narr-inp" data-ri="' + i + '" type="text" maxlength="20" placeholder="Bill no / narration…" value="' + esc(row.narration) + '" '
           + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (row.narration?'#6366f1':'#e9ecef') + ';border-radius:7px;font-size:12px;color:#374151;outline:none;background:' + (row.narration?'#f5f5ff':'#fff') + ';transition:border-color .15s;" '
           + 'onfocus="this.style.borderColor=\'#6366f1\';this.style.background=\'#f5f5ff\'" onblur="this.style.borderColor=\'' + (row.narration?'#6366f1':'#e9ecef') + '\';this.style.background=\'' + (row.narration?'#f5f5ff':'#fff') + '\'" />'
       + '</td>'
@@ -401,7 +401,7 @@ window.Pages['client-master'] = (() => {
             + '</button>'
             + '<button id="pm-excel-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;font-size:12px;font-weight:600;border:none;border-radius:8px;background:#059669;color:#fff;cursor:pointer;" onmouseenter="this.style.background=\'#047857\'" onmouseleave="this.style.background=\'#059669\'">'
               + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'
-              + (checkedRows.length ? 'Export ' + checkedRows.length + ' Selected' : 'Export Excel')
+              + (checkedRows.length ? 'Export ' + checkedRows.length + ' Selected' : 'Export RBI File')
             + '</button>'
           + '</div>'
         + '</div>'
@@ -466,7 +466,7 @@ window.Pages['client-master'] = (() => {
     const excelBtn = document.getElementById('pm-excel-btn');
     if (excelBtn) {
       const svg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-      excelBtn.innerHTML = svg + (checkedRows.length ? 'Export ' + checkedRows.length + ' Selected' : 'Export Excel');
+      excelBtn.innerHTML = svg + (checkedRows.length ? 'Export ' + checkedRows.length + ' Selected' : 'Export RBI File');
     }
     // Update select-all checkbox
     const allChk = document.getElementById('pm-chk-all');
@@ -702,7 +702,7 @@ window.Pages['client-master'] = (() => {
         URL.revokeObjectURL(url);
       }
 
-      // Build one shared row-data array; both downloads are derived from it so they can never drift apart.
+      // Build one shared row-data array.
       const exportedIds = [];
       const rows = [];
       let sno = 1;
@@ -722,7 +722,7 @@ window.Pages['client-master'] = (() => {
         });
       });
 
-      // ── File 1: Notepad (.txt) — the exact bank-upload-ready comma format ──
+      // Notepad (.txt) — the exact bank-upload-ready comma format (matches the bank's field spec).
       const hdr = ['Transaction Type','Beneficiary Code','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Instruction Reference Number','Debit Statement Narration','Chq / Trn Date','IFSC Code','Beneficiary email id'];
       const csvRows = [hdr.join(',')];
       rows.forEach(r => {
@@ -735,39 +735,6 @@ window.Pages['client-master'] = (() => {
         ].join(','));
       });
       downloadBlob(csvRows.join('\r\n'), 'text/plain;charset=utf-8;', 'RBI_Bulk_' + fileStamp + '.txt');
-
-      // ── File 2: Excel (.xlsx) — human-readable workbook with a division-wise summary ──
-      if (window.XLSX) {
-        const wb = window.XLSX.utils.book_new();
-
-        const puAoa = [['Sr No','Division','Transaction Type','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Debit Statement Narration','Chq / Trn Date','IFSC Code']];
-        rows.forEach(r => puAoa.push([r.sno, r.division, r.txnType, r.accountNo, r.amount, r.name, r.narration, dateStr, r.ifsc]));
-        const wsPU = window.XLSX.utils.aoa_to_sheet(puAoa);
-        rows.forEach((r, i) => {
-          const cellRef = 'D' + (i + 2); // keep account numbers as text so a leading zero isn't dropped
-          if (wsPU[cellRef]) wsPU[cellRef].t = 's';
-        });
-        wsPU['!cols'] = [{ wch:6 },{ wch:16 },{ wch:8 },{ wch:20 },{ wch:14 },{ wch:26 },{ wch:22 },{ wch:12 },{ wch:13 }];
-        window.XLSX.utils.book_append_sheet(wb, wsPU, 'Payment Upload');
-
-        const divTotals = {};
-        rows.forEach(r => {
-          const key = r.division || '(No Division)';
-          if (!divTotals[key]) divTotals[key] = { amount: 0, count: 0 };
-          divTotals[key].amount += r.amount;
-          divTotals[key].count  += 1;
-        });
-        const divAoa = [['Division','Total Amount','No. of Payments']];
-        Object.keys(divTotals).sort().forEach(k => divAoa.push([k, divTotals[k].amount, divTotals[k].count]));
-        divAoa.push(['GRAND TOTAL', rows.reduce((s, r) => s + r.amount, 0), rows.length]);
-        const wsDiv = window.XLSX.utils.aoa_to_sheet(divAoa);
-        wsDiv['!cols'] = [{ wch:24 },{ wch:16 },{ wch:16 }];
-        window.XLSX.utils.book_append_sheet(wb, wsDiv, 'Division Summary');
-
-        window.XLSX.writeFile(wb, 'RBI_Bulk_' + fileStamp + '.xlsx');
-      } else {
-        Utils.showToast('Excel library unavailable — only the text file downloaded', 'warning');
-      }
 
       // Mark exported rows in DB (best-effort)
       if (exportedIds.length) {
@@ -784,7 +751,7 @@ window.Pages['client-master'] = (() => {
           _updatePmHeader();
         } catch { /* silently ignore — files are already downloaded */ }
       }
-      Utils.showToast('Payment files downloaded (Excel + Text) — ' + rows.length + ' entries exported', 'success');
+      Utils.showToast('RBI bulk file downloaded — ' + rows.length + ' entries exported', 'success');
     });
   }
 

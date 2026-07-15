@@ -207,6 +207,10 @@ window.Pages.dashboard = (function () {
       <style>
         @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
         #db-wrap { animation: fadeIn .25s ease both; }
+        .db-stat-card { border: 2px solid transparent; transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
+        .db-stat-card[data-filter]:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.08); }
+        .db-stat-card[data-filter]:active { transform: translateY(0); }
+        .db-stat-card[data-filter].active { border-color: var(--color-primary); box-shadow: 0 4px 14px rgba(196,113,74,.16); }
         /* Mobile responsive */
         @media (max-width: 767px) {
           #db-topbar { flex-direction: column; gap: 10px; }
@@ -298,20 +302,20 @@ window.Pages.dashboard = (function () {
 
         <!-- Stat cards -->
         <div id="db-stat-cards" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1rem;margin-bottom:20px;">
-          <div class="card db-stat-card" data-filter="All" style="padding:20px;cursor:pointer;">
+          <div class="card db-stat-card active" data-filter="All" title="Show all pending tasks" style="padding:20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Pending</div>
             <div id="db-stat-pending" style="font-size:2.5rem;font-weight:800;color:var(--color-danger);">${data.pending || data.pendingTasks.length}</div>
             <div id="db-stat-revised" style="font-size:11px;font-weight:600;color:var(--color-warning);margin-top:4px;${data.revised > 0 ? '' : 'display:none;'}">+ ${data.revised} shifted</div>
           </div>
-          <div class="card db-stat-card" data-filter="Shifted" style="padding:20px;cursor:pointer;">
+          <div class="card db-stat-card" data-filter="Shifted" title="Show shifted tasks" style="padding:20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Shifted</div>
             <div id="db-stat-revised-count" style="font-size:2.5rem;font-weight:800;color:var(--color-warning);">${data.revised || 0}</div>
           </div>
-          <div class="card db-stat-card" data-filter="Completed" style="padding:20px;cursor:pointer;">
+          <div class="card db-stat-card" data-filter="Completed" title="Show completed tasks" style="padding:20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Completed</div>
             <div id="db-stat-completed" style="font-size:2.5rem;font-weight:800;color:var(--color-success);">${data.completed}</div>
           </div>
-          <div class="card db-stat-card" data-filter="Upcoming" style="padding:20px;cursor:pointer;">
+          <div class="card db-stat-card" data-filter="Upcoming" title="Show upcoming tasks" style="padding:20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Upcoming</div>
             <div id="db-stat-upcoming" style="font-size:2.5rem;font-weight:800;color:var(--color-purple);">${data.upcoming || 0}</div>
           </div>
@@ -760,6 +764,11 @@ window.Pages.dashboard = (function () {
       btn.style.background = active ? '#fff' : 'transparent';
       btn.style.color       = active ? '#0f172a' : '#64748b';
       btn.style.boxShadow   = active ? '0 1px 4px rgba(0,0,0,.08)' : 'none';
+    });
+
+    /* update stat card active state */
+    document.querySelectorAll('.db-stat-card[data-filter]').forEach(card => {
+      card.classList.toggle('active', card.dataset.filter === _state.subTab);
     });
 
     if (filtered.length === 0) {
