@@ -688,34 +688,86 @@ window.Pages['client-master'] = (() => {
       const dd    = String(today.getDate()).padStart(2,'0');
       const mm    = String(today.getMonth()+1).padStart(2,'0');
       const yyyy  = today.getFullYear();
-      const dateStr   = dd + '/' + mm + '/' + yyyy;
+      const dateStr    = dd + '/' + mm + '/' + yyyy;
       const batchLabel = 'Export ' + dd + '/' + mm + '/' + yyyy;
+      const fileStamp  = yyyy + mm + dd;
 
       function qf(s) { return '"' + String(s||'').replace(/"/g,'""') + '"'; }
+      function downloadBlob(content, mime, filename) {
+        const blob = new Blob([content], { type: mime });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
 
-      const hdr = ['Transaction Type','Beneficiary Code','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Instruction Reference Number','Debit Statement Narration','Chq / Trn Date','IFSC Code','Beneficiary email id'];
-      const csvRows = [hdr.join(',')];
-      let sno = 1;
+      // Build one shared row-data array; both downloads are derived from it so they can never drift apart.
       const exportedIds = [];
+      const rows = [];
+      let sno = 1;
       toExport.forEach(entry => {
         const v = _list.find(x => String(x.id) === String(entry.vendorId));
         if (!v) return;
         if (entry.id) exportedIds.push(entry.id);
-        csvRows.push([
-          entry.txnType || 'N', sno++,
-          qf("'" + (v.account_no || '')),
-          parseFloat(entry.amount || 0).toFixed(2),
-          qf(v.name), qf(entry.narration || ''), '',
-          dateStr, qf(v.ifsc_code || ''), '',
-        ].join(','));
+        rows.push({
+          sno: sno++,
+          division: v.division || '',
+          txnType: entry.txnType || 'N',
+          accountNo: v.account_no || '',
+          amount: parseFloat(entry.amount || 0),
+          name: v.name || '',
+          narration: entry.narration || '',
+          ifsc: v.ifsc_code || '',
+        });
       });
 
-      const csv  = csvRows.join('\r\n');
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href = url; a.download = 'RBI_Bulk_' + yyyy + mm + dd + '.csv';
-      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+      // ── File 1: Notepad (.txt) — the exact bank-upload-ready comma format ──
+      const hdr = ['Transaction Type','Beneficiary Code','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Instruction Reference Number','Debit Statement Narration','Chq / Trn Date','IFSC Code','Beneficiary email id'];
+      const csvRows = [hdr.join(',')];
+      rows.forEach(r => {
+        csvRows.push([
+          r.txnType, r.sno,
+          qf("'" + r.accountNo),
+          r.amount.toFixed(2),
+          qf(r.name), qf(r.narration), '',
+          dateStr, qf(r.ifsc), '',
+        ].join(','));
+      });
+      downloadBlob(csvRows.join('\r\n'), 'text/plain;charset=utf-8;', 'RBI_Bulk_' + fileStamp + '.txt');
+
+      // ── File 2: Excel (.xlsx) — human-readable workbook with a division-wise summary ──
+      if (window.XLSX) {
+        const wb = window.XLSX.utils.book_new();
+
+        const puAoa = [['Sr No','Division','Transaction Type','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Debit Statement Narration','Chq / Trn Date','IFSC Code']];
+        rows.forEach(r => puAoa.push([r.sno, r.division, r.txnType, r.accountNo, r.amount, r.name, r.narration, dateStr, r.ifsc]));
+        const wsPU = window.XLSX.utils.aoa_to_sheet(puAoa);
+        rows.forEach((r, i) => {
+          const cellRef = 'D' + (i + 2); // keep account numbers as text so a leading zero isn't dropped
+          if (wsPU[cellRef]) wsPU[cellRef].t = 's';
+        });
+        wsPU['!cols'] = [{ wch:6 },{ wch:16 },{ wch:8 },{ wch:20 },{ wch:14 },{ wch:26 },{ wch:22 },{ wch:12 },{ wch:13 }];
+        window.XLSX.utils.book_append_sheet(wb, wsPU, 'Payment Upload');
+
+        const divTotals = {};
+        rows.forEach(r => {
+          const key = r.division || '(No Division)';
+          if (!divTotals[key]) divTotals[key] = { amount: 0, count: 0 };
+          divTotals[key].amount += r.amount;
+          divTotals[key].count  += 1;
+        });
+        const divAoa = [['Division','Total Amount','No. of Payments']];
+        Object.keys(divTotals).sort().forEach(k => divAoa.push([k, divTotals[k].amount, divTotals[k].count]));
+        divAoa.push(['GRAND TOTAL', rows.reduce((s, r) => s + r.amount, 0), rows.length]);
+        const wsDiv = window.XLSX.utils.aoa_to_sheet(divAoa);
+        wsDiv['!cols'] = [{ wch:24 },{ wch:16 },{ wch:16 }];
+        window.XLSX.utils.book_append_sheet(wb, wsDiv, 'Division Summary');
+
+        window.XLSX.writeFile(wb, 'RBI_Bulk_' + fileStamp + '.xlsx');
+      } else {
+        Utils.showToast('Excel library unavailable — only the text file downloaded', 'warning');
+      }
 
       // Mark exported rows in DB (best-effort)
       if (exportedIds.length) {
@@ -730,9 +782,9 @@ window.Pages['client-master'] = (() => {
           while (_pmRows.length < 10) _pmRows.push(_blankRow());
           _refreshPmTbody();
           _updatePmHeader();
-        } catch { /* silently ignore — file is already downloaded */ }
+        } catch { /* silently ignore — files are already downloaded */ }
       }
-      Utils.showToast('RBI bulk file downloaded — ' + toExport.length + ' entries exported', 'success');
+      Utils.showToast('Payment files downloaded (Excel + Text) — ' + rows.length + ' entries exported', 'success');
     });
   }
 
