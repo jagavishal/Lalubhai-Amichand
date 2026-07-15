@@ -202,8 +202,17 @@ const SCHEMA = [
   `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS transferred_to VARCHAR(255) DEFAULT NULL`,
   `CREATE TABLE IF NOT EXISTS announcements (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, message TEXT DEFAULT NULL, posted_by VARCHAR(255) NOT NULL DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS vendor_submissions (id VARCHAR(16) PRIMARY KEY, business_name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', phone VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', gst_no VARCHAR(32) DEFAULT '', address TEXT DEFAULT NULL, products TEXT DEFAULT NULL, notes TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-  `CREATE TABLE IF NOT EXISTS packing_items (id VARCHAR(24) PRIMARY KEY, item_name VARCHAR(255) NOT NULL DEFAULT '', size_label VARCHAR(128) DEFAULT '', pcs_per_box VARCHAR(32) DEFAULT '', length_in VARCHAR(32) DEFAULT '', width_in VARCHAR(32) DEFAULT '', height_in VARCHAR(32) DEFAULT '', ply_type VARCHAR(64) DEFAULT '', product_code VARCHAR(64) DEFAULT '', barcode VARCHAR(64) DEFAULT '', cbm_per_box VARCHAR(32) DEFAULT '', customer_group VARCHAR(64) DEFAULT '', remarks VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS packing_items (id VARCHAR(24) PRIMARY KEY, item_type VARCHAR(32) NOT NULL DEFAULT 'PACKING_BOX', item_name VARCHAR(255) NOT NULL DEFAULT '', size_label VARCHAR(128) DEFAULT '', pcs_per_box VARCHAR(32) DEFAULT '', length_in VARCHAR(32) DEFAULT '', width_in VARCHAR(32) DEFAULT '', height_in VARCHAR(32) DEFAULT '', ply_type VARCHAR(64) DEFAULT '', product_code VARCHAR(64) DEFAULT '', barcode VARCHAR(64) DEFAULT '', cbm_per_box VARCHAR(32) DEFAULT '', customer_group VARCHAR(64) DEFAULT '', remarks VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `ALTER TABLE packing_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(32) NOT NULL DEFAULT 'PACKING_BOX'`,
   `CREATE INDEX idx_pk_group ON packing_items (customer_group)`,
+  `CREATE INDEX idx_pk_type ON packing_items (item_type)`,
+  `CREATE TABLE IF NOT EXISTS purchase_requisitions (id VARCHAR(16) PRIMARY KEY, pr_type VARCHAR(32) NOT NULL DEFAULT 'ITEM_CODE', pr_date DATE NOT NULL, requested_by VARCHAR(255) NOT NULL DEFAULT '', requested_by_id VARCHAR(16) DEFAULT NULL, vendor_id VARCHAR(16) DEFAULT NULL, status VARCHAR(32) NOT NULL DEFAULT 'pending', remarks TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `ALTER TABLE purchase_requisitions ADD COLUMN IF NOT EXISTS pr_type VARCHAR(32) NOT NULL DEFAULT 'ITEM_CODE'`,
+  `CREATE INDEX idx_pr_status ON purchase_requisitions (status)`,
+  `CREATE INDEX idx_pr_requester ON purchase_requisitions (requested_by_id)`,
+  `CREATE INDEX idx_pr_type ON purchase_requisitions (pr_type)`,
+  `CREATE TABLE IF NOT EXISTS purchase_requisition_items (id VARCHAR(24) PRIMARY KEY, pr_id VARCHAR(16) NOT NULL, packing_item_id VARCHAR(24) DEFAULT NULL, item_name VARCHAR(255) NOT NULL DEFAULT '', unit VARCHAR(32) DEFAULT '', quantity DECIMAL(12,2) DEFAULT 0, estimated_rate DECIMAL(12,2) DEFAULT 0, remarks VARCHAR(255) DEFAULT '', CONSTRAINT fk_pri_pr FOREIGN KEY (pr_id) REFERENCES purchase_requisitions(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_pri_pr ON purchase_requisition_items (pr_id)`,
 ];
 
 // Seed rows for packing_items — imported once from "PR July 2026" packing-box
@@ -2182,7 +2191,11 @@ async function nextPackingId() {
 app.get('/api/packing-items', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    const rows = await q(`SELECT id, item_name, size_label, pcs_per_box, length_in, width_in, height_in, ply_type, product_code, barcode, cbm_per_box, customer_group, remarks, created_at AS createdAt FROM packing_items ORDER BY LENGTH(id) ASC, id ASC`);
+    const type = req.query.type;
+    const base = `SELECT id, item_type AS itemType, item_name, size_label, pcs_per_box, length_in, width_in, height_in, ply_type, product_code, barcode, cbm_per_box, customer_group, remarks, created_at AS createdAt FROM packing_items`;
+    const rows = type
+      ? await q(base + ' WHERE item_type = $1 ORDER BY LENGTH(id) ASC, id ASC', [type])
+      : await q(base + ' ORDER BY LENGTH(id) ASC, id ASC');
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -2194,9 +2207,9 @@ app.post('/api/packing-items', requireAuth, async (req, res) => {
     if (!b.itemName?.trim()) return res.status(400).json({ error:'itemName required' });
     const id = await nextPackingId();
     await pool.query(
-      `INSERT INTO packing_items (id,item_name,size_label,pcs_per_box,length_in,width_in,height_in,ply_type,product_code,barcode,cbm_per_box,customer_group,remarks)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [id, b.itemName.trim(), b.sizeLabel||'', b.pcsPerBox||'', b.lengthIn||'', b.widthIn||'', b.heightIn||'',
+      `INSERT INTO packing_items (id,item_type,item_name,size_label,pcs_per_box,length_in,width_in,height_in,ply_type,product_code,barcode,cbm_per_box,customer_group,remarks)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [id, b.itemType||'ITEM_CODE', b.itemName.trim(), b.sizeLabel||'', b.pcsPerBox||'', b.lengthIn||'', b.widthIn||'', b.heightIn||'',
        b.plyType||'', b.productCode||'', b.barcode||'', b.cbmPerBox||'', b.customerGroup||'', b.remarks||'']
     );
     return res.status(201).json({ success:true, id });
@@ -2209,13 +2222,13 @@ app.patch('/api/packing-items', requireAuth, async (req, res) => {
     const b = req.body;
     if (!b.id) return res.status(400).json({ error:'id required' });
     await pool.query(
-      `UPDATE packing_items SET item_name=COALESCE($1,item_name), size_label=COALESCE($2,size_label),
-       pcs_per_box=COALESCE($3,pcs_per_box), length_in=COALESCE($4,length_in), width_in=COALESCE($5,width_in),
-       height_in=COALESCE($6,height_in), ply_type=COALESCE($7,ply_type), product_code=COALESCE($8,product_code),
-       barcode=COALESCE($9,barcode), cbm_per_box=COALESCE($10,cbm_per_box), customer_group=COALESCE($11,customer_group),
-       remarks=COALESCE($12,remarks)
-       WHERE id=$13`,
-      [b.itemName??null, b.sizeLabel??null, b.pcsPerBox??null, b.lengthIn??null, b.widthIn??null, b.heightIn??null,
+      `UPDATE packing_items SET item_type=COALESCE($1,item_type), item_name=COALESCE($2,item_name), size_label=COALESCE($3,size_label),
+       pcs_per_box=COALESCE($4,pcs_per_box), length_in=COALESCE($5,length_in), width_in=COALESCE($6,width_in),
+       height_in=COALESCE($7,height_in), ply_type=COALESCE($8,ply_type), product_code=COALESCE($9,product_code),
+       barcode=COALESCE($10,barcode), cbm_per_box=COALESCE($11,cbm_per_box), customer_group=COALESCE($12,customer_group),
+       remarks=COALESCE($13,remarks)
+       WHERE id=$14`,
+      [b.itemType??null, b.itemName??null, b.sizeLabel??null, b.pcsPerBox??null, b.lengthIn??null, b.widthIn??null, b.heightIn??null,
        b.plyType??null, b.productCode??null, b.barcode??null, b.cbmPerBox??null, b.customerGroup??null, b.remarks??null, b.id]
     );
     return res.json({ success:true });
@@ -2228,6 +2241,93 @@ app.delete('/api/packing-items', requireAuth, async (req, res) => {
     const id = req.query.id;
     if (!id) return res.status(400).json({ error:'id required' });
     await pool.query('DELETE FROM packing_items WHERE id = $1', [id]);
+    return res.json({ success:true });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+// ── Purchase Requisitions ──────────────────────────────────────────────────────
+
+async function nextPrId() {
+  const rows = await q("SELECT MAX(CAST(SUBSTRING(id,3) AS UNSIGNED)) AS maxnum FROM purchase_requisitions WHERE id REGEXP '^PR[0-9]+$'");
+  const lastNum = (rows.length && rows[0].maxnum) ? parseInt(rows[0].maxnum) || 0 : 0;
+  return 'PR' + (lastNum + 1).toString().padStart(4, '0');
+}
+
+app.get('/api/purchase-requisitions', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const requestedById = req.query.requestedById;
+    const headerSql = `SELECT pr.id, pr.pr_type AS prType, pr.pr_date AS prDate, pr.requested_by AS requestedBy, pr.requested_by_id AS requestedById, pr.vendor_id AS vendorId, c.name AS vendorName, pr.status, pr.remarks, pr.created_at AS createdAt FROM purchase_requisitions pr LEFT JOIN clients c ON c.id = pr.vendor_id`;
+    const headers = requestedById
+      ? await q(headerSql + ' WHERE pr.requested_by_id = $1 ORDER BY pr.created_at DESC', [requestedById])
+      : await q(headerSql + ' ORDER BY pr.created_at DESC');
+    const items = await q(`SELECT id, pr_id AS prId, packing_item_id AS packingItemId, item_name AS itemName, unit, quantity, estimated_rate AS estimatedRate, remarks FROM purchase_requisition_items ORDER BY id ASC`);
+    const byPr = new Map();
+    for (const it of items) {
+      if (!byPr.has(it.prId)) byPr.set(it.prId, []);
+      byPr.get(it.prId).push(it);
+    }
+    const rows = headers.map(h => ({ ...h, items: byPr.get(h.id) || [] }));
+    return res.json(rows);
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+app.post('/api/purchase-requisitions', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const b = req.body;
+    if (!b.prDate) return res.status(400).json({ error:'prDate required' });
+    const items = Array.isArray(b.items) ? b.items.filter(it => it.itemName?.trim()) : [];
+    if (!items.length) return res.status(400).json({ error:'at least one item required' });
+    const id = await nextPrId();
+    const user = req.session?.user;
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query(
+        `INSERT INTO purchase_requisitions (id,pr_type,pr_date,requested_by,requested_by_id,vendor_id,status,remarks)
+         VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)`,
+        [id, b.prType||'ITEM_CODE', b.prDate, user?.name||'', user?.id||null, b.vendorId||null, b.remarks||'']
+      );
+      let idx = 0;
+      for (const it of items) {
+        idx++;
+        await c.query(
+          `INSERT INTO purchase_requisition_items (id,pr_id,packing_item_id,item_name,unit,quantity,estimated_rate,remarks)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [id+'-'+idx, id, it.packingItemId||null, it.itemName.trim(), it.unit||'', parseFloat(it.quantity)||0, parseFloat(it.estimatedRate)||0, it.remarks||'']
+        );
+      }
+      await c.query('COMMIT');
+    } catch (e) {
+      await c.query('ROLLBACK');
+      throw e;
+    } finally {
+      c.release();
+    }
+    return res.status(201).json({ success:true, id });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+app.patch('/api/purchase-requisitions', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const b = req.body;
+    if (!b.id) return res.status(400).json({ error:'id required' });
+    await pool.query(
+      `UPDATE purchase_requisitions SET status=COALESCE($1,status), vendor_id=COALESCE($2,vendor_id), remarks=COALESCE($3,remarks), pr_type=COALESCE($4,pr_type) WHERE id=$5`,
+      [b.status??null, b.vendorId??null, b.remarks??null, b.prType??null, b.id]
+    );
+    return res.json({ success:true });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+app.delete('/api/purchase-requisitions', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error:'id required' });
+    await pool.query('DELETE FROM purchase_requisitions WHERE id = $1', [id]);
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });

@@ -13,7 +13,7 @@ window.Topbar = {
     'leave-tracker':'Leave Tracker',
     'meetings':     'Meetings',
     'client-master':'',
-    'packing-master':'Packing Master',
+    'pr-po-grn':'PR / PO / GRN',
     'daily-task':   'Daily Task',
     'race-tracker': 'Race Tracker',
     'compliance':   'Compliance',
