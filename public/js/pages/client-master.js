@@ -401,7 +401,7 @@ window.Pages['client-master'] = (() => {
             + '</button>'
             + '<button id="pm-excel-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;font-size:12px;font-weight:600;border:none;border-radius:8px;background:#059669;color:#fff;cursor:pointer;" onmouseenter="this.style.background=\'#047857\'" onmouseleave="this.style.background=\'#059669\'">'
               + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'
-              + (checkedRows.length ? 'Export ' + checkedRows.length + ' Selected' : 'Export RBI File')
+              + (checkedRows.length ? 'Export ' + checkedRows.length + ' Selected' : 'Export Excel')
             + '</button>'
           + '</div>'
         + '</div>'
@@ -466,7 +466,7 @@ window.Pages['client-master'] = (() => {
     const excelBtn = document.getElementById('pm-excel-btn');
     if (excelBtn) {
       const svg = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-      excelBtn.innerHTML = svg + (checkedRows.length ? 'Export ' + checkedRows.length + ' Selected' : 'Export RBI File');
+      excelBtn.innerHTML = svg + (checkedRows.length ? 'Export ' + checkedRows.length + ' Selected' : 'Export Excel');
     }
     // Update select-all checkbox
     const allChk = document.getElementById('pm-chk-all');
@@ -692,7 +692,6 @@ window.Pages['client-master'] = (() => {
       const batchLabel = 'Export ' + dd + '/' + mm + '/' + yyyy;
       const fileStamp  = yyyy + mm + dd;
 
-      function qf(s) { return '"' + String(s||'').replace(/"/g,'""') + '"'; }
       function downloadBlob(content, mime, filename) {
         const blob = new Blob([content], { type: mime });
         const url  = URL.createObjectURL(blob);
@@ -722,19 +721,52 @@ window.Pages['client-master'] = (() => {
         });
       });
 
-      // Notepad (.txt) — the exact bank-upload-ready comma format (matches the bank's field spec).
+      // Notepad (.txt) — plain values only, no quotes/formatting, matching the bank's raw sample format.
       const hdr = ['Transaction Type','Beneficiary Code','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Instruction Reference Number','Debit Statement Narration','Chq / Trn Date','IFSC Code','Beneficiary email id'];
       const csvRows = [hdr.join(',')];
       rows.forEach(r => {
         csvRows.push([
           r.txnType, r.sno,
-          qf("'" + r.accountNo),
+          r.accountNo,
           r.amount.toFixed(2),
-          qf(r.name), qf(r.narration), '',
-          dateStr, qf(r.ifsc), '',
+          r.name, r.narration, '',
+          dateStr, r.ifsc, '',
         ].join(','));
       });
       downloadBlob(csvRows.join('\r\n'), 'text/plain;charset=utf-8;', 'RBI_Bulk_' + fileStamp + '.txt');
+
+      // Excel (.xlsx) — human-readable workbook with a division-wise summary.
+      if (window.XLSX) {
+        const wb = window.XLSX.utils.book_new();
+
+        const puAoa = [['Sr No','Division','Transaction Type','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Debit Statement Narration','Chq / Trn Date','IFSC Code']];
+        rows.forEach(r => puAoa.push([r.sno, r.division, r.txnType, r.accountNo, r.amount, r.name, r.narration, dateStr, r.ifsc]));
+        const wsPU = window.XLSX.utils.aoa_to_sheet(puAoa);
+        rows.forEach((r, i) => {
+          const cellRef = 'D' + (i + 2); // keep account numbers as text so a leading zero isn't dropped
+          if (wsPU[cellRef]) wsPU[cellRef].t = 's';
+        });
+        wsPU['!cols'] = [{ wch:6 },{ wch:16 },{ wch:8 },{ wch:20 },{ wch:14 },{ wch:26 },{ wch:22 },{ wch:12 },{ wch:13 }];
+        window.XLSX.utils.book_append_sheet(wb, wsPU, 'Payment Upload');
+
+        const divTotals = {};
+        rows.forEach(r => {
+          const key = r.division || '(No Division)';
+          if (!divTotals[key]) divTotals[key] = { amount: 0, count: 0 };
+          divTotals[key].amount += r.amount;
+          divTotals[key].count  += 1;
+        });
+        const divAoa = [['Division','Total Amount','No. of Payments']];
+        Object.keys(divTotals).sort().forEach(k => divAoa.push([k, divTotals[k].amount, divTotals[k].count]));
+        divAoa.push(['GRAND TOTAL', rows.reduce((s, r) => s + r.amount, 0), rows.length]);
+        const wsDiv = window.XLSX.utils.aoa_to_sheet(divAoa);
+        wsDiv['!cols'] = [{ wch:24 },{ wch:16 },{ wch:16 }];
+        window.XLSX.utils.book_append_sheet(wb, wsDiv, 'Division Summary');
+
+        window.XLSX.writeFile(wb, 'RBI_Bulk_' + fileStamp + '.xlsx');
+      } else {
+        Utils.showToast('Excel library unavailable — only the text file downloaded', 'warning');
+      }
 
       // Mark exported rows in DB (best-effort)
       if (exportedIds.length) {
@@ -751,7 +783,7 @@ window.Pages['client-master'] = (() => {
           _updatePmHeader();
         } catch { /* silently ignore — files are already downloaded */ }
       }
-      Utils.showToast('RBI bulk file downloaded — ' + rows.length + ' entries exported', 'success');
+      Utils.showToast('Payment files downloaded (Excel + Text) — ' + rows.length + ' entries exported', 'success');
     });
   }
 
