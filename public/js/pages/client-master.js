@@ -721,17 +721,21 @@ window.Pages['client-master'] = (() => {
         });
       });
 
-      // Notepad (.txt) — plain values only, no quotes/formatting, matching the bank's raw sample format.
-      const hdr = ['Transaction Type','Beneficiary Code','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Instruction Reference Number','Debit Statement Narration','Chq / Trn Date','IFSC Code','Beneficiary email id'];
-      const csvRows = [hdr.join(',')];
+      // Notepad (.txt) — no header row; each line has 26 comma-separated slots with the
+      // bank's reserved/blank columns in between (matches the bank's exact raw template —
+      // positions 0,1,2,3,4 = type/code/account/amount/name, 12 = reference, 20 = date, 22 = IFSC).
+      const csvRows = [];
       rows.forEach(r => {
-        csvRows.push([
-          r.txnType, r.sno,
-          r.accountNo,
-          r.amount.toFixed(2),
-          r.name, r.narration, '',
-          dateStr, r.ifsc, '',
-        ].join(','));
+        const line = new Array(26).fill('');
+        line[0]  = r.txnType;
+        line[1]  = r.sno;
+        line[2]  = r.accountNo;
+        line[3]  = r.amount;
+        line[4]  = r.name;
+        line[12] = r.narration;
+        line[20] = dateStr;
+        line[22] = r.ifsc;
+        csvRows.push(line.join(','));
       });
       downloadBlob(csvRows.join('\r\n'), 'text/plain;charset=utf-8;', 'RBI_Bulk_' + fileStamp + '.txt');
 
