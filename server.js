@@ -1421,6 +1421,7 @@ app.post('/api/delegations', requireAuth, async (req, res) => {
 
     if (!body.description||!body.doerId||!body.dueDate) return res.status(400).json({ error:'description, doerId, dueDate required' });
     const users = await q('SELECT * FROM users WHERE id = $1', [body.doerId]);
+    if (!users.length) return res.status(400).json({ error:'Selected doer no longer exists — please refresh and pick them again' });
     const row = await insertDelegation({ description:body.description, doerId:body.doerId, doerName:users[0]?.name, delegatedBy:body.delegatedBy, dueDate:normDate(body.dueDate)||body.dueDate, client:body.client, priority:body.priority, approval:resolvedApproval, url:body.url, remarks:body.remarks });
     sendDelegationEmail({ toEmail:users[0]?.email, toName:users[0]?.name, description:body.description, dueDate:normDate(body.dueDate)||body.dueDate, priority:body.priority||'Low', delegatedByName:req.session?.user?.name, url:body.url, remarks:body.remarks });
     return res.status(201).json(row);

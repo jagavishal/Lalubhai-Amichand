@@ -984,6 +984,32 @@ window.Pages['all-tasks'] = (function () {
     });
   }
 
+  /* ─── Shared transfer helper — splits selected ids by type since delegations
+         and checklist tasks live in different tables with different endpoints ── */
+  async function transferSelectedTasks(tasks, ids, fromUser, toUser) {
+    const delegationIds = [];
+    const checklistIds  = [];
+    ids.forEach(id => {
+      const t = tasks.find(x => x.id === id);
+      if (t && t.type === 'Checklist') checklistIds.push(id);
+      else delegationIds.push(id);
+    });
+    const jobs = [];
+    if (delegationIds.length) {
+      jobs.push(Utils.apiFetch('/api/delegations', {
+        method: 'PATCH',
+        body: JSON.stringify({ action: 'transfer', fromDoer: fromUser, toDoer: toUser?.name, toDoerId: toUser?.id, taskIds: delegationIds }),
+      }));
+    }
+    checklistIds.forEach(id => {
+      jobs.push(Utils.apiFetch('/api/masters', {
+        method: 'PATCH',
+        body: JSON.stringify({ id, assignedTo: toUser?.name }),
+      }));
+    });
+    await Promise.all(jobs);
+  }
+
   /* ─── Transfer Modal (admin) ────────────────────────────────────────────── */
   function openTransferModal() {
     const div = modalOverlay('at-transfer-modal', `
@@ -1016,12 +1042,14 @@ window.Pages['all-tasks'] = (function () {
     `);
 
     let selectedIds = new Set();
+    let currentTasks = [];
 
     function renderTaskList(fromUserId) {
       const fromUser = _users.find(u => u.id === fromUserId);
       if (!fromUser) return;
       const group = _grouped.find(g => g.doer === fromUser.name);
-      const tasks = (group?.tasks || []).filter(t => t.type !== 'Checklist' && t.status !== 'done');
+      const tasks = (group?.tasks || []).filter(t => t.status !== 'done');
+      currentTasks = tasks;
 
       const toSel = document.getElementById('att-to');
       toSel.disabled = false;
@@ -1052,6 +1080,7 @@ window.Pages['all-tasks'] = (function () {
             <div style="flex:1;min-width:0">
               <div style="font-size:12.5px;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}</div>
               <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
+                ${t.type === 'Checklist' ? '<span style="font-size:10px;padding:1px 6px;border-radius:999px;font-weight:500;background:#ecfdf5;color:#059669">Checklist</span>' : ''}
                 ${t.dueDate ? `<span style="font-size:10.5px;color:#94a3b8">${new Date(t.dueDate).toLocaleDateString('en-IN')}</span>` : ''}
                 <span style="font-size:10px;padding:1px 6px;border-radius:999px;font-weight:500;background:${t.status === 'revise' ? '#fef3c7' : '#f1f5f9'};color:${t.status === 'revise' ? '#92400e' : '#64748b'}">${t.status}</span>
               </div>
@@ -1109,14 +1138,7 @@ window.Pages['all-tasks'] = (function () {
       const btn = document.getElementById('att-submit');
       btn.disabled = true; btn.textContent = 'Transferring…';
       try {
-        await Utils.apiFetch('/api/delegations', {
-          method: 'PATCH',
-          body: JSON.stringify({
-            action: 'transfer',
-            fromDoer: fromUser?.name, toDoer: toUser?.name, toDoerId: toUser?.id,
-            taskIds: [...selectedIds],
-          }),
-        });
+        await transferSelectedTasks(currentTasks, [...selectedIds], fromUser?.name, toUser);
         div.remove();
         Utils.showToast('Tasks transferred successfully');
         await reload();
@@ -1132,7 +1154,7 @@ window.Pages['all-tasks'] = (function () {
   function openMyTransferModal() {
     const myName  = currentUserName();
     const group   = _grouped.find(g => g.doer === myName);
-    const myTasks = (group?.tasks || []).filter(t => t.type !== 'Checklist' && t.status !== 'done');
+    const myTasks = (group?.tasks || []).filter(t => t.status !== 'done');
 
     let selectedIds = new Set(myTasks.map(t => t.id));
 
@@ -1152,6 +1174,7 @@ window.Pages['all-tasks'] = (function () {
             <div style="flex:1;min-width:0">
               <div style="font-size:12.5px;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}</div>
               <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
+                ${t.type === 'Checklist' ? '<span style="font-size:10px;padding:1px 6px;border-radius:999px;font-weight:500;background:#ecfdf5;color:#059669">Checklist</span>' : ''}
                 ${t.dueDate ? `<span style="font-size:10.5px;color:#94a3b8">${new Date(t.dueDate).toLocaleDateString('en-IN')}</span>` : ''}
                 <span style="font-size:10px;padding:1px 6px;border-radius:999px;font-weight:500;background:${t.status === 'revise' ? '#fef3c7' : '#f1f5f9'};color:${t.status === 'revise' ? '#92400e' : '#64748b'}">${t.status}</span>
               </div>
@@ -1217,14 +1240,7 @@ window.Pages['all-tasks'] = (function () {
       const btn = document.getElementById('atmt-submit');
       btn.disabled = true; btn.textContent = 'Transferring…';
       try {
-        await Utils.apiFetch('/api/delegations', {
-          method: 'PATCH',
-          body: JSON.stringify({
-            action: 'transfer',
-            fromDoer: myName, toDoer: toUser?.name, toDoerId: toUser?.id,
-            taskIds: [...selectedIds],
-          }),
-        });
+        await transferSelectedTasks(myTasks, [...selectedIds], myName, toUser);
         div.remove();
         Utils.showToast('Tasks transferred successfully');
         await reload();

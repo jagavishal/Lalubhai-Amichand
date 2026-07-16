@@ -127,7 +127,39 @@ window.Pages.dashboard = (function () {
     reviseSaving: false,
     reviseNote: '',
     reviseDate: '',
+    sortCol: null,   // 'type' | 'description' | 'doer' | 'priority' | 'date'
+    sortDir: 'asc',
   };
+
+  /* ── column sort (click a header, like Google Sheets) ──────────────── */
+  const PRIORITY_RANK = { High: 0, Medium: 1, Low: 2 };
+  const DASH_SORT_ACCESSORS = {
+    type:        t => (t.type || '').toLowerCase(),
+    description: t => (t.description || '').toLowerCase(),
+    doer:        t => (t.doer || '').toLowerCase(),
+    priority:    t => PRIORITY_RANK[t.priority] ?? 99,
+    date:        t => t.date ? new Date(t.date).getTime() : -Infinity,
+  };
+
+  function sortDashTasks(tasks) {
+    const { sortCol, sortDir } = _state;
+    if (!sortCol || !DASH_SORT_ACCESSORS[sortCol]) return tasks;
+    const accessor = DASH_SORT_ACCESSORS[sortCol];
+    const dir = sortDir === 'desc' ? -1 : 1;
+    return [...tasks].sort((a, b) => {
+      const av = accessor(a), bv = accessor(b);
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return 0;
+    });
+  }
+
+  function dashSortIndicator(col) {
+    if (_state.sortCol !== col) return '';
+    return _state.sortDir === 'asc'
+      ? ' <span style="font-size:9px;">&#9650;</span>'
+      : ' <span style="font-size:9px;">&#9660;</span>';
+  }
 
   /* ── render helpers for tasks table ─────────────────────────────── */
   function getFiltered() {
@@ -149,7 +181,7 @@ window.Pages.dashboard = (function () {
           if (t.status === 'done') return false;
           if (subTab !== 'All' && t.type !== subTab) return false;
         }
-        return userFilter === 'All' || t.doer === userFilter;
+        return userFilter === 'All' || (t.doer || '').trim().toLowerCase() === userFilter.trim().toLowerCase();
       })
       .slice()
       .sort((a, b) => (STATUS_RANK[a.status] ?? 2) - (STATUS_RANK[b.status] ?? 2));
@@ -211,6 +243,7 @@ window.Pages.dashboard = (function () {
         .db-stat-card[data-filter]:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.08); }
         .db-stat-card[data-filter]:active { transform: translateY(0); }
         .db-stat-card[data-filter].active { border-color: var(--color-primary); box-shadow: 0 4px 14px rgba(196,113,74,.16); }
+        .db-th-sort:hover { color: var(--color-primary) !important; }
         /* Mobile responsive */
         @media (max-width: 767px) {
           #db-topbar { flex-direction: column; gap: 10px; }
@@ -497,10 +530,10 @@ window.Pages.dashboard = (function () {
                 <option value="yearly">Yearly (1 task/year)</option>
               </select>
             </div>
-            <!-- Start Date | End Date -->
+            <!-- Due Date | End Date -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label class="label">START DATE</label>
+                <label class="label">DUE DATE</label>
                 <input type="date" id="chk-start" class="input" value="${todayISO()}" />
               </div>
               <div>
@@ -786,7 +819,7 @@ window.Pages.dashboard = (function () {
     const thStyle = 'text-align:left;padding:10px 12px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;background:rgba(248,250,252,.97);position:sticky;top:0;';
     const tdStyle = 'padding:10px 12px;font-size:12.5px;color:#475569;border-top:1px solid #f1f5f9;';
 
-    const rows = filtered.map(t => {
+    const rows = sortDashTasks(filtered).map(t => {
       const dateStyle = t.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#475569;';
       const urlLink = t.url ? `<a href="${t.url}" target="_blank" rel="noopener noreferrer" title="${t.url}" style="color:#C4714A;flex-shrink:0;display:inline-flex;margin-left:4px;">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>` : '';
@@ -829,18 +862,31 @@ window.Pages.dashboard = (function () {
       </tr>`;
     }).join('');
 
+    const sortTh = (col, label) =>
+      `<th class="db-th-sort" data-sort="${col}" style="${thStyle}cursor:pointer;user-select:none;" title="Sort by ${label}">${label}${dashSortIndicator(col)}</th>`;
+
     table.innerHTML = `
       <thead>
         <tr>
-          <th style="${thStyle}">Type</th>
-          <th style="${thStyle}">Description</th>
-          <th style="${thStyle}">Doer</th>
-          <th style="${thStyle}">Priority</th>
-          <th style="${thStyle}">Date</th>
+          ${sortTh('type', 'Type')}
+          ${sortTh('description', 'Description')}
+          ${sortTh('doer', 'Doer')}
+          ${sortTh('priority', 'Priority')}
+          ${sortTh('date', 'Date')}
           <th style="${thStyle}">Action</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>`;
+
+    /* sortable column headers */
+    table.querySelectorAll('.db-th-sort').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.sort;
+        if (_state.sortCol === col) { _state.sortDir = _state.sortDir === 'asc' ? 'desc' : 'asc'; }
+        else { _state.sortCol = col; _state.sortDir = 'asc'; }
+        _updateTasksTable(admin);
+      });
+    });
 
     /* attach action button events */
     table.querySelectorAll('[data-action]').forEach(btn => {
