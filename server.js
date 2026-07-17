@@ -206,8 +206,9 @@ const SCHEMA = [
   `ALTER TABLE packing_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(32) NOT NULL DEFAULT 'PACKING_BOX'`,
   `CREATE INDEX idx_pk_group ON packing_items (customer_group)`,
   `CREATE INDEX idx_pk_type ON packing_items (item_type)`,
-  `CREATE TABLE IF NOT EXISTS purchase_requisitions (id VARCHAR(16) PRIMARY KEY, pr_type VARCHAR(32) NOT NULL DEFAULT 'ITEM_CODE', pr_date DATE NOT NULL, requested_by VARCHAR(255) NOT NULL DEFAULT '', requested_by_id VARCHAR(16) DEFAULT NULL, vendor_id VARCHAR(16) DEFAULT NULL, status VARCHAR(32) NOT NULL DEFAULT 'pending', remarks TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS purchase_requisitions (id VARCHAR(16) PRIMARY KEY, pr_type VARCHAR(32) NOT NULL DEFAULT 'ITEM_CODE', pr_date DATE NOT NULL, requested_by VARCHAR(255) NOT NULL DEFAULT '', requested_by_id VARCHAR(16) DEFAULT NULL, vendor_id VARCHAR(16) DEFAULT NULL, status VARCHAR(32) NOT NULL DEFAULT 'pending', expected_date DATE DEFAULT NULL, remarks TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `ALTER TABLE purchase_requisitions ADD COLUMN IF NOT EXISTS pr_type VARCHAR(32) NOT NULL DEFAULT 'ITEM_CODE'`,
+  `ALTER TABLE purchase_requisitions ADD COLUMN IF NOT EXISTS expected_date DATE DEFAULT NULL`,
   `CREATE INDEX idx_pr_status ON purchase_requisitions (status)`,
   `CREATE INDEX idx_pr_requester ON purchase_requisitions (requested_by_id)`,
   `CREATE INDEX idx_pr_type ON purchase_requisitions (pr_type)`,
@@ -1515,6 +1516,40 @@ app.patch('/api/delegations', requireAuth, async (req, res) => {
         }
       } catch (e) { console.error('[email] Done reminder failed:', e.message); }
     }
+    /* shifted reminder email → delegator */
+    if (status === 'revise') {
+      try {
+        const task = result[0];
+        const delegatorId = task.delegated_by || task.delegatedBy;
+        let toEmail = null, toName = null;
+        if (delegatorId) {
+          const uRows = await q('SELECT email, name FROM users WHERE id=$1 OR email=$1 LIMIT 1', [delegatorId]);
+          if (uRows[0]) { toEmail = uRows[0].email; toName = uRows[0].name; }
+        }
+        if (toEmail) {
+          const mailer = getMailer();
+          if (mailer) {
+            await mailer.sendMail({
+              from: `"Task Manager" <${process.env.SMTP_USER}>`,
+              to: toEmail,
+              subject: `Task Shifted: ${(task.description||'').slice(0,60)}`,
+              html: `<div style="font-family:sans-serif;max-width:520px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
+                <div style="background:#f59e0b;padding:20px 24px">
+                  <h2 style="color:#fff;margin:0;font-size:16px">🔄 Task Shifted</h2>
+                </div>
+                <div style="padding:24px">
+                  <p style="margin:0 0 12px;font-size:14px;color:#1e293b"><strong>Task:</strong> ${task.description||''}</p>
+                  <p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Shifted by:</strong> ${task.doer||''}</p>
+                  ${task.remarks ? `<p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Reason:</strong> ${task.remarks}</p>` : ''}
+                  ${task.due_date ? `<p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>New Due Date:</strong> ${new Date(task.due_date).toLocaleDateString('en-IN')}</p>` : ''}
+                  <p style="margin:0;font-size:13px;color:#94a3b8">Hi ${toName||''}, the above task has been shifted.</p>
+                </div>
+              </div>`,
+            });
+          }
+        }
+      } catch (e) { console.error('[email] Shift reminder failed:', e.message); }
+    }
     return res.json(result[0]);
   } catch (err) { console.error(err); return res.status(500).json({ error:err.message }); }
 });
@@ -1713,7 +1748,37 @@ app.patch('/api/masters', requireAuth, async (req, res) => {
       return res.json({ success:true });
     }
     await ensureSchema();
+    const before = await q('SELECT assigned_to, task FROM masters WHERE id=$1', [body.id]);
+    const prevAssignee = before[0]?.assigned_to || '';
     await pool.query('UPDATE masters SET task=COALESCE($1,task), assigned_to=COALESCE($2,assigned_to), frequency=COALESCE($3,frequency), start_date=COALESCE($4,start_date), end_date=COALESCE($5,end_date), remarks=COALESCE($6,remarks), department=COALESCE($7,department) WHERE id=$8', [body.task??null,body.assignedTo??null,body.frequency??null,body.startDate??null,body.endDate??null,body.remarks??null,body.department??null,body.id]);
+    /* reassigned/transferred email → new assignee */
+    if (body.assignedTo && body.assignedTo !== prevAssignee) {
+      try {
+        const uRows = await q('SELECT email, name FROM users WHERE name=$1 LIMIT 1', [body.assignedTo]);
+        const toEmail = uRows[0]?.email, toName = uRows[0]?.name;
+        if (toEmail) {
+          const mailer = getMailer();
+          if (mailer) {
+            const taskDesc = body.task || before[0]?.task || '';
+            await mailer.sendMail({
+              from: `"Task Manager" <${process.env.SMTP_USER}>`,
+              to: toEmail,
+              subject: `Checklist Task Transferred to You: ${taskDesc.slice(0,60)}`,
+              html: `<div style="font-family:sans-serif;max-width:520px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
+                <div style="background:#6366f1;padding:20px 24px">
+                  <h2 style="color:#fff;margin:0;font-size:16px">📋 Checklist Task Assigned to You</h2>
+                </div>
+                <div style="padding:24px">
+                  <p style="margin:0 0 12px;font-size:14px;color:#1e293b"><strong>Task:</strong> ${taskDesc}</p>
+                  ${prevAssignee ? `<p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Transferred from:</strong> ${prevAssignee}</p>` : ''}
+                  <p style="margin:0;font-size:13px;color:#94a3b8">Hi ${toName||''}, this recurring checklist task is now assigned to you.</p>
+                </div>
+              </div>`,
+            });
+          }
+        }
+      } catch (e) { console.error('[email] Checklist transfer notification failed:', e.message); }
+    }
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -2294,11 +2359,70 @@ async function nextPrId() {
   return 'PR' + (lastNum + 1).toString().padStart(4, '0');
 }
 
+const PR_TYPE_LABEL = { ITEM_CODE: 'Item Code', PACKING_STICKER: 'Packing Sticker', PACKING_BOX: 'Packing Box', ALU: 'Aluminium' };
+
+async function sendPrApprovalEmail({ id, prType, prDate, requestedBy, vendorId, remarks, items }) {
+  const mailer = getMailer();
+  if (!mailer) return;
+  let vendorName = '';
+  if (vendorId) {
+    try { const v = await q('SELECT name FROM clients WHERE id=$1', [vendorId]); vendorName = v[0]?.name || ''; } catch {}
+  }
+  const total = items.reduce((s, it) => s + (parseFloat(it.quantity)||0) * (parseFloat(it.estimatedRate)||0), 0);
+  const rowsHtml = items.map(it => {
+    const qty = parseFloat(it.quantity)||0, rate = parseFloat(it.estimatedRate)||0;
+    return `<tr>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;">${it.itemName||''}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;">${it.unit||'—'}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:right;">${qty}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:right;">${rate.toFixed(2)}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;text-align:right;">${(qty*rate).toFixed(2)}</td>
+    </tr>`;
+  }).join('');
+  try {
+    await mailer.sendMail({
+      from: `"MIS LALTD" <${process.env.SMTP_USER}>`,
+      to: 'sajilshah@laltd.in',
+      cc: 'store@laltd.in',
+      subject: `Purchase Requisition ${id} — Approval Required (${PR_TYPE_LABEL[prType]||prType})`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
+        <div style="background:#C4714A;padding:20px 24px">
+          <h2 style="color:#fff;margin:0;font-size:16px">Purchase Requisition ${id}</h2>
+          <div style="color:#fde8dd;font-size:12.5px;margin-top:2px;">${PR_TYPE_LABEL[prType]||prType}</div>
+        </div>
+        <div style="padding:24px">
+          <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13px;">
+            <tr><td style="padding:4px 0;color:#64748b;width:130px;">Requested By</td><td style="padding:4px 0;color:#1e293b;font-weight:600;">${requestedBy||'—'}</td></tr>
+            <tr><td style="padding:4px 0;color:#64748b;">Date</td><td style="padding:4px 0;color:#1e293b;">${prDate||'—'}</td></tr>
+            <tr><td style="padding:4px 0;color:#64748b;">Vendor</td><td style="padding:4px 0;color:#1e293b;">${vendorName||'—'}</td></tr>
+            ${remarks ? `<tr><td style="padding:4px 0;color:#64748b;">Remarks</td><td style="padding:4px 0;color:#1e293b;">${remarks}</td></tr>` : ''}
+          </table>
+          <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+            <thead><tr style="background:#f8fafc;">
+              <th style="padding:6px 10px;text-align:left;color:#64748b;">Item</th>
+              <th style="padding:6px 10px;text-align:left;color:#64748b;">Unit</th>
+              <th style="padding:6px 10px;text-align:right;color:#64748b;">Qty</th>
+              <th style="padding:6px 10px;text-align:right;color:#64748b;">Rate</th>
+              <th style="padding:6px 10px;text-align:right;color:#64748b;">Amount</th>
+            </tr></thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+          <p style="text-align:right;font-size:13.5px;font-weight:700;color:#1e293b;margin:12px 0 0;">Estimated Total: ₹${total.toLocaleString('en-IN',{minimumFractionDigits:2})}</p>
+          <p style="color:#94a3b8;font-size:12px;margin-top:20px;">Please review and approve this requisition.</p>
+        </div>
+      </div>`,
+    });
+    console.log('[email] PR approval email sent for', id);
+  } catch (e) {
+    console.error('[email] PR approval email failed:', e.message);
+  }
+}
+
 app.get('/api/purchase-requisitions', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
     const requestedById = req.query.requestedById;
-    const headerSql = `SELECT pr.id, pr.pr_type AS prType, pr.pr_date AS prDate, pr.requested_by AS requestedBy, pr.requested_by_id AS requestedById, pr.vendor_id AS vendorId, c.name AS vendorName, pr.status, pr.remarks, pr.created_at AS createdAt FROM purchase_requisitions pr LEFT JOIN clients c ON c.id = pr.vendor_id`;
+    const headerSql = `SELECT pr.id, pr.pr_type AS prType, pr.pr_date AS prDate, pr.requested_by AS requestedBy, pr.requested_by_id AS requestedById, pr.vendor_id AS vendorId, c.name AS vendorName, pr.status, pr.expected_date AS expectedDate, pr.remarks, pr.created_at AS createdAt FROM purchase_requisitions pr LEFT JOIN clients c ON c.id = pr.vendor_id`;
     const headers = requestedById
       ? await q(headerSql + ' WHERE pr.requested_by_id = $1 ORDER BY pr.created_at DESC', [requestedById])
       : await q(headerSql + ' ORDER BY pr.created_at DESC');
@@ -2346,6 +2470,7 @@ app.post('/api/purchase-requisitions', requireAuth, async (req, res) => {
     } finally {
       c.release();
     }
+    sendPrApprovalEmail({ id, prType: b.prType||'ITEM_CODE', prDate: b.prDate, requestedBy: user?.name||'', vendorId: b.vendorId||null, remarks: b.remarks||'', items }).catch(() => {});
     return res.status(201).json({ success:true, id });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -2356,8 +2481,8 @@ app.patch('/api/purchase-requisitions', requireAuth, async (req, res) => {
     const b = req.body;
     if (!b.id) return res.status(400).json({ error:'id required' });
     await pool.query(
-      `UPDATE purchase_requisitions SET status=COALESCE($1,status), vendor_id=COALESCE($2,vendor_id), remarks=COALESCE($3,remarks), pr_type=COALESCE($4,pr_type) WHERE id=$5`,
-      [b.status??null, b.vendorId??null, b.remarks??null, b.prType??null, b.id]
+      `UPDATE purchase_requisitions SET status=COALESCE($1,status), vendor_id=COALESCE($2,vendor_id), remarks=COALESCE($3,remarks), pr_type=COALESCE($4,pr_type), expected_date=COALESCE($5,expected_date) WHERE id=$6`,
+      [b.status??null, b.vendorId??null, b.remarks??null, b.prType??null, b.expectedDate??null, b.id]
     );
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }

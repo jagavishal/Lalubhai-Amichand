@@ -425,6 +425,36 @@ window.Pages.users = (() => {
       el.querySelectorAll('[data-action="delete"]').forEach(btn => {
         btn.addEventListener('click', () => deleteUser(btn.dataset.id));
       });
+
+      el.querySelectorAll('[data-action="access"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const u = _users.find(x => String(x.id) === String(btn.dataset.id));
+          if (u) openPermRow(u);
+        });
+      });
+
+      if (_expandedUserId) {
+        el.querySelectorAll('.pi-page').forEach(chk => {
+          chk.addEventListener('change', () => {
+            const page = chk.dataset.page;
+            if (chk.checked) { if (!_permData.pages.includes(page)) _permData.pages.push(page); }
+            else {
+              _permData.pages = _permData.pages.filter(p => p !== page);
+              delete _permData.features[page]; // feature toggles are meaningless without page access
+            }
+            renderPage();
+          });
+        });
+        el.querySelectorAll('.pi-feat').forEach(chk => {
+          chk.addEventListener('change', () => {
+            const page = chk.dataset.page, feat = chk.dataset.feat;
+            const cur = _permData.features[page] || [];
+            _permData.features[page] = chk.checked ? [...new Set([...cur, feat])] : cur.filter(f => f !== feat);
+          });
+        });
+        document.getElementById('perm-save-btn')?.addEventListener('click', () => savePermissions(_expandedUserId));
+        document.getElementById('perm-cancel-btn')?.addEventListener('click', () => { _expandedUserId = null; renderPage(); });
+      }
     }
 
     if (_tab === 'Access') {
@@ -451,16 +481,20 @@ window.Pages.users = (() => {
           /* optimistically update local state */
           u.permissions = { ...existing, pages };
 
+          chk.disabled = true;
           try {
             await Utils.apiFetch('/api/users', {
               method: 'PATCH',
               body: JSON.stringify({ id: uid, permissions: u.permissions }),
             });
+            Utils.showToast(`${chk.checked ? 'Granted' : 'Revoked'} ${(ALL_PAGES.find(p => p.key === page)?.label) || page} for ${u.name || 'user'}`);
           } catch (e) {
             /* revert on failure */
             u.permissions = existing;
             chk.checked = !chk.checked;
             Utils.showToast(e.message || 'Failed to save', 'error');
+          } finally {
+            chk.disabled = false;
           }
         });
       });
@@ -480,15 +514,20 @@ window.Pages.users = (() => {
     const tableRows = rows.length === 0
       ? `<tr><td colspan="${_isAdmin ? 6 : 5}" class="table-td text-center text-slate-400 py-10">No users found</td></tr>`
       : rows.map(u => {
+          const isAdminOrHod = normalizeRoles(u.roles).some(r => r === 'Admin' || r === 'HOD');
+          const accessBtn = !isAdminOrHod
+            ? `<button data-action="access" data-id="${esc(u.id)}" class="pill bg-indigo-50 text-indigo-700 hover:bg-indigo-100 cursor-pointer">${_expandedUserId === u.id ? 'Close' : 'Access'}</button>`
+            : '';
           const actionCells = _isAdmin ? `
             <td class="table-td">
               <div class="flex gap-1.5 flex-wrap">
                 <button data-action="edit"   data-id="${esc(u.id)}" class="pill pill-brand cursor-pointer" style="border:none;" onmouseenter="this.style.opacity='0.8'" onmouseleave="this.style.opacity='1'">Edit</button>
                 <button data-action="setpwd" data-id="${esc(u.id)}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer">Set Password</button>
+                ${accessBtn}
                 <button data-action="delete" data-id="${esc(u.id)}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer">Delete</button>
               </div>
             </td>` : '';
-          return `
+          const mainRow = `
             <tr class="table-row">
               <td class="table-td">
                 <div class="flex items-center gap-2.5">
@@ -505,6 +544,24 @@ window.Pages.users = (() => {
               <td class="table-td"><div class="flex flex-wrap gap-1">${rolePillsHtml(u.roles)}</div></td>
               ${actionCells}
             </tr>`;
+
+          const expandRow = _expandedUserId === u.id ? `
+            <tr>
+              <td colspan="${_isAdmin ? 6 : 5}" style="padding:0;border-bottom:1px solid #f1f5f9;">
+                <div style="background:#fafbfc;border-top:1px dashed #e2e8f0;padding:16px 20px;">
+                  <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">
+                    Page &amp; Feature Access — ${esc(u.name || '')}
+                  </div>
+                  <div id="perm-inline-body">${renderPermInline()}</div>
+                  <div style="display:flex;gap:8px;margin-top:14px;">
+                    <button id="perm-save-btn" class="btn-primary" style="padding:7px 18px;font-size:12.5px;" ${_permSaving ? 'disabled' : ''}>${_permSaving ? 'Saving…' : 'Save Access'}</button>
+                    <button id="perm-cancel-btn" class="pill bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer" style="padding:7px 18px;">Cancel</button>
+                  </div>
+                </div>
+              </td>
+            </tr>` : '';
+
+          return mainRow + expandRow;
         }).join('');
 
     return `
@@ -577,8 +634,8 @@ window.Pages.users = (() => {
       .sort((a, b) => (a.name||'').localeCompare(b.name||''))
       .filter(u => !q || (u.name||'').toLowerCase().includes(q) || (u.email||'').toLowerCase().includes(q));
 
-    const thStyle = 'padding:10px 12px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#e4e4e7;text-align:center;white-space:nowrap;border-right:1px solid #2d2d3a;';
-    const thFirst = 'padding:10px 16px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#e4e4e7;text-align:left;white-space:nowrap;position:sticky;left:0;z-index:2;background:#18181b;';
+    const thStyle = 'padding:10px 12px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;text-align:center;white-space:nowrap;border-right:1px solid #e2e8f0;background:#f8fafc;';
+    const thFirst = 'padding:10px 16px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;text-align:left;white-space:nowrap;position:sticky;left:0;z-index:2;background:#f8fafc;border-right:1px solid #e2e8f0;';
 
     const rows = sorted.map(u => {
       const isHod    = isAdminOrHod(u);
@@ -632,7 +689,7 @@ window.Pages.users = (() => {
         <div style="overflow-x:auto;">
           <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
             <thead>
-              <tr style="background:#18181b;">
+              <tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0;">
                 <th style="${thFirst}">User</th>
                 ${colHeaders}
               </tr>

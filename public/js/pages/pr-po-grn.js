@@ -20,7 +20,7 @@ window.Pages['pr-po-grn'] = (() => {
   };
 
   /* ── Shared state ───────────────────────────────────────────── */
-  let _tab      = 'masters'; // 'masters' | 'forms'
+  let _tab      = 'masters'; // 'masters' | 'forms' | 'fms'
   let _canEdit  = false;     // Admin/HOD
 
   /* ── Masters (Item Master) state ───────────────────────────── */
@@ -45,6 +45,10 @@ window.Pages['pr-po-grn'] = (() => {
   let _prViewing   = null;
   let _prSaving    = false;
   let _prForm      = _blankPrForm();
+
+  /* ── FMS (dispatch/shipment tracking) state ────────────────── */
+  let _fmsStatusF  = 'ordered'; // 'ordered' | 'All'
+  let _fmsQ        = '';
 
   /* ── Helpers ────────────────────────────────────────────────── */
   function esc(s) {
@@ -769,6 +773,155 @@ window.Pages['pr-po-grn'] = (() => {
   }
 
   /* ═══════════════════════════════════════════════════════════════
+     FMS TAB — dispatch/shipment tracking (which PR is expected when)
+     ═══════════════════════════════════════════════════════════════ */
+
+  function _fmsFiltered() {
+    const t = _fmsQ.toLowerCase();
+    return _prs
+      .filter(pr => (_fmsStatusF === 'All' || pr.status === _fmsStatusF))
+      .filter(pr => !t || (pr.id + pr.requestedBy + (pr.vendorName||'') + (pr.items||[]).map(i=>i.itemName).join(' ')).toLowerCase().includes(t))
+      .sort((a, b) => {
+        // no expected date sorts last; otherwise soonest-first
+        if (!a.expectedDate && !b.expectedDate) return 0;
+        if (!a.expectedDate) return 1;
+        if (!b.expectedDate) return -1;
+        return new Date(a.expectedDate) - new Date(b.expectedDate);
+      });
+  }
+
+  function _daysInfo(pr) {
+    if (!pr.expectedDate) return { label: 'Not set', color: '#94a3b8' };
+    if (pr.status === 'received') return { label: 'Received', color: '#16a34a' };
+    const today = new Date(); today.setHours(0,0,0,0);
+    const exp = new Date(pr.expectedDate); exp.setHours(0,0,0,0);
+    const diffDays = Math.round((exp - today) / 86400000);
+    if (diffDays < 0) return { label: Math.abs(diffDays) + ' day' + (Math.abs(diffDays)===1?'':'s') + ' overdue', color: '#dc2626' };
+    if (diffDays === 0) return { label: 'Due today', color: '#f59e0b' };
+    return { label: 'In ' + diffDays + ' day' + (diffDays===1?'':'s'), color: '#64748b' };
+  }
+
+  async function _setPrExpectedDate(id, expectedDate) {
+    await Utils.apiFetch('/api/purchase-requisitions', { method: 'PATCH', body: JSON.stringify({ id, expectedDate }) });
+    const pr = _prs.find(x => x.id === id);
+    if (pr) pr.expectedDate = expectedDate;
+  }
+
+  function _renderFmsTable() {
+    const rows = _fmsFiltered();
+    if (!rows.length) {
+      return '<div style="padding:56px 24px;text-align:center;">'
+        + '<div style="font-size:14px;font-weight:600;color:#374151;">No requisitions to track</div>'
+        + '<div style="font-size:12px;color:#94a3b8;margin-top:4px;">' + (_fmsStatusF === 'ordered' ? 'Nothing is currently marked Ordered.' : 'Try adjusting your filters.') + '</div>'
+      + '</div>';
+    }
+    const thS = 'padding:10px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;background:#f8fafc;text-align:left;white-space:nowrap;';
+    return '<div class="overflow-x-auto"><table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr style="border-bottom:2px solid #e2e8f0;">'
+        + '<th style="' + thS + '">PR ID</th>'
+        + '<th style="' + thS + '">Type</th>'
+        + '<th style="' + thS + '">Vendor</th>'
+        + '<th style="' + thS + '">Requested By</th>'
+        + '<th style="' + thS + '">PR Date</th>'
+        + '<th style="' + thS + '">Expected Date</th>'
+        + '<th style="' + thS + '">Days</th>'
+        + '<th style="' + thS + '">Status</th>'
+        + '<th style="' + thS + 'text-align:right;">Actions</th>'
+      + '</tr></thead>'
+      + '<tbody>' + rows.map((pr, i) => {
+        const sc = STATUS_COLOR[pr.status] || STATUS_COLOR.pending;
+        const di = _daysInfo(pr);
+        const tdS = 'padding:10px 14px;font-size:12.5px;color:#374151;border-bottom:1px solid #f1f5f9;';
+        const pill = '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;background:' + sc.bg + ';color:' + sc.fg + ';font-size:11px;font-weight:600;"><span style="width:5px;height:5px;border-radius:50%;background:' + sc.dot + ';"></span>' + STATUS_LABEL[pr.status] + '</span>';
+        return '<tr style="' + (i % 2 === 1 ? 'background:#fafafa;' : '') + '">'
+          + '<td style="' + tdS + 'font-weight:600;color:#1e293b;">' + esc(pr.id) + '</td>'
+          + '<td style="' + tdS + '"><span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;background:#eff6ff;color:#2563eb;font-size:11px;font-weight:600;">' + esc(TYPE_LABEL[pr.prType] || pr.prType) + '</span></td>'
+          + '<td style="' + tdS + '">' + esc(pr.vendorName || '—') + '</td>'
+          + '<td style="' + tdS + '">' + esc(pr.requestedBy) + '</td>'
+          + '<td style="' + tdS + '">' + esc(pr.prDate) + '</td>'
+          + '<td style="' + tdS + '"><input type="date" class="ppgx-expected" data-id="' + esc(pr.id) + '" value="' + esc(pr.expectedDate || '') + '" style="padding:5px 8px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12px;" /></td>'
+          + '<td style="' + tdS + 'color:' + di.color + ';font-weight:600;">' + di.label + '</td>'
+          + '<td style="' + tdS + '">' + pill + '</td>'
+          + '<td style="' + tdS + '"><div style="display:flex;gap:6px;justify-content:flex-end;">'
+            + (pr.status !== 'received' ? '<button class="ppgx-received" data-id="' + esc(pr.id) + '" style="padding:4px 12px;border-radius:6px;border:1.5px solid #bbf7d0;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;cursor:pointer;">Mark Received</button>' : '')
+            + '<button class="ppgx-view" data-id="' + esc(pr.id) + '" style="padding:4px 12px;border-radius:6px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:11px;font-weight:600;cursor:pointer;">View</button>'
+          + '</div></td>'
+        + '</tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  function _renderFmsTab() {
+    const rows = _fmsFiltered();
+    const overdue = _prs.filter(pr => pr.status === 'ordered' && pr.expectedDate && new Date(pr.expectedDate) < new Date(new Date().toDateString())).length;
+    const ordered = _prs.filter(pr => pr.status === 'ordered').length;
+
+    return '<div style="display:flex;flex-direction:column;gap:16px;">'
+      + '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+        + '<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;background:#fff;border:1px solid #e2e8f0;">'
+          + '<div><div style="font-size:18px;font-weight:800;color:#1e293b;line-height:1;">' + ordered + '</div><div style="font-size:10.5px;color:#94a3b8;margin-top:1px;">Awaiting Delivery</div></div>'
+        + '</div>'
+        + '<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;background:#fef2f2;border:1px solid #fecaca;">'
+          + '<div><div style="font-size:18px;font-weight:800;color:#dc2626;line-height:1;">' + overdue + '</div><div style="font-size:10.5px;color:#dc2626;margin-top:1px;">Overdue</div></div>'
+        + '</div>'
+      + '</div>'
+      + '<div style="background:#fff;border-radius:14px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.05);">'
+        + '<div style="padding:14px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+          + '<div style="position:relative;flex:1;min-width:200px;">'
+            + '<svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#94a3b8;" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
+            + '<input id="ppgx-search" placeholder="Search PR ID, vendor, item…" value="' + esc(_fmsQ) + '" style="width:100%;box-sizing:border-box;padding:8px 12px 8px 32px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;outline:none;background:#f8fafc;" />'
+          + '</div>'
+          + '<select id="ppgx-status-filter" style="padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;outline:none;background:#f8fafc;color:#374151;cursor:pointer;">'
+            + '<option value="ordered" ' + (_fmsStatusF==='ordered'?'selected':'') + '>Awaiting Delivery</option>'
+            + '<option value="All" ' + (_fmsStatusF==='All'?'selected':'') + '>All Requisitions</option>'
+          + '</select>'
+          + '<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">' + rows.length + ' shown</span>'
+        + '</div>'
+        + '<div id="ppgx-table">' + _renderFmsTable() + '</div>'
+      + '</div>'
+    + '</div>';
+  }
+
+  function _bindFmsEvents() {
+    document.getElementById('ppgx-search')?.addEventListener('input', (e) => {
+      _fmsQ = e.target.value;
+      const t = document.getElementById('ppgx-table');
+      if (t) t.innerHTML = _renderFmsTable();
+      _bindFmsTableEvents();
+    });
+    document.getElementById('ppgx-status-filter')?.addEventListener('change', (e) => {
+      _fmsStatusF = e.target.value;
+      _renderTabContent();
+    });
+    _bindFmsTableEvents();
+  }
+  function _bindFmsTableEvents() {
+    document.querySelectorAll('.ppgx-expected').forEach(inp => {
+      inp.addEventListener('change', async () => {
+        await _setPrExpectedDate(inp.dataset.id, inp.value || null);
+        Utils.showToast('Expected date updated');
+        const t = document.getElementById('ppgx-table');
+        if (t) t.innerHTML = _renderFmsTable();
+        _bindFmsTableEvents();
+      });
+    });
+    document.querySelectorAll('.ppgx-received').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await Utils.apiFetch('/api/purchase-requisitions', { method: 'PATCH', body: JSON.stringify({ id: btn.dataset.id, status: 'received' }) });
+        const pr = _prs.find(x => x.id === btn.dataset.id);
+        if (pr) pr.status = 'received';
+        Utils.showToast('Marked as Received');
+        _renderTabContent();
+      });
+    });
+    document.querySelectorAll('.ppgx-view').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const pr = _prs.find(x => String(x.id) === String(btn.dataset.id));
+        if (pr) _openViewPr(pr);
+      });
+    });
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
      SHELL — tab bar + page render
      ═══════════════════════════════════════════════════════════════ */
 
@@ -776,6 +929,7 @@ window.Pages['pr-po-grn'] = (() => {
     return '<div style="display:flex;gap:4px;margin-bottom:16px;background:#f1f5f9;padding:4px;border-radius:11px;width:fit-content;">'
       + _tabBtn('masters', 'Masters')
       + _tabBtn('forms', 'Forms')
+      + _tabBtn('fms', 'FMS')
     + '</div>';
   }
   function _tabBtn(key, label) {
@@ -789,18 +943,28 @@ window.Pages['pr-po-grn'] = (() => {
         if (key === _tab) return;
         _tab = key;
         if (!_itemsLoaded) await _loadItems(true);
-        if (key === 'forms') { await _loadVendors(); await _loadPrs(true); }
+        if (key === 'forms' || key === 'fms') { await _loadVendors(); await _loadPrs(true); }
         _render();
       });
     });
   }
 
+  function _currentTabHtml() {
+    if (_tab === 'masters') return _renderMastersTab();
+    if (_tab === 'fms')     return _renderFmsTab();
+    return _renderFormsTab();
+  }
+  function _bindCurrentTab() {
+    if (_tab === 'masters')      { _bindMastersEvents(); _renderItemModal(); }
+    else if (_tab === 'fms')     { _bindFmsEvents(); }
+    else                          { _bindFormsEvents(); _renderPrModal(); _renderPrViewModal(); }
+  }
+
   function _renderTabContent() {
     const el = document.getElementById('ppg-tab-content');
     if (!el) { _render(); return; }
-    el.innerHTML = _tab === 'masters' ? _renderMastersTab() : _renderFormsTab();
-    if (_tab === 'masters') { _bindMastersEvents(); _renderItemModal(); }
-    else { _bindFormsEvents(); _renderPrModal(); _renderPrViewModal(); }
+    el.innerHTML = _currentTabHtml();
+    _bindCurrentTab();
   }
 
   function _render() {
@@ -811,15 +975,14 @@ window.Pages['pr-po-grn'] = (() => {
     main.innerHTML = '<div style="padding:20px;max-width:1400px;margin:0 auto;">'
       + '<div style="margin-bottom:4px;"><span style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8;">Procurement</span></div>'
       + _renderTabBar()
-      + '<div id="ppg-tab-content">' + (_tab === 'masters' ? _renderMastersTab() : _renderFormsTab()) + '</div>'
+      + '<div id="ppg-tab-content">' + _currentTabHtml() + '</div>'
       + '<div id="ppgm-modal"></div>'
       + '<div id="ppgf-modal"></div>'
       + '<div id="ppgf-view-modal"></div>'
     + '</div>';
 
     _bindTabBar();
-    if (_tab === 'masters') { _bindMastersEvents(); _renderItemModal(); }
-    else { _bindFormsEvents(); _renderPrModal(); _renderPrViewModal(); }
+    _bindCurrentTab();
   }
 
   return {
