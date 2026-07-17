@@ -166,10 +166,14 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS users (id VARCHAR(16) PRIMARY KEY, name VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL, phone VARCHAR(64) DEFAULT '', department VARCHAR(128) DEFAULT '', roles VARCHAR(128) DEFAULT 'User', active SMALLINT NOT NULL DEFAULT 1, password_hash VARCHAR(255) DEFAULT NULL, picture TEXT DEFAULT NULL, force_logout_after DATETIME DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(name, email)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_users_name ON users (name)`,
   `CREATE INDEX idx_users_email ON users (email)`,
+  `CREATE INDEX idx_users_department ON users (department)`,
   `CREATE TABLE IF NOT EXISTS delegations (id VARCHAR(16) PRIMARY KEY, description TEXT NOT NULL, doer_id VARCHAR(16), doer VARCHAR(255) NOT NULL DEFAULT '', delegated_by VARCHAR(16), due_date DATE, client VARCHAR(255) DEFAULT '', status VARCHAR(32) NOT NULL DEFAULT 'pending', type VARCHAR(32) NOT NULL DEFAULT 'delegation', priority VARCHAR(32) DEFAULT 'Low', approval VARCHAR(64) DEFAULT 'No Approval', url VARCHAR(500) DEFAULT '', remarks TEXT, completed_at DATETIME DEFAULT NULL, revise_action VARCHAR(32) DEFAULT NULL, transferred_by VARCHAR(255) DEFAULT NULL, transferred_from VARCHAR(255) DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_del_doer ON delegations (doer)`,
   `CREATE INDEX idx_del_status ON delegations (status)`,
+  `CREATE INDEX idx_del_doer_id ON delegations (doer_id)`,
+  `CREATE INDEX idx_del_delegated_by ON delegations (delegated_by)`,
   `CREATE TABLE IF NOT EXISTS masters (id VARCHAR(16) PRIMARY KEY, task TEXT NOT NULL, assigned_to VARCHAR(255) DEFAULT '', frequency VARCHAR(32) NOT NULL DEFAULT 'Daily', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_masters_assigned_to ON masters (assigned_to)`,
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS start_date DATE DEFAULT NULL`,
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS end_date DATE DEFAULT NULL`,
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS remarks TEXT DEFAULT NULL`,
@@ -1358,6 +1362,82 @@ async function nextDelId() {
   return 'DEL' + (lastNum+1).toString().padStart(3,'0');
 }
 
+async function sendChecklistTransferEmail({ assignedTo, taskDesc, prevAssignee }) {
+  const mailer = getMailer();
+  if (!mailer) return;
+  const uRows = await q('SELECT email, name FROM users WHERE name=$1 LIMIT 1', [assignedTo]);
+  const toEmail = uRows[0]?.email, toName = uRows[0]?.name;
+  if (!toEmail) return;
+  await mailer.sendMail({
+    from: `"Task Manager" <${process.env.SMTP_USER}>`,
+    to: toEmail,
+    subject: `Checklist Task Transferred to You: ${taskDesc.slice(0,60)}`,
+    html: `<div style="font-family:sans-serif;max-width:520px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
+      <div style="background:#6366f1;padding:20px 24px">
+        <h2 style="color:#fff;margin:0;font-size:16px">📋 Checklist Task Assigned to You</h2>
+      </div>
+      <div style="padding:24px">
+        <p style="margin:0 0 12px;font-size:14px;color:#1e293b"><strong>Task:</strong> ${taskDesc}</p>
+        ${prevAssignee ? `<p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Transferred from:</strong> ${prevAssignee}</p>` : ''}
+        <p style="margin:0;font-size:13px;color:#94a3b8">Hi ${toName||''}, this recurring checklist task is now assigned to you.</p>
+      </div>
+    </div>`,
+  });
+}
+
+async function resolveDelegator(task) {
+  const delegatorId = task.delegated_by || task.delegatedBy;
+  if (!delegatorId) return null;
+  const uRows = await q('SELECT email, name FROM users WHERE id=$1 OR email=$1 LIMIT 1', [delegatorId]);
+  return uRows[0] || null;
+}
+
+async function sendDelegationDoneEmail(task) {
+  const mailer = getMailer();
+  if (!mailer) return;
+  const delegator = await resolveDelegator(task);
+  if (!delegator?.email) return;
+  await mailer.sendMail({
+    from: `"Task Manager" <${process.env.SMTP_USER}>`,
+    to: delegator.email,
+    subject: `Task Completed: ${(task.description||'').slice(0,60)}`,
+    html: `<div style="font-family:sans-serif;max-width:520px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
+      <div style="background:#10b981;padding:20px 24px">
+        <h2 style="color:#fff;margin:0;font-size:16px">✅ Task Marked Done</h2>
+      </div>
+      <div style="padding:24px">
+        <p style="margin:0 0 12px;font-size:14px;color:#1e293b"><strong>Task:</strong> ${task.description||''}</p>
+        <p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Done by:</strong> ${task.doer||''}</p>
+        <p style="margin:0;font-size:13px;color:#94a3b8">Hi ${delegator.name||''}, the above task has been completed.</p>
+      </div>
+    </div>`,
+  });
+}
+
+async function sendDelegationShiftedEmail(task) {
+  const mailer = getMailer();
+  if (!mailer) return;
+  const delegator = await resolveDelegator(task);
+  if (!delegator?.email) return;
+  await mailer.sendMail({
+    from: `"Task Manager" <${process.env.SMTP_USER}>`,
+    to: delegator.email,
+    subject: `Task Shifted: ${(task.description||'').slice(0,60)}`,
+    html: `<div style="font-family:sans-serif;max-width:520px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
+      <div style="background:#f59e0b;padding:20px 24px">
+        <h2 style="color:#fff;margin:0;font-size:16px">🔄 Task Shifted</h2>
+      </div>
+      <div style="padding:24px">
+        <p style="margin:0 0 12px;font-size:14px;color:#1e293b"><strong>Task:</strong> ${task.description||''}</p>
+        <p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Shifted by:</strong> ${task.doer||''}</p>
+        ${task.remarks ? `<p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Reason:</strong> ${task.remarks}</p>` : ''}
+        ${task.due_date ? `<p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>New Due Date:</strong> ${new Date(task.due_date).toLocaleDateString('en-IN')}</p>` : ''}
+        <p style="margin:0;font-size:13px;color:#94a3b8">Hi ${delegator.name||''}, the above task has been shifted.</p>
+      </div>
+    </div>`,
+  });
+}
+
 async function insertDelegation({ description, doerId, doerName, delegatedBy, dueDate, client, priority, approval, url, remarks }) {
   const id = await nextDelId();
   await pool.query(
@@ -1484,72 +1564,10 @@ app.patch('/api/delegations', requireAuth, async (req, res) => {
     );
     const result = await q('SELECT * FROM delegations WHERE id = $1', [body.id]);
     if (!result.length) return res.status(404).json({ error:'Not found' });
-    /* done reminder email → delegator */
-    if (status === 'done') {
-      try {
-        const task = result[0];
-        const delegatorId = task.delegated_by || task.delegatedBy;
-        let toEmail = null, toName = null;
-        if (delegatorId) {
-          const uRows = await q('SELECT email, name FROM users WHERE id=$1 OR email=$1 LIMIT 1', [delegatorId]);
-          if (uRows[0]) { toEmail = uRows[0].email; toName = uRows[0].name; }
-        }
-        if (toEmail) {
-          const mailer = getMailer();
-          if (mailer) {
-            await mailer.sendMail({
-              from: `"Task Manager" <${process.env.SMTP_USER}>`,
-              to: toEmail,
-              subject: `Task Completed: ${(task.description||'').slice(0,60)}`,
-              html: `<div style="font-family:sans-serif;max-width:520px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
-                <div style="background:#10b981;padding:20px 24px">
-                  <h2 style="color:#fff;margin:0;font-size:16px">✅ Task Marked Done</h2>
-                </div>
-                <div style="padding:24px">
-                  <p style="margin:0 0 12px;font-size:14px;color:#1e293b"><strong>Task:</strong> ${task.description||''}</p>
-                  <p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Done by:</strong> ${task.doer||''}</p>
-                  <p style="margin:0;font-size:13px;color:#94a3b8">Hi ${toName||''}, the above task has been completed.</p>
-                </div>
-              </div>`,
-            });
-          }
-        }
-      } catch (e) { console.error('[email] Done reminder failed:', e.message); }
-    }
-    /* shifted reminder email → delegator */
-    if (status === 'revise') {
-      try {
-        const task = result[0];
-        const delegatorId = task.delegated_by || task.delegatedBy;
-        let toEmail = null, toName = null;
-        if (delegatorId) {
-          const uRows = await q('SELECT email, name FROM users WHERE id=$1 OR email=$1 LIMIT 1', [delegatorId]);
-          if (uRows[0]) { toEmail = uRows[0].email; toName = uRows[0].name; }
-        }
-        if (toEmail) {
-          const mailer = getMailer();
-          if (mailer) {
-            await mailer.sendMail({
-              from: `"Task Manager" <${process.env.SMTP_USER}>`,
-              to: toEmail,
-              subject: `Task Shifted: ${(task.description||'').slice(0,60)}`,
-              html: `<div style="font-family:sans-serif;max-width:520px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
-                <div style="background:#f59e0b;padding:20px 24px">
-                  <h2 style="color:#fff;margin:0;font-size:16px">🔄 Task Shifted</h2>
-                </div>
-                <div style="padding:24px">
-                  <p style="margin:0 0 12px;font-size:14px;color:#1e293b"><strong>Task:</strong> ${task.description||''}</p>
-                  <p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Shifted by:</strong> ${task.doer||''}</p>
-                  ${task.remarks ? `<p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Reason:</strong> ${task.remarks}</p>` : ''}
-                  ${task.due_date ? `<p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>New Due Date:</strong> ${new Date(task.due_date).toLocaleDateString('en-IN')}</p>` : ''}
-                  <p style="margin:0;font-size:13px;color:#94a3b8">Hi ${toName||''}, the above task has been shifted.</p>
-                </div>
-              </div>`,
-            });
-          }
-        }
-      } catch (e) { console.error('[email] Shift reminder failed:', e.message); }
-    }
+    // Fire-and-forget — an unreachable/slow SMTP server must never delay the
+    // response to whoever is marking the task done/shifted.
+    if (status === 'done')   sendDelegationDoneEmail(result[0]).catch(() => {});
+    if (status === 'revise') sendDelegationShiftedEmail(result[0]).catch(() => {});
     return res.json(result[0]);
   } catch (err) { console.error(err); return res.status(500).json({ error:err.message }); }
 });
@@ -1751,33 +1769,10 @@ app.patch('/api/masters', requireAuth, async (req, res) => {
     const before = await q('SELECT assigned_to, task FROM masters WHERE id=$1', [body.id]);
     const prevAssignee = before[0]?.assigned_to || '';
     await pool.query('UPDATE masters SET task=COALESCE($1,task), assigned_to=COALESCE($2,assigned_to), frequency=COALESCE($3,frequency), start_date=COALESCE($4,start_date), end_date=COALESCE($5,end_date), remarks=COALESCE($6,remarks), department=COALESCE($7,department) WHERE id=$8', [body.task??null,body.assignedTo??null,body.frequency??null,body.startDate??null,body.endDate??null,body.remarks??null,body.department??null,body.id]);
-    /* reassigned/transferred email → new assignee */
+    // Fire-and-forget — bulk Transfer PATCHes many checklist rows in a row; an
+    // awaited SMTP call here would serialize (and could hang) the whole batch.
     if (body.assignedTo && body.assignedTo !== prevAssignee) {
-      try {
-        const uRows = await q('SELECT email, name FROM users WHERE name=$1 LIMIT 1', [body.assignedTo]);
-        const toEmail = uRows[0]?.email, toName = uRows[0]?.name;
-        if (toEmail) {
-          const mailer = getMailer();
-          if (mailer) {
-            const taskDesc = body.task || before[0]?.task || '';
-            await mailer.sendMail({
-              from: `"Task Manager" <${process.env.SMTP_USER}>`,
-              to: toEmail,
-              subject: `Checklist Task Transferred to You: ${taskDesc.slice(0,60)}`,
-              html: `<div style="font-family:sans-serif;max-width:520px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
-                <div style="background:#6366f1;padding:20px 24px">
-                  <h2 style="color:#fff;margin:0;font-size:16px">📋 Checklist Task Assigned to You</h2>
-                </div>
-                <div style="padding:24px">
-                  <p style="margin:0 0 12px;font-size:14px;color:#1e293b"><strong>Task:</strong> ${taskDesc}</p>
-                  ${prevAssignee ? `<p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Transferred from:</strong> ${prevAssignee}</p>` : ''}
-                  <p style="margin:0;font-size:13px;color:#94a3b8">Hi ${toName||''}, this recurring checklist task is now assigned to you.</p>
-                </div>
-              </div>`,
-            });
-          }
-        }
-      } catch (e) { console.error('[email] Checklist transfer notification failed:', e.message); }
+      sendChecklistTransferEmail({ assignedTo: body.assignedTo, taskDesc: body.task || before[0]?.task || '', prevAssignee }).catch(() => {});
     }
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
@@ -1866,14 +1861,19 @@ app.post('/api/checklist-completions', requireAuth, async (req, res) => {
 
 app.get('/api/checklist-completions', requireAuth, async (req, res) => {
   await ensureSchema();
+  // Callers (All Tasks, Dashboard) only ever use *today's* completions to know which
+  // recurring checklist items are already done today — fetching the whole history here
+  // used to grow unbounded forever and get slower every day. Scope to today by default;
+  // an explicit ?date= is still honored for anything that needs a specific day.
+  const date = req.query.date || new Date().toISOString().slice(0, 10);
   if (!isAdminUser(req.session?.user)) {
     const { rows } = await pool.query(
-      `SELECT cc.* FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(m.assigned_to) = LOWER($1) ORDER BY cc.completed_at DESC`,
-      [req.session?.user?.name || '']
+      `SELECT cc.* FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(m.assigned_to) = LOWER($1) AND cc.date = $2 ORDER BY cc.completed_at DESC`,
+      [req.session?.user?.name || '', date]
     );
     return res.json(rows);
   }
-  const { rows } = await pool.query('SELECT * FROM checklist_completions ORDER BY completed_at DESC');
+  const { rows } = await pool.query('SELECT * FROM checklist_completions WHERE date = $1 ORDER BY completed_at DESC', [date]);
   return res.json(rows);
 });
 
