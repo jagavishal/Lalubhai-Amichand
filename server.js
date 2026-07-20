@@ -992,10 +992,10 @@ function computeDashboard(store, filter='all', doerFilter='') {
   let total=0, completed=0, pending=0, revised=0, upcoming=0;
   const items=[];
   const now=new Date(); now.setHours(0,0,0,0);
-  const df = doerFilter ? doerFilter.toLowerCase() : '';
+  const df = doerFilter ? doerFilter.trim().toLowerCase() : '';
   if (filter==='all'||filter==='delegation') {
     (store.delegations||[]).forEach(d => {
-      if (df && (d.doer||'').toLowerCase() !== df) return;
+      if (df && (d.doer||'').trim().toLowerCase() !== df) return;
       total++;
       const due = new Date(d.dueDate||d.due_date); due.setHours(0,0,0,0);
       if (d.status==='done') {
@@ -1013,7 +1013,7 @@ function computeDashboard(store, filter='all', doerFilter='') {
   if (filter==='all'||filter==='checklist') {
     const doneToday = new Set(store.completedTodayIds || []);
     (store.masters||[]).forEach(m => {
-      if (df && (m.assignedTo||'').toLowerCase() !== df) return;
+      if (df && (m.assignedTo||'').trim().toLowerCase() !== df) return;
       total++;
       const dateStr = m.startDate || now.toISOString();
       if (doneToday.has(m.id)) {
