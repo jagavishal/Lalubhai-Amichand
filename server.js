@@ -81,8 +81,6 @@ function pgToMysql(text) {
   t = t.replace(/"key"/g, '`key`').replace(/"value"/g, '`value`');
   // EXCLUDED.col → VALUES(col)
   t = t.replace(/EXCLUDED\.(\w+)/g, 'VALUES($1)');
-  // table.column in upsert → bare column
-  t = t.replace(/\b[a-z_]+\.([a-z_]+)\b/g, '$1');
   // ON CONFLICT (...) DO NOTHING → INSERT IGNORE
   if (/ON CONFLICT\s*\([^)]+\)\s*DO NOTHING/i.test(t)) {
     t = t.replace(/\bINSERT INTO\b/i, 'INSERT IGNORE INTO');
@@ -90,6 +88,16 @@ function pgToMysql(text) {
   }
   // ON CONFLICT (...) DO UPDATE SET → ON DUPLICATE KEY UPDATE
   t = t.replace(/ON CONFLICT\s*\([^)]+\)\s*DO UPDATE SET\s*/gi, 'ON DUPLICATE KEY UPDATE ');
+  // table.column → bare column, but ONLY inside ON DUPLICATE KEY UPDATE — MySQL upsert can't
+  // reference other tables there (e.g. "password_hash=COALESCE(VALUES(password_hash),users.password_hash)"
+  // needs "users." stripped). This used to run on the WHOLE query, which also stripped real
+  // JOIN qualifiers like "m.id = cc.master_id" down to "id = master_id" — MySQL then rejects
+  // that as an ambiguous column whenever the joined tables share a column name (e.g. every
+  // table's own "id"), which is what broke /api/checklist-completions.
+  const dupIdx = t.search(/ON DUPLICATE KEY UPDATE/i);
+  if (dupIdx !== -1) {
+    t = t.slice(0, dupIdx) + t.slice(dupIdx).replace(/\b[a-z_]+\.([a-z_]+)\b/g, '$1');
+  }
   // $N → ?
   t = t.replace(/\$\d+/g, '?');
   return t;
