@@ -36,15 +36,13 @@ window.Pages.users = (() => {
   let _permSaving     = false;
   let _searchAccess   = '';
 
-  // Vendor Master is intentionally excluded — it stays hard-locked to Admin/HOD in the
-  // sidebar (bank account details + RBI payment export), so a checkbox here would grant
-  // nothing and just confuse whoever ticks it.
   const ALL_PAGES = [
     { key: 'all-tasks',     label: 'All Tasks' },
     { key: 'approvals',     label: 'Approvals' },
     { key: 'daily-task',    label: 'Daily Task' },
     { key: 'mis',           label: 'MIS Report' },
     { key: 'fms',           label: 'FMS Master' },
+    { key: 'client-master', label: 'Vendor Master' },
     { key: 'meetings',      label: 'Meetings' },
     { key: 'leave-tracker', label: 'Leave Tracker' },
     { key: 'race-tracker',  label: 'Race Tracker' },
