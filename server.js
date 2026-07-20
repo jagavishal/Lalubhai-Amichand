@@ -1961,6 +1961,16 @@ app.get('/api/users', requireAuth, async (req, res) => {
   return res.json(rows.map(({ password_hash, ...u }) => u));
 });
 
+// Default page access for newly created (non-Admin/HOD) users — must match keys in
+// ALL_PAGES (public/js/pages/users.js). Everything else stays hidden until an Admin
+// grants it from the Access tab.
+const DEFAULT_USER_PAGES = ['all-tasks', 'approvals', 'announcements', 'help-ticket', 'mis', 'profile'];
+function defaultPermissionsFor(roles) {
+  const list = Array.isArray(roles) ? roles : String(roles || '').split(',').map(r => r.trim());
+  if (list.includes('Admin') || list.includes('HOD')) return null;
+  return { pages: DEFAULT_USER_PAGES, features: {} };
+}
+
 app.post('/api/users', requireAuth, async (req, res) => {
   const body = req.body;
   if (Array.isArray(body.bulk)) {
@@ -1977,7 +1987,7 @@ app.post('/api/users', requireAuth, async (req, res) => {
           const id = 'U'+(lastNum+1).toString().padStart(3,'0');
           const roles = parseRoles(row.role||'', row.user_role||'');
           const hash = row.password ? await bcrypt.hash(row.password, 10) : null;
-          store.users.push({ id, name, email, phone:row.phone||'', department:row.department||'', roles, active:true, password_hash:hash, createdAt:new Date().toISOString() });
+          store.users.push({ id, name, email, phone:row.phone||'', department:row.department||'', roles, active:true, password_hash:hash, permissions: defaultPermissionsFor(roles), createdAt:new Date().toISOString() });
           inserted++;
         }
         await writeStore(store);
@@ -1995,8 +2005,9 @@ app.post('/api/users', requireAuth, async (req, res) => {
         const id = 'U'+lastNum.toString().padStart(3,'0');
         const roles = parseRoles(row.role||'', row.user_role||'');
         const hash = row.password ? await bcrypt.hash(row.password, 10) : null;
+        const perms = defaultPermissionsFor(roles);
         try {
-          await pool.query('INSERT INTO users (id,name,email,phone,department,roles,active,password_hash,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,NOW())', [id,name,email,row.phone||'',row.department||'',roles.join(','),hash]);
+          await pool.query('INSERT INTO users (id,name,email,phone,department,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,NOW())', [id,name,email,row.phone||'',row.department||'',roles.join(','),hash,perms?JSON.stringify(perms):null]);
           inserted++;
         } catch(ie) {
           if (ie.code==='ER_DUP_ENTRY'||ie.code==='23505') { errors.push(`Row ${i+1}: ${email} already exists (id conflict)`); lastNum--; }
@@ -2020,7 +2031,7 @@ app.post('/api/users', requireAuth, async (req, res) => {
     const lastNum = users.reduce((max,u)=>{ const n=parseInt((u.id||'').replace('U',''))||0; return n>max?n:max; },0);
     const id = 'U'+(lastNum+1).toString().padStart(3,'0');
     const roles = body.roles?.length ? body.roles : ['User'];
-    const newUser = { id, name:body.name.trim(), email:body.email.trim(), phone:body.phone||'', department:body.department||'', roles, active:true, createdAt:new Date().toISOString() };
+    const newUser = { id, name:body.name.trim(), email:body.email.trim(), phone:body.phone||'', department:body.department||'', roles, active:true, permissions: defaultPermissionsFor(roles), createdAt:new Date().toISOString() };
     users.push(newUser); store.users=users;
     await writeStore(store);
     return res.status(201).json(newUser);
@@ -2035,7 +2046,8 @@ app.post('/api/users', requireAuth, async (req, res) => {
     const id = 'U'+(lastNum+1).toString().padStart(3,'0');
     const roles = body.roles?.length ? body.roles : ['User'];
     const hash = body.password ? await bcrypt.hash(body.password, 10) : null;
-    await pool.query('INSERT INTO users (id,name,email,phone,department,roles,active,password_hash,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,NOW())', [id,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',body.department||'',roles.join(','),hash]);
+    const perms = defaultPermissionsFor(roles);
+    await pool.query('INSERT INTO users (id,name,email,phone,department,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,NOW())', [id,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',body.department||'',roles.join(','),hash,perms?JSON.stringify(perms):null]);
     if (body.picture) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,id]);

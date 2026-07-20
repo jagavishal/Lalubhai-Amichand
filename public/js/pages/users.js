@@ -614,17 +614,21 @@ window.Pages.users = (() => {
       return r.includes('Admin') || r.includes('HOD');
     };
 
+    // No permissions row saved yet (brand-new/never-touched user) means unrestricted
+    // access — the sidebar treats a null `permissions` the same way. Must match here too,
+    // or this grid shows every box unchecked while the user can actually see everything,
+    // and toggling one box on top of that misleading state saves the wrong result.
     const hasAll = u => {
       if (isAdminOrHod(u)) return true;
       const perm = u.permissions;
-      if (!perm || !perm.pages) return false;
+      if (!perm || !perm.pages) return true;
       return allPageKeys.every(k => perm.pages.includes(k));
     };
 
     const userHasPage = (u, pageKey) => {
       if (isAdminOrHod(u)) return true;
       const perm = u.permissions;
-      if (!perm || !perm.pages) return false;
+      if (!perm || !perm.pages) return true;
       return perm.pages.includes(pageKey);
     };
 
@@ -634,8 +638,8 @@ window.Pages.users = (() => {
       .sort((a, b) => (a.name||'').localeCompare(b.name||''))
       .filter(u => !q || (u.name||'').toLowerCase().includes(q) || (u.email||'').toLowerCase().includes(q));
 
-    const thStyle = 'padding:10px 12px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;text-align:center;white-space:nowrap;border-right:1px solid #e2e8f0;background:#f8fafc;';
-    const thFirst = 'padding:10px 16px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;text-align:left;white-space:nowrap;position:sticky;left:0;z-index:2;background:#f8fafc;border-right:1px solid #e2e8f0;';
+    const thStyle = 'padding:10px 12px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;text-align:center;white-space:nowrap;border-right:1px solid #e2e8f0;background:#f8fafc;position:sticky;top:0;z-index:2;';
+    const thFirst = 'padding:10px 16px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;text-align:left;white-space:nowrap;position:sticky;left:0;top:0;z-index:3;background:#f8fafc;border-right:1px solid #e2e8f0;';
 
     const rows = sorted.map(u => {
       const isHod    = isAdminOrHod(u);
@@ -686,7 +690,7 @@ window.Pages.users = (() => {
           <input id="acc-search" type="text" placeholder="Search user..." value="${esc(_searchAccess)}"
             style="padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;outline:none;width:200px;" />
         </div>
-        <div style="overflow-x:auto;">
+        <div style="overflow:auto;max-height:65vh;">
           <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
             <thead>
               <tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0;">

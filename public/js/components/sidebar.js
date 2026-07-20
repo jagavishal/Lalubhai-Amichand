@@ -34,13 +34,13 @@ window.Sidebar = {
       { route: 'dashboard',     label: 'Dashboard',      icon: 'dashboard',     alwaysShow: true },
       { route: 'all-tasks',     label: 'All Tasks',      icon: 'tasks' },
       { route: 'approvals',     label: 'Approvals',      icon: 'approve',       badge: true },
-      { route: 'announcements', label: 'Announcements',  icon: 'announcements', alwaysShow: true },
-      { route: 'help-ticket',   label: 'Help Ticket',    icon: 'helpticket',    alwaysShow: true },
-      { route: 'pr-po-grn',    label: 'PR / PO / GRN', icon: 'purchaserequisition', alwaysShow: true },
+      { route: 'announcements', label: 'Announcements',  icon: 'announcements' },
+      { route: 'help-ticket',   label: 'Help Ticket',    icon: 'helpticket' },
+      { route: 'pr-po-grn',    label: 'PR / PO / GRN', icon: 'purchaserequisition' },
     ]},
     { title: 'Operations', items: [
-      { route: 'mis',            label: 'MIS Report',     icon: 'mis',           adminOnly: true },
-      { route: 'client-master',  label: 'Vendor Master',  icon: 'clientmaster',  adminOnly: true },
+      { route: 'mis',            label: 'MIS Report',     icon: 'mis' },
+      { route: 'client-master',  label: 'Vendor Master',  icon: 'clientmaster' },
     ]},
     { title: 'Administration', items: [
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
