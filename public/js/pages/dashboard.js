@@ -1160,6 +1160,13 @@ window.Pages.dashboard = (function () {
     const empList     = el.querySelector('#db-emp-list');
 
     async function setEmpFilter(val, label) {
+      // Stat cards below are only updated once the fetch for the NEW employee succeeds
+      // (see the `if (newData)` block). If it fails, _state.userFilter/label must not be
+      // left pointing at the new employee while the stat cards still show the PREVIOUS
+      // employee's numbers — that mismatch (stale stat count, correctly-empty task list)
+      // is exactly what looks like "pending count doesn't match the list".
+      const prevFilter = _state.userFilter;
+      const prevLabel  = empLabel?.textContent;
       _state.userFilter = val;
       if (empLabel) empLabel.textContent = label.length > 28 ? label.slice(0,28)+'…' : label;
       if (empDropdown) empDropdown.style.display = 'none';
@@ -1172,27 +1179,31 @@ window.Pages.dashboard = (function () {
       try {
         const url = val === 'All' ? '/api/dashboard' : `/api/dashboard?doer=${encodeURIComponent(val)}`;
         const newData = await Utils.apiFetch(url);
-        if (newData) {
-          _state.data = newData;
-          /* update stat cards */
-          const statTotal     = el.querySelector('#db-stat-total');
-          const statCompleted = el.querySelector('#db-stat-completed');
-          const statPending   = el.querySelector('#db-stat-pending');
-          const statUpcoming  = el.querySelector('#db-stat-upcoming');
-          const statRevised   = el.querySelector('#db-stat-revised');
-          if (statTotal)     statTotal.textContent     = newData.total;
-          if (statCompleted) statCompleted.textContent = newData.completed;
-          if (statPending)   statPending.textContent   = newData.pending || newData.pendingTasks.length;
-          if (statUpcoming)  statUpcoming.textContent  = newData.upcoming || 0;
-          if (statRevised) {
-            statRevised.textContent = newData.revised > 0 ? `+ ${newData.revised} shifted` : '';
-            statRevised.style.display = newData.revised > 0 ? '' : 'none';
-          }
-          /* update pie chart */
-          const pieEl = el.querySelector('#db-pie-container');
-          if (pieEl) pieEl.innerHTML = renderPieSVG(newData.completed, newData.pending || newData.pendingTasks.length, newData.revised, newData.upcoming || 0);
+        if (!newData) throw new Error('No data returned');
+        _state.data = newData;
+        /* update stat cards */
+        const statTotal     = el.querySelector('#db-stat-total');
+        const statCompleted = el.querySelector('#db-stat-completed');
+        const statPending   = el.querySelector('#db-stat-pending');
+        const statUpcoming  = el.querySelector('#db-stat-upcoming');
+        const statRevised   = el.querySelector('#db-stat-revised');
+        if (statTotal)     statTotal.textContent     = newData.total;
+        if (statCompleted) statCompleted.textContent = newData.completed;
+        if (statPending)   statPending.textContent   = newData.pending || newData.pendingTasks.length;
+        if (statUpcoming)  statUpcoming.textContent  = newData.upcoming || 0;
+        if (statRevised) {
+          statRevised.textContent = newData.revised > 0 ? `+ ${newData.revised} shifted` : '';
+          statRevised.style.display = newData.revised > 0 ? '' : 'none';
         }
-      } catch(e) { /* fallback to client filter */ }
+        /* update pie chart */
+        const pieEl = el.querySelector('#db-pie-container');
+        if (pieEl) pieEl.innerHTML = renderPieSVG(newData.completed, newData.pending || newData.pendingTasks.length, newData.revised, newData.upcoming || 0);
+      } catch(e) {
+        /* revert so stat cards and the task list stay consistent with each other */
+        _state.userFilter = prevFilter;
+        if (empLabel && prevLabel !== undefined) empLabel.textContent = prevLabel;
+        Utils.showToast('Failed to load tasks for this employee — please try again', 'error');
+      }
       _updateTasksTable(admin);
     }
 
