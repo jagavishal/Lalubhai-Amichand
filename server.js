@@ -1,5 +1,18 @@
 'use strict';
 require('dotenv').config({ path: require('path').join(__dirname, '.env.local') });
+
+// Node 15+ terminates the whole process on an unhandled rejection by default. Every
+// request handler in this app already has its own try/catch, so the only way to hit
+// one of these is a stray fire-and-forget async call (e.g. a background email) — that
+// must never be allowed to kill the server and force PM2 to restart (and cold-start
+// ensureSchema()) for every user, repeatedly. Log and keep running instead.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason instanceof Error ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err.stack || err);
+});
+
 const express = require('express');
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
@@ -91,9 +104,12 @@ if (!g.__db_pool) {
 
   if (dbType === 'mysql') {
     const mysql2 = require('mysql2/promise');
+    // connectTimeout fails a dead/unreachable DB fast instead of hanging past the
+    // client's own timeout; queueLimit means an exhausted pool errors immediately
+    // rather than queuing requests forever if a connection is ever stuck.
     const poolOpts = dbUrl
-      ? { uri: dbUrl, waitForConnections: true, connectionLimit: 5 }
-      : { host: process.env.DB_HOST, port: +(process.env.DB_PORT || 3306), user: process.env.DB_USER, password: process.env.DB_PASSWORD, database: process.env.DB_NAME, waitForConnections: true, connectionLimit: 5 };
+      ? { uri: dbUrl, waitForConnections: true, connectionLimit: 10, queueLimit: 30, connectTimeout: 10000 }
+      : { host: process.env.DB_HOST, port: +(process.env.DB_PORT || 3306), user: process.env.DB_USER, password: process.env.DB_PASSWORD, database: process.env.DB_NAME, waitForConnections: true, connectionLimit: 10, queueLimit: 30, connectTimeout: 10000 };
     const myPool = mysql2.createPool(poolOpts);
     // Normalize collation on every new connection
     myPool.pool.on('connection', conn => {
@@ -125,7 +141,7 @@ if (!g.__db_pool) {
       : null);
     if (pgUrl) {
       const useSsl = !/railway\.internal|localhost|127\.0\.0\.1/.test(pgUrl);
-      const pgPool = new pg.Pool({ connectionString: pgUrl, ssl: useSsl ? { rejectUnauthorized: false } : false, max: 5, idleTimeoutMillis: 30000 });
+      const pgPool = new pg.Pool({ connectionString: pgUrl, ssl: useSsl ? { rejectUnauthorized: false } : false, max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 10000 });
       g.__db_pool = {
         query: (t, p) => { if (WRITE_RE.test(t)) bumpStoreVersion(); return pgPool.query(t, p); },
         connect: (...a) => pgPool.connect(...a),
@@ -216,7 +232,7 @@ const SCHEMA = [
   `CREATE INDEX idx_pr_status ON purchase_requisitions (status)`,
   `CREATE INDEX idx_pr_requester ON purchase_requisitions (requested_by_id)`,
   `CREATE INDEX idx_pr_type ON purchase_requisitions (pr_type)`,
-  `CREATE TABLE IF NOT EXISTS purchase_requisition_items (id VARCHAR(24) PRIMARY KEY, pr_id VARCHAR(16) NOT NULL, packing_item_id VARCHAR(24) DEFAULT NULL, item_name VARCHAR(255) NOT NULL DEFAULT '', unit VARCHAR(32) DEFAULT '', quantity DECIMAL(12,2) DEFAULT 0, estimated_rate DECIMAL(12,2) DEFAULT 0, remarks VARCHAR(255) DEFAULT '', CONSTRAINT fk_pri_pr FOREIGN KEY (pr_id) REFERENCES purchase_requisitions(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS purchase_requisition_items (id VARCHAR(24) PRIMARY KEY, pr_id VARCHAR(16) NOT NULL, packing_item_id VARCHAR(24) DEFAULT NULL, item_name VARCHAR(255) NOT NULL DEFAULT '', unit VARCHAR(32) DEFAULT '', quantity DECIMAL(12,2) DEFAULT 0, estimated_rate DECIMAL(12,2) DEFAULT 0, remarks VARCHAR(255) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_pri_pr ON purchase_requisition_items (pr_id)`,
 ];
 
@@ -827,11 +843,14 @@ async function ensureSchema() {
       try { await pool.query(stmt); }
       catch (e) {
         const code = e.code || '';
-        // Ignore "already exists" for tables and indexes
-        if (!code.match(/^(ER_TABLE_EXISTS_ERROR|ER_DUP_KEYNAME|42P07|42710)$/) && !e.message?.includes('already exists')) throw e;
+        const alreadyExists = code.match(/^(ER_TABLE_EXISTS_ERROR|ER_DUP_KEYNAME|42P07|42710)$/) || e.message?.includes('already exists');
+        // A single bad/unexpected statement (e.g. one index on one MySQL version) must
+        // never take down every route in the app for the rest of the process's life —
+        // this promise is cached and reused by every request. Log and keep going instead.
+        if (!alreadyExists) console.error('[db] schema statement failed (continuing):', stmt.slice(0, 90), '—', e.message);
       }
     }
-    await seedIfEmpty();
+    await seedIfEmpty().catch((e) => console.error('[db] seedIfEmpty failed:', e.message));
     fixCollations().catch(() => {});
     relaxEmailUnique().catch(() => {});
     seedPackingItemsIfEmpty().catch((e) => console.error('[db] packing_items seed failed:', e.message));
@@ -1860,21 +1879,26 @@ app.post('/api/checklist-completions', requireAuth, async (req, res) => {
 });
 
 app.get('/api/checklist-completions', requireAuth, async (req, res) => {
-  await ensureSchema();
-  // Callers (All Tasks, Dashboard) only ever use *today's* completions to know which
-  // recurring checklist items are already done today — fetching the whole history here
-  // used to grow unbounded forever and get slower every day. Scope to today by default;
-  // an explicit ?date= is still honored for anything that needs a specific day.
-  const date = req.query.date || new Date().toISOString().slice(0, 10);
-  if (!isAdminUser(req.session?.user)) {
-    const { rows } = await pool.query(
-      `SELECT cc.* FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(m.assigned_to) = LOWER($1) AND cc.date = $2 ORDER BY cc.completed_at DESC`,
-      [req.session?.user?.name || '', date]
-    );
+  try {
+    await ensureSchema();
+    // Callers (All Tasks, Dashboard) only ever use *today's* completions to know which
+    // recurring checklist items are already done today — fetching the whole history here
+    // used to grow unbounded forever and get slower every day. Scope to today by default;
+    // an explicit ?date= is still honored for anything that needs a specific day.
+    const date = req.query.date || new Date().toISOString().slice(0, 10);
+    if (!isAdminUser(req.session?.user)) {
+      const { rows } = await pool.query(
+        `SELECT cc.* FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(m.assigned_to) = LOWER($1) AND cc.date = $2 ORDER BY cc.completed_at DESC`,
+        [req.session?.user?.name || '', date]
+      );
+      return res.json(rows);
+    }
+    const { rows } = await pool.query('SELECT * FROM checklist_completions WHERE date = $1 ORDER BY completed_at DESC', [date]);
     return res.json(rows);
+  } catch (err) {
+    console.error('[api/checklist-completions]', err);
+    return res.status(500).json({ error: err.message });
   }
-  const { rows } = await pool.query('SELECT * FROM checklist_completions WHERE date = $1 ORDER BY completed_at DESC', [date]);
-  return res.json(rows);
 });
 
 // Reopen a checklist task: undo today's completion so it shows as pending again.
@@ -1922,11 +1946,11 @@ app.post('/api/daily-tasks', requireAuth, async (req, res) => {
 app.get('/api/users', requireAuth, async (req, res) => {
   if (!USE_DB) {
     const store = await readStore();
-    return res.json(store.users||[]);
+    return res.json((store.users||[]).map(({ password_hash, ...u }) => u));
   }
   await ensureSchema();
   const rows = await q('SELECT * FROM users ORDER BY id');
-  return res.json(rows);
+  return res.json(rows.map(({ password_hash, ...u }) => u));
 });
 
 app.post('/api/users', requireAuth, async (req, res) => {
@@ -2493,6 +2517,7 @@ app.delete('/api/purchase-requisitions', requireAuth, async (req, res) => {
     await ensureSchema();
     const id = req.query.id;
     if (!id) return res.status(400).json({ error:'id required' });
+    await pool.query('DELETE FROM purchase_requisition_items WHERE pr_id = $1', [id]);
     await pool.query('DELETE FROM purchase_requisitions WHERE id = $1', [id]);
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
