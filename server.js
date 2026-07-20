@@ -1958,8 +1958,18 @@ app.get('/api/users', requireAuth, async (req, res) => {
   }
   await ensureSchema();
   const rows = await q('SELECT * FROM users ORDER BY id');
-  return res.json(rows.map(({ password_hash, ...u }) => u));
+  return res.json(rows.map(({ password_hash, ...u }) => ({ ...u, permissions: parsePermissions(u.permissions) })));
 });
+
+// The DB stores permissions as a JSON TEXT column — routes that SELECT * and forward the
+// row straight to the client must parse it, or the frontend receives a raw string, "perm.pages"
+// is always undefined, and every page-access checkbox silently falls back to its unrestricted
+// default no matter what was actually saved.
+function parsePermissions(raw) {
+  if (!raw) return null;
+  if (typeof raw !== 'string') return raw;
+  try { return JSON.parse(raw); } catch { return null; }
+}
 
 // Default page access for newly created (non-Admin/HOD) users — must match keys in
 // ALL_PAGES (public/js/pages/users.js). Everything else stays hidden until an Admin
@@ -2054,7 +2064,8 @@ app.post('/api/users', requireAuth, async (req, res) => {
     }
     const result = await q('SELECT * FROM users WHERE id = $1', [id]);
     syncUsers_gs().catch(()=>{});
-    return res.status(201).json(result[0]);
+    const { password_hash, ...created } = result[0];
+    return res.status(201).json({ ...created, permissions: parsePermissions(created.permissions) });
   } catch(e) {
     console.error('POST /api/users error:', e.message);
     return res.status(500).json({ error: e.message || 'Failed to create user' });
@@ -2096,7 +2107,8 @@ app.patch('/api/users', requireAuth, async (req, res) => {
     const result = await q('SELECT * FROM users WHERE id = $1', [body.id]);
     if (!result.length) return res.status(404).json({ error:'Not found' });
     syncUsers_gs().catch(()=>{});
-    return res.json(result[0]);
+    const { password_hash, ...updated } = result[0];
+    return res.json({ ...updated, permissions: parsePermissions(updated.permissions) });
   } catch (err) { console.error('[PATCH /api/users]',err); return res.status(500).json({ error:err.message }); }
 });
 
