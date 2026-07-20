@@ -31,7 +31,7 @@ window.Sidebar = {
   // route = hash fragment used by Router (href without leading slash)
   _sections: [
     { title: 'Workspace', items: [
-      { route: 'dashboard',     label: 'Dashboard',      icon: 'dashboard' },
+      { route: 'dashboard',     label: 'Dashboard',      icon: 'dashboard',     alwaysShow: true },
       { route: 'all-tasks',     label: 'All Tasks',      icon: 'tasks' },
       { route: 'approvals',     label: 'Approvals',      icon: 'approve',       badge: true },
       { route: 'announcements', label: 'Announcements',  icon: 'announcements', alwaysShow: true },
