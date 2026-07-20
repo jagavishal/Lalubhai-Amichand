@@ -1981,7 +1981,7 @@ function defaultPermissionsFor(roles) {
   return { pages: DEFAULT_USER_PAGES, features: {} };
 }
 
-app.post('/api/users', requireAuth, async (req, res) => {
+app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
   const body = req.body;
   if (Array.isArray(body.bulk)) {
     try {
@@ -2072,7 +2072,7 @@ app.post('/api/users', requireAuth, async (req, res) => {
   }
 });
 
-app.patch('/api/users', requireAuth, async (req, res) => {
+app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
   try {
     const body = req.body;
     if (!body.id) return res.status(400).json({ error:'id required' });
@@ -2112,7 +2112,7 @@ app.patch('/api/users', requireAuth, async (req, res) => {
   } catch (err) { console.error('[PATCH /api/users]',err); return res.status(500).json({ error:err.message }); }
 });
 
-app.delete('/api/users', requireAuth, async (req, res) => {
+app.delete('/api/users', requireAuth, requireAdmin, async (req, res) => {
   const id = req.query.id;
   if (!id) return res.status(400).json({ error:'id required' });
   if (!USE_DB) {
