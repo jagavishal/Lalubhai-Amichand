@@ -37,6 +37,7 @@ window.Sidebar = {
       { route: 'announcements', label: 'Announcements',  icon: 'announcements' },
       { route: 'help-ticket',   label: 'Help Ticket',    icon: 'helpticket' },
       { route: 'pr-po-grn',    label: 'PR / PO / GRN', icon: 'purchaserequisition' },
+      { route: 'leave-tracker', label: 'Leave Tracker', icon: 'leave' },
     ]},
     { title: 'Operations', items: [
       { route: 'mis',            label: 'MIS Report',     icon: 'mis' },

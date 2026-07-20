@@ -2248,7 +2248,7 @@ app.post('/api/leaves', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
-app.patch('/api/leaves', requireAuth, async (req, res) => {
+app.patch('/api/leaves', requireAuth, requireAdmin, async (req, res) => {
   try {
     await ensureSchema();
     const body = req.body;
