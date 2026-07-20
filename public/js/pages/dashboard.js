@@ -337,7 +337,7 @@ window.Pages.dashboard = (function () {
         <div id="db-stat-cards" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1rem;margin-bottom:20px;">
           <div class="card db-stat-card active" data-filter="All" title="Show all pending tasks" style="padding:20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Pending</div>
-            <div id="db-stat-pending" style="font-size:2.5rem;font-weight:800;color:var(--color-danger);">${data.pending || data.pendingTasks.length}</div>
+            <div id="db-stat-pending" style="font-size:2.5rem;font-weight:800;color:var(--color-danger);">${data.pending}</div>
             <div id="db-stat-revised" style="font-size:11px;font-weight:600;color:var(--color-warning);margin-top:4px;${data.revised > 0 ? '' : 'display:none;'}">+ ${data.revised} shifted</div>
           </div>
           <div class="card db-stat-card" data-filter="Shifted" title="Show shifted tasks" style="padding:20px;cursor:pointer;">
@@ -386,7 +386,7 @@ window.Pages.dashboard = (function () {
               <p style="font-size:11.5px;color:#64748b;margin:3px 0 0;">Overall distribution</p>
             </div>
             <div id="db-pie-container" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-top:12px;">
-              ${renderPieSVG(data.completed, data.pending || data.pendingTasks.length, data.revised, data.upcoming || 0)}
+              ${renderPieSVG(data.completed, data.pending, data.revised, data.upcoming || 0)}
             </div>
           </div>
         </div>
@@ -1187,17 +1187,19 @@ window.Pages.dashboard = (function () {
         const statPending   = el.querySelector('#db-stat-pending');
         const statUpcoming  = el.querySelector('#db-stat-upcoming');
         const statRevised   = el.querySelector('#db-stat-revised');
+        const statRevisedC  = el.querySelector('#db-stat-revised-count');
         if (statTotal)     statTotal.textContent     = newData.total;
         if (statCompleted) statCompleted.textContent = newData.completed;
-        if (statPending)   statPending.textContent   = newData.pending || newData.pendingTasks.length;
+        if (statPending)   statPending.textContent   = newData.pending;
         if (statUpcoming)  statUpcoming.textContent  = newData.upcoming || 0;
+        if (statRevisedC)  statRevisedC.textContent  = newData.revised || 0;
         if (statRevised) {
           statRevised.textContent = newData.revised > 0 ? `+ ${newData.revised} shifted` : '';
           statRevised.style.display = newData.revised > 0 ? '' : 'none';
         }
         /* update pie chart */
         const pieEl = el.querySelector('#db-pie-container');
-        if (pieEl) pieEl.innerHTML = renderPieSVG(newData.completed, newData.pending || newData.pendingTasks.length, newData.revised, newData.upcoming || 0);
+        if (pieEl) pieEl.innerHTML = renderPieSVG(newData.completed, newData.pending, newData.revised, newData.upcoming || 0);
       } catch(e) {
         /* revert so stat cards and the task list stay consistent with each other */
         _state.userFilter = prevFilter;
@@ -1722,7 +1724,7 @@ window.Pages.dashboard = (function () {
     const statUpcoming  = wrap.querySelector('#db-stat-upcoming');
     const statRevised   = wrap.querySelector('#db-stat-revised');
     const statRevisedC  = wrap.querySelector('#db-stat-revised-count');
-    if (statPending)   statPending.textContent   = dashData.pending || dashData.pendingTasks.length;
+    if (statPending)   statPending.textContent   = dashData.pending;
     if (statCompleted) statCompleted.textContent = dashData.completed;
     if (statTotal)     statTotal.textContent     = admin ? dashData.total : dashData.pendingTasks.length;
     if (statUpcoming)  statUpcoming.textContent  = dashData.upcoming || 0;
@@ -1732,7 +1734,7 @@ window.Pages.dashboard = (function () {
       statRevised.style.display = dashData.revised > 0 ? '' : 'none';
     }
     const pieEl = wrap.querySelector('#db-pie-container');
-    if (pieEl) pieEl.innerHTML = renderPieSVG(dashData.completed, dashData.pending || dashData.pendingTasks.length, dashData.revised, dashData.upcoming || 0);
+    if (pieEl) pieEl.innerHTML = renderPieSVG(dashData.completed, dashData.pending, dashData.revised, dashData.upcoming || 0);
 
     _updateTasksTable(admin);
   }
