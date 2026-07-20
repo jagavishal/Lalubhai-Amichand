@@ -40,7 +40,7 @@ window.Sidebar = {
     ]},
     { title: 'Operations', items: [
       { route: 'mis',            label: 'MIS Report',     icon: 'mis' },
-      { route: 'client-master',  label: 'Vendor Master',  icon: 'clientmaster' },
+      { route: 'client-master',  label: 'Vendor Master',  icon: 'clientmaster',  adminOnly: true },
     ]},
     { title: 'Administration', items: [
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
