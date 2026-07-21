@@ -2,15 +2,18 @@ window.Pages = window.Pages || {};
 
 window.Pages.approvals = {
   /* ── state ─────────────────────────────────────────────── */
-  _tab: 'Shift Requests',          // admin: 'Shift Requests' | 'Task Approvals'
+  _tab: 'Shift Requests',          // admin: 'Shift Requests' | 'Task Approvals' | 'PO Approvals'
   _reviseRequests: [],
   _taskApprovals: [],
+  _poApprovals: [],
   _myRequests: [],
   _seenRevise: new Set(),
   _seenApprovals: new Set(),
   _grantTask: null,
   _granting: false,
   _seenTimer: null,
+  _rejectingPo: null,
+  _rejecting: false,
 
   /* ── helpers ───────────────────────────────────────────── */
   _hasFeature(feat) {
@@ -55,12 +58,14 @@ window.Pages.approvals = {
 
   /* ── fetch data ────────────────────────────────────────── */
   async _fetchAdmin() {
-    const [r1, r2] = await Promise.all([
+    const [r1, r2, r3] = await Promise.all([
       fetch('/api/delegations?filter=revise_requested'),
       fetch('/api/delegations?filter=approval_required'),
+      fetch('/api/purchase-orders?approvalStatus=pending'),
     ]);
     this._reviseRequests = r1.ok ? (await r1.json()) : [];
     this._taskApprovals  = r2.ok ? (await r2.json()) : [];
+    this._poApprovals    = r3.ok ? (await r3.json()) : [];
   },
 
   async _fetchUser() {
@@ -131,6 +136,51 @@ window.Pages.approvals = {
     await this._refresh();
   },
 
+  async _approvePo(po) {
+    try {
+      const res = await fetch('/api/purchase-orders/' + encodeURIComponent(po.id) + '/decision', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision: 'approved' }),
+      });
+      if (!res.ok) throw new Error('Server error ' + res.status);
+      if (window.Utils?.showToast) Utils.showToast(po.id + ' approved');
+    } catch (err) {
+      console.error('Approve PO failed:', err);
+      if (window.Utils?.showToast) Utils.showToast('Failed to approve. Try again.', 'error');
+    }
+    await this._refresh();
+  },
+
+  _openRejectPo(po) {
+    this._rejectingPo = po;
+    this._renderRejectModal();
+  },
+
+  async _submitRejectPo() {
+    const reason = document.getElementById('reject-po-reason')?.value.trim();
+    if (!reason) return;
+    this._rejecting = true;
+    this._renderRejectModal();
+    try {
+      const res = await fetch('/api/purchase-orders/' + encodeURIComponent(this._rejectingPo.id) + '/decision', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision: 'rejected', reason }),
+      });
+      if (!res.ok) throw new Error('Server error ' + res.status);
+      if (window.Utils?.showToast) Utils.showToast(this._rejectingPo.id + ' rejected');
+    } catch (err) {
+      console.error('Reject PO failed:', err);
+      if (window.Utils?.showToast) Utils.showToast('Failed to reject. Try again.', 'error');
+    } finally {
+      this._rejecting = false;
+      this._rejectingPo = null;
+      document.getElementById('reject-po-modal-overlay')?.remove();
+    }
+    await this._refresh();
+  },
+
   async _refresh() {
     const user = window.currentUser;
     const isAdmin = user?.roles?.includes('Admin') || user?.roles?.includes('HOD');
@@ -154,8 +204,10 @@ window.Pages.approvals = {
 
     // Reset tab default per role
     this._tab = isAdmin ? 'Shift Requests' : 'My Requests';
-    this._grantTask = null;
-    this._granting  = false;
+    this._grantTask   = null;
+    this._granting    = false;
+    this._rejectingPo = null;
+    this._rejecting   = false;
 
     // Initial skeleton
     el.innerHTML = '<div class="space-y-5 animate-fade-in" id="approvals-root"><div style="display:flex;align-items:center;justify-content:center;min-height:60vh;"><div style="text-align:center;"><div style="width:40px;height:40px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 14px;"></div><div style="font-size:13px;color:#94a3b8;font-weight:500;">Loading…</div></div></div></div>';
@@ -191,6 +243,10 @@ window.Pages.approvals = {
     if (this._grantTask) {
       this._renderGrantModal();
     }
+    // Re-attach reject modal if open
+    if (this._rejectingPo) {
+      this._renderRejectModal();
+    }
   },
 
   /* ── ADMIN VIEW ────────────────────────────────────────── */
@@ -198,6 +254,7 @@ window.Pages.approvals = {
     const tabs = [
       { key: 'Shift Requests', count: this._reviseRequests.length, icon: 'revise' },
       { key: 'Task Approvals',  count: this._taskApprovals.length,  icon: 'task'   },
+      { key: 'PO Approvals',    count: this._poApprovals.length,    icon: 'po'     },
     ];
 
     const tabHtml = tabs.map(({ key, count, icon }) => {
@@ -206,7 +263,7 @@ window.Pages.approvals = {
       const btnCls = active
         ? 'bg-white border-slate-200 text-slate-900 shadow-card'
         : 'bg-transparent border-transparent text-slate-600 hover:bg-white/60 hover:border-slate-200';
-      const iconHtml = icon === 'revise' ? this._reviseIconSvg('w-4 h-4') : this._taskIconSvg('w-4 h-4');
+      const iconHtml = icon === 'revise' ? this._reviseIconSvg('w-4 h-4') : icon === 'po' ? this._poIconSvg('w-4 h-4') : this._taskIconSvg('w-4 h-4');
       const iconColorCls = active ? 'text-primary-600' : 'text-slate-400';
       return `<button data-tab="${key}" class="approvals-tab flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition border ${btnCls}">
         <span class="${iconColorCls}">${iconHtml}</span>
@@ -218,6 +275,8 @@ window.Pages.approvals = {
     let contentHtml = '';
     if (this._tab === 'Shift Requests') {
       contentHtml = this._buildReviseTable();
+    } else if (this._tab === 'PO Approvals') {
+      contentHtml = this._buildPoApprovalsTable();
     } else {
       contentHtml = this._buildTaskApprovalsTable();
     }
@@ -317,6 +376,56 @@ window.Pages.approvals = {
     </div>`;
   },
 
+  _poAmount(po) {
+    return (po.items || []).reduce((s, it) => s + (parseFloat(it.quantity)||0) * (parseFloat(it.rate)||0), 0);
+  },
+
+  _money(n) {
+    return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  },
+
+  _buildPoApprovalsTable() {
+    const items = this._poApprovals;
+    if (items.length === 0) {
+      return this._emptyState(this._poIconSvg('w-8 h-8 text-primary-400'), 'No pending PO approvals', 'Purchase orders sent for approval will appear here.');
+    }
+    const rows = items.map((po, i) => {
+      return `<tr class="table-row">
+        <td class="table-td text-slate-400 text-xs font-mono">${i + 1}</td>
+        <td class="table-td font-medium text-slate-800">${this._esc(po.id)}</td>
+        <td class="table-td text-slate-600">${this._esc(po.poType || '—')}</td>
+        <td class="table-td text-slate-600">${this._esc(po.vendorName || '—')}</td>
+        <td class="table-td text-slate-600">${this._esc(po.createdBy || '—')}</td>
+        <td class="table-td text-slate-500 whitespace-nowrap">${this._fmt(po.poDate)}</td>
+        <td class="table-td text-slate-700 font-medium whitespace-nowrap">${this._money(this._poAmount(po))}</td>
+        <td class="table-td">
+          <div class="flex gap-1.5 flex-wrap">
+            <button data-action="po-view" data-id="${this._esc(po.id)}" class="pill bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer">View PDF</button>
+            ${this._hasFeature('approve') ? `<button data-action="po-approve" data-id="${this._esc(po.id)}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer">Approve</button>` : ''}
+            ${this._hasFeature('reject') ? `<button data-action="po-reject" data-id="${this._esc(po.id)}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer">Reject</button>` : ''}
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+    return `<div class="card overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50/80">
+          <tr>
+            <th class="table-th">#</th>
+            <th class="table-th">PO ID</th>
+            <th class="table-th">Type</th>
+            <th class="table-th">Vendor</th>
+            <th class="table-th">Created By</th>
+            <th class="table-th">Date</th>
+            <th class="table-th">Amount</th>
+            <th class="table-th">Action</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  },
+
   _bindAdminEvents() {
     const root = document.getElementById('approvals-root');
     if (!root) return;
@@ -361,6 +470,25 @@ window.Pages.approvals = {
       btn.addEventListener('click', () => {
         const task = this._taskApprovals.find(t => String(t.id) === btn.dataset.id);
         if (task) this._rejectTask(task);
+      });
+    });
+
+    // PO Approvals actions
+    content.querySelectorAll('[data-action="po-view"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        window.open('/api/purchase-orders/' + encodeURIComponent(btn.dataset.id) + '/pdf', '_blank');
+      });
+    });
+    content.querySelectorAll('[data-action="po-approve"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const po = this._poApprovals.find(p => String(p.id) === btn.dataset.id);
+        if (po) this._approvePo(po);
+      });
+    });
+    content.querySelectorAll('[data-action="po-reject"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const po = this._poApprovals.find(p => String(p.id) === btn.dataset.id);
+        if (po) this._openRejectPo(po);
       });
     });
   },
@@ -439,6 +567,71 @@ window.Pages.approvals = {
     });
   },
 
+  /* ── REJECT PO MODAL ───────────────────────────────────── */
+  _renderRejectModal() {
+    const existing = document.getElementById('reject-po-modal-overlay');
+    if (existing) existing.remove();
+
+    if (!this._rejectingPo) return;
+
+    const po = this._rejectingPo;
+    const overlay = document.createElement('div');
+    overlay.id = 'reject-po-modal-overlay';
+    overlay.className = 'fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4';
+    overlay.innerHTML = `
+      <div id="reject-po-modal" class="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div class="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-red-50 text-red-600 grid place-items-center shrink-0">
+            ${this._poIconSvg('w-5 h-5')}
+          </div>
+          <div class="flex-1">
+            <h2 class="text-base font-semibold">Reject ${this._esc(po.id)}</h2>
+            <p class="text-xs text-slate-500 mt-0.5">A reason is required so the creator knows what to fix.</p>
+          </div>
+          <button id="reject-po-modal-close" ${this._rejecting ? 'disabled' : ''} class="w-8 h-8 grid place-items-center rounded-lg text-slate-400 hover:bg-slate-100">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="p-6 space-y-3">
+          <textarea id="reject-po-reason" rows="4" placeholder="Reason for rejection…" class="w-full rounded-lg border border-slate-200 p-3 text-sm outline-none focus:border-primary-400" ${this._rejecting ? 'disabled' : ''}></textarea>
+        </div>
+        <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
+          <button id="reject-po-modal-cancel" ${this._rejecting ? 'disabled' : ''} class="btn-secondary">Cancel</button>
+          <button id="reject-po-modal-confirm" disabled class="btn-danger">
+            ${this._rejecting ? 'Rejecting…' : 'Reject'}
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay && !this._rejecting) {
+        this._rejectingPo = null;
+        overlay.remove();
+      }
+    });
+
+    document.getElementById('reject-po-modal-close').addEventListener('click', () => {
+      if (!this._rejecting) { this._rejectingPo = null; overlay.remove(); }
+    });
+
+    document.getElementById('reject-po-modal-cancel').addEventListener('click', () => {
+      if (!this._rejecting) { this._rejectingPo = null; overlay.remove(); }
+    });
+
+    const reasonEl = document.getElementById('reject-po-reason');
+    const confirmBtn = document.getElementById('reject-po-modal-confirm');
+    reasonEl.addEventListener('input', () => {
+      confirmBtn.disabled = !reasonEl.value.trim();
+    });
+
+    confirmBtn.addEventListener('click', () => {
+      this._submitRejectPo();
+    });
+  },
+
   /* ── USER VIEW ─────────────────────────────────────────── */
   _buildUserView() {
     const items = this._myRequests;
@@ -513,5 +706,9 @@ window.Pages.approvals = {
 
   _taskIconSvg(cls) {
     return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="m9 14 2 2 4-4"/></svg>`;
+  },
+
+  _poIconSvg(cls) {
+    return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg>`;
   },
 };

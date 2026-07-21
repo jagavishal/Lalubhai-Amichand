@@ -18,6 +18,8 @@ const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const path = require('path');
 const nodemailer = require('nodemailer');
+const PDFDocument = require('pdfkit');
+const { Readable } = require('stream');
 
 let _mailer = null;
 function getMailer() {
@@ -242,6 +244,33 @@ const SCHEMA = [
   `CREATE INDEX idx_pr_type ON purchase_requisitions (pr_type)`,
   `CREATE TABLE IF NOT EXISTS purchase_requisition_items (id VARCHAR(24) PRIMARY KEY, pr_id VARCHAR(16) NOT NULL, packing_item_id VARCHAR(24) DEFAULT NULL, item_name VARCHAR(255) NOT NULL DEFAULT '', unit VARCHAR(32) DEFAULT '', quantity DECIMAL(12,2) DEFAULT 0, estimated_rate DECIMAL(12,2) DEFAULT 0, remarks VARCHAR(255) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_pri_pr ON purchase_requisition_items (pr_id)`,
+  `CREATE TABLE IF NOT EXISTS purchase_orders (id VARCHAR(16) PRIMARY KEY, po_type VARCHAR(16) NOT NULL DEFAULT 'STANDARD', po_date DATE NOT NULL, vendor_id VARCHAR(16) DEFAULT NULL, delivery_terms VARCHAR(255) DEFAULT '', payment_terms VARCHAR(255) DEFAULT '', created_by VARCHAR(255) NOT NULL DEFAULT '', created_by_id VARCHAR(16) DEFAULT NULL, status VARCHAR(32) NOT NULL DEFAULT 'pending', expected_date DATE DEFAULT NULL, remarks TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_po_status ON purchase_orders (status)`,
+  `CREATE INDEX idx_po_type ON purchase_orders (po_type)`,
+  `CREATE INDEX idx_po_created_by ON purchase_orders (created_by_id)`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS approval_status VARCHAR(32) NOT NULL DEFAULT 'not_sent'`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS sent_for_approval_at DATETIME DEFAULT NULL`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS approved_by_id VARCHAR(16) DEFAULT NULL`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS approved_by_name VARCHAR(255) DEFAULT NULL`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS decided_at DATETIME DEFAULT NULL`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS rejection_reason TEXT DEFAULT NULL`,
+  `CREATE INDEX idx_po_approval_status ON purchase_orders (approval_status)`,
+  `CREATE TABLE IF NOT EXISTS purchase_order_items (id VARCHAR(24) PRIMARY KEY, po_id VARCHAR(16) NOT NULL, packing_item_id VARCHAR(24) DEFAULT NULL, item_name VARCHAR(255) NOT NULL DEFAULT '', unit VARCHAR(32) DEFAULT '', quantity DECIMAL(12,2) DEFAULT 0, rate DECIMAL(12,2) DEFAULT 0, remarks VARCHAR(255) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_poi_po ON purchase_order_items (po_id)`,
+  `CREATE TABLE IF NOT EXISTS goods_receipts (id VARCHAR(16) PRIMARY KEY, gr_date DATE NOT NULL, made_by VARCHAR(255) NOT NULL DEFAULT '', made_by_id VARCHAR(16) DEFAULT NULL, vendor_id VARCHAR(16) DEFAULT NULL, pr_id VARCHAR(16) DEFAULT NULL, po_id VARCHAR(16) DEFAULT NULL, bill_no VARCHAR(64) DEFAULT '', bill_recv_date DATE DEFAULT NULL, dept_head VARCHAR(255) DEFAULT '', cgst DECIMAL(12,2) DEFAULT 0, sgst DECIMAL(12,2) DEFAULT 0, round_off DECIMAL(12,2) DEFAULT 0, remarks TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_gr_made_by ON goods_receipts (made_by_id)`,
+  `CREATE INDEX idx_gr_pr ON goods_receipts (pr_id)`,
+  `CREATE INDEX idx_gr_po ON goods_receipts (po_id)`,
+  `CREATE TABLE IF NOT EXISTS goods_receipt_items (id VARCHAR(24) PRIMARY KEY, gr_id VARCHAR(16) NOT NULL, item_name VARCHAR(255) NOT NULL DEFAULT '', unit VARCHAR(32) DEFAULT '', quantity DECIMAL(12,2) DEFAULT 0, rate DECIMAL(12,2) DEFAULT 0, remarks VARCHAR(255) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_gri_gr ON goods_receipt_items (gr_id)`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS department VARCHAR(255) DEFAULT ''`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS freight_charges DECIMAL(12,2) DEFAULT 0`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS packing_charges DECIMAL(12,2) DEFAULT 0`,
+  `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS discount DECIMAL(12,2) DEFAULT 0`,
+  `ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS hsn_code VARCHAR(32) DEFAULT ''`,
+  `ALTER TABLE purchase_order_items ADD COLUMN IF NOT EXISTS gst_percent DECIMAL(5,2) DEFAULT 0`,
+  `ALTER TABLE purchase_requisitions ADD COLUMN IF NOT EXISTS department VARCHAR(255) DEFAULT ''`,
+  `ALTER TABLE purchase_requisitions ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(255) DEFAULT ''`,
 ];
 
 // Seed rows for packing_items — imported once from "PR July 2026" packing-box
@@ -2474,11 +2503,152 @@ async function sendPrApprovalEmail({ id, prType, prDate, requestedBy, vendorId, 
   }
 }
 
+const PR_STATUS_LABEL = { pending: 'Pending', ordered: 'Ordered', received: 'Received', cancelled: 'Cancelled' };
+
+async function fetchPrForPdf(id) {
+  const headers = await q(
+    `SELECT pr.id, pr.pr_type AS prType, pr.pr_date AS prDate, pr.requested_by AS requestedBy, pr.department, pr.vendor_id AS vendorId, c.name AS vendorName, pr.payment_terms AS paymentTerms, pr.status, pr.expected_date AS expectedDate, pr.remarks, pr.created_at AS createdAt FROM purchase_requisitions pr LEFT JOIN clients c ON c.id = pr.vendor_id WHERE pr.id = $1`,
+    [id]
+  );
+  if (!headers.length) return null;
+  const items = await q(
+    `SELECT item_name AS itemName, unit, quantity, estimated_rate AS estimatedRate, remarks FROM purchase_requisition_items WHERE pr_id = $1 ORDER BY id ASC`,
+    [id]
+  );
+  return { ...headers[0], items };
+}
+
+function buildPrPdfBuffer(pr) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 40 });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    const pageW = doc.page.width;
+    const marginX = 40;
+    const contentW = pageW - marginX * 2;
+
+    doc.rect(0, 0, pageW, 74).fill('#C4714A');
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(15).text('LALLUBHAI AMICHAND LTD', marginX, 16);
+    doc.font('Helvetica').fontSize(9).fillColor('#fde8dd').text('Purchase Requisition · ' + (PR_TYPE_LABEL[pr.prType] || pr.prType), marginX, 34);
+    doc.fontSize(8).text('GSTIN: ' + COMPANY_LETTERHEAD.gstin + '  ·  ' + COMPANY_LETTERHEAD.phone, marginX, 48, { width: contentW * 0.65 });
+    doc.font('Helvetica-Bold').fontSize(14).fillColor('#ffffff').text(pr.id, marginX, 18, { width: contentW, align: 'right' });
+    doc.font('Helvetica').fontSize(9).fillColor('#fde8dd').text(pr.prDate ? new Date(pr.prDate).toISOString().slice(0, 10) : '—', marginX, 34, { width: contentW, align: 'right' });
+    if (pr.department) doc.text('Dept: ' + pr.department, marginX, 48, { width: contentW, align: 'right' });
+
+    let y = 96;
+    doc.fillColor('#1e293b').font('Helvetica').fontSize(10);
+    const metaLeft = [
+      ['Requested By', pr.requestedBy || '—'],
+      ['Status', PR_STATUS_LABEL[pr.status] || pr.status || '—'],
+      ['Payment Terms', pr.paymentTerms || '—'],
+    ];
+    const metaRight = [
+      ['Vendor', pr.vendorName || '—'],
+      ['Estimated Del. Date', pr.expectedDate ? new Date(pr.expectedDate).toISOString().slice(0, 10) : '—'],
+    ];
+    const rowH = 16;
+    metaLeft.forEach((row, i) => {
+      doc.font('Helvetica').fillColor('#64748b').text(row[0] + ':', marginX, y + i * rowH, { continued: false, width: 120 });
+      doc.font('Helvetica-Bold').fillColor('#1e293b').text(row[1], marginX + 100, y + i * rowH, { width: contentW / 2 - 100 });
+    });
+    metaRight.forEach((row, i) => {
+      const cx = marginX + contentW / 2 + 10;
+      doc.font('Helvetica').fillColor('#64748b').text(row[0] + ':', cx, y + i * rowH, { width: 100 });
+      doc.font('Helvetica-Bold').fillColor('#1e293b').text(row[1], cx + 90, y + i * rowH, { width: contentW / 2 - 100 });
+    });
+    y += metaLeft.length * rowH + 6;
+    if (pr.remarks) {
+      doc.font('Helvetica').fillColor('#64748b').text('Remarks:', marginX, y, { width: 100 });
+      doc.font('Helvetica-Bold').fillColor('#1e293b').text(pr.remarks, marginX + 100, y, { width: contentW - 100 });
+      y = doc.y + 10;
+    } else {
+      y += 10;
+    }
+
+    const cols = [
+      { key: 'itemName', label: 'Item', w: contentW * 0.36, align: 'left' },
+      { key: 'unit', label: 'Unit', w: contentW * 0.12, align: 'left' },
+      { key: 'quantity', label: 'Qty', w: contentW * 0.12, align: 'right' },
+      { key: 'estimatedRate', label: 'Rate', w: contentW * 0.16, align: 'right' },
+      { key: 'amount', label: 'Amount', w: contentW * 0.24, align: 'right' },
+    ];
+    const drawRow = (vals, opts) => {
+      const bold = !!opts?.bold;
+      const bg = opts?.bg;
+      const rh = 22;
+      if (bg) doc.rect(marginX, y, contentW, rh).fill(bg);
+      let x = marginX;
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9.5).fillColor(opts?.color || '#374151');
+      cols.forEach((c, i) => {
+        doc.text(String(vals[i] ?? ''), x + 8, y + 6, { width: c.w - 12, align: c.align });
+        x += c.w;
+      });
+      y += rh;
+    };
+
+    drawRow(cols.map((c) => c.label), { bold: true, bg: '#f8fafc', color: '#64748b' });
+    doc.moveTo(marginX, y).lineTo(marginX + contentW, y).strokeColor('#e2e8f0').lineWidth(1).stroke();
+
+    let total = 0;
+    (pr.items || []).forEach((it) => {
+      const qty = parseFloat(it.quantity) || 0;
+      const rate = parseFloat(it.estimatedRate) || 0;
+      const amount = qty * rate;
+      total += amount;
+      if (y > doc.page.height - 160) {
+        doc.addPage();
+        y = 40;
+      }
+      drawRow([it.itemName || '', it.unit || '—', qty, rate.toFixed(2), amount.toFixed(2)]);
+      doc.moveTo(marginX, y).lineTo(marginX + contentW, y).strokeColor('#f1f5f9').lineWidth(0.5).stroke();
+    });
+
+    y += 14;
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('#1e293b')
+      .text('Estimated Total: Rs. ' + total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), marginX, y, { width: contentW, align: 'right' });
+
+    y += 34;
+    if (y > doc.page.height - 90) { doc.addPage(); y = 40; }
+    doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#64748b').text('APPROVALS', marginX, y);
+    y += 14;
+    const approvalCols = [
+      ['Factory Manager', marginX], ['Production Manager', marginX + contentW / 2],
+    ];
+    approvalCols.forEach(([label, x]) => {
+      doc.font('Helvetica').fontSize(9).fillColor('#94a3b8').text(label, x, y, { width: contentW / 2 - 20 });
+      doc.text('Approved / Rejected: _______________', x, y + 14, { width: contentW / 2 - 20 });
+      doc.text('Date: _______________', x, y + 28, { width: contentW / 2 - 20 });
+    });
+
+    doc.font('Helvetica').fontSize(8).fillColor('#94a3b8')
+      .text('Generated from Lallubhai Amichand Task Manager', marginX, doc.page.height - 50, { width: contentW, align: 'center' });
+
+    doc.end();
+  });
+}
+
+app.get('/api/purchase-requisitions/:id/pdf', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const pr = await fetchPrForPdf(req.params.id);
+    if (!pr) return res.status(404).json({ error: 'Purchase requisition not found' });
+    const buffer = await buildPrPdfBuffer(pr);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${pr.id}.pdf"`,
+    });
+    return res.send(buffer);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/purchase-requisitions', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
     const requestedById = req.query.requestedById;
-    const headerSql = `SELECT pr.id, pr.pr_type AS prType, pr.pr_date AS prDate, pr.requested_by AS requestedBy, pr.requested_by_id AS requestedById, pr.vendor_id AS vendorId, c.name AS vendorName, pr.status, pr.expected_date AS expectedDate, pr.remarks, pr.created_at AS createdAt FROM purchase_requisitions pr LEFT JOIN clients c ON c.id = pr.vendor_id`;
+    const headerSql = `SELECT pr.id, pr.pr_type AS prType, pr.pr_date AS prDate, pr.requested_by AS requestedBy, pr.requested_by_id AS requestedById, pr.department, pr.payment_terms AS paymentTerms, pr.vendor_id AS vendorId, c.name AS vendorName, pr.status, pr.expected_date AS expectedDate, pr.remarks, pr.created_at AS createdAt FROM purchase_requisitions pr LEFT JOIN clients c ON c.id = pr.vendor_id`;
     const headers = requestedById
       ? await q(headerSql + ' WHERE pr.requested_by_id = $1 ORDER BY pr.created_at DESC', [requestedById])
       : await q(headerSql + ' ORDER BY pr.created_at DESC');
@@ -2506,9 +2676,9 @@ app.post('/api/purchase-requisitions', requireAuth, async (req, res) => {
     try {
       await c.query('BEGIN');
       await c.query(
-        `INSERT INTO purchase_requisitions (id,pr_type,pr_date,requested_by,requested_by_id,vendor_id,status,remarks)
-         VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)`,
-        [id, b.prType||'ITEM_CODE', b.prDate, user?.name||'', user?.id||null, b.vendorId||null, b.remarks||'']
+        `INSERT INTO purchase_requisitions (id,pr_type,pr_date,requested_by,requested_by_id,department,payment_terms,vendor_id,status,remarks)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9)`,
+        [id, b.prType||'ITEM_CODE', b.prDate, user?.name||'', user?.id||null, b.department||'', b.paymentTerms||'', b.vendorId||null, b.remarks||'']
       );
       let idx = 0;
       for (const it of items) {
@@ -2527,6 +2697,7 @@ app.post('/api/purchase-requisitions', requireAuth, async (req, res) => {
       c.release();
     }
     sendPrApprovalEmail({ id, prType: b.prType||'ITEM_CODE', prDate: b.prDate, requestedBy: user?.name||'', vendorId: b.vendorId||null, remarks: b.remarks||'', items }).catch(() => {});
+    syncPrToSheet(id).catch(() => {});
     return res.status(201).json({ success:true, id });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -2537,8 +2708,8 @@ app.patch('/api/purchase-requisitions', requireAuth, async (req, res) => {
     const b = req.body;
     if (!b.id) return res.status(400).json({ error:'id required' });
     await pool.query(
-      `UPDATE purchase_requisitions SET status=COALESCE($1,status), vendor_id=COALESCE($2,vendor_id), remarks=COALESCE($3,remarks), pr_type=COALESCE($4,pr_type), expected_date=COALESCE($5,expected_date) WHERE id=$6`,
-      [b.status??null, b.vendorId??null, b.remarks??null, b.prType??null, b.expectedDate??null, b.id]
+      `UPDATE purchase_requisitions SET status=COALESCE($1,status), vendor_id=COALESCE($2,vendor_id), remarks=COALESCE($3,remarks), pr_type=COALESCE($4,pr_type), expected_date=COALESCE($5,expected_date), department=COALESCE($6,department), payment_terms=COALESCE($7,payment_terms) WHERE id=$8`,
+      [b.status??null, b.vendorId??null, b.remarks??null, b.prType??null, b.expectedDate??null, b.department??null, b.paymentTerms??null, b.id]
     );
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
@@ -2554,6 +2725,765 @@ app.delete('/api/purchase-requisitions', requireAuth, async (req, res) => {
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
+
+// ── Purchase Orders ────────────────────────────────────────────────────────────
+
+const PO_TYPE_LABEL = { STANDARD: 'Purchase Order', DIAMOND: 'Diamond Purchase Order', ENR: 'Purchase Order — ENR Creative Solutions' };
+
+async function nextPoId() {
+  const rows = await q("SELECT MAX(CAST(SUBSTRING(id,3) AS UNSIGNED)) AS maxnum FROM purchase_orders WHERE id REGEXP '^PO[0-9]+$'");
+  const lastNum = (rows.length && rows[0].maxnum) ? parseInt(rows[0].maxnum) || 0 : 0;
+  return 'PO' + (lastNum + 1).toString().padStart(4, '0');
+}
+
+async function fetchPoForPdf(id) {
+  const headers = await q(
+    `SELECT po.id, po.po_type AS poType, po.po_date AS poDate, po.vendor_id AS vendorId, c.name AS vendorName, c.address AS vendorAddress, c.mobile AS vendorMobile, c.email AS vendorEmail, po.department, po.delivery_terms AS deliveryTerms, po.payment_terms AS paymentTerms, po.expected_date AS expectedDate, po.freight_charges AS freightCharges, po.packing_charges AS packingCharges, po.discount, po.created_by AS createdBy, po.status, po.remarks, po.approval_status AS approvalStatus, po.approved_by_name AS approvedByName, po.decided_at AS decidedAt, po.rejection_reason AS rejectionReason FROM purchase_orders po LEFT JOIN clients c ON c.id = po.vendor_id WHERE po.id = $1`,
+    [id]
+  );
+  if (!headers.length) return null;
+  const items = await q(
+    `SELECT item_name AS itemName, unit, quantity, rate, remarks, hsn_code AS hsnCode, gst_percent AS gstPercent FROM purchase_order_items WHERE po_id = $1 ORDER BY id ASC`,
+    [id]
+  );
+  return { ...headers[0], items };
+}
+
+function numberToWords(amount) {
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine',
+    'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+
+  function twoDigits(n) {
+    if (n < 20) return ones[n];
+    return tens[Math.floor(n / 10)] + (n % 10 ? ' ' + ones[n % 10] : '');
+  }
+  function threeDigits(n) {
+    const hundred = Math.floor(n / 100);
+    const rest = n % 100;
+    let s = '';
+    if (hundred) s += ones[hundred] + ' Hundred';
+    if (rest) s += (s ? ' ' : '') + twoDigits(rest);
+    return s;
+  }
+  function integerToWords(n) {
+    if (n === 0) return 'Zero';
+    const crore = Math.floor(n / 10000000);
+    const lakh = Math.floor((n % 10000000) / 100000);
+    const thousand = Math.floor((n % 100000) / 1000);
+    const rest = n % 1000;
+    const parts = [];
+    if (crore) parts.push(threeDigits(crore) + ' Crore');
+    if (lakh) parts.push(threeDigits(lakh) + ' Lakh');
+    if (thousand) parts.push(threeDigits(thousand) + ' Thousand');
+    if (rest) parts.push(threeDigits(rest));
+    return parts.join(' ');
+  }
+
+  const amt = Math.abs(parseFloat(amount) || 0);
+  const rupees = Math.floor(amt);
+  const paise = Math.round((amt - rupees) * 100);
+  let words = integerToWords(rupees) + ' Rupees';
+  if (paise) words += ' and ' + integerToWords(paise) + ' Paise';
+  return words + ' Only';
+}
+
+const COMPANY_LETTERHEAD = {
+  name: 'LALLUBHAI AMICHAND LIMITED (Factory)',
+  address: '175/2&3, Village Ghodasar, Nr. GIDC Vatva, Vatva, opp. Hotel Samir, Ahmedabad, Gujarat 382 445, India.',
+  phone: '022 2380 5806',
+  gstin: '24AAACL0829R1Z9',
+  email: 'factory.ahd@laltd.in',
+  website: 'www.laltd.in',
+};
+
+function buildPoPdfBuffer(po) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 40 });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    const pageW = doc.page.width;
+    const marginX = 40;
+    const contentW = pageW - marginX * 2;
+
+    doc.rect(0, 0, pageW, 74).fill('#C4714A');
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(15).text('LALLUBHAI AMICHAND LIMITED', marginX, 16);
+    doc.font('Helvetica').fontSize(9).fillColor('#fde8dd').text('Purchase Order · ' + (PO_TYPE_LABEL[po.poType] || po.poType), marginX, 34);
+    doc.fontSize(8).text(COMPANY_LETTERHEAD.address, marginX, 48, { width: contentW * 0.65 });
+    doc.text('GSTIN: ' + COMPANY_LETTERHEAD.gstin + '  ·  ' + COMPANY_LETTERHEAD.phone + '  ·  ' + COMPANY_LETTERHEAD.email, marginX, 60, { width: contentW * 0.65 });
+    doc.font('Helvetica-Bold').fontSize(14).fillColor('#ffffff').text(po.id, marginX, 18, { width: contentW, align: 'right' });
+    doc.font('Helvetica').fontSize(9).fillColor('#fde8dd').text(po.poDate ? new Date(po.poDate).toISOString().slice(0, 10) : '—', marginX, 34, { width: contentW, align: 'right' });
+    if (po.department) doc.text('Dept: ' + po.department, marginX, 48, { width: contentW, align: 'right' });
+
+    let bannerH = 0;
+    if (po.approvalStatus === 'approved' || po.approvalStatus === 'rejected') {
+      const isApproved = po.approvalStatus === 'approved';
+      const bg = isApproved ? '#dcfce7' : '#fee2e2';
+      const fg = isApproved ? '#15803d' : '#b91c1c';
+      const decidedStr = po.decidedAt ? new Date(po.decidedAt).toISOString().slice(0, 10) : '';
+      const label = (isApproved ? 'APPROVED' : 'REJECTED') + ' by ' + (po.approvedByName || '—') + (decidedStr ? ' on ' + decidedStr : '')
+        + (!isApproved && po.rejectionReason ? ' — ' + po.rejectionReason : '');
+      bannerH = 22;
+      doc.rect(marginX, 80, contentW, bannerH).fill(bg);
+      doc.font('Helvetica-Bold').fontSize(9.5).fillColor(fg).text(label, marginX + 10, 86, { width: contentW - 20 });
+    }
+
+    let y = 96 + bannerH + (bannerH ? 6 : 0);
+    doc.fillColor('#1e293b').font('Helvetica').fontSize(10);
+
+    // Bill To / Ship To — both always this company's own factory (static, not a per-order input)
+    doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#64748b').text('BILL TO / SHIP TO', marginX, y);
+    doc.font('Helvetica').fontSize(9).fillColor('#374151').text(COMPANY_LETTERHEAD.name + ', ' + COMPANY_LETTERHEAD.address, marginX, y + 12, { width: contentW });
+    y = doc.y + 10;
+
+    const metaLeft = [
+      ['Vendor', po.vendorName || '—'],
+      ['Vendor Contact', [po.vendorMobile, po.vendorEmail].filter(Boolean).join(' · ') || '—'],
+      ['PO Validity', po.deliveryTerms || '—'],
+    ];
+    const metaRight = [
+      ['PO Made By', po.createdBy || '—'],
+      ['Delivery Schedule', po.expectedDate ? new Date(po.expectedDate).toISOString().slice(0, 10) : '—'],
+      ['Payment Terms', po.paymentTerms || '—'],
+    ];
+    const rowH = 16;
+    metaLeft.forEach((row, i) => {
+      doc.font('Helvetica').fillColor('#64748b').text(row[0] + ':', marginX, y + i * rowH, { width: 100 });
+      doc.font('Helvetica-Bold').fillColor('#1e293b').text(row[1], marginX + 90, y + i * rowH, { width: contentW / 2 - 90 });
+    });
+    metaRight.forEach((row, i) => {
+      const cx = marginX + contentW / 2 + 10;
+      doc.font('Helvetica').fillColor('#64748b').text(row[0] + ':', cx, y + i * rowH, { width: 100 });
+      doc.font('Helvetica-Bold').fillColor('#1e293b').text(row[1], cx + 90, y + i * rowH, { width: contentW / 2 - 100 });
+    });
+    y += metaLeft.length * rowH + 6;
+    if (po.remarks) {
+      doc.font('Helvetica').fillColor('#64748b').text('Remarks:', marginX, y, { width: 100 });
+      doc.font('Helvetica-Bold').fillColor('#1e293b').text(po.remarks, marginX + 90, y, { width: contentW - 90 });
+      y = doc.y + 10;
+    } else {
+      y += 10;
+    }
+
+    const cols = [
+      { label: 'Item', w: contentW * 0.28, align: 'left' },
+      { label: 'HSN', w: contentW * 0.11, align: 'left' },
+      { label: 'UOM', w: contentW * 0.09, align: 'left' },
+      { label: 'Qty', w: contentW * 0.09, align: 'right' },
+      { label: 'Rate', w: contentW * 0.13, align: 'right' },
+      { label: 'GST%', w: contentW * 0.09, align: 'right' },
+      { label: 'Amount', w: contentW * 0.21, align: 'right' },
+    ];
+    const drawRow = (vals, opts) => {
+      const bold = !!opts?.bold;
+      const bg = opts?.bg;
+      const rh = 22;
+      if (bg) doc.rect(marginX, y, contentW, rh).fill(bg);
+      let x = marginX;
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9).fillColor(opts?.color || '#374151');
+      cols.forEach((c, i) => {
+        doc.text(String(vals[i] ?? ''), x + 6, y + 6, { width: c.w - 10, align: c.align });
+        x += c.w;
+      });
+      y += rh;
+    };
+
+    drawRow(cols.map((c) => c.label), { bold: true, bg: '#f8fafc', color: '#64748b' });
+    doc.moveTo(marginX, y).lineTo(marginX + contentW, y).strokeColor('#e2e8f0').lineWidth(1).stroke();
+
+    let subtotal = 0, gstTotal = 0;
+    (po.items || []).forEach((it) => {
+      const qty = parseFloat(it.quantity) || 0;
+      const rate = parseFloat(it.rate) || 0;
+      const gstPct = parseFloat(it.gstPercent) || 0;
+      const amount = qty * rate;
+      subtotal += amount;
+      gstTotal += amount * gstPct / 100;
+      if (y > doc.page.height - 180) {
+        doc.addPage();
+        y = 40;
+      }
+      drawRow([it.itemName || '', it.hsnCode || '—', it.unit || '—', qty, rate.toFixed(2), gstPct ? gstPct + '%' : '—', amount.toFixed(2)]);
+      doc.moveTo(marginX, y).lineTo(marginX + contentW, y).strokeColor('#f1f5f9').lineWidth(0.5).stroke();
+    });
+
+    const freight = parseFloat(po.freightCharges) || 0;
+    const packing = parseFloat(po.packingCharges) || 0;
+    const discount = parseFloat(po.discount) || 0;
+    const total = subtotal + gstTotal + freight + packing - discount;
+
+    y += 10;
+    const totalsRows = [
+      ['Subtotal', subtotal], ['GST', gstTotal], ['Freight Charges', freight], ['Packing Charges', packing], ['Discount', -discount],
+    ];
+    doc.font('Helvetica').fontSize(9.5);
+    totalsRows.forEach((row) => {
+      doc.fillColor('#64748b').text(row[0] + ':', marginX + contentW - 220, y, { width: 120 });
+      doc.fillColor('#374151').text('Rs. ' + row[1].toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), marginX + contentW - 100, y, { width: 100, align: 'right' });
+      y += 15;
+    });
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('#1e293b')
+      .text('Total Amount: Rs. ' + total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), marginX, y, { width: contentW, align: 'right' });
+    y = doc.y + 4;
+    doc.font('Helvetica-Oblique').fontSize(9).fillColor('#64748b')
+      .text('Amount in Words: ' + numberToWords(total), marginX, y, { width: contentW, align: 'right' });
+
+    y = doc.y + 30;
+    if (y > doc.page.height - 90) { doc.addPage(); y = 40; }
+    doc.font('Helvetica').fontSize(9).fillColor('#94a3b8').text('_________________________', marginX + contentW - 180, y, { width: 180, align: 'center' });
+    doc.text('Director / Authorized Signatory', marginX + contentW - 180, y + 12, { width: 180, align: 'center' });
+
+    doc.font('Helvetica').fontSize(8).fillColor('#94a3b8')
+      .text('Generated from Lallubhai Amichand Task Manager', marginX, doc.page.height - 50, { width: contentW, align: 'center' });
+
+    doc.end();
+  });
+}
+
+async function sendPoSentForApprovalEmail(id) {
+  const mailer = getMailer();
+  if (!mailer) return;
+  try {
+    const po = await fetchPoForPdf(id);
+    if (!po) return;
+    const buffer = await buildPoPdfBuffer(po);
+    await mailer.sendMail({
+      from: `"MIS LALTD" <${process.env.SMTP_USER}>`,
+      to: 'sajilshah@laltd.in',
+      cc: 'store@laltd.in',
+      subject: `Purchase Order ${id} — Approval Required (${PO_TYPE_LABEL[po.poType]||po.poType})`,
+      html: `<p>Dear Sir,</p><p>Please find the attached Purchase Order <b>${id}</b> for your review and approval.</p>`,
+      attachments: [{ filename: id + '.pdf', content: buffer }],
+    });
+    console.log('[email] PO send-for-approval email sent for', id);
+  } catch (e) {
+    console.error('[email] PO send-for-approval email failed:', e.message);
+  }
+}
+
+async function sendPoDecisionEmail(id, decision, reason, approvedByName) {
+  const mailer = getMailer();
+  if (!mailer) return;
+  try {
+    const po = await fetchPoForPdf(id);
+    if (!po) return;
+    const buffer = await buildPoPdfBuffer(po);
+    await mailer.sendMail({
+      from: `"MIS LALTD" <${process.env.SMTP_USER}>`,
+      to: 'sajilshah@laltd.in',
+      cc: 'store@laltd.in',
+      subject: `Purchase Order ${id} — ${decision === 'approved' ? 'Approved' : 'Rejected'}`,
+      html: decision === 'approved'
+        ? `<p>Dear Team,</p><p>Purchase Order <b>${id}</b> has been <b>approved</b> by ${approvedByName||'—'}.</p>`
+        : `<p>Dear Team,</p><p>Purchase Order <b>${id}</b> has been <b>rejected</b> by ${approvedByName||'—'}.</p><p>Reason: ${reason}</p>`,
+      attachments: [{ filename: id + '.pdf', content: buffer }],
+    });
+    console.log('[email] PO decision email sent for', id);
+  } catch (e) {
+    console.error('[email] PO decision email failed:', e.message);
+  }
+}
+
+app.get('/api/purchase-orders/:id/pdf', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const po = await fetchPoForPdf(req.params.id);
+    if (!po) return res.status(404).json({ error: 'Purchase order not found' });
+    const buffer = await buildPoPdfBuffer(po);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${po.id}.pdf"`,
+    });
+    return res.send(buffer);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/purchase-orders', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const createdById = req.query.createdById;
+    const approvalStatus = req.query.approvalStatus;
+    const headerSql = `SELECT po.id, po.po_type AS poType, po.po_date AS poDate, po.vendor_id AS vendorId, c.name AS vendorName, po.department, po.delivery_terms AS deliveryTerms, po.payment_terms AS paymentTerms, po.freight_charges AS freightCharges, po.packing_charges AS packingCharges, po.discount, po.created_by AS createdBy, po.created_by_id AS createdById, po.status, po.expected_date AS expectedDate, po.remarks, po.approval_status AS approvalStatus, po.sent_for_approval_at AS sentForApprovalAt, po.approved_by_name AS approvedByName, po.decided_at AS decidedAt, po.rejection_reason AS rejectionReason, po.created_at AS createdAt FROM purchase_orders po LEFT JOIN clients c ON c.id = po.vendor_id`;
+    const conditions = [];
+    const params = [];
+    if (createdById) { params.push(createdById); conditions.push('po.created_by_id = $' + params.length); }
+    if (approvalStatus) { params.push(approvalStatus); conditions.push('po.approval_status = $' + params.length); }
+    const whereSql = conditions.length ? ' WHERE ' + conditions.join(' AND ') : '';
+    const headers = await q(headerSql + whereSql + ' ORDER BY po.created_at DESC', params);
+    const items = await q(`SELECT id, po_id AS poId, packing_item_id AS packingItemId, item_name AS itemName, unit, quantity, rate, remarks, hsn_code AS hsnCode, gst_percent AS gstPercent FROM purchase_order_items ORDER BY id ASC`);
+    const byPo = new Map();
+    for (const it of items) {
+      if (!byPo.has(it.poId)) byPo.set(it.poId, []);
+      byPo.get(it.poId).push(it);
+    }
+    const rows = headers.map(h => ({ ...h, items: byPo.get(h.id) || [] }));
+    return res.json(rows);
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+app.post('/api/purchase-orders', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const b = req.body;
+    if (!b.poDate) return res.status(400).json({ error:'poDate required' });
+    const items = Array.isArray(b.items) ? b.items.filter(it => it.itemName?.trim()) : [];
+    if (!items.length) return res.status(400).json({ error:'at least one item required' });
+    const id = await nextPoId();
+    const user = req.session?.user;
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query(
+        `INSERT INTO purchase_orders (id,po_type,po_date,vendor_id,department,delivery_terms,payment_terms,expected_date,freight_charges,packing_charges,discount,created_by,created_by_id,status,remarks)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'pending',$14)`,
+        [id, b.poType||'STANDARD', b.poDate, b.vendorId||null, b.department||'', b.deliveryTerms||'', b.paymentTerms||'', b.expectedDate||null, parseFloat(b.freightCharges)||0, parseFloat(b.packingCharges)||0, parseFloat(b.discount)||0, user?.name||'', user?.id||null, b.remarks||'']
+      );
+      let idx = 0;
+      for (const it of items) {
+        idx++;
+        await c.query(
+          `INSERT INTO purchase_order_items (id,po_id,packing_item_id,item_name,unit,quantity,rate,remarks,hsn_code,gst_percent)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [id+'-'+idx, id, it.packingItemId||null, it.itemName.trim(), it.unit||'', parseFloat(it.quantity)||0, parseFloat(it.rate)||0, it.remarks||'', it.hsnCode||'', parseFloat(it.gstPercent)||0]
+        );
+      }
+      await c.query('COMMIT');
+    } catch (e) {
+      await c.query('ROLLBACK');
+      throw e;
+    } finally {
+      c.release();
+    }
+    syncPoToSheet(id).catch(() => {});
+    return res.status(201).json({ success:true, id });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+app.patch('/api/purchase-orders', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const b = req.body;
+    if (!b.id) return res.status(400).json({ error:'id required' });
+    await pool.query(
+      `UPDATE purchase_orders SET status=COALESCE($1,status), vendor_id=COALESCE($2,vendor_id), remarks=COALESCE($3,remarks), po_type=COALESCE($4,po_type), expected_date=COALESCE($5,expected_date), delivery_terms=COALESCE($6,delivery_terms), payment_terms=COALESCE($7,payment_terms), department=COALESCE($8,department), freight_charges=COALESCE($9,freight_charges), packing_charges=COALESCE($10,packing_charges), discount=COALESCE($11,discount) WHERE id=$12`,
+      [b.status??null, b.vendorId??null, b.remarks??null, b.poType??null, b.expectedDate??null, b.deliveryTerms??null, b.paymentTerms??null, b.department??null, b.freightCharges??null, b.packingCharges??null, b.discount??null, b.id]
+    );
+    return res.json({ success:true });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+app.delete('/api/purchase-orders', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error:'id required' });
+    await pool.query('DELETE FROM purchase_order_items WHERE po_id = $1', [id]);
+    await pool.query('DELETE FROM purchase_orders WHERE id = $1', [id]);
+    return res.json({ success:true });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+app.post('/api/purchase-orders/:id/send-for-approval', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.params.id;
+    const rows = await q('SELECT approval_status AS approvalStatus FROM purchase_orders WHERE id=$1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Purchase order not found' });
+    if (!['not_sent', 'rejected'].includes(rows[0].approvalStatus)) {
+      return res.status(400).json({ error: 'This purchase order has already been sent for approval' });
+    }
+    await pool.query(`UPDATE purchase_orders SET approval_status='pending', sent_for_approval_at=NOW(), rejection_reason=NULL WHERE id=$1`, [id]);
+    sendPoSentForApprovalEmail(id).catch(() => {});
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/api/purchase-orders/:id/decision', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.params.id;
+    const { decision, reason } = req.body;
+    if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'decision must be approved or rejected' });
+    if (decision === 'rejected' && !reason?.trim()) return res.status(400).json({ error: 'A reason is required to reject' });
+    const rows = await q('SELECT approval_status AS approvalStatus FROM purchase_orders WHERE id=$1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Purchase order not found' });
+    if (rows[0].approvalStatus !== 'pending') return res.status(400).json({ error: 'This purchase order is not awaiting approval' });
+    const user = req.session?.user;
+    await pool.query(
+      `UPDATE purchase_orders SET approval_status=$1, approved_by_id=$2, approved_by_name=$3, decided_at=NOW(), rejection_reason=$4 WHERE id=$5`,
+      [decision, user?.id||null, user?.name||'', decision === 'rejected' ? reason.trim() : null, id]
+    );
+    sendPoDecisionEmail(id, decision, decision === 'rejected' ? reason.trim() : '', user?.name||'').catch(() => {});
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── Goods Receipts (GRN) ───────────────────────────────────────────────────────
+
+async function nextGrId() {
+  const rows = await q("SELECT MAX(CAST(SUBSTRING(id,3) AS UNSIGNED)) AS maxnum FROM goods_receipts WHERE id REGEXP '^GR[0-9]+$'");
+  const lastNum = (rows.length && rows[0].maxnum) ? parseInt(rows[0].maxnum) || 0 : 0;
+  return 'GR' + (lastNum + 1).toString().padStart(4, '0');
+}
+
+async function fetchGrForPdf(id) {
+  const headers = await q(
+    `SELECT gr.id, gr.gr_date AS grDate, gr.made_by AS madeBy, gr.vendor_id AS vendorId, c.name AS vendorName, gr.pr_id AS prId, gr.po_id AS poId, gr.bill_no AS billNo, gr.bill_recv_date AS billRecvDate, gr.dept_head AS deptHead, gr.cgst, gr.sgst, gr.round_off AS roundOff, gr.remarks FROM goods_receipts gr LEFT JOIN clients c ON c.id = gr.vendor_id WHERE gr.id = $1`,
+    [id]
+  );
+  if (!headers.length) return null;
+  const items = await q(
+    `SELECT item_name AS itemName, unit, quantity, rate, remarks FROM goods_receipt_items WHERE gr_id = $1 ORDER BY id ASC`,
+    [id]
+  );
+  return { ...headers[0], items };
+}
+
+function buildGrnPdfBuffer(gr) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 40 });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    const pageW = doc.page.width;
+    const marginX = 40;
+    const contentW = pageW - marginX * 2;
+
+    doc.rect(0, 0, pageW, 74).fill('#C4714A');
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(17).text('LALLUBHAI AMICHAND LTD', marginX, 20);
+    doc.font('Helvetica').fontSize(10).fillColor('#fde8dd').text('Goods Received Note', marginX, 42);
+    doc.font('Helvetica-Bold').fontSize(15).fillColor('#ffffff').text(gr.id, marginX, 22, { width: contentW, align: 'right' });
+    doc.font('Helvetica').fontSize(10).fillColor('#fde8dd').text(gr.grDate ? new Date(gr.grDate).toISOString().slice(0, 10) : '—', marginX, 42, { width: contentW, align: 'right' });
+
+    let y = 96;
+    doc.fillColor('#1e293b').font('Helvetica').fontSize(10);
+    const metaLeft = [
+      ['Made By', gr.madeBy || '—'],
+      ['Vendor', gr.vendorName || '—'],
+      ['PR No.', gr.prId || '—'],
+      ['PO No.', gr.poId || '—'],
+    ];
+    const metaRight = [
+      ['Bill No.', gr.billNo || '—'],
+      ['Bill Recv. Date', gr.billRecvDate ? new Date(gr.billRecvDate).toISOString().slice(0, 10) : '—'],
+      ['Dept. Head', gr.deptHead || '—'],
+    ];
+    const rowH = 16;
+    metaLeft.forEach((row, i) => {
+      doc.font('Helvetica').fillColor('#64748b').text(row[0] + ':', marginX, y + i * rowH, { width: 100 });
+      doc.font('Helvetica-Bold').fillColor('#1e293b').text(row[1], marginX + 90, y + i * rowH, { width: contentW / 2 - 90 });
+    });
+    metaRight.forEach((row, i) => {
+      const cx = marginX + contentW / 2 + 10;
+      doc.font('Helvetica').fillColor('#64748b').text(row[0] + ':', cx, y + i * rowH, { width: 110 });
+      doc.font('Helvetica-Bold').fillColor('#1e293b').text(row[1], cx + 100, y + i * rowH, { width: contentW / 2 - 110 });
+    });
+    y += metaLeft.length * rowH + 6;
+    if (gr.remarks) {
+      doc.font('Helvetica').fillColor('#64748b').text('Remarks:', marginX, y, { width: 100 });
+      doc.font('Helvetica-Bold').fillColor('#1e293b').text(gr.remarks, marginX + 90, y, { width: contentW - 90 });
+      y = doc.y + 10;
+    } else {
+      y += 10;
+    }
+
+    const cols = [
+      { key: 'itemName', label: 'Item', w: contentW * 0.36, align: 'left' },
+      { key: 'unit', label: 'Unit', w: contentW * 0.12, align: 'left' },
+      { key: 'quantity', label: 'Qty', w: contentW * 0.12, align: 'right' },
+      { key: 'rate', label: 'Rate', w: contentW * 0.16, align: 'right' },
+      { key: 'amount', label: 'Amount', w: contentW * 0.24, align: 'right' },
+    ];
+    const drawRow = (vals, opts) => {
+      const bold = !!opts?.bold;
+      const bg = opts?.bg;
+      const rh = 22;
+      if (bg) doc.rect(marginX, y, contentW, rh).fill(bg);
+      let x = marginX;
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9.5).fillColor(opts?.color || '#374151');
+      cols.forEach((c, i) => {
+        doc.text(String(vals[i] ?? ''), x + 8, y + 6, { width: c.w - 12, align: c.align });
+        x += c.w;
+      });
+      y += rh;
+    };
+
+    drawRow(cols.map((c) => c.label), { bold: true, bg: '#f8fafc', color: '#64748b' });
+    doc.moveTo(marginX, y).lineTo(marginX + contentW, y).strokeColor('#e2e8f0').lineWidth(1).stroke();
+
+    let subtotal = 0;
+    (gr.items || []).forEach((it) => {
+      const qty = parseFloat(it.quantity) || 0;
+      const rate = parseFloat(it.rate) || 0;
+      const amount = qty * rate;
+      subtotal += amount;
+      if (y > doc.page.height - 160) {
+        doc.addPage();
+        y = 40;
+      }
+      drawRow([it.itemName || '', it.unit || '—', qty, rate.toFixed(2), amount.toFixed(2)]);
+      doc.moveTo(marginX, y).lineTo(marginX + contentW, y).strokeColor('#f1f5f9').lineWidth(0.5).stroke();
+    });
+
+    const cgst = parseFloat(gr.cgst) || 0;
+    const sgst = parseFloat(gr.sgst) || 0;
+    const roundOff = parseFloat(gr.roundOff) || 0;
+    const total = subtotal + cgst + sgst + roundOff;
+
+    const totalsRows = [
+      ['Subtotal', subtotal], ['CGST', cgst], ['SGST', sgst], ['Round Off', roundOff],
+    ];
+    y += 10;
+    doc.font('Helvetica').fontSize(9.5).fillColor('#64748b');
+    totalsRows.forEach((row) => {
+      doc.text(row[0] + ':', marginX + contentW - 200, y, { width: 110 });
+      doc.font('Helvetica').fillColor('#374151').text('Rs. ' + row[1].toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), marginX + contentW - 90, y, { width: 90, align: 'right' });
+      doc.font('Helvetica').fillColor('#64748b');
+      y += 15;
+    });
+    doc.font('Helvetica-Bold').fontSize(11).fillColor('#1e293b')
+      .text('Total: Rs. ' + total.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), marginX, y, { width: contentW, align: 'right' });
+
+    doc.font('Helvetica').fontSize(8).fillColor('#94a3b8')
+      .text('Generated from Lallubhai Amichand Task Manager', marginX, doc.page.height - 50, { width: contentW, align: 'center' });
+
+    doc.end();
+  });
+}
+
+app.get('/api/goods-receipts/:id/pdf', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const gr = await fetchGrForPdf(req.params.id);
+    if (!gr) return res.status(404).json({ error: 'Goods receipt not found' });
+    const buffer = await buildGrnPdfBuffer(gr);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${gr.id}.pdf"`,
+    });
+    return res.send(buffer);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/goods-receipts', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const madeById = req.query.madeById;
+    const headerSql = `SELECT gr.id, gr.gr_date AS grDate, gr.made_by AS madeBy, gr.made_by_id AS madeById, gr.vendor_id AS vendorId, c.name AS vendorName, gr.pr_id AS prId, gr.po_id AS poId, gr.bill_no AS billNo, gr.bill_recv_date AS billRecvDate, gr.dept_head AS deptHead, gr.cgst, gr.sgst, gr.round_off AS roundOff, gr.remarks, gr.created_at AS createdAt FROM goods_receipts gr LEFT JOIN clients c ON c.id = gr.vendor_id`;
+    const headers = madeById
+      ? await q(headerSql + ' WHERE gr.made_by_id = $1 ORDER BY gr.created_at DESC', [madeById])
+      : await q(headerSql + ' ORDER BY gr.created_at DESC');
+    const items = await q(`SELECT id, gr_id AS grId, item_name AS itemName, unit, quantity, rate, remarks FROM goods_receipt_items ORDER BY id ASC`);
+    const byGr = new Map();
+    for (const it of items) {
+      if (!byGr.has(it.grId)) byGr.set(it.grId, []);
+      byGr.get(it.grId).push(it);
+    }
+    const rows = headers.map(h => ({ ...h, items: byGr.get(h.id) || [] }));
+    return res.json(rows);
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+app.post('/api/goods-receipts', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const b = req.body;
+    if (!b.grDate) return res.status(400).json({ error:'grDate required' });
+    const items = Array.isArray(b.items) ? b.items.filter(it => it.itemName?.trim()) : [];
+    if (!items.length) return res.status(400).json({ error:'at least one item required' });
+    const id = await nextGrId();
+    const user = req.session?.user;
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query(
+        `INSERT INTO goods_receipts (id,gr_date,made_by,made_by_id,vendor_id,pr_id,po_id,bill_no,bill_recv_date,dept_head,cgst,sgst,round_off,remarks)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [id, b.grDate, user?.name||'', user?.id||null, b.vendorId||null, b.prId||null, b.poId||null, b.billNo||'', b.billRecvDate||null, b.deptHead||'', parseFloat(b.cgst)||0, parseFloat(b.sgst)||0, parseFloat(b.roundOff)||0, b.remarks||'']
+      );
+      let idx = 0;
+      for (const it of items) {
+        idx++;
+        await c.query(
+          `INSERT INTO goods_receipt_items (id,gr_id,item_name,unit,quantity,rate,remarks)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [id+'-'+idx, id, it.itemName.trim(), it.unit||'', parseFloat(it.quantity)||0, parseFloat(it.rate)||0, it.remarks||'']
+        );
+      }
+      await c.query('COMMIT');
+    } catch (e) {
+      await c.query('ROLLBACK');
+      throw e;
+    } finally {
+      c.release();
+    }
+    syncGrnToSheet(id).catch(() => {});
+    return res.status(201).json({ success:true, id });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+app.patch('/api/goods-receipts', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const b = req.body;
+    if (!b.id) return res.status(400).json({ error:'id required' });
+    await pool.query(
+      `UPDATE goods_receipts SET vendor_id=COALESCE($1,vendor_id), pr_id=COALESCE($2,pr_id), po_id=COALESCE($3,po_id), bill_no=COALESCE($4,bill_no), bill_recv_date=COALESCE($5,bill_recv_date), dept_head=COALESCE($6,dept_head), remarks=COALESCE($7,remarks) WHERE id=$8`,
+      [b.vendorId??null, b.prId??null, b.poId??null, b.billNo??null, b.billRecvDate??null, b.deptHead??null, b.remarks??null, b.id]
+    );
+    return res.json({ success:true });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+app.delete('/api/goods-receipts', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error:'id required' });
+    await pool.query('DELETE FROM goods_receipt_items WHERE gr_id = $1', [id]);
+    await pool.query('DELETE FROM goods_receipts WHERE id = $1', [id]);
+    return res.json({ success:true });
+  } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+// ── Google Sheets & Drive Sync (PR/PO/GRN → their respective live sheets) ─────
+
+const PR_SHEET_ID = '18SNUNQPwZMC0OLCKmU8eltvLLY4VC1kO8rZw75UNg1k';
+const PO_SHEET_ID = '1QB4fZQ1IVFeGs9YKXgGb-dAvsVrTQnBjPCEBzyd0KrM';
+const GRN_SHEET_ID = '1mvhf6SN7_5h1HEuKoBc1CJRqnYwoOAzNAgvGuSbSi38';
+const PDF_DRIVE_FOLDER_ID = '1szkgiMRZ8RAvQxQiwOho4Hqd7JO5VzoI';
+const LOG_TAB_NAME = 'Web App Log';
+
+let _googleAuth = null;
+function getGoogleAuth() {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const key = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  if (!email || !key) return null;
+  if (_googleAuth) return _googleAuth;
+  const { google } = require('googleapis');
+  _googleAuth = new google.auth.GoogleAuth({
+    credentials: { client_email: email, private_key: key },
+    scopes: ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'],
+  });
+  return _googleAuth;
+}
+
+async function ensureLogTab(spreadsheetId, tabName, headerRow) {
+  const { google } = require('googleapis');
+  const auth = getGoogleAuth();
+  if (!auth) return;
+  const sheets = google.sheets({ version: 'v4', auth });
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const exists = meta.data.sheets.some(s => s.properties.title === tabName);
+  if (!exists) {
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] } });
+    await sheets.spreadsheets.values.update({ spreadsheetId, range: `${tabName}!A1`, valueInputOption: 'RAW', requestBody: { values: [headerRow] } });
+  }
+}
+
+async function appendLogRow(spreadsheetId, tabName, rowValues) {
+  const { google } = require('googleapis');
+  const auth = getGoogleAuth();
+  if (!auth) return;
+  const sheets = google.sheets({ version: 'v4', auth });
+  await sheets.spreadsheets.values.append({
+    spreadsheetId, range: `${tabName}!A:A`, valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: [rowValues] },
+  });
+}
+
+async function uploadPdfToDrive(buffer, filename) {
+  const { google } = require('googleapis');
+  const auth = getGoogleAuth();
+  if (!auth) return null;
+  const drive = google.drive({ version: 'v3', auth });
+  const file = await drive.files.create({
+    requestBody: { name: filename, parents: [PDF_DRIVE_FOLDER_ID] },
+    media: { mimeType: 'application/pdf', body: Readable.from(buffer) },
+    fields: 'id,webViewLink',
+    supportsAllDrives: true,
+  });
+  await drive.permissions.create({ fileId: file.data.id, requestBody: { role: 'reader', type: 'anyone' }, supportsAllDrives: true });
+  return file.data.webViewLink;
+}
+
+function _itemsSummary(items) {
+  return (items || []).map(it => it.itemName).filter(Boolean).join(', ');
+}
+
+// Drive upload is a separate failure domain from the Sheets row (e.g. the
+// service account can have Sheets access without matching Drive folder
+// permissions) — never let a Drive failure block the Sheets sync.
+async function safeUploadPdfToDrive(buffer, filename) {
+  try {
+    return await uploadPdfToDrive(buffer, filename);
+  } catch (e) {
+    console.error('[google-sync] Drive upload failed:', e.message);
+    return null;
+  }
+}
+
+async function syncPrToSheet(id) {
+  if (!getGoogleAuth()) return;
+  try {
+    const pr = await fetchPrForPdf(id);
+    if (!pr) return;
+    const buffer = await buildPrPdfBuffer(pr);
+    const pdfLink = await safeUploadPdfToDrive(buffer, id + '.pdf');
+    const total = (pr.items || []).reduce((s, it) => s + (parseFloat(it.quantity) || 0) * (parseFloat(it.estimatedRate) || 0), 0);
+    const header = ['PR ID', 'Type', 'Date', 'Requested By', 'Department', 'Vendor', 'Items Summary', 'Est. Total', 'Status', 'PDF Link'];
+    await ensureLogTab(PR_SHEET_ID, LOG_TAB_NAME, header);
+    await appendLogRow(PR_SHEET_ID, LOG_TAB_NAME, [
+      pr.id, PR_TYPE_LABEL[pr.prType] || pr.prType, pr.prDate, pr.requestedBy || '', pr.department || '',
+      pr.vendorName || '', _itemsSummary(pr.items), total.toFixed(2), pr.status || '', pdfLink || '',
+    ]);
+  } catch (e) { console.error('[google-sync] PR sync failed:', e.message); }
+}
+
+async function syncPoToSheet(id) {
+  if (!getGoogleAuth()) return;
+  try {
+    const po = await fetchPoForPdf(id);
+    if (!po) return;
+    const buffer = await buildPoPdfBuffer(po);
+    const pdfLink = await safeUploadPdfToDrive(buffer, id + '.pdf');
+    const subtotal = (po.items || []).reduce((s, it) => s + (parseFloat(it.quantity) || 0) * (parseFloat(it.rate) || 0), 0);
+    const gst = (po.items || []).reduce((s, it) => s + (parseFloat(it.quantity) || 0) * (parseFloat(it.rate) || 0) * (parseFloat(it.gstPercent) || 0) / 100, 0);
+    const freight = parseFloat(po.freightCharges) || 0, packing = parseFloat(po.packingCharges) || 0, discount = parseFloat(po.discount) || 0;
+    const total = subtotal + gst + freight + packing - discount;
+    const header = ['PO ID', 'Type', 'Date', 'Created By', 'Department', 'Vendor', 'Items Summary', 'Subtotal', 'GST', 'Freight', 'Packing', 'Discount', 'Total', 'Approval Status', 'PDF Link'];
+    await ensureLogTab(PO_SHEET_ID, LOG_TAB_NAME, header);
+    await appendLogRow(PO_SHEET_ID, LOG_TAB_NAME, [
+      po.id, PO_TYPE_LABEL[po.poType] || po.poType, po.poDate, po.createdBy || '', po.department || '',
+      po.vendorName || '', _itemsSummary(po.items), subtotal.toFixed(2), gst.toFixed(2), freight.toFixed(2), packing.toFixed(2), discount.toFixed(2), total.toFixed(2),
+      po.approvalStatus || '', pdfLink || '',
+    ]);
+  } catch (e) { console.error('[google-sync] PO sync failed:', e.message); }
+}
+
+async function syncGrnToSheet(id) {
+  if (!getGoogleAuth()) return;
+  try {
+    const gr = await fetchGrForPdf(id);
+    if (!gr) return;
+    const buffer = await buildGrnPdfBuffer(gr);
+    const pdfLink = await safeUploadPdfToDrive(buffer, id + '.pdf');
+    const subtotal = (gr.items || []).reduce((s, it) => s + (parseFloat(it.quantity) || 0) * (parseFloat(it.rate) || 0), 0);
+    const cgst = parseFloat(gr.cgst) || 0, sgst = parseFloat(gr.sgst) || 0, roundOff = parseFloat(gr.roundOff) || 0;
+    const total = subtotal + cgst + sgst + roundOff;
+    const header = ['GR No', 'Date', 'Made By', 'PR No', 'PO No', 'Bill No', 'Bill Recv Date', 'Dept Head', 'Vendor', 'Items Summary', 'Subtotal', 'CGST', 'SGST', 'Round Off', 'Total', 'PDF Link'];
+    await ensureLogTab(GRN_SHEET_ID, LOG_TAB_NAME, header);
+    await appendLogRow(GRN_SHEET_ID, LOG_TAB_NAME, [
+      gr.id, gr.grDate, gr.madeBy || '', gr.prId || '', gr.poId || '', gr.billNo || '', gr.billRecvDate || '', gr.deptHead || '',
+      gr.vendorName || '', _itemsSummary(gr.items), subtotal.toFixed(2), cgst.toFixed(2), sgst.toFixed(2), roundOff.toFixed(2), total.toFixed(2), pdfLink || '',
+    ]);
+  } catch (e) { console.error('[google-sync] GRN sync failed:', e.message); }
+}
 
 // ── Payment Entries ───────────────────────────────────────────────────────────
 
@@ -2724,11 +3654,12 @@ app.get('/api/approvals/pending-count', requireAuth, async (req, res) => {
   if (!isAdmin) return res.json({ count:0 });
   try {
     if (USE_DB) {
-      const [revise, tasks] = await Promise.all([
+      const [revise, tasks, pos] = await Promise.all([
         q(`SELECT COUNT(*) AS cnt FROM delegations WHERE status='revise_requested'`),
         q(`SELECT COUNT(*) AS cnt FROM delegations WHERE approval='Approval Required' AND status='pending'`),
+        q(`SELECT COUNT(*) AS cnt FROM purchase_orders WHERE approval_status='pending'`),
       ]);
-      return res.json({ count:Number(revise[0]?.cnt||0)+Number(tasks[0]?.cnt||0) });
+      return res.json({ count:Number(revise[0]?.cnt||0)+Number(tasks[0]?.cnt||0)+Number(pos[0]?.cnt||0) });
     }
     const store = await readStore();
     const dels = store.delegations||[];
