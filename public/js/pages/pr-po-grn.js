@@ -90,6 +90,24 @@ window.Pages['pr-po-grn'] = (() => {
     return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
   function _today() { return new Date().toISOString().slice(0, 10); }
+
+  // Item-search dropdowns live inside a horizontally-scrollable table
+  // (overflow-x:auto), which in every browser also clips vertical overflow —
+  // so a plain position:absolute dropdown gets cut off mid-list. Anchoring it
+  // as position:fixed (viewport-relative, computed from the input's actual
+  // on-screen rect) escapes that clipping entirely.
+  function _openFixedDropdown(inputEl, ddEl) {
+    const rect = inputEl.getBoundingClientRect();
+    ddEl.style.position = 'fixed';
+    ddEl.style.top = (rect.bottom + 3) + 'px';
+    ddEl.style.left = rect.left + 'px';
+    ddEl.style.right = 'auto';
+    ddEl.style.width = rect.width + 'px';
+    ddEl.style.display = 'block';
+  }
+  window.addEventListener('scroll', () => {
+    document.querySelectorAll('.ppgf-item-dd, .ppgo-item-dd').forEach(el => { el.style.display = 'none'; });
+  }, true);
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
   function _money(n) { return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
   function _typeSelectOptions(selected) {
@@ -234,8 +252,8 @@ window.Pages['pr-po-grn'] = (() => {
     modal.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="ppgm-backdrop">'
       + '<div style="background:#fff;border-radius:18px;width:100%;max-width:640px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
       + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;">'
-        + '<div style="width:38px;height:38px;border-radius:10px;background:#fff8f5;display:grid;place-items:center;flex-shrink:0;">'
-          + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C4714A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg>'
+        + '<div style="width:38px;height:38px;border-radius:10px;background:var(--color-primary-light);display:grid;place-items:center;flex-shrink:0;">'
+          + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary-strong)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg>'
         + '</div>'
         + '<div style="flex:1;"><div style="font-size:15px;font-weight:700;color:#1e293b;">' + title + '</div><div style="font-size:12px;color:#94a3b8;margin-top:1px;">Item master specification</div></div>'
         + '<button id="ppgm-modal-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;">'
@@ -254,7 +272,7 @@ window.Pages['pr-po-grn'] = (() => {
       + '</div>'
       + '<div style="padding:14px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;background:#fafafa;">'
         + '<button id="ppgm-modal-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
-        + '<button id="ppgm-modal-save" style="padding:9px 24px;border-radius:9px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_itemSaving ? 'disabled' : '') + '>'
+        + '<button id="ppgm-modal-save" style="padding:9px 24px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_itemSaving ? 'disabled' : '') + '>'
           + (_itemSaving ? 'Saving…' : (_itemEditing !== null ? 'Update Item' : 'Add Item'))
         + '</button>'
       + '</div>'
@@ -355,7 +373,7 @@ window.Pages['pr-po-grn'] = (() => {
             + _typeSelectOptions(_itemTypeF !== 'All' ? _itemTypeF : null)
           + '</select>'
           + '<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">' + rows.length + ' of ' + _items.length + '</span>'
-          + (_canEdit ? '<button id="ppgm-add-btn" style="margin-left:auto;padding:8px 16px;border-radius:9px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;">+ Add Item</button>' : '')
+          + (_canEdit ? '<button id="ppgm-add-btn" style="margin-left:auto;padding:8px 16px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">+ Add Item</button>' : '')
         + '</div>'
         + '<div id="ppgm-table">' + _renderItemsTable() + '</div>'
       + '</div>'
@@ -453,7 +471,7 @@ window.Pages['pr-po-grn'] = (() => {
   function _vendorDropdownHtml() {
     return '<div style="position:relative;">'
       + '<input id="ppgf-vendor-inp" type="text" placeholder="Search vendor…" autocomplete="off" value="' + esc(_prForm.vendorSearch) + '" '
-        + 'style="width:100%;box-sizing:border-box;padding:8px 12px;border:1.5px solid ' + (_prForm.vendorId ? 'var(--color-primary)' : '#e2e8f0') + ';border-radius:9px;font-size:13px;font-weight:' + (_prForm.vendorId?'600':'400') + ';color:#1e293b;outline:none;background:' + (_prForm.vendorId?'#fff8f5':'#f8fafc') + ';" />'
+        + 'style="width:100%;box-sizing:border-box;padding:8px 12px;border:1.5px solid ' + (_prForm.vendorId ? 'var(--color-primary)' : '#e2e8f0') + ';border-radius:9px;font-size:13px;font-weight:' + (_prForm.vendorId?'600':'400') + ';color:#1e293b;outline:none;background:' + (_prForm.vendorId?'var(--color-primary-light)':'#f8fafc') + ';" />'
       + '<div id="ppgf-vendor-dd" style="display:none;position:absolute;top:calc(100% + 3px);left:0;right:0;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
     + '</div>';
   }
@@ -488,7 +506,7 @@ window.Pages['pr-po-grn'] = (() => {
       const v = _vendors.find(x => String(x.id) === String(opt.dataset.vid));
       if (!v) return;
       _prForm.vendorId = v.id; _prForm.vendorSearch = v.name;
-      inp.value = v.name; inp.style.borderColor = 'var(--color-primary)'; inp.style.fontWeight = '600'; inp.style.background = '#fff8f5';
+      inp.value = v.name; inp.style.borderColor = 'var(--color-primary)'; inp.style.fontWeight = '600'; inp.style.background = 'var(--color-primary-light)';
       ddEl.style.display = 'none';
     });
   }
@@ -499,8 +517,8 @@ window.Pages['pr-po-grn'] = (() => {
       + '<td style="' + cellS + 'text-align:center;width:28px;color:#94a3b8;font-size:12px;font-weight:600;">' + (i+1) + '</td>'
       + '<td style="' + cellS + 'min-width:220px;position:relative;">'
         + '<input class="ppgf-item-inp" data-ri="' + i + '" type="text" placeholder="Search ' + TYPE_LABEL[_prForm.prType].toLowerCase() + ' item…" autocomplete="off" value="' + esc(item.itemSearch || item.itemName) + '" '
-          + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (item.packingItemId ? 'var(--color-primary)' : '#e9ecef') + ';border-radius:7px;font-size:12.5px;color:#1e293b;outline:none;background:' + (item.packingItemId?'#fff8f5':'#fff') + ';" />'
-        + '<div class="ppgf-item-dd" data-ri="' + i + '" style="display:none;position:absolute;top:calc(100% + 3px);left:0;right:0;min-width:260px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
+          + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (item.packingItemId ? 'var(--color-primary)' : '#e9ecef') + ';border-radius:7px;font-size:12.5px;color:#1e293b;outline:none;background:' + (item.packingItemId?'var(--color-primary-light)':'#fff') + ';" />'
+        + '<div class="ppgf-item-dd" data-ri="' + i + '" style="display:none;min-width:260px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
       + '</td>'
       + '<td style="' + cellS + 'min-width:80px;"><input class="ppgf-unit-inp" data-ri="' + i + '" type="text" placeholder="Box/Pcs" value="' + esc(item.unit) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;" /></td>'
       + '<td style="' + cellS + 'min-width:80px;"><input class="ppgf-qty-inp" data-ri="' + i + '" type="number" min="0" step="any" placeholder="0" value="' + esc(item.quantity) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;" /></td>'
@@ -539,11 +557,11 @@ window.Pages['pr-po-grn'] = (() => {
     const removeBtn = rowEl.querySelector('.ppgf-remove-row[data-ri="' + ri + '"]');
 
     if (inp && ddEl) {
-      inp.addEventListener('focus', () => { _buildItemDropdown(ri, inp.value); ddEl.style.display = 'block'; });
+      inp.addEventListener('focus', () => { _buildItemDropdown(ri, inp.value); _openFixedDropdown(inp, ddEl); });
       inp.addEventListener('input', () => {
         _prForm.items[ri].packingItemId = null; _prForm.items[ri].itemSearch = inp.value; _prForm.items[ri].itemName = inp.value;
         inp.style.borderColor = '#e9ecef'; inp.style.background = '#fff';
-        _buildItemDropdown(ri, inp.value); ddEl.style.display = 'block';
+        _buildItemDropdown(ri, inp.value); _openFixedDropdown(inp, ddEl);
       });
       inp.addEventListener('blur', () => { setTimeout(() => { ddEl.style.display = 'none'; }, 160); });
       ddEl.addEventListener('mousedown', e => {
@@ -556,7 +574,7 @@ window.Pages['pr-po-grn'] = (() => {
         _prForm.items[ri].itemName = p.item_name + (p.size_label ? ' (' + p.size_label + ')' : '');
         _prForm.items[ri].itemSearch = _prForm.items[ri].itemName;
         inp.value = _prForm.items[ri].itemName;
-        inp.style.borderColor = 'var(--color-primary)'; inp.style.background = '#fff8f5';
+        inp.style.borderColor = 'var(--color-primary)'; inp.style.background = 'var(--color-primary-light)';
         ddEl.style.display = 'none';
         if (!_prForm.items[ri].unit) { _prForm.items[ri].unit = 'Box'; if (unitInp) unitInp.value = 'Box'; }
         if (qtyInp) qtyInp.focus();
@@ -634,7 +652,7 @@ window.Pages['pr-po-grn'] = (() => {
       + '</div>'
       + '<div style="padding:14px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;background:#fafafa;">'
         + '<button id="ppgf-modal-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
-        + '<button id="ppgf-modal-save" style="padding:9px 24px;border-radius:9px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_prSaving ? 'disabled' : '') + '>'
+        + '<button id="ppgf-modal-save" style="padding:9px 24px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_prSaving ? 'disabled' : '') + '>'
           + (_prSaving ? 'Saving…' : 'Raise Requisition')
         + '</button>'
       + '</div>'
@@ -816,7 +834,7 @@ window.Pages['pr-po-grn'] = (() => {
             + '</div>'
           ) : '')
           + '<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">' + rows.length + ' of ' + _prs.length + '</span>'
-          + '<button id="ppgf-add-btn" style="margin-left:auto;padding:8px 16px;border-radius:9px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;">+ Raise Requisition</button>'
+          + '<button id="ppgf-add-btn" style="margin-left:auto;padding:8px 16px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">+ Raise Requisition</button>'
         + '</div>'
         + '<div id="ppgf-table">' + _renderPrTable() + '</div>'
       + '</div>'
@@ -943,7 +961,7 @@ window.Pages['pr-po-grn'] = (() => {
   function _poVendorDropdownHtml() {
     return '<div style="position:relative;">'
       + '<input id="ppgo-vendor-inp" type="text" placeholder="Search vendor…" autocomplete="off" value="' + esc(_poForm.vendorSearch) + '" '
-        + 'style="width:100%;box-sizing:border-box;padding:8px 12px;border:1.5px solid ' + (_poForm.vendorId ? 'var(--color-primary)' : '#e2e8f0') + ';border-radius:9px;font-size:13px;font-weight:' + (_poForm.vendorId?'600':'400') + ';color:#1e293b;outline:none;background:' + (_poForm.vendorId?'#fff8f5':'#f8fafc') + ';" />'
+        + 'style="width:100%;box-sizing:border-box;padding:8px 12px;border:1.5px solid ' + (_poForm.vendorId ? 'var(--color-primary)' : '#e2e8f0') + ';border-radius:9px;font-size:13px;font-weight:' + (_poForm.vendorId?'600':'400') + ';color:#1e293b;outline:none;background:' + (_poForm.vendorId?'var(--color-primary-light)':'#f8fafc') + ';" />'
       + '<div id="ppgo-vendor-dd" style="display:none;position:absolute;top:calc(100% + 3px);left:0;right:0;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
     + '</div>';
   }
@@ -978,7 +996,7 @@ window.Pages['pr-po-grn'] = (() => {
       const v = _vendors.find(x => String(x.id) === String(opt.dataset.vid));
       if (!v) return;
       _poForm.vendorId = v.id; _poForm.vendorSearch = v.name;
-      inp.value = v.name; inp.style.borderColor = 'var(--color-primary)'; inp.style.fontWeight = '600'; inp.style.background = '#fff8f5';
+      inp.value = v.name; inp.style.borderColor = 'var(--color-primary)'; inp.style.fontWeight = '600'; inp.style.background = 'var(--color-primary-light)';
       ddEl.style.display = 'none';
     });
   }
@@ -989,8 +1007,8 @@ window.Pages['pr-po-grn'] = (() => {
       + '<td style="' + cellS + 'text-align:center;width:28px;color:#94a3b8;font-size:12px;font-weight:600;">' + (i+1) + '</td>'
       + '<td style="' + cellS + 'min-width:220px;position:relative;">'
         + '<input class="ppgo-item-inp" data-ri="' + i + '" type="text" placeholder="Search item…" autocomplete="off" value="' + esc(item.itemSearch || item.itemName) + '" '
-          + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (item.packingItemId ? 'var(--color-primary)' : '#e9ecef') + ';border-radius:7px;font-size:12.5px;color:#1e293b;outline:none;background:' + (item.packingItemId?'#fff8f5':'#fff') + ';" />'
-        + '<div class="ppgo-item-dd" data-ri="' + i + '" style="display:none;position:absolute;top:calc(100% + 3px);left:0;right:0;min-width:260px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
+          + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (item.packingItemId ? 'var(--color-primary)' : '#e9ecef') + ';border-radius:7px;font-size:12.5px;color:#1e293b;outline:none;background:' + (item.packingItemId?'var(--color-primary-light)':'#fff') + ';" />'
+        + '<div class="ppgo-item-dd" data-ri="' + i + '" style="display:none;min-width:260px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
       + '</td>'
       + '<td style="' + cellS + 'min-width:70px;"><input class="ppgo-hsn-inp" data-ri="' + i + '" type="text" placeholder="HSN" value="' + esc(item.hsnCode) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;" /></td>'
       + '<td style="' + cellS + 'min-width:80px;"><input class="ppgo-unit-inp" data-ri="' + i + '" type="text" placeholder="Box/Pcs" value="' + esc(item.unit) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;" /></td>'
@@ -1032,11 +1050,11 @@ window.Pages['pr-po-grn'] = (() => {
     const removeBtn = rowEl.querySelector('.ppgo-remove-row[data-ri="' + ri + '"]');
 
     if (inp && ddEl) {
-      inp.addEventListener('focus', () => { _buildPoItemDropdown(ri, inp.value); ddEl.style.display = 'block'; });
+      inp.addEventListener('focus', () => { _buildPoItemDropdown(ri, inp.value); _openFixedDropdown(inp, ddEl); });
       inp.addEventListener('input', () => {
         _poForm.items[ri].packingItemId = null; _poForm.items[ri].itemSearch = inp.value; _poForm.items[ri].itemName = inp.value;
         inp.style.borderColor = '#e9ecef'; inp.style.background = '#fff';
-        _buildPoItemDropdown(ri, inp.value); ddEl.style.display = 'block';
+        _buildPoItemDropdown(ri, inp.value); _openFixedDropdown(inp, ddEl);
       });
       inp.addEventListener('blur', () => { setTimeout(() => { ddEl.style.display = 'none'; }, 160); });
       ddEl.addEventListener('mousedown', e => {
@@ -1049,7 +1067,7 @@ window.Pages['pr-po-grn'] = (() => {
         _poForm.items[ri].itemName = p.item_name + (p.size_label ? ' (' + p.size_label + ')' : '');
         _poForm.items[ri].itemSearch = _poForm.items[ri].itemName;
         inp.value = _poForm.items[ri].itemName;
-        inp.style.borderColor = 'var(--color-primary)'; inp.style.background = '#fff8f5';
+        inp.style.borderColor = 'var(--color-primary)'; inp.style.background = 'var(--color-primary-light)';
         ddEl.style.display = 'none';
         if (!_poForm.items[ri].unit) { _poForm.items[ri].unit = 'Box'; if (unitInp) unitInp.value = 'Box'; }
         if (qtyInp) qtyInp.focus();
@@ -1143,7 +1161,7 @@ window.Pages['pr-po-grn'] = (() => {
       + '</div>'
       + '<div style="padding:14px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;background:#fafafa;">'
         + '<button id="ppgo-modal-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
-        + '<button id="ppgo-modal-save" style="padding:9px 24px;border-radius:9px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_poSaving ? 'disabled' : '') + '>'
+        + '<button id="ppgo-modal-save" style="padding:9px 24px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_poSaving ? 'disabled' : '') + '>'
           + (_poSaving ? 'Saving…' : 'Create Purchase Order')
         + '</button>'
       + '</div>'
@@ -1351,7 +1369,7 @@ window.Pages['pr-po-grn'] = (() => {
             + '</div>'
           ) : '')
           + '<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">' + rows.length + ' of ' + _pos.length + '</span>'
-          + '<button id="ppgo-add-btn" style="margin-left:auto;padding:8px 16px;border-radius:9px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;">+ Create PO</button>'
+          + '<button id="ppgo-add-btn" style="margin-left:auto;padding:8px 16px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">+ Create PO</button>'
         + '</div>'
         + '<div id="ppgo-table">' + _renderPoTable() + '</div>'
       + '</div>'
@@ -1451,7 +1469,7 @@ window.Pages['pr-po-grn'] = (() => {
   function _grnVendorDropdownHtml() {
     return '<div style="position:relative;">'
       + '<input id="ppgn-vendor-inp" type="text" placeholder="Search vendor…" autocomplete="off" value="' + esc(_grnForm.vendorSearch) + '" '
-        + 'style="width:100%;box-sizing:border-box;padding:8px 12px;border:1.5px solid ' + (_grnForm.vendorId ? 'var(--color-primary)' : '#e2e8f0') + ';border-radius:9px;font-size:13px;font-weight:' + (_grnForm.vendorId?'600':'400') + ';color:#1e293b;outline:none;background:' + (_grnForm.vendorId?'#fff8f5':'#f8fafc') + ';" />'
+        + 'style="width:100%;box-sizing:border-box;padding:8px 12px;border:1.5px solid ' + (_grnForm.vendorId ? 'var(--color-primary)' : '#e2e8f0') + ';border-radius:9px;font-size:13px;font-weight:' + (_grnForm.vendorId?'600':'400') + ';color:#1e293b;outline:none;background:' + (_grnForm.vendorId?'var(--color-primary-light)':'#f8fafc') + ';" />'
       + '<div id="ppgn-vendor-dd" style="display:none;position:absolute;top:calc(100% + 3px);left:0;right:0;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
     + '</div>';
   }
@@ -1486,7 +1504,7 @@ window.Pages['pr-po-grn'] = (() => {
       const v = _vendors.find(x => String(x.id) === String(opt.dataset.vid));
       if (!v) return;
       _grnForm.vendorId = v.id; _grnForm.vendorSearch = v.name;
-      inp.value = v.name; inp.style.borderColor = 'var(--color-primary)'; inp.style.fontWeight = '600'; inp.style.background = '#fff8f5';
+      inp.value = v.name; inp.style.borderColor = 'var(--color-primary)'; inp.style.fontWeight = '600'; inp.style.background = 'var(--color-primary-light)';
       ddEl.style.display = 'none';
     });
   }
@@ -1496,7 +1514,7 @@ window.Pages['pr-po-grn'] = (() => {
   function _docRefDropdownHtml(prefix, placeholder, search, hasValue) {
     return '<div style="position:relative;">'
       + '<input id="' + prefix + '-inp" type="text" placeholder="' + placeholder + '" autocomplete="off" value="' + esc(search) + '" '
-        + 'style="width:100%;box-sizing:border-box;padding:8px 12px;border:1.5px solid ' + (hasValue ? 'var(--color-primary)' : '#e2e8f0') + ';border-radius:9px;font-size:13px;font-weight:' + (hasValue?'600':'400') + ';color:#1e293b;outline:none;background:' + (hasValue?'#fff8f5':'#f8fafc') + ';" />'
+        + 'style="width:100%;box-sizing:border-box;padding:8px 12px;border:1.5px solid ' + (hasValue ? 'var(--color-primary)' : '#e2e8f0') + ';border-radius:9px;font-size:13px;font-weight:' + (hasValue?'600':'400') + ';color:#1e293b;outline:none;background:' + (hasValue?'var(--color-primary-light)':'#f8fafc') + ';" />'
       + '<div id="' + prefix + '-dd" style="display:none;position:absolute;top:calc(100% + 3px);left:0;right:0;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
     + '</div>';
   }
@@ -1531,7 +1549,7 @@ window.Pages['pr-po-grn'] = (() => {
       const d = pool.find(x => String(x.id) === String(opt.dataset.did));
       if (!d) return;
       form[idField] = d.id; form[searchField] = d.id;
-      inp.value = d.id; inp.style.borderColor = 'var(--color-primary)'; inp.style.fontWeight = '600'; inp.style.background = '#fff8f5';
+      inp.value = d.id; inp.style.borderColor = 'var(--color-primary)'; inp.style.fontWeight = '600'; inp.style.background = 'var(--color-primary-light)';
       ddEl.style.display = 'none';
     });
   }
@@ -1641,7 +1659,7 @@ window.Pages['pr-po-grn'] = (() => {
       + '</div>'
       + '<div style="padding:14px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;background:#fafafa;">'
         + '<button id="ppgn-modal-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
-        + '<button id="ppgn-modal-save" style="padding:9px 24px;border-radius:9px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_grnSaving ? 'disabled' : '') + '>'
+        + '<button id="ppgn-modal-save" style="padding:9px 24px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_grnSaving ? 'disabled' : '') + '>'
           + (_grnSaving ? 'Saving…' : 'Create Goods Receipt')
         + '</button>'
       + '</div>'
@@ -1811,7 +1829,7 @@ window.Pages['pr-po-grn'] = (() => {
             + '</div>'
           ) : '')
           + '<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">' + rows.length + ' of ' + _grns.length + '</span>'
-          + '<button id="ppgn-add-btn" style="margin-left:auto;padding:8px 16px;border-radius:9px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;">+ Create GRN</button>'
+          + '<button id="ppgn-add-btn" style="margin-left:auto;padding:8px 16px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">+ Create GRN</button>'
         + '</div>'
         + '<div id="ppgn-table">' + _renderGrnTable() + '</div>'
       + '</div>'
@@ -2034,7 +2052,7 @@ window.Pages['pr-po-grn'] = (() => {
   function _renderTabBar() {
     return '<div style="display:flex;gap:4px;margin-bottom:16px;background:#f1f5f9;padding:4px;border-radius:11px;width:fit-content;">'
       + _tabBtn('masters', 'Masters')
-      + _tabBtn('forms', 'Forms')
+      + _tabBtn('forms', 'PR')
       + _tabBtn('po', 'PO')
       + _tabBtn('grn', 'GRN')
       + _tabBtn('fms', 'FMS')

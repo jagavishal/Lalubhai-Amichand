@@ -125,8 +125,8 @@ window.Pages['client-master'] = (() => {
     modal.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="cm-backdrop">'
       + '<div style="background:#fff;border-radius:18px;width:100%;max-width:600px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
       + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;">'
-        + '<div style="width:38px;height:38px;border-radius:10px;background:#fff8f5;display:grid;place-items:center;flex-shrink:0;">'
-          + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C4714A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'
+        + '<div style="width:38px;height:38px;border-radius:10px;background:var(--color-primary-light);display:grid;place-items:center;flex-shrink:0;">'
+          + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary-strong)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'
         + '</div>'
         + '<div style="flex:1;"><div style="font-size:15px;font-weight:700;color:#1e293b;">' + title + '</div><div style="font-size:12px;color:#94a3b8;margin-top:1px;">Fill in vendor information</div></div>'
         + '<button id="cm-modal-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;" onmouseenter="this.style.background=\'#f1f5f9\'" onmouseleave="this.style.background=\'transparent\'">'
@@ -169,7 +169,7 @@ window.Pages['client-master'] = (() => {
       + '</div>'
       + '<div style="padding:14px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;background:#fafafa;">'
         + '<button id="cm-modal-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
-        + '<button id="cm-modal-save" style="padding:9px 24px;border-radius:9px;background:#C4714A;color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_saving ? 'disabled' : '') + '>'
+        + '<button id="cm-modal-save" style="padding:9px 24px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_saving ? 'disabled' : '') + '>'
           + (_saving ? 'Saving…' : (_editing !== null ? 'Update Vendor' : 'Add Vendor'))
         + '</button>'
       + '</div>'
@@ -237,7 +237,7 @@ window.Pages['client-master'] = (() => {
               + '<button class="js-edit" data-id="' + c.id + '" style="padding:4px 12px;border-radius:6px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:11px;font-weight:600;cursor:pointer;">Edit</button>'
               + '<button class="js-delete" data-id="' + c.id + '" style="padding:4px 12px;border-radius:6px;border:1.5px solid #fecaca;background:#fff5f5;color:#ef4444;font-size:11px;font-weight:600;cursor:pointer;">Delete</button>'
               + '</div></td>' : '';
-          return '<tr style="' + (i % 2 === 1 ? 'background:#fafafa;' : '') + '" onmouseenter="this.style.background=\'#fff8f5\'" onmouseleave="this.style.background=\'' + (i % 2 === 1 ? '#fafafa' : 'transparent') + '\'">'
+          return '<tr style="' + (i % 2 === 1 ? 'background:#fafafa;' : '') + '" onmouseenter="this.style.background=\'#fffbeb\'" onmouseleave="this.style.background=\'' + (i % 2 === 1 ? '#fafafa' : 'transparent') + '\'">'
             + '<td style="' + tdS + 'text-align:center;color:#94a3b8;font-weight:600;">' + (i+1) + '</td>'
             + '<td style="' + tdS + '">'
               + '<div style="font-weight:600;color:#1e293b;">' + esc(c.name) + '</div>'
@@ -337,7 +337,7 @@ window.Pages['client-master'] = (() => {
       + '<td style="' + cellS + 'min-width:180px;padding:4px 5px;">'
         + '<div style="position:relative;">'
           + '<input class="pm-name-inp" data-ri="' + i + '" type="text" placeholder="Search vendor…" autocomplete="off" value="' + esc(row.vendorSearch) + '" '
-            + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (v ? 'var(--color-primary)' : '#e9ecef') + ';border-radius:7px;font-size:13px;font-weight:' + (v?'600':'400') + ';color:#1e293b;outline:none;background:' + (v?'#fff8f5':'#fff') + ';transition:border-color .15s;" />'
+            + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (v ? 'var(--color-primary)' : '#e9ecef') + ';border-radius:7px;font-size:13px;font-weight:' + (v?'600':'400') + ';color:#1e293b;outline:none;background:' + (v?'var(--color-primary-light)':'#fff') + ';transition:border-color .15s;" />'
           + '<div class="pm-dd" data-ri="' + i + '" style="display:none;position:absolute;top:calc(100% + 3px);left:0;right:0;min-width:230px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:200px;overflow-y:auto;"></div>'
         + '</div>'
       + '</td>'
@@ -564,8 +564,8 @@ window.Pages['client-master'] = (() => {
         _pmRows[ri].vendorSearch = v.name;
         inp.value             = v.name;
         inp.style.fontWeight  = '600';
-        inp.style.borderColor = '#C4714A';
-        inp.style.background  = '#fff8f5';
+        inp.style.borderColor = '#EEBC2E';
+        inp.style.background  = 'var(--color-primary-light)';
         ddEl.style.display    = 'none';
         // Fill auto cells in this row
         const tr = document.querySelector('tr[data-ri="' + ri + '"]');
@@ -1039,8 +1039,8 @@ window.Pages['client-master'] = (() => {
     modal.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="cm-bills-backdrop">'
       + '<div style="background:#fff;border-radius:18px;width:100%;max-width:640px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
         + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;flex-shrink:0;">'
-          + '<div style="width:38px;height:38px;border-radius:10px;background:#fff8f5;display:grid;place-items:center;flex-shrink:0;">'
-            + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C4714A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>'
+          + '<div style="width:38px;height:38px;border-radius:10px;background:var(--color-primary-light);display:grid;place-items:center;flex-shrink:0;">'
+            + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary-strong)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>'
           + '</div>'
           + '<div style="flex:1;min-width:0;"><div style="font-size:15px;font-weight:700;color:#1e293b;">' + esc(_phBillsVendor) + '</div><div style="font-size:12px;color:#94a3b8;margin-top:1px;">' + rows.length + ' bill' + (rows.length===1?'':'s') + ' &middot; ' + _phAmt(total) + ' total</div></div>'
           + '<button id="cm-bills-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;flex-shrink:0;" onmouseenter="this.style.background=\'#f1f5f9\'" onmouseleave="this.style.background=\'transparent\'">'

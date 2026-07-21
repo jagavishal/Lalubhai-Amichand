@@ -96,11 +96,12 @@ window.Utils = {
 
       const iconHtml = danger
         ? `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`
-        : `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#C4714A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+        : `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary-strong)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
 
-      const iconBg  = danger ? '#fef2f2' : '#fff8f5';
+      const iconBg  = danger ? '#fef2f2' : 'var(--color-primary-light)';
       const btnBg   = danger ? '#dc2626' : 'var(--color-primary)';
       const btnHover= danger ? '#b91c1c' : 'var(--color-primary-dark)';
+      const btnText = danger ? '#fff' : 'var(--color-primary-text)';
 
       const overlay = document.createElement('div');
       overlay.id = 'utils-confirm-overlay';
@@ -117,7 +118,7 @@ window.Utils = {
           </div>
           <div style="padding:0 24px 20px;display:flex;justify-content:flex-end;gap:10px;">
             <button id="utils-confirm-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s;" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='#fff'">${String(cancelText).replace(/</g,'&lt;')}</button>
-            <button id="utils-confirm-ok" style="padding:9px 22px;border-radius:9px;border:none;background:${btnBg};color:#fff;font-size:13px;font-weight:700;cursor:pointer;transition:background .15s;" onmouseenter="this.style.background='${btnHover}'" onmouseleave="this.style.background='${btnBg}'">${String(confirmText).replace(/</g,'&lt;')}</button>
+            <button id="utils-confirm-ok" style="padding:9px 22px;border-radius:9px;border:none;background:${btnBg};color:${btnText};font-size:13px;font-weight:700;cursor:pointer;transition:background .15s;" onmouseenter="this.style.background='${btnHover}'" onmouseleave="this.style.background='${btnBg}'">${String(confirmText).replace(/</g,'&lt;')}</button>
           </div>
         </div>`;
 

@@ -4,27 +4,31 @@ window.UI = (function () {
   // 'auto' palette/hash copied verbatim from the original dashboard.js avatarHTML()
   // so existing avatars don't visibly shuffle color after adoption.
   const AUTO_PALETTE = [
-    'background:linear-gradient(135deg,#f43f5e,#db2777)',
-    'background:linear-gradient(135deg,#f59e0b,#ea580c)',
-    'background:linear-gradient(135deg,#10b981,#0d9488)',
-    'background:linear-gradient(135deg,#C4714A,#D4895A)',
-    'background:linear-gradient(135deg,#8b5cf6,#7c3aed)',
+    { bg: 'background:linear-gradient(135deg,#f43f5e,#db2777)', text: '#fff' },
+    { bg: 'background:linear-gradient(135deg,#f59e0b,#ea580c)', text: '#fff' },
+    { bg: 'background:linear-gradient(135deg,#10b981,#0d9488)', text: '#fff' },
+    // Gold is a high-luminance hue — needs dark text to stay readable/AA-contrast, unlike the others above.
+    { bg: 'background:linear-gradient(135deg,#EEBC2E,#F3CB5E)', text: '#09090B' },
+    { bg: 'background:linear-gradient(135deg,#8b5cf6,#7c3aed)', text: '#fff' },
   ];
 
   function avatar(name, opts = {}) {
     const { size = 28, variant = 'auto', shape = 'circle', id = '', className = '' } = opts;
     name = name || '';
     const initials = name.split(' ').filter(Boolean).slice(0, 2).map(n => n[0]).join('').toUpperCase() || '·';
-    let bg;
+    let bg, textColor;
     if (variant === 'brand') {
       bg = 'background:linear-gradient(135deg,var(--color-primary),var(--color-primary-dark))';
+      textColor = 'var(--color-primary-text)';
     } else {
       const hash = name.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-      bg = AUTO_PALETTE[hash % AUTO_PALETTE.length];
+      const swatch = AUTO_PALETTE[hash % AUTO_PALETTE.length];
+      bg = swatch.bg;
+      textColor = swatch.text;
     }
     const fontSize = Math.max(9, Math.round(size * 0.36));
     const radius = shape === 'square' ? 'var(--radius-md)' : '50%';
-    return `<div${id ? ` id="${id}"` : ''} class="ui-avatar ${className}" style="${bg};width:${size}px;height:${size}px;border-radius:${radius};display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:${fontSize}px;font-weight:700;flex-shrink:0;letter-spacing:.02em;">${initials}</div>`;
+    return `<div${id ? ` id="${id}"` : ''} class="ui-avatar ${className}" style="${bg};width:${size}px;height:${size}px;border-radius:${radius};display:inline-flex;align-items:center;justify-content:center;color:${textColor};font-size:${fontSize}px;font-weight:700;flex-shrink:0;letter-spacing:.02em;">${initials}</div>`;
   }
 
   /* ── Pill (status/label) ────────────────────────────────────────── */

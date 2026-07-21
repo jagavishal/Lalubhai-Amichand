@@ -6,11 +6,20 @@
 /* ── CSS Custom Properties ───────────────────────────────────────── */
 
 :root {
-  /* Primary — fixed brand accent (terracotta), no longer switchable */
-  --color-primary:        #C4714A;
-  --color-primary-dark:   #A85D3A;
-  --color-primary-light:  rgba(196,113,74,.12);
-  --color-primary-ring:   rgba(196,113,74,.20);
+  /* Primary — fixed brand accent (gold), no longer switchable */
+  --color-primary:        #EEBC2E;
+  --color-primary-dark:   #C39A26;
+  --color-primary-light:  rgba(238,188,46,.12);
+  --color-primary-ring:   rgba(238,188,46,.20);
+  /* Gold is a high-luminance hue — white text on it fails WCAG AA contrast.
+     Anything using --color-primary/--color-primary-dark as a solid background
+     must pair it with this dark text color, not white. */
+  --color-primary-text:   #09090B;
+  /* The reverse case: brand-colored TEXT/icon-stroke/link sitting directly on
+     a white or pale surface. The bright base gold measures ~1.8:1 there too —
+     use this darker, text-safe gold (~5.2:1 on white) instead. */
+  --color-primary-strong: #8E6B0B;
+  --shadow-glow:          0 10px 32px rgba(238,188,46,.333);
   --app-bg:               #f4f6f9;
 
   --color-brand:          var(--color-primary);
@@ -113,8 +122,8 @@ html[data-theme="dark"] {
   --border-base:   #2b2e34;
   --border-strong: #3a3e46;
 
-  --color-primary-light: rgba(196,113,74,.18);
-  --color-primary-ring:  rgba(196,113,74,.30);
+  --color-primary-light: rgba(238,188,46,.18);
+  --color-primary-ring:  rgba(238,188,46,.30);
 
   --color-success-bg: rgba(5,150,105,.15);  --color-success-text: #34d399;
   --color-warning-bg: rgba(217,119,6,.15);  --color-warning-text: #fbbf24;
@@ -245,12 +254,12 @@ html, body {
 /* Primary */
 .btn-primary {
   background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
-  color: #fff;
+  color: var(--color-primary-text);
   box-shadow: 0 1px 3px var(--color-primary-ring);
 }
 .btn-primary:hover:not(:disabled) {
   filter: brightness(0.93);
-  box-shadow: 0 4px 14px var(--color-primary-ring);
+  box-shadow: var(--shadow-glow);
   transform: translateY(-1px);
 }
 .btn-primary:active:not(:disabled) { transform: translateY(0); filter: brightness(0.87); }
@@ -711,7 +720,7 @@ select.input { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg
   font-size: 10px;
   font-weight: 700;
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-primary-text);
 }
 .badge-danger  { background: var(--color-danger); }
 .badge-neutral { background: var(--color-neutral-text); }

@@ -149,7 +149,7 @@ window.Sidebar = {
       <div style="height:52px;padding:0 10px;display:flex;align-items:center;gap:10px;flex-shrink:0;border-bottom:1px solid var(--sidebar-border);">
         <img src="/logo.png" alt="Logo" width="30" height="30" style="flex-shrink:0;border-radius:7px;object-fit:contain;background:#fff;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
         <svg width="30" height="30" viewBox="0 0 28 28" fill="none" style="flex-shrink:0;display:none;">
-          <rect width="28" height="28" rx="7" fill="#C4714A"/>
+          <rect width="28" height="28" rx="7" fill="#EEBC2E"/>
           <path d="M7 20V10l7-4 7 4v10" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           <path d="M11 20v-5h6v5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>

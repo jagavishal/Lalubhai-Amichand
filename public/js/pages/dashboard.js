@@ -86,7 +86,7 @@ window.Pages.dashboard = (function () {
     const colors = {
       emerald: { bar: 'linear-gradient(90deg,#34d399,#059669)', icon: 'linear-gradient(135deg,#34d399,#059669)', text: '#065f46' },
       red:     { bar: 'linear-gradient(90deg,#f87171,#dc2626)', icon: 'linear-gradient(135deg,#f87171,#dc2626)', text: '#991b1b' },
-      blue:    { bar: 'linear-gradient(90deg,#C4714A,#D4895A)', icon: 'linear-gradient(135deg,#C4714A,#D4895A)', text: '#7c2d12' },
+      blue:    { bar: 'linear-gradient(90deg,#EEBC2E,#F3CB5E)', icon: 'linear-gradient(135deg,#C39A26,#8E6B0B)', text: '#8E6B0B' },
     };
     const c = colors[tone] || colors.blue;
     const max = Math.max(...items.map(i => i[valueKey] || 0), 1);
@@ -242,7 +242,7 @@ window.Pages.dashboard = (function () {
         .db-stat-card { border: 2px solid transparent; transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
         .db-stat-card[data-filter]:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.08); }
         .db-stat-card[data-filter]:active { transform: translateY(0); }
-        .db-stat-card[data-filter].active { border-color: var(--color-primary); box-shadow: 0 4px 14px rgba(196,113,74,.16); }
+        .db-stat-card[data-filter].active { border-color: var(--color-primary); box-shadow: 0 4px 14px rgba(238,188,46,.16); }
         .db-th-sort:hover { color: var(--color-primary) !important; }
         /* Mobile responsive */
         @media (max-width: 767px) {
@@ -309,7 +309,7 @@ window.Pages.dashboard = (function () {
             <button id="db-btn-checklist" style="padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#059669;color:#fff;border:none;cursor:pointer;">
               Checklist
             </button>
-            <button id="db-btn-delegate" style="padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:#C4714A;color:#fff;border:none;cursor:pointer;">
+            <button id="db-btn-delegate" style="padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:var(--color-primary);color:var(--color-primary-text);border:none;cursor:pointer;">
               Delegate
             </button>
             <button id="db-btn-help-ticket" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#0ea5e9;color:#fff;border:none;cursor:pointer;">
@@ -438,7 +438,7 @@ window.Pages.dashboard = (function () {
             </div>
             <!-- Doer-defined due date checkbox -->
             <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
-              <input type="checkbox" id="del-doer-date" style="width:14px;height:14px;accent-color:#C4714A;cursor:pointer;" />
+              <input type="checkbox" id="del-doer-date" style="width:14px;height:14px;accent-color:var(--color-primary);cursor:pointer;" />
               <label for="del-doer-date" style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;cursor:pointer;">Doer-Defined Due Date</label>
             </div>
             <!-- Row 2: Priority | Approval Required -->
@@ -821,7 +821,7 @@ window.Pages.dashboard = (function () {
 
     const rows = sortDashTasks(filtered).map(t => {
       const dateStyle = t.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#475569;';
-      const urlLink = t.url ? `<a href="${t.url}" target="_blank" rel="noopener noreferrer" title="${t.url}" style="color:#C4714A;flex-shrink:0;display:inline-flex;margin-left:4px;">
+      const urlLink = t.url ? `<a href="${t.url}" target="_blank" rel="noopener noreferrer" title="${t.url}" style="color:var(--color-primary-strong);flex-shrink:0;display:inline-flex;margin-left:4px;">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>` : '';
       const transferred = t.transferredFrom ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 6px;border-radius:5px;background:#fffbeb;color:#b45309;border:1px solid #fde68a;font-weight:600;" title="${t.transferredBy ? 'Transferred by ' + t.transferredBy : ''}">🔄 from ${t.transferredFrom}</span>` : '';
 

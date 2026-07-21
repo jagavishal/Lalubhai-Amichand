@@ -2471,9 +2471,9 @@ async function sendPrApprovalEmail({ id, prType, prDate, requestedBy, vendorId, 
       cc: 'store@laltd.in',
       subject: `Purchase Requisition ${id} — Approval Required (${PR_TYPE_LABEL[prType]||prType})`,
       html: `<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
-        <div style="background:#C4714A;padding:20px 24px">
-          <h2 style="color:#fff;margin:0;font-size:16px">Purchase Requisition ${id}</h2>
-          <div style="color:#fde8dd;font-size:12.5px;margin-top:2px;">${PR_TYPE_LABEL[prType]||prType}</div>
+        <div style="background:#EEBC2E;padding:20px 24px">
+          <h2 style="color:#09090B;margin:0;font-size:16px">Purchase Requisition ${id}</h2>
+          <div style="color:rgba(9,9,11,.7);font-size:12.5px;margin-top:2px;">${PR_TYPE_LABEL[prType]||prType}</div>
         </div>
         <div style="padding:24px">
           <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:13px;">
@@ -2530,12 +2530,12 @@ function buildPrPdfBuffer(pr) {
     const marginX = 40;
     const contentW = pageW - marginX * 2;
 
-    doc.rect(0, 0, pageW, 74).fill('#C4714A');
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(15).text('LALLUBHAI AMICHAND LTD', marginX, 16);
-    doc.font('Helvetica').fontSize(9).fillColor('#fde8dd').text('Purchase Requisition · ' + (PR_TYPE_LABEL[pr.prType] || pr.prType), marginX, 34);
+    doc.rect(0, 0, pageW, 74).fill('#EEBC2E');
+    doc.fillColor('#09090B').font('Helvetica-Bold').fontSize(15).text('LALLUBHAI AMICHAND LTD', marginX, 16);
+    doc.font('Helvetica').fontSize(9).fillColor('#44403C').text('Purchase Requisition · ' + (PR_TYPE_LABEL[pr.prType] || pr.prType), marginX, 34);
     doc.fontSize(8).text('GSTIN: ' + COMPANY_LETTERHEAD.gstin + '  ·  ' + COMPANY_LETTERHEAD.phone, marginX, 48, { width: contentW * 0.65 });
-    doc.font('Helvetica-Bold').fontSize(14).fillColor('#ffffff').text(pr.id, marginX, 18, { width: contentW, align: 'right' });
-    doc.font('Helvetica').fontSize(9).fillColor('#fde8dd').text(pr.prDate ? new Date(pr.prDate).toISOString().slice(0, 10) : '—', marginX, 34, { width: contentW, align: 'right' });
+    doc.font('Helvetica-Bold').fontSize(14).fillColor('#09090B').text(pr.id, marginX, 18, { width: contentW, align: 'right' });
+    doc.font('Helvetica').fontSize(9).fillColor('#44403C').text(pr.prDate ? new Date(pr.prDate).toISOString().slice(0, 10) : '—', marginX, 34, { width: contentW, align: 'right' });
     if (pr.department) doc.text('Dept: ' + pr.department, marginX, 48, { width: contentW, align: 'right' });
 
     let y = 96;
@@ -2809,13 +2809,13 @@ function buildPoPdfBuffer(po) {
     const marginX = 40;
     const contentW = pageW - marginX * 2;
 
-    doc.rect(0, 0, pageW, 74).fill('#C4714A');
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(15).text('LALLUBHAI AMICHAND LIMITED', marginX, 16);
-    doc.font('Helvetica').fontSize(9).fillColor('#fde8dd').text('Purchase Order · ' + (PO_TYPE_LABEL[po.poType] || po.poType), marginX, 34);
+    doc.rect(0, 0, pageW, 74).fill('#EEBC2E');
+    doc.fillColor('#09090B').font('Helvetica-Bold').fontSize(15).text('LALLUBHAI AMICHAND LIMITED', marginX, 16);
+    doc.font('Helvetica').fontSize(9).fillColor('#44403C').text('Purchase Order · ' + (PO_TYPE_LABEL[po.poType] || po.poType), marginX, 34);
     doc.fontSize(8).text(COMPANY_LETTERHEAD.address, marginX, 48, { width: contentW * 0.65 });
     doc.text('GSTIN: ' + COMPANY_LETTERHEAD.gstin + '  ·  ' + COMPANY_LETTERHEAD.phone + '  ·  ' + COMPANY_LETTERHEAD.email, marginX, 60, { width: contentW * 0.65 });
-    doc.font('Helvetica-Bold').fontSize(14).fillColor('#ffffff').text(po.id, marginX, 18, { width: contentW, align: 'right' });
-    doc.font('Helvetica').fontSize(9).fillColor('#fde8dd').text(po.poDate ? new Date(po.poDate).toISOString().slice(0, 10) : '—', marginX, 34, { width: contentW, align: 'right' });
+    doc.font('Helvetica-Bold').fontSize(14).fillColor('#09090B').text(po.id, marginX, 18, { width: contentW, align: 'right' });
+    doc.font('Helvetica').fontSize(9).fillColor('#44403C').text(po.poDate ? new Date(po.poDate).toISOString().slice(0, 10) : '—', marginX, 34, { width: contentW, align: 'right' });
     if (po.department) doc.text('Dept: ' + po.department, marginX, 48, { width: contentW, align: 'right' });
 
     let bannerH = 0;
@@ -3154,11 +3154,11 @@ function buildGrnPdfBuffer(gr) {
     const marginX = 40;
     const contentW = pageW - marginX * 2;
 
-    doc.rect(0, 0, pageW, 74).fill('#C4714A');
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(17).text('LALLUBHAI AMICHAND LTD', marginX, 20);
-    doc.font('Helvetica').fontSize(10).fillColor('#fde8dd').text('Goods Received Note', marginX, 42);
-    doc.font('Helvetica-Bold').fontSize(15).fillColor('#ffffff').text(gr.id, marginX, 22, { width: contentW, align: 'right' });
-    doc.font('Helvetica').fontSize(10).fillColor('#fde8dd').text(gr.grDate ? new Date(gr.grDate).toISOString().slice(0, 10) : '—', marginX, 42, { width: contentW, align: 'right' });
+    doc.rect(0, 0, pageW, 74).fill('#EEBC2E');
+    doc.fillColor('#09090B').font('Helvetica-Bold').fontSize(17).text('LALLUBHAI AMICHAND LTD', marginX, 20);
+    doc.font('Helvetica').fontSize(10).fillColor('#44403C').text('Goods Received Note', marginX, 42);
+    doc.font('Helvetica-Bold').fontSize(15).fillColor('#09090B').text(gr.id, marginX, 22, { width: contentW, align: 'right' });
+    doc.font('Helvetica').fontSize(10).fillColor('#44403C').text(gr.grDate ? new Date(gr.grDate).toISOString().slice(0, 10) : '—', marginX, 42, { width: contentW, align: 'right' });
 
     let y = 96;
     doc.fillColor('#1e293b').font('Helvetica').fontSize(10);
