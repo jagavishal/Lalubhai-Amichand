@@ -833,7 +833,7 @@ async function fixCollations() {
     'purchase_requisitions','purchase_requisition_items','purchase_orders','purchase_order_items','goods_receipts','goods_receipt_items','packing_items'];
   for (const t of tables) {
     try { await pool.query(`ALTER TABLE ${t} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`); }
-    catch (_) {}
+    catch (e) { console.error('[db] collation fix failed for', t, '—', e.message); }
   }
   // Add vendor columns to existing clients tables (no-op if already present)
   const vendorCols = [
@@ -889,8 +889,13 @@ async function ensureSchema() {
       }
     }
     await seedIfEmpty().catch((e) => console.error('[db] seedIfEmpty failed:', e.message));
-    fixCollations().catch(() => {});
-    relaxEmailUnique().catch(() => {});
+    // These two must be awaited, not fire-and-forget: g.__pg_schema_ready is cached
+    // and returned instantly to every future ensureSchema() caller the moment this
+    // IIFE resolves, so an un-awaited background fix here would race every request
+    // that runs before it happens to finish (e.g. collation-dependent JOINs failing
+    // intermittently right after a cold start).
+    await fixCollations().catch((e) => console.error('[db] fixCollations failed:', e.message));
+    await relaxEmailUnique().catch((e) => console.error('[db] relaxEmailUnique failed:', e.message));
     seedPackingItemsIfEmpty().catch((e) => console.error('[db] packing_items seed failed:', e.message));
   })();
   return g.__pg_schema_ready;
