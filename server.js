@@ -831,6 +831,23 @@ async function fixCollations() {
   if (!USE_DB) return;
   const tables = ['users','delegations','masters','clients','checklist_completions','daily_tasks','leaves','user_sessions',
     'purchase_requisitions','purchase_requisition_items','purchase_orders','purchase_order_items','goods_receipts','goods_receipt_items','packing_items'];
+  // A couple of these tables carry a leftover FOREIGN KEY constraint from an
+  // earlier schema iteration (the current schema style is FK-less, app-generated
+  // string ids) that blocks ALTER ... CONVERT TO CHARACTER SET on either side of
+  // the relationship. Drop any such constraint touching these tables first —
+  // best-effort, never re-added, matching the rest of the schema's FK-less design.
+  try {
+    const fks = await q(`SELECT TABLE_NAME AS tableName, CONSTRAINT_NAME AS constraintName, REFERENCED_TABLE_NAME AS referencedTableName FROM information_schema.KEY_COLUMN_USAGE WHERE CONSTRAINT_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME IS NOT NULL`);
+    const seen = new Set();
+    for (const fk of fks) {
+      const key = fk.tableName + '.' + fk.constraintName;
+      if (seen.has(key) || !(tables.includes(fk.tableName) || tables.includes(fk.referencedTableName))) continue;
+      seen.add(key);
+      try { await pool.query(`ALTER TABLE ${fk.tableName} DROP FOREIGN KEY ${fk.constraintName}`); }
+      catch (e) { console.error('[db] drop FK failed for', fk.tableName, fk.constraintName, '—', e.message); }
+    }
+  } catch (e) { console.error('[db] FK lookup failed:', e.message); }
+
   for (const t of tables) {
     try { await pool.query(`ALTER TABLE ${t} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`); }
     catch (e) { console.error('[db] collation fix failed for', t, '—', e.message); }
