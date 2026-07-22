@@ -829,7 +829,8 @@ async function seedIfEmpty() {
 
 async function fixCollations() {
   if (!USE_DB) return;
-  const tables = ['users','delegations','masters','clients','checklist_completions','daily_tasks','leaves','user_sessions'];
+  const tables = ['users','delegations','masters','clients','checklist_completions','daily_tasks','leaves','user_sessions',
+    'purchase_requisitions','purchase_requisition_items','purchase_orders','purchase_order_items','goods_receipts','goods_receipt_items','packing_items'];
   for (const t of tables) {
     try { await pool.query(`ALTER TABLE ${t} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`); }
     catch (_) {}

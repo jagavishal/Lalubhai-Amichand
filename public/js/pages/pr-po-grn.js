@@ -308,24 +308,23 @@ window.Pages['pr-po-grn'] = (() => {
       + '</div>';
     }
     const thS = 'padding:10px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;background:#f8fafc;text-align:left;white-space:nowrap;';
-    const actionTh = _canEdit ? '<th style="' + thS + 'text-align:right;">Actions</th>' : '';
 
-    return '<div class="overflow-x-auto"><table style="width:100%;border-collapse:collapse;">'
+    return '<div class="overflow-x-auto"><table style="width:100%;border-collapse:collapse;table-layout:fixed;">'
       + '<thead><tr style="border-bottom:2px solid #e2e8f0;">'
         + '<th style="' + thS + 'text-align:center;width:44px;">#</th>'
-        + '<th style="' + thS + '">Item Code</th>'
-        + '<th style="' + thS + '">Type</th>'
+        + '<th style="' + thS + 'width:100px;">Item Code</th>'
+        + '<th style="' + thS + 'width:130px;">Type</th>'
         + '<th style="' + thS + '">Item Name</th>'
-        + '<th style="' + thS + '">Size</th>'
-        + '<th style="' + thS + 'text-align:right;">Pcs/Box</th>'
-        + '<th style="' + thS + 'text-align:right;">L × W × H (in)</th>'
-        + '<th style="' + thS + 'text-align:right;">CBM/Box</th>'
-        + '<th style="' + thS + '">Barcode</th>'
-        + actionTh
+        + '<th style="' + thS + 'width:90px;">Size</th>'
+        + '<th style="' + thS + 'text-align:right;width:90px;">Pcs/Box</th>'
+        + '<th style="' + thS + 'text-align:right;width:150px;">L × W × H (in)</th>'
+        + '<th style="' + thS + 'text-align:right;width:90px;">CBM/Box</th>'
+        + '<th style="' + thS + 'width:140px;">Barcode</th>'
+        + (_canEdit ? '<th style="' + thS + 'text-align:right;width:150px;">Actions</th>' : '')
       + '</tr></thead>'
       + '<tbody>'
         + rows.map((p, i) => {
-          const tdS = 'padding:10px 14px;font-size:12.5px;color:#374151;border-bottom:1px solid #f1f5f9;white-space:nowrap;';
+          const tdS = 'padding:10px 14px;font-size:12.5px;color:#374151;border-bottom:1px solid #f1f5f9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
           const dims = [p.length_in, p.width_in, p.height_in].filter(v => v).join(' × ') || '—';
           const actionTd = _canEdit
             ? '<td style="' + tdS + '"><div style="display:flex;gap:6px;justify-content:flex-end;">'
