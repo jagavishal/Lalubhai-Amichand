@@ -1844,6 +1844,39 @@ function generateChecklistDates(startDate, endDate, freq) {
   return dates;
 }
 
+// One-time maintenance action: checklist masters created before recurring generation
+// existed are each a single dated row with no series behind them. This backfills their
+// future occurrences (from the interval after their own start date, through their stored
+// end date or one year forward) so they behave like newly-created recurring tasks. Safe to
+// call more than once — it skips any (task, assignee, date) combination that already exists.
+app.post('/api/masters/backfill-recurring', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await ensureSchema();
+    const existing = await q('SELECT id, task, assigned_to, frequency, start_date, end_date, remarks, department FROM masters WHERE start_date IS NOT NULL');
+    const keyOf = (task, assignedTo, date) => task + '||' + assignedTo + '||' + date;
+    const seen = new Set(existing.map(m => keyOf(m.task, m.assigned_to, toDateStr(m.start_date))));
+    const base = Date.now().toString(36).toUpperCase();
+    let created = 0, seriesCount = 0;
+    for (const m of existing) {
+      const startDate = toDateStr(m.start_date);
+      const endDate = toDateStr(m.end_date) || defaultChecklistSeriesEnd(startDate);
+      const dates = generateChecklistDates(startDate, endDate, m.frequency).slice(1);
+      let any = false;
+      for (const date of dates) {
+        const key = keyOf(m.task, m.assigned_to, date);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const id = 'CHK' + base + created.toString(36).padStart(4, '0').toUpperCase();
+        await pool.query('INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,department,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())',
+          [id, m.task, m.assigned_to, m.frequency, date, null, m.remarks || '', m.department || '']);
+        created++; any = true;
+      }
+      if (any) seriesCount++;
+    }
+    return res.json({ success:true, created, seriesCount, mastersScanned: existing.length });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/masters', requireAuth, async (req, res) => {
   try {
     const body = req.body;
