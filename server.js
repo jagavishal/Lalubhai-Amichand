@@ -3633,21 +3633,41 @@ app.post('/api/payment-entries', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-// PATCH /api/payment-entries — mark selected ids as exported
+// PATCH /api/payment-entries — mark exported entries as such, recording history
+//
+// Entries exported straight from freshly-typed rows (never saved as a draft first)
+// have no id yet — inserting them here rather than silently dropping them is what
+// keeps Payment History from losing those exports.
 app.patch('/api/payment-entries', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    const { ids, batchLabel } = req.body || {};
-    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids required' });
+    const { entries, batchLabel } = req.body || {};
+    if (!Array.isArray(entries) || !entries.length) return res.status(400).json({ error: 'entries required' });
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
     const label = batchLabel || ('Export ' + new Date().toLocaleDateString('en-IN'));
-    for (const id of ids) {
-      await pool.query(
-        `UPDATE payment_entries SET status='exported', exported_at=$1, batch_label=$2 WHERE id=$3`,
-        [now, label, id]
-      );
+    const user = req.session?.user?.name || req.session?.user?.email || '';
+    const cnt = await q('SELECT COUNT(*) AS c FROM payment_entries');
+    let base = Number(cnt[0]?.c || 0);
+    const ids = [];
+    for (const e of entries) {
+      if (e.id) {
+        await pool.query(
+          `UPDATE payment_entries SET status='exported', exported_at=$1, batch_label=$2 WHERE id=$3`,
+          [now, label, e.id]
+        );
+        ids.push(e.id);
+      } else if (e.vendorId && e.amount) {
+        base++;
+        const eid = 'PE' + String(base).padStart(6, '0');
+        await pool.query(
+          `INSERT INTO payment_entries (id, vendor_id, amount, txn_type, narration, status, created_by, exported_at, batch_label)
+           VALUES ($1,$2,$3,$4,$5,'exported',$6,$7,$8)`,
+          [eid, String(e.vendorId), parseFloat(e.amount) || 0, e.txnType || 'N', e.narration || '', user, now, label]
+        );
+        ids.push(eid);
+      }
     }
-    return res.json({ success: true });
+    return res.json({ success: true, ids });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 

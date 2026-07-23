@@ -733,13 +733,13 @@ window.Pages['client-master'] = (() => {
       }
 
       // Build one shared row-data array.
-      const exportedIds = [];
+      const exportedRows = [];
       const rows = [];
       let sno = 1;
       toExport.forEach(entry => {
         const v = _list.find(x => String(x.id) === String(entry.vendorId));
         if (!v) return;
-        if (entry.id) exportedIds.push(entry.id);
+        exportedRows.push(entry);
         rows.push({
           sno: sno++,
           division: v.division || '',
@@ -807,22 +807,33 @@ window.Pages['client-master'] = (() => {
         Utils.showToast('Excel library unavailable — only the text file downloaded', 'warning');
       }
 
-      // Mark exported rows in DB (best-effort)
-      if (exportedIds.length) {
+      // Record the export in Payment History — entries without an id yet (typed and
+      // exported without ever clicking Save Draft) are inserted directly as exported,
+      // not just matched against an existing draft id, or history would silently miss them.
+      if (exportedRows.length) {
         try {
-          await fetch('/api/payment-entries', {
+          const patchRes = await fetch('/api/payment-entries', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids: exportedIds, batchLabel }),
+            body: JSON.stringify({
+              entries: exportedRows.map(r => ({ id: r.id, vendorId: r.vendorId, amount: r.amount, txnType: r.txnType, narration: r.narration })),
+              batchLabel,
+            }),
           });
+          if (!patchRes.ok) throw new Error('Failed to record export in history');
           // Remove exported rows from draft grid
-          _pmRows = _pmRows.filter(r => !exportedIds.includes(r.id));
+          const exportedSet = new Set(exportedRows);
+          _pmRows = _pmRows.filter(r => !exportedSet.has(r));
           while (_pmRows.length < 10) _pmRows.push(_blankRow());
           _refreshPmTbody();
           _updatePmHeader();
-        } catch { /* silently ignore — files are already downloaded */ }
+          Utils.showToast('Payment files downloaded (Excel + Text) — ' + rows.length + ' entries exported', 'success');
+        } catch {
+          Utils.showToast('Files downloaded, but recording the export in Payment History failed — please retry Export.', 'error');
+        }
+      } else {
+        Utils.showToast('Payment files downloaded (Excel + Text) — ' + rows.length + ' entries exported', 'success');
       }
-      Utils.showToast('Payment files downloaded (Excel + Text) — ' + rows.length + ' entries exported', 'success');
     });
   }
 
