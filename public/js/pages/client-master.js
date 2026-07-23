@@ -718,12 +718,15 @@ window.Pages['client-master'] = (() => {
           name: v.name || '',
           narration: entry.narration || '',
           ifsc: v.ifsc_code || '',
+          email: v.email || '',
         });
       });
 
       // Notepad (.txt) — no header row; each line has 26 comma-separated slots with the
       // bank's reserved/blank columns in between (matches the bank's exact raw template —
-      // positions 0,1,2,3,4 = type/code/account/amount/name, 12 = reference, 20 = date, 22 = IFSC).
+      // positions 0,1,2,3,4 = type/code/account/amount/name, 12 = reference, 20 = date,
+      // 22 = IFSC, 25 = beneficiary email — same 3-slot gap after IFSC seen in a real
+      // sample line, kept anchored to the already bank-verified date/IFSC positions).
       const csvRows = [];
       rows.forEach(r => {
         const line = new Array(26).fill('');
@@ -735,6 +738,7 @@ window.Pages['client-master'] = (() => {
         line[12] = r.narration;
         line[20] = dateStr;
         line[22] = r.ifsc;
+        line[25] = r.email;
         csvRows.push(line.join(','));
       });
       downloadBlob(csvRows.join('\r\n'), 'text/plain;charset=utf-8;', 'RBI_Bulk_' + fileStamp + '.txt');
