@@ -1780,16 +1780,16 @@ app.get('/api/masters', requireAuth, async (req, res) => {
   const sessUser = req.session?.user;
   const isAdmin = isAdminUser(sessUser);
   const isHOD = isHODUser(sessUser);
-  const userName = (sessUser?.name || '').toLowerCase();
+  const userName = (sessUser?.name || '').trim().toLowerCase();
   const userDept = sessUser?.department || '';
   if (!USE_DB) {
     const store = await readStore();
     let rows = store.masters||[];
     if (isHOD) {
-      const teamNames = new Set((store.users || []).filter(u => (u.department || '') === userDept).map(u => (u.name || '').toLowerCase()));
-      rows = rows.filter(m => teamNames.has((m.assignedTo||'').toLowerCase()) || (m.assignedTo||'').toLowerCase() === userName);
+      const teamNames = new Set((store.users || []).filter(u => (u.department || '') === userDept).map(u => (u.name || '').trim().toLowerCase()));
+      rows = rows.filter(m => teamNames.has((m.assignedTo||'').trim().toLowerCase()) || (m.assignedTo||'').trim().toLowerCase() === userName);
     } else if (!isAdmin) {
-      rows = rows.filter(m => (m.assignedTo||'').toLowerCase() === userName);
+      rows = rows.filter(m => (m.assignedTo||'').trim().toLowerCase() === userName);
     }
     return res.json(rows);
   }
@@ -1797,11 +1797,11 @@ app.get('/api/masters', requireAuth, async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM masters ORDER BY created_at DESC');
   let mapped = rows.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) }));
   if (isHOD) {
-    const teamRows = await q('SELECT LOWER(name) AS n FROM users WHERE department=$1', [userDept]);
+    const teamRows = await q('SELECT LOWER(TRIM(name)) AS n FROM users WHERE department=$1', [userDept]);
     const teamNames = new Set(teamRows.map(r => r.n));
-    mapped = mapped.filter(m => teamNames.has(m.assignedTo.toLowerCase()) || m.assignedTo.toLowerCase() === userName);
+    mapped = mapped.filter(m => teamNames.has(m.assignedTo.trim().toLowerCase()) || m.assignedTo.trim().toLowerCase() === userName);
   } else if (!isAdmin) {
-    mapped = mapped.filter(m => m.assignedTo.toLowerCase() === userName);
+    mapped = mapped.filter(m => m.assignedTo.trim().toLowerCase() === userName);
   }
   return res.json(mapped);
 });
@@ -1814,14 +1814,14 @@ app.post('/api/masters', requireAuth, async (req, res) => {
       const store = await readStore();
       const masters = store.masters||[];
       const id = 'CHK' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase();
-      masters.push({ id, task:body.task.trim(), assignedTo:body.assignedTo||'', frequency:body.frequency||'Daily', startDate:body.startDate||null, endDate:body.endDate||null, remarks:body.remarks||'', department:body.department||'', createdAt:new Date().toISOString() });
+      masters.push({ id, task:body.task.trim(), assignedTo:(body.assignedTo||'').trim(), frequency:body.frequency||'Daily', startDate:body.startDate||null, endDate:body.endDate||null, remarks:body.remarks||'', department:body.department||'', createdAt:new Date().toISOString() });
       store.masters = masters;
       await writeStore(store);
       return res.status(201).json({ success:true, id });
     }
     await ensureSchema();
     const id = 'CHK' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase();
-    await pool.query('INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,department,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())', [id,body.task.trim(),body.assignedTo||'',body.frequency||'Daily',body.startDate||null,body.endDate||null,body.remarks||'',body.department||'']);
+    await pool.query('INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,department,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())', [id,body.task.trim(),(body.assignedTo||'').trim(),body.frequency||'Daily',body.startDate||null,body.endDate||null,body.remarks||'',body.department||'']);
     return res.status(201).json({ success:true, id });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -1835,7 +1835,7 @@ app.patch('/api/masters', requireAuth, async (req, res) => {
       const m = (store.masters||[]).find(x=>x.id===body.id);
       if (!m) return res.status(404).json({ error:'Not found' });
       if (body.task) m.task=body.task;
-      if (body.assignedTo) m.assignedTo=body.assignedTo;
+      if (body.assignedTo) m.assignedTo=body.assignedTo.trim();
       if (body.frequency) m.frequency=body.frequency;
       if (body.startDate !== undefined) m.startDate=body.startDate;
       if (body.endDate !== undefined) m.endDate=body.endDate;
@@ -1847,11 +1847,12 @@ app.patch('/api/masters', requireAuth, async (req, res) => {
     await ensureSchema();
     const before = await q('SELECT assigned_to, task FROM masters WHERE id=$1', [body.id]);
     const prevAssignee = before[0]?.assigned_to || '';
-    await pool.query('UPDATE masters SET task=COALESCE($1,task), assigned_to=COALESCE($2,assigned_to), frequency=COALESCE($3,frequency), start_date=COALESCE($4,start_date), end_date=COALESCE($5,end_date), remarks=COALESCE($6,remarks), department=COALESCE($7,department) WHERE id=$8', [body.task??null,body.assignedTo??null,body.frequency??null,body.startDate??null,body.endDate??null,body.remarks??null,body.department??null,body.id]);
+    const assignedTo = body.assignedTo !== undefined ? body.assignedTo.trim() : undefined;
+    await pool.query('UPDATE masters SET task=COALESCE($1,task), assigned_to=COALESCE($2,assigned_to), frequency=COALESCE($3,frequency), start_date=COALESCE($4,start_date), end_date=COALESCE($5,end_date), remarks=COALESCE($6,remarks), department=COALESCE($7,department) WHERE id=$8', [body.task??null,assignedTo??null,body.frequency??null,body.startDate??null,body.endDate??null,body.remarks??null,body.department??null,body.id]);
     // Fire-and-forget — bulk Transfer PATCHes many checklist rows in a row; an
     // awaited SMTP call here would serialize (and could hang) the whole batch.
-    if (body.assignedTo && body.assignedTo !== prevAssignee) {
-      sendChecklistTransferEmail({ assignedTo: body.assignedTo, taskDesc: body.task || before[0]?.task || '', prevAssignee }).catch(() => {});
+    if (assignedTo && assignedTo !== prevAssignee) {
+      sendChecklistTransferEmail({ assignedTo, taskDesc: body.task || before[0]?.task || '', prevAssignee }).catch(() => {});
     }
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
@@ -1948,7 +1949,7 @@ app.get('/api/checklist-completions', requireAuth, async (req, res) => {
     const date = req.query.date || new Date().toISOString().slice(0, 10);
     if (!isAdminUser(req.session?.user)) {
       const { rows } = await pool.query(
-        `SELECT cc.* FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(m.assigned_to) = LOWER($1) AND cc.date = $2 ORDER BY cc.completed_at DESC`,
+        `SELECT cc.* FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(TRIM(m.assigned_to)) = LOWER(TRIM($1)) AND cc.date = $2 ORDER BY cc.completed_at DESC`,
         [req.session?.user?.name || '', date]
       );
       return res.json(rows);
