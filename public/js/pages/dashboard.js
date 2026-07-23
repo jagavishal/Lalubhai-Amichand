@@ -1394,12 +1394,12 @@ window.Pages.dashboard = (function () {
       if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Generating…'; }
 
       try {
-        await Utils.apiFetch('/api/masters', {
+        const result = await Utils.apiFetch('/api/masters', {
           method: 'POST',
           body: JSON.stringify({ task, assignedTo: userName, frequency, startDate, endDate: endDate || null, remarks }),
         });
         hideModal('modal-checklist');
-        Utils.showToast('Checklist tasks generated!');
+        Utils.showToast(result?.count > 1 ? `${result.count} checklist tasks generated!` : 'Checklist task added!');
         await _refresh(admin);
       } catch (err) {
         if (errEl) { errEl.textContent = err.message || 'Failed to generate tasks.'; errEl.style.display = 'block'; }

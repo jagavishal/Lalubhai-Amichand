@@ -146,33 +146,35 @@ window.Pages['all-tasks'] = (function () {
 
     _users = users;
 
-    // A checklist master is "done" once it has a completion recorded for
-    // today — matches the doneToday logic computeDashboard() uses server-side.
-    const todayStr = new Date().toISOString().split('T')[0];
-    const doneTodayIds = new Set(
-      (completions || [])
-        .filter(c => (c.date || '').slice(0, 10) === todayStr)
-        .map(c => c.master_id || c.masterId)
+    // Each checklist master row is one dated occurrence (recurring series are pre-generated
+    // as separate rows) — it's "done" once it has any completion at all, not just today's.
+    const doneIds = new Set(
+      (completions || []).map(c => c.master_id || c.masterId)
     );
+    const todayStr = new Date().toISOString().split('T')[0];
 
-    // Build grouped structure: merge delegations + checklist masters
+    // Build grouped structure: merge delegations + checklist masters. Occurrences whose
+    // due date hasn't arrived yet aren't shown — matches computeDashboard()'s server-side
+    // "not due yet" gating, so a bulk-generated series doesn't flood the list at once.
     const allTasks = [
       ...delegations.map(d => ({ ...d, type: d.type || 'delegation' })),
-      ...masters.map(m => ({
-        id:          m.id,
-        description: m.task,
-        doer:        m.assignedTo || '',
-        doerId:      null,
-        delegatedBy: null,
-        dueDate:     m.startDate || null,
-        client:      '',
-        status:      doneTodayIds.has(m.id) ? 'done' : 'pending',
-        type:        'Checklist',
-        priority:    'Low',
-        remarks:     m.remarks || '',
-        url:         '',
-        createdAt:   m.createdAt || m.created_at || '',
-      })),
+      ...masters
+        .filter(m => !m.startDate || m.startDate <= todayStr || doneIds.has(m.id))
+        .map(m => ({
+          id:          m.id,
+          description: m.task,
+          doer:        m.assignedTo || '',
+          doerId:      null,
+          delegatedBy: null,
+          dueDate:     m.startDate || null,
+          client:      '',
+          status:      doneIds.has(m.id) ? 'done' : 'pending',
+          type:        'Checklist',
+          priority:    'Low',
+          remarks:     m.remarks || '',
+          url:         '',
+          createdAt:   m.createdAt || m.created_at || '',
+        })),
     ];
 
     // Group by doer

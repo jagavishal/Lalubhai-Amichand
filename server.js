@@ -967,7 +967,7 @@ function userOut(r) {
 
 async function readStoreDb() {
   await ensureSchema();
-  const [users, delegations, masters, holidays, fmsRows, stepRows, profileRows, completionsToday] = await Promise.all([
+  const [users, delegations, masters, holidays, fmsRows, stepRows, profileRows, completedMasters] = await Promise.all([
     q('SELECT * FROM users ORDER BY id ASC'),
     q('SELECT * FROM delegations ORDER BY id ASC'),
     q('SELECT * FROM masters ORDER BY id ASC'),
@@ -975,7 +975,10 @@ async function readStoreDb() {
     q('SELECT * FROM fms ORDER BY id ASC'),
     q('SELECT * FROM fms_steps ORDER BY fms_id ASC, step_index ASC'),
     q('SELECT * FROM profile LIMIT 1'),
-    q('SELECT master_id FROM checklist_completions WHERE date = CURRENT_DATE'),
+    // Each masters row is one dated occurrence (recurring series are pre-generated as
+    // separate rows), so a checklist item is "done" once it has any completion at all —
+    // not just one recorded today.
+    q('SELECT DISTINCT master_id FROM checklist_completions'),
   ]);
   const byFms = new Map();
   for (const s of stepRows) {
@@ -996,7 +999,7 @@ async function readStoreDb() {
     masters: masters.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) })),
     holidays: holidays.map(r => ({ id:r.id, date:toDateStr(r.date), name:r.name, type:r.type||'' })),
     fms, approvals:{ tasks:[], transfers:[], leaves:[] }, profile,
-    completedTodayIds: completionsToday.map(r => r.master_id),
+    completedMasterIds: completedMasters.map(r => r.master_id),
   };
 }
 
@@ -1063,12 +1066,12 @@ function computeDashboard(store, filter='all', doerFilter='') {
     });
   }
   if (filter==='all'||filter==='checklist') {
-    const doneToday = new Set(store.completedTodayIds || []);
+    const doneIds = new Set(store.completedMasterIds || []);
     (store.masters||[]).forEach(m => {
       if (df && (m.assignedTo||'').trim().toLowerCase() !== df) return;
       total++;
       const dateStr = m.startDate || now.toISOString();
-      if (doneToday.has(m.id)) {
+      if (doneIds.has(m.id)) {
         completed++;
         items.push({ id:m.id, doerId:m.doerId||null, type:'Checklist', description:m.task, doer:m.assignedTo, department:m.department||'', frequency:m.frequency||'', date:dateStr, client:'-', overdue:false, status:'done', remarks:m.remarks||'', createdAt:m.createdAt||m.created_at });
         return;
@@ -1806,23 +1809,70 @@ app.get('/api/masters', requireAuth, async (req, res) => {
   return res.json(mapped);
 });
 
+// A checklist master row is one dated occurrence, not a recurring template — so creating
+// one with a frequency + start date (+ optional end date) pre-generates the whole series
+// as separate rows (each its own id), matching the "Daily (365 tasks/year)" etc. labels
+// the Add Checklist form has always shown. Without an end date the series defaults to one
+// year forward, which is where those per-year counts come from.
+function addChecklistInterval(dateStr, freq) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  switch (String(freq || 'daily').toLowerCase()) {
+    case 'weekly': d.setUTCDate(d.getUTCDate() + 7); break;
+    case 'alternative_week': case 'alternate_week': d.setUTCDate(d.getUTCDate() + 14); break;
+    case 'monthly': d.setUTCMonth(d.getUTCMonth() + 1); break;
+    case 'quarterly': d.setUTCMonth(d.getUTCMonth() + 3); break;
+    case 'yearly': d.setUTCFullYear(d.getUTCFullYear() + 1); break;
+    case 'daily': default: d.setUTCDate(d.getUTCDate() + 1); break;
+  }
+  return d.toISOString().slice(0, 10);
+}
+function defaultChecklistSeriesEnd(startDate) {
+  const d = new Date(startDate + 'T00:00:00Z');
+  d.setUTCFullYear(d.getUTCFullYear() + 1);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+const CHECKLIST_MAX_OCCURRENCES = 400; // safety cap, well above a 365-day daily series
+function generateChecklistDates(startDate, endDate, freq) {
+  const end = endDate || defaultChecklistSeriesEnd(startDate);
+  const dates = [];
+  let cur = startDate;
+  while (cur <= end && dates.length < CHECKLIST_MAX_OCCURRENCES) {
+    dates.push(cur);
+    cur = addChecklistInterval(cur, freq);
+  }
+  return dates;
+}
+
 app.post('/api/masters', requireAuth, async (req, res) => {
   try {
     const body = req.body;
     if (!body.task?.trim()) return res.status(400).json({ error:'Task required' });
+    const task = body.task.trim();
+    const assignedTo = (body.assignedTo||'').trim();
+    const frequency = body.frequency || 'Daily';
+    const remarks = body.remarks || '';
+    const department = body.department || '';
+    const startDate = body.startDate || null;
+    const dates = startDate ? generateChecklistDates(startDate, body.endDate || null, frequency) : [null];
+    const base = Date.now().toString(36).toUpperCase();
+    const ids = dates.map((_, i) => 'CHK' + base + i.toString(36).padStart(3, '0').toUpperCase());
+
     if (!USE_DB) {
       const store = await readStore();
       const masters = store.masters||[];
-      const id = 'CHK' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase();
-      masters.push({ id, task:body.task.trim(), assignedTo:(body.assignedTo||'').trim(), frequency:body.frequency||'Daily', startDate:body.startDate||null, endDate:body.endDate||null, remarks:body.remarks||'', department:body.department||'', createdAt:new Date().toISOString() });
+      dates.forEach((d, i) => {
+        masters.push({ id: ids[i], task, assignedTo, frequency, startDate: d, endDate: null, remarks, department, createdAt: new Date().toISOString() });
+      });
       store.masters = masters;
       await writeStore(store);
-      return res.status(201).json({ success:true, id });
+      return res.status(201).json({ success:true, id: ids[0], count: ids.length });
     }
     await ensureSchema();
-    const id = 'CHK' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase();
-    await pool.query('INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,department,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())', [id,body.task.trim(),(body.assignedTo||'').trim(),body.frequency||'Daily',body.startDate||null,body.endDate||null,body.remarks||'',body.department||'']);
-    return res.status(201).json({ success:true, id });
+    for (let i = 0; i < dates.length; i++) {
+      await pool.query('INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,department,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())', [ids[i], task, assignedTo, frequency, dates[i], null, remarks, department]);
+    }
+    return res.status(201).json({ success:true, id: ids[0], count: ids.length });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
@@ -1942,19 +1992,24 @@ app.post('/api/checklist-completions', requireAuth, async (req, res) => {
 app.get('/api/checklist-completions', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    // Callers (All Tasks, Dashboard) only ever use *today's* completions to know which
-    // recurring checklist items are already done today — fetching the whole history here
-    // used to grow unbounded forever and get slower every day. Scope to today by default;
-    // an explicit ?date= is still honored for anything that needs a specific day.
-    const date = req.query.date || new Date().toISOString().slice(0, 10);
+    // Each masters row is a single dated occurrence (recurring series are pre-generated as
+    // separate rows), so callers (All Tasks) use this to know which occurrences have EVER
+    // been completed, not just today — a completion doesn't expire when the day changes.
+    // An explicit ?date= still scopes to one day for reporting-style callers.
+    const dateFilter = req.query.date || null;
     if (!isAdminUser(req.session?.user)) {
-      const { rows } = await pool.query(
-        `SELECT cc.* FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(TRIM(m.assigned_to)) = LOWER(TRIM($1)) AND cc.date = $2 ORDER BY cc.completed_at DESC`,
-        [req.session?.user?.name || '', date]
-      );
+      let sql = `SELECT cc.* FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(TRIM(m.assigned_to)) = LOWER(TRIM($1))`;
+      const params = [req.session?.user?.name || ''];
+      if (dateFilter) { sql += ' AND cc.date = $2'; params.push(dateFilter); }
+      sql += ' ORDER BY cc.completed_at DESC';
+      const { rows } = await pool.query(sql, params);
       return res.json(rows);
     }
-    const { rows } = await pool.query('SELECT * FROM checklist_completions WHERE date = $1 ORDER BY completed_at DESC', [date]);
+    let sql = 'SELECT * FROM checklist_completions';
+    const params = [];
+    if (dateFilter) { sql += ' WHERE date = $1'; params.push(dateFilter); }
+    sql += ' ORDER BY completed_at DESC';
+    const { rows } = await pool.query(sql, params);
     return res.json(rows);
   } catch (err) {
     console.error('[api/checklist-completions]', err);
@@ -1962,14 +2017,14 @@ app.get('/api/checklist-completions', requireAuth, async (req, res) => {
   }
 });
 
-// Reopen a checklist task: undo today's completion so it shows as pending again.
+// Reopen a checklist task: undo its completion so it shows as pending again.
 app.delete('/api/checklist-completions', requireAuth, async (req, res) => {
   try {
     const masterId = req.query.masterId;
     if (!masterId) return res.status(400).json({ error:'masterId required' });
     if (!USE_DB) return res.json({ success:true });
     await ensureSchema();
-    await pool.query('DELETE FROM checklist_completions WHERE master_id=$1 AND date=CURRENT_DATE', [masterId]);
+    await pool.query('DELETE FROM checklist_completions WHERE master_id=$1', [masterId]);
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
