@@ -4,6 +4,20 @@ window.Pages['client-master'] = (() => {
   /* ── Constants ──────────────────────────────────────────────── */
   const DIVISIONS = ['Export', 'Others', 'Trading', 'Wirerod', 'SSCD Ahd', 'Retail (Satelite)', 'Retail (Bopal)'];
 
+  /* ── Permission helper ──────────────────────────────────────── */
+  function _hasFeature(feat) {
+    const roles = window.currentUser?.roles || [];
+    const isAdmin = Array.isArray(roles)
+      ? (roles.includes('Admin') || roles.includes('HOD'))
+      : (String(roles).includes('Admin') || String(roles).includes('HOD'));
+    if (isAdmin) return true;
+    const perms = window.currentUser?.permissions;
+    if (!perms || !perms.features) return true;
+    const pageFeats = perms.features['client-master'];
+    if (!pageFeats) return false;
+    return pageFeats.includes(feat);
+  }
+
   /* ── State ──────────────────────────────────────────────────── */
   let _list    = [];
   let _q       = '';
@@ -1170,9 +1184,7 @@ window.Pages['client-master'] = (() => {
   /* ── Public API ─────────────────────────────────────────────── */
   return {
     async render() {
-      _canEdit = (window.currentUser?.roles || []).some
-        ? (window.currentUser?.roles || []).some(r => r === 'Admin' || r === 'HOD')
-        : String(window.currentUser?.roles || '').includes('Admin');
+      _canEdit = _hasFeature('add');
       _q = ''; _status = 'All'; _open = false; _editing = null; _saving = false;
       _pmSaving = false; _pmSaved = false;
       _form = _blankForm(); _list = [];

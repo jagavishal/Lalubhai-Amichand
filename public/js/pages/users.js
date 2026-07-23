@@ -64,6 +64,9 @@ window.Pages.users = (() => {
       { key: 'reject',       label: 'Reject Task' },
       { key: 'grant_revise', label: 'Grant Revise' },
     ],
+    'client-master': [
+      { key: 'add', label: 'Add Vendor' },
+    ],
   };
 
   // set-password modal
