@@ -512,6 +512,21 @@ window.Pages['client-master'] = (() => {
     }).join('');
   }
 
+  // The checkbox cell renders as an inert placeholder <span> until the row has data
+  // (see _pmRowHtml's hasData check) — once a vendor/amount/narration is entered via the
+  // handlers below (which patch the row in place rather than re-rendering it, to avoid
+  // losing input focus), this swaps that placeholder for a real, wired-up checkbox.
+  function _ensurePmCheckbox(rowEl, ri) {
+    const cell = rowEl.querySelector('td:first-child');
+    if (!cell || cell.querySelector('.pm-row-chk')) return;
+    cell.innerHTML = '<input type="checkbox" class="pm-row-chk" data-ri="' + ri + '" style="width:15px;height:15px;cursor:pointer;accent-color:var(--color-primary);" />';
+    cell.querySelector('.pm-row-chk').addEventListener('change', (e) => {
+      _pmRows[ri].checked = e.target.checked;
+      rowEl.style.background = e.target.checked ? '#f0fff8' : (ri % 2 === 1 ? '#fafbfc' : '');
+      _updatePmHeader();
+    });
+  }
+
   // Bind search + delegation for a single row — works even after _buildDropdown rebuilds innerHTML
   function _bindSingleRow(ri, rowEl) {
     const inp    = rowEl.querySelector('.pm-name-inp[data-ri="' + ri + '"]');
@@ -534,6 +549,7 @@ window.Pages['client-master'] = (() => {
         ddEl.style.display = 'block';
       });
       inp.addEventListener('input', () => {
+        _ensurePmCheckbox(rowEl, ri);
         _pmRows[ri].vendorId     = null;
         _pmRows[ri].vendorSearch = inp.value;
         inp.style.fontWeight     = '400';
@@ -574,6 +590,7 @@ window.Pages['client-master'] = (() => {
         if (!opt) return;
         const v = _list.find(x => String(x.id) === String(opt.dataset.vid));
         if (!v) return;
+        _ensurePmCheckbox(rowEl, ri);
         _pmRows[ri].vendorId     = v.id;
         _pmRows[ri].vendorSearch = v.name;
         inp.value             = v.name;
@@ -607,12 +624,12 @@ window.Pages['client-master'] = (() => {
     }
 
     if (amtInp) {
-      amtInp.addEventListener('input', () => { _pmRows[ri].amount = amtInp.value; _updatePmHeader(); });
+      amtInp.addEventListener('input', () => { _ensurePmCheckbox(rowEl, ri); _pmRows[ri].amount = amtInp.value; _updatePmHeader(); });
     }
     const txnInp  = rowEl.querySelector('.pm-txn-inp[data-ri="'  + ri + '"]');
     const narrInp = rowEl.querySelector('.pm-narr-inp[data-ri="' + ri + '"]');
     if (txnInp)  txnInp.addEventListener('change', () => { _pmRows[ri].txnType  = txnInp.value; });
-    if (narrInp) narrInp.addEventListener('input',  () => { _pmRows[ri].narration = narrInp.value; });
+    if (narrInp) narrInp.addEventListener('input',  () => { _ensurePmCheckbox(rowEl, ri); _pmRows[ri].narration = narrInp.value; });
     if (clearBtn) {
       clearBtn.addEventListener('click', () => { _pmRows[ri] = _blankRow(); _refreshPmRow(ri); _updatePmHeader(); });
     }
