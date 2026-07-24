@@ -26,6 +26,12 @@ window.Pages['pr-po-grn'] = (() => {
   ];
   const PO_TYPE_LABEL = {}; PO_TYPES.forEach(t => PO_TYPE_LABEL[t.key] = t.label);
 
+  const DEPARTMENTS = [
+    'Stamping Department', 'Pressing Department', 'Rolling and cutting Department', 'Spinning Department',
+    'CNC Department', 'Charak Department', 'Milk Jug Department', 'Kettle Department', 'Welding Department',
+    'Washing Department', 'Packing Department', 'All Department', 'Accessory Department', 'ELECTRICAL', 'BUFFING',
+  ];
+
   const APPROVAL_STATUS_LABEL = { not_sent: 'Not Sent', pending: 'Pending Approval', approved: 'Approved', rejected: 'Rejected' };
   const APPROVAL_STATUS_COLOR = {
     not_sent: { bg:'#f1f5f9', fg:'#64748b', dot:'#94a3b8' },
@@ -113,6 +119,12 @@ window.Pages['pr-po-grn'] = (() => {
   function _typeSelectOptions(selected) {
     return TYPES.map(t => '<option value="' + t.key + '" ' + (selected===t.key?'selected':'') + '>' + t.label + '</option>').join('');
   }
+  function _departmentSelectOptions(selected) {
+    let html = '<option value="">Select Department</option>'
+      + DEPARTMENTS.map(d => '<option value="' + esc(d) + '" ' + (selected===d?'selected':'') + '>' + esc(d) + '</option>').join('');
+    if (selected && !DEPARTMENTS.includes(selected)) html += '<option value="' + esc(selected) + '" selected>' + esc(selected) + '</option>';
+    return html;
+  }
 
   function _blankItemForm() {
     return {
@@ -131,7 +143,7 @@ window.Pages['pr-po-grn'] = (() => {
     return { packingItemId: null, itemSearch: '', itemName: '', unit: '', quantity: '', rate: '', remarks: '', hsnCode: '', gstPercent: '' };
   }
   function _blankPoForm() {
-    return { poType: 'STANDARD', poDate: _today(), vendorId: null, vendorSearch: '', department: '', deliveryTerms: '', paymentTerms: '', expectedDate: '', freightCharges: '', packingCharges: '', discount: '', remarks: '', items: [_blankPoItem()] };
+    return { poType: 'STANDARD', poDate: _today(), prId: null, prSearch: '', vendorId: null, vendorSearch: '', department: '', deliveryTerms: '', paymentTerms: '', expectedDate: '', freightCharges: '', packingCharges: '', discount: '', remarks: '', items: [_blankPoItem()] };
   }
   function _poTypeSelectOptions(selected) {
     return PO_TYPES.map(t => '<option value="' + t.key + '" ' + (selected===t.key?'selected':'') + '>' + t.label + '</option>').join('');
@@ -621,7 +633,8 @@ window.Pages['pr-po-grn'] = (() => {
             + '<select class="input" id="ppgf-prtype" style="width:100%;box-sizing:border-box;">' + _typeSelectOptions(_prForm.prType) + '</select></div>'
           + _fld('ppgf-date', 'PR Date *', _prForm.prDate, '', 'date')
           + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Vendor</label>' + _vendorDropdownHtml() + '</div>'
-          + _fld('ppgf-department', 'Department', _prForm.department, 'e.g. Welding Dept')
+          + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Department</label>'
+            + '<select class="input" id="ppgf-department" style="width:100%;box-sizing:border-box;">' + _departmentSelectOptions(_prForm.department) + '</select></div>'
         + '</div>'
         + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'
           + _fld('ppgf-payment', 'Terms of Payment', _prForm.paymentTerms, 'e.g. 30 days')
@@ -909,7 +922,7 @@ window.Pages['pr-po-grn'] = (() => {
       await Utils.apiFetch('/api/purchase-orders', {
         method: 'POST',
         body: JSON.stringify({
-          poType: _poForm.poType, poDate: _poForm.poDate, vendorId: _poForm.vendorId, department: _poForm.department,
+          poType: _poForm.poType, poDate: _poForm.poDate, prId: _poForm.prId, vendorId: _poForm.vendorId, department: _poForm.department,
           deliveryTerms: _poForm.deliveryTerms, paymentTerms: _poForm.paymentTerms, expectedDate: _poForm.expectedDate || null,
           freightCharges: _poForm.freightCharges, packingCharges: _poForm.packingCharges, discount: _poForm.discount, remarks: _poForm.remarks,
           items: items.map(i => ({ packingItemId: i.packingItemId, itemName: i.itemName, unit: i.unit, quantity: i.quantity, rate: i.rate, remarks: i.remarks, hsnCode: i.hsnCode, gstPercent: i.gstPercent })),
@@ -1115,11 +1128,13 @@ window.Pages['pr-po-grn'] = (() => {
         + '</button>'
       + '</div>'
       + '<div style="padding:22px 24px;max-height:70vh;overflow-y:auto;display:flex;flex-direction:column;gap:16px;">'
-        + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:12px;">'
           + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Type *</label>'
             + '<select class="input" id="ppgo-potype" style="width:100%;box-sizing:border-box;">' + _poTypeSelectOptions(_poForm.poType) + '</select></div>'
           + _fld('ppgo-date', 'PO Date *', _poForm.poDate, '', 'date')
-          + _fld('ppgo-department', 'Department', _poForm.department, 'e.g. Circles')
+          + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">PR No. (optional)</label>' + _docRefDropdownHtml('ppgo-pr', 'Search PR…', _poForm.prSearch, !!_poForm.prId) + '</div>'
+          + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Department</label>'
+            + '<select class="input" id="ppgo-department" style="width:100%;box-sizing:border-box;">' + _departmentSelectOptions(_poForm.department) + '</select></div>'
           + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Vendor</label>' + _poVendorDropdownHtml() + '</div>'
         + '</div>'
         + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">'
@@ -1187,6 +1202,7 @@ window.Pages['pr-po-grn'] = (() => {
       document.getElementById(id)?.addEventListener('input', _updatePoFormTotal);
     });
     _bindPoVendorField();
+    _bindDocRefField('ppgo-pr', _prs, _poForm, 'prId', 'prSearch', _applyPrToPoForm);
     document.querySelectorAll('#ppgo-items-tbody tr[data-ri]').forEach(tr => {
       const ri = parseInt(tr.dataset.ri);
       if (!isNaN(ri)) _bindPoItemRow(ri, tr);
@@ -1230,6 +1246,7 @@ window.Pages['pr-po-grn'] = (() => {
           + '</div>'
         ) : '')
         + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12.5px;color:#374151;">'
+          + '<div><span style="color:#94a3b8;">PR No.:</span> ' + esc(po.prId || '—') + '</div>'
           + '<div><span style="color:#94a3b8;">Vendor:</span> ' + esc(po.vendorName || '—') + '</div>'
           + '<div><span style="color:#94a3b8;">Department:</span> ' + esc(po.department || '—') + '</div>'
           + '<div><span style="color:#94a3b8;">PO Validity:</span> ' + esc(po.deliveryTerms || '—') + '</div>'
@@ -1399,6 +1416,7 @@ window.Pages['pr-po-grn'] = (() => {
     document.getElementById('ppgo-add-btn')?.addEventListener('click', async () => {
       if (!_itemsLoaded) await _loadItems(true);
       await _loadVendors();
+      await _loadPrs(true);
       _openAddPo();
     });
     _bindPoTableEvents();
@@ -1530,7 +1548,7 @@ window.Pages['pr-po-grn'] = (() => {
       + '</div>'
     ).join('');
   }
-  function _bindDocRefField(prefix, pool, form, idField, searchField) {
+  function _bindDocRefField(prefix, pool, form, idField, searchField, onSelect) {
     const inp = document.getElementById(prefix + '-inp');
     const ddEl = document.getElementById(prefix + '-dd');
     if (!inp || !ddEl) return;
@@ -1550,7 +1568,32 @@ window.Pages['pr-po-grn'] = (() => {
       form[idField] = d.id; form[searchField] = d.id;
       inp.value = d.id; inp.style.borderColor = 'var(--color-primary)'; inp.style.fontWeight = '600'; inp.style.background = 'var(--color-primary-light)';
       ddEl.style.display = 'none';
+      if (onSelect) onSelect(d);
     });
+  }
+
+  // Selecting a PR while creating a PO carries the PR's vendor, department and
+  // items over onto the PO — the PO is normally raised directly from an approved
+  // PR, so re-typing the same detail twice would just invite mismatches.
+  function _applyPrToPoForm(pr) {
+    _poForm.vendorId = pr.vendorId || null;
+    _poForm.vendorSearch = pr.vendorName || '';
+    _poForm.department = pr.department || '';
+    _poForm.paymentTerms = pr.paymentTerms || _poForm.paymentTerms;
+    if ((pr.items || []).length) {
+      _poForm.items = pr.items.map(it => ({
+        packingItemId: it.packingItemId || null,
+        itemSearch: it.itemName || '',
+        itemName: it.itemName || '',
+        unit: it.unit || '',
+        quantity: it.quantity || '',
+        rate: it.estimatedRate || '',
+        remarks: it.remarks || '',
+        hsnCode: '',
+        gstPercent: '',
+      }));
+    }
+    _renderPoModal();
   }
 
   function _grnItemRowHtml(item, i) {
