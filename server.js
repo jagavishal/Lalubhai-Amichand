@@ -3648,10 +3648,23 @@ const MONITORING_TAB_NAME = 'Monitoring';
 // a separate, pre-existing sheet the store team already tracks PRs in by hand.
 const PR_MONITORING_SHEET_ID = '1AX0lB5eyUgh5RHbAv1D5mllTQyV8B9SadnPsltfLang';
 
+// Hosting-panel env-var editors routinely mangle a multi-line PEM key pasted
+// from a .env file: surrounding quotes get included literally, CRLF sneaks
+// in, or only some of the escaped "\n" sequences survive as real newlines.
+// Normalize all of that rather than fail with an opaque OpenSSL decoder error.
+function _normalizeGooglePrivateKey(raw) {
+  if (!raw) return raw;
+  let key = raw.trim();
+  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+    key = key.slice(1, -1).trim();
+  }
+  return key.replace(/\r\n/g, '\n').replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
+}
+
 let _googleAuth = null;
 function getGoogleAuth() {
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const key = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+  const key = _normalizeGooglePrivateKey(process.env.GOOGLE_PRIVATE_KEY);
   if (!email || !key) return null;
   if (_googleAuth) return _googleAuth;
   const { google } = require('googleapis');
