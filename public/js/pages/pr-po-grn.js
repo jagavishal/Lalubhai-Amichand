@@ -41,7 +41,7 @@ window.Pages['pr-po-grn'] = (() => {
   };
 
   /* ── Shared state ───────────────────────────────────────────── */
-  let _tab      = 'masters'; // 'masters' | 'forms' | 'po' | 'fms'
+  let _tab      = 'masters'; // 'masters' | 'forms' | 'po' | 'grn'
   let _canEdit  = false;     // Admin/HOD
 
   /* ── Masters (Item Master) state ───────────────────────────── */
@@ -86,10 +86,6 @@ window.Pages['pr-po-grn'] = (() => {
   let _grnViewing  = null;
   let _grnSaving   = false;
   let _grnForm     = _blankGrnForm();
-
-  /* ── FMS (dispatch/shipment tracking) state ────────────────── */
-  let _fmsStatusF  = 'ordered'; // 'ordered' | 'All'
-  let _fmsQ        = '';
 
   /* ── Helpers ────────────────────────────────────────────────── */
   function esc(s) {
@@ -1905,189 +1901,6 @@ window.Pages['pr-po-grn'] = (() => {
   }
 
   /* ═══════════════════════════════════════════════════════════════
-     FMS TAB — dispatch/shipment tracking (which PR is expected when)
-     ═══════════════════════════════════════════════════════════════ */
-
-  // Merges PRs and approved POs into one dispatch-tracking row set, tagged by
-  // docType so actions (expected date, mark received, view) route to the right
-  // endpoint/modal — PR and PO share identical status strings by design.
-  function _fmsRows() {
-    const prRows = _prs.map(pr => ({
-      docType: 'PR', id: pr.id, typeLabel: TYPE_LABEL[pr.prType] || pr.prType,
-      vendorName: pr.vendorName, personLabel: pr.requestedBy, docDate: pr.prDate,
-      expectedDate: pr.expectedDate, status: pr.status,
-      searchBlob: (pr.id + pr.requestedBy + (pr.vendorName||'') + (pr.items||[]).map(i=>i.itemName).join(' ')).toLowerCase(),
-    }));
-    const poRows = _pos.filter(po => po.approvalStatus === 'approved').map(po => ({
-      docType: 'PO', id: po.id, typeLabel: PO_TYPE_LABEL[po.poType] || po.poType,
-      vendorName: po.vendorName, personLabel: po.createdBy, docDate: po.poDate,
-      expectedDate: po.expectedDate, status: po.status,
-      searchBlob: (po.id + po.createdBy + (po.vendorName||'') + (po.items||[]).map(i=>i.itemName).join(' ')).toLowerCase(),
-    }));
-    return [...prRows, ...poRows];
-  }
-
-  function _fmsFiltered() {
-    const t = _fmsQ.toLowerCase();
-    return _fmsRows()
-      .filter(r => (_fmsStatusF === 'All' || r.status === _fmsStatusF))
-      .filter(r => !t || r.searchBlob.includes(t))
-      .sort((a, b) => {
-        // no expected date sorts last; otherwise soonest-first
-        if (!a.expectedDate && !b.expectedDate) return 0;
-        if (!a.expectedDate) return 1;
-        if (!b.expectedDate) return -1;
-        return new Date(a.expectedDate) - new Date(b.expectedDate);
-      });
-  }
-
-  function _daysInfo(row) {
-    if (!row.expectedDate) return { label: 'Not set', color: '#94a3b8' };
-    if (row.status === 'received') return { label: 'Received', color: '#16a34a' };
-    const today = new Date(); today.setHours(0,0,0,0);
-    const exp = new Date(row.expectedDate); exp.setHours(0,0,0,0);
-    const diffDays = Math.round((exp - today) / 86400000);
-    if (diffDays < 0) return { label: Math.abs(diffDays) + ' day' + (Math.abs(diffDays)===1?'':'s') + ' overdue', color: '#dc2626' };
-    if (diffDays === 0) return { label: 'Due today', color: '#f59e0b' };
-    return { label: 'In ' + diffDays + ' day' + (diffDays===1?'':'s'), color: '#64748b' };
-  }
-
-  function _fmsEndpoint(docType) {
-    return docType === 'PO' ? '/api/purchase-orders' : '/api/purchase-requisitions';
-  }
-  async function _setFmsExpectedDate(docType, id, expectedDate) {
-    await Utils.apiFetch(_fmsEndpoint(docType), { method: 'PATCH', body: JSON.stringify({ id, expectedDate }) });
-    const cache = docType === 'PO' ? _pos : _prs;
-    const row = cache.find(x => x.id === id);
-    if (row) row.expectedDate = expectedDate;
-  }
-
-  function _renderFmsTable() {
-    const rows = _fmsFiltered();
-    if (!rows.length) {
-      return '<div style="padding:56px 24px;text-align:center;">'
-        + '<div style="font-size:14px;font-weight:600;color:#374151;">Nothing to track</div>'
-        + '<div style="font-size:12px;color:#94a3b8;margin-top:4px;">' + (_fmsStatusF === 'ordered' ? 'Nothing is currently marked Ordered.' : 'Try adjusting your filters.') + '</div>'
-      + '</div>';
-    }
-    const thS = 'padding:10px 14px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;background:#f8fafc;text-align:left;white-space:nowrap;';
-    return '<div class="overflow-x-auto"><table style="width:100%;border-collapse:collapse;">'
-      + '<thead><tr style="border-bottom:2px solid #e2e8f0;">'
-        + '<th style="' + thS + '">Doc</th>'
-        + '<th style="' + thS + '">Type</th>'
-        + '<th style="' + thS + '">Vendor</th>'
-        + '<th style="' + thS + '">By</th>'
-        + '<th style="' + thS + '">Date</th>'
-        + '<th style="' + thS + '">Expected Date</th>'
-        + '<th style="' + thS + '">Days</th>'
-        + '<th style="' + thS + '">Status</th>'
-        + '<th style="' + thS + 'text-align:right;">Actions</th>'
-      + '</tr></thead>'
-      + '<tbody>' + rows.map((row, i) => {
-        const sc = STATUS_COLOR[row.status] || STATUS_COLOR.pending;
-        const di = _daysInfo(row);
-        const tdS = 'padding:10px 14px;font-size:12.5px;color:#374151;border-bottom:1px solid #f1f5f9;';
-        const pill = '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;background:' + sc.bg + ';color:' + sc.fg + ';font-size:11px;font-weight:600;"><span style="width:5px;height:5px;border-radius:50%;background:' + sc.dot + ';"></span>' + STATUS_LABEL[row.status] + '</span>';
-        const docPill = row.docType === 'PO'
-          ? '<span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;background:#fdf4ff;color:#a21caf;font-size:11px;font-weight:700;">PO</span>'
-          : '<span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;background:#eff6ff;color:#2563eb;font-size:11px;font-weight:700;">PR</span>';
-        return '<tr style="' + (i % 2 === 1 ? 'background:#fafafa;' : '') + '">'
-          + '<td style="' + tdS + 'font-weight:600;color:#1e293b;">' + docPill + ' ' + esc(row.id) + '</td>'
-          + '<td style="' + tdS + '"><span style="display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;background:#f1f5f9;color:#475569;font-size:11px;font-weight:600;">' + esc(row.typeLabel) + '</span></td>'
-          + '<td style="' + tdS + '">' + esc(row.vendorName || '—') + '</td>'
-          + '<td style="' + tdS + '">' + esc(row.personLabel) + '</td>'
-          + '<td style="' + tdS + '">' + esc(row.docDate) + '</td>'
-          + '<td style="' + tdS + '"><input type="date" class="ppgx-expected" data-doctype="' + row.docType + '" data-id="' + esc(row.id) + '" value="' + esc((row.expectedDate || '').slice(0, 10)) + '" style="padding:5px 8px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12px;" /></td>'
-          + '<td style="' + tdS + 'color:' + di.color + ';font-weight:600;">' + di.label + '</td>'
-          + '<td style="' + tdS + '">' + pill + '</td>'
-          + '<td style="' + tdS + '"><div style="display:flex;gap:6px;justify-content:flex-end;">'
-            + (row.status !== 'received' ? '<button class="ppgx-received" data-doctype="' + row.docType + '" data-id="' + esc(row.id) + '" style="padding:4px 12px;border-radius:6px;border:1.5px solid #bbf7d0;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;cursor:pointer;">Mark Received</button>' : '')
-            + '<button class="ppgx-view" data-doctype="' + row.docType + '" data-id="' + esc(row.id) + '" style="padding:4px 12px;border-radius:6px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:11px;font-weight:600;cursor:pointer;">View</button>'
-          + '</div></td>'
-        + '</tr>';
-      }).join('') + '</tbody></table></div>';
-  }
-
-  function _renderFmsTab() {
-    const rows = _fmsFiltered();
-    const allRows = _fmsRows();
-    const overdue = allRows.filter(r => r.status === 'ordered' && r.expectedDate && new Date(r.expectedDate) < new Date(new Date().toDateString())).length;
-    const ordered = allRows.filter(r => r.status === 'ordered').length;
-
-    return '<div style="display:flex;flex-direction:column;gap:16px;">'
-      + '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
-        + '<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;background:#fff;border:1px solid #e2e8f0;">'
-          + '<div><div style="font-size:18px;font-weight:800;color:#1e293b;line-height:1;">' + ordered + '</div><div style="font-size:10.5px;color:#94a3b8;margin-top:1px;">Awaiting Delivery</div></div>'
-        + '</div>'
-        + '<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;background:#fef2f2;border:1px solid #fecaca;">'
-          + '<div><div style="font-size:18px;font-weight:800;color:#dc2626;line-height:1;">' + overdue + '</div><div style="font-size:10.5px;color:#dc2626;margin-top:1px;">Overdue</div></div>'
-        + '</div>'
-      + '</div>'
-      + '<div style="background:#fff;border-radius:14px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.05);">'
-        + '<div style="padding:14px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-          + '<div style="position:relative;flex:1;min-width:200px;">'
-            + '<svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#94a3b8;" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
-            + '<input id="ppgx-search" placeholder="Search PR/PO ID, vendor, item…" value="' + esc(_fmsQ) + '" style="width:100%;box-sizing:border-box;padding:8px 12px 8px 32px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;outline:none;background:#f8fafc;" />'
-          + '</div>'
-          + '<select id="ppgx-status-filter" style="padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;outline:none;background:#f8fafc;color:#374151;cursor:pointer;">'
-            + '<option value="ordered" ' + (_fmsStatusF==='ordered'?'selected':'') + '>Awaiting Delivery</option>'
-            + '<option value="All" ' + (_fmsStatusF==='All'?'selected':'') + '>All</option>'
-          + '</select>'
-          + '<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">' + rows.length + ' shown</span>'
-        + '</div>'
-        + '<div id="ppgx-table">' + _renderFmsTable() + '</div>'
-      + '</div>'
-    + '</div>';
-  }
-
-  function _bindFmsEvents() {
-    document.getElementById('ppgx-search')?.addEventListener('input', (e) => {
-      _fmsQ = e.target.value;
-      const t = document.getElementById('ppgx-table');
-      if (t) t.innerHTML = _renderFmsTable();
-      _bindFmsTableEvents();
-    });
-    document.getElementById('ppgx-status-filter')?.addEventListener('change', (e) => {
-      _fmsStatusF = e.target.value;
-      _renderTabContent();
-    });
-    _bindFmsTableEvents();
-  }
-  function _bindFmsTableEvents() {
-    document.querySelectorAll('.ppgx-expected').forEach(inp => {
-      inp.addEventListener('change', async () => {
-        await _setFmsExpectedDate(inp.dataset.doctype, inp.dataset.id, inp.value || null);
-        Utils.showToast('Expected date updated');
-        const t = document.getElementById('ppgx-table');
-        if (t) t.innerHTML = _renderFmsTable();
-        _bindFmsTableEvents();
-      });
-    });
-    document.querySelectorAll('.ppgx-received').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const docType = btn.dataset.doctype;
-        await Utils.apiFetch(_fmsEndpoint(docType), { method: 'PATCH', body: JSON.stringify({ id: btn.dataset.id, status: 'received' }) });
-        const cache = docType === 'PO' ? _pos : _prs;
-        const row = cache.find(x => x.id === btn.dataset.id);
-        if (row) row.status = 'received';
-        Utils.showToast('Marked as Received');
-        _renderTabContent();
-      });
-    });
-    document.querySelectorAll('.ppgx-view').forEach(btn => {
-      btn.addEventListener('click', () => {
-        if (btn.dataset.doctype === 'PO') {
-          const po = _pos.find(x => String(x.id) === String(btn.dataset.id));
-          if (po) _openViewPo(po);
-        } else {
-          const pr = _prs.find(x => String(x.id) === String(btn.dataset.id));
-          if (pr) _openViewPr(pr);
-        }
-      });
-    });
-  }
-
-  /* ═══════════════════════════════════════════════════════════════
      SHELL — tab bar + page render
      ═══════════════════════════════════════════════════════════════ */
 
@@ -2097,7 +1910,6 @@ window.Pages['pr-po-grn'] = (() => {
       + _tabBtn('forms', 'PR')
       + _tabBtn('po', 'PO')
       + _tabBtn('grn', 'GRN')
-      + _tabBtn('fms', 'FMS')
     + '</div>';
   }
   function _tabBtn(key, label) {
@@ -2111,9 +1923,9 @@ window.Pages['pr-po-grn'] = (() => {
         if (key === _tab) return;
         _tab = key;
         if (!_itemsLoaded) await _loadItems(true);
-        if (key === 'forms' || key === 'fms') { await _loadVendors(); await _loadPrs(true); }
-        if (key === 'po' || key === 'fms')    { await _loadVendors(); await _loadPos(true); }
-        if (key === 'grn')                    { await _loadVendors(); await _loadPrs(true); await _loadPos(true); await _loadGrns(true); }
+        if (key === 'forms') { await _loadVendors(); await _loadPrs(true); }
+        if (key === 'po')    { await _loadVendors(); await _loadPos(true); }
+        if (key === 'grn')   { await _loadVendors(); await _loadPrs(true); await _loadPos(true); await _loadGrns(true); }
         _render();
       });
     });
@@ -2123,14 +1935,12 @@ window.Pages['pr-po-grn'] = (() => {
     if (_tab === 'masters') return _renderMastersTab();
     if (_tab === 'po')      return _renderPoTab();
     if (_tab === 'grn')     return _renderGrnTab();
-    if (_tab === 'fms')     return _renderFmsTab();
     return _renderFormsTab();
   }
   function _bindCurrentTab() {
     if (_tab === 'masters')      { _bindMastersEvents(); _renderItemModal(); }
     else if (_tab === 'po')      { _bindPoTabEvents(); _renderPoModal(); _renderPoViewModal(); }
     else if (_tab === 'grn')     { _bindGrnTabEvents(); _renderGrnModal(); _renderGrnViewModal(); }
-    else if (_tab === 'fms')     { _bindFmsEvents(); }
     else                          { _bindFormsEvents(); _renderPrModal(); _renderPrViewModal(); }
   }
 

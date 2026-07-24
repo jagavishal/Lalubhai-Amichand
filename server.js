@@ -2866,6 +2866,7 @@ app.post('/api/purchase-requisitions', requireAuth, async (req, res) => {
     }
     sendPrApprovalEmail({ id, prType: b.prType||'ITEM_CODE', prDate: b.prDate, requestedBy: user?.name||'', vendorId: b.vendorId||null, remarks: b.remarks||'', items }).catch(() => {});
     syncPrToSheet(id).catch(() => {});
+    syncPrToMonitoringSheet(id).catch(() => {});
     return res.status(201).json({ success:true, id });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -3642,7 +3643,10 @@ const LOG_TAB_NAME = 'Web App Log';
 // PO log replaced the old per-PO-spreadsheet "Web App Log" tab with this shared
 // monitoring spreadsheet so PO activity shows up alongside other ops tracking.
 const PO_MONITORING_SHEET_ID = '19wbm97_bYYsVDCpgOzGHZlriYc81McuPSKpqumf96MI';
-const PO_MONITORING_TAB_NAME = 'Monitoring';
+const MONITORING_TAB_NAME = 'Monitoring';
+// PR creation also logs into the existing FMS (Stores) tracking spreadsheet —
+// a separate, pre-existing sheet the store team already tracks PRs in by hand.
+const PR_MONITORING_SHEET_ID = '1AX0lB5eyUgh5RHbAv1D5mllTQyV8B9SadnPsltfLang';
 
 let _googleAuth = null;
 function getGoogleAuth() {
@@ -3730,6 +3734,20 @@ async function syncPrToSheet(id) {
   } catch (e) { console.error('[google-sync] PR sync failed:', e.message); }
 }
 
+// Separate from syncPrToSheet above — this appends into the store team's own
+// pre-existing FMS (Stores) tracking spreadsheet, which already has PR rows
+// entered by hand and many product-specific columns we don't own. Only ever
+// append into the known-existing "Monitoring" tab; never create/re-header it.
+async function syncPrToMonitoringSheet(id) {
+  if (!getGoogleAuth()) return;
+  try {
+    const pr = await fetchPrForPdf(id);
+    if (!pr) return;
+    const timestamp = new Date().toLocaleString('en-IN');
+    await appendLogRow(PR_MONITORING_SHEET_ID, MONITORING_TAB_NAME, [timestamp, pr.id, pr.requestedBy || '', pr.vendorName || '']);
+  } catch (e) { console.error('[google-sync] PR monitoring sync failed:', e.message); }
+}
+
 async function syncPoToSheet(id) {
   if (!getGoogleAuth()) return;
   try {
@@ -3742,8 +3760,8 @@ async function syncPoToSheet(id) {
     const freight = parseFloat(po.freightCharges) || 0, packing = parseFloat(po.packingCharges) || 0, discount = parseFloat(po.discount) || 0;
     const total = subtotal + gst + freight + packing - discount;
     const header = ['PO ID', 'Type', 'Date', 'PR No', 'Created By', 'Department', 'Vendor', 'Items Summary', 'Subtotal', 'GST', 'Freight', 'Packing', 'Discount', 'Total', 'Approval Status', 'PDF Link'];
-    await ensureLogTab(PO_MONITORING_SHEET_ID, PO_MONITORING_TAB_NAME, header);
-    await appendLogRow(PO_MONITORING_SHEET_ID, PO_MONITORING_TAB_NAME, [
+    await ensureLogTab(PO_MONITORING_SHEET_ID, MONITORING_TAB_NAME, header);
+    await appendLogRow(PO_MONITORING_SHEET_ID, MONITORING_TAB_NAME, [
       po.id, PO_TYPE_LABEL[po.poType] || po.poType, po.poDate, po.prId || '', po.createdBy || '', po.department || '',
       po.vendorName || '', _itemsSummary(po.items), subtotal.toFixed(2), gst.toFixed(2), freight.toFixed(2), packing.toFixed(2), discount.toFixed(2), total.toFixed(2),
       po.approvalStatus || '', pdfLink || '',
