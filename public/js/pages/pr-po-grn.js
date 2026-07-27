@@ -16,17 +16,18 @@ window.Pages['pr-po-grn'] = (() => {
   // store team's existing PR intake form (department picked first, product
   // list then filtered to that department).
   const PR_PRODUCT_CATALOG = {
-    'Accessory dept': ['BACK LIGHT MILK JUG KNOB', 'BRASS INSERT', 'S.S MILK JUG SCREW', 'STEEL CAP RIVET'],
+    'accessory dept': ['BACK LIGHT MILK JUG KNOB', 'BRASS INSERT', 'S.S MILK JUG SCREW', 'STEEL CAP RIVET'],
     'Brazing dept': ['ALU.BRAZING POWDER (MUMBAI)', 'ALU.BRAZING POWDER (PUNA)'],
     'CNC dept': ['HYDROPAC OIL 100 FOR CNC'],
-    'Consumable': ['-297 EX.COARSE PAPER', 'APPRON', 'COCONUT OIL', 'COTTON HAND GLOVES JE', 'COTTON WASTE', 'EMERY PAPER 320 NO', 'EMERY PAPER J-297 FINE', 'EXTRA PAPER J-297', 'GREEN BAR', 'GREEN SCOTCH BRIGHT HAND PAD', 'GUMBOOT', 'KEROSENE', 'KNITTED HAND GLOVES HEAVY', 'KNITTED HAND GLOVES SMALL', 'A.P. - GREASE', 'M.S. WIRE', 'MADRASI BUFF 12 * 12', 'MS WELDING ROD NO.08', 'MS WELDING ROD NO.10', 'PVC COATED HAND GLOVES', 'QUENCHING OIL', 'RANI PAPER', 'SAFETY GOGGALS', 'SAFETY MASK', 'STEEL WOOL', 'TAPPER WHEEL', 'WHITE COTTON WASTE', 'WOODEN DHOKHA', 'WOODEN STICK', 'WOODEN WASTE', 'YELLOW CLOTHS'],
-    'Electric dept': ['2.5 MFD CAPECITOR', '35 A R/F SWITCH', '4 MFD CAPECITOR', '6 MFD CAPECITOR', 'HALOZEN LIGHT 200W', 'L&T MK-1 4 TO 10 A', 'L&T MK-1 4 TO 6.5 A', 'TUBE LIGHT', 'TUBE LIGHT 36 W'],
+    'consumable': ['-297 EX.COARSE PAPER', 'APPRON', 'COCONUT OIL', 'COTTON HAND GLOVES JE', 'COTTON WASTE', 'EMERY PAPER 320 NO', 'EMERY PAPER J-297 FINE', 'EXTRA PAPER J-297.', 'GREEN BAR', 'GREEN SCOTCH BRIGHT HAND PAD', 'GUMBOOT', 'KEROSENE', 'KNITTED HAND GLOVES HEAVY', 'KNITTED HAND GLOVES SMALL', 'A.P. - GREASE', 'M.S. WIRE', 'MADRASI BUFF 12 * 12', 'MS WELDING ROD NO.08', 'MS WELDING ROD NO.10', 'PVC COATED HAND GLOVES', 'QUENCHING OIL', 'RANI PAPER', 'SAFETY GOGGALS', 'SAFETY MASK', 'STEEL WOOL', 'TAPPER WHEEL', 'WHITE COTTON WASTE', 'WOODEN DHOKHA', 'WOODEN STICK', 'WOODEN WASTE', 'YELLOW CLOTHS'],
+    'electric dept': ['2.5 MFD CAPECITOR', '35 A R/F SWITCH', '4 MFD CAPECITOR', '6 MFD CAPECITOR', 'HALOZEN LIGHT 200W', 'L&T MK-1 4 TO 10 A', 'L&T MK-1 4 TO 6.5 A', 'TUBE LIGHT', 'TUBE LIGHT 36 W'],
     'Packing dept': ['B.O.P.P TAPP ROLL (BROWN)', 'POLYTHENE BAG 10*10', 'POLYTHENE BAG 10*12', 'POLYTHENE BAG 11*13', 'POLYTHENE BAG 12*12', 'POLYTHENE BAG 13*15', 'POLYTHENE BAG 14*16', 'POLYTHENE BAG 16*18', 'POLYTHENE BAG 18*20', 'POLYTHENE BAG 20*20', 'POLYTHENE BAG 20*22', 'POLYTHENE BAG 24*24', 'POLYTHENE BAG 26*26', 'POLYTHENE BAG 28*28', 'POLYTHENE BAG 32*32', 'POLYTHENE BAG 8*8', 'WHITE TAPE ROLL 1/2"', 'WHITE TAPE ROLL 3"', 'Pp bag 32×32'],
     'Pressing dept': ['ALU DRWMATE POWDER', 'COMPRESSOR OIL 220 NO', 'HYDROLIC OIL 68 NO', 'LUBRICANT OIL 40 NO', 'HP EP 220 NO GEAR OIL'],
     'Washing dept': ['AMONIUM ALUM', 'CAUSTIC SODA', 'CHROMIC ACID', 'HYDROFLORIC ACID', 'LIME POWDER', 'LIME POWDER LIQUID', 'LPG CYLENDER', 'NITRIC ACID', 'PHOSPHURIC ACID', 'SULPHURIC ACID', 'Saw firewood'],
     'Welding dept': ['ALU WELDING ROD 1.63 MM SMALL', 'ALU.WELDING ROD 2 MM', 'OXYGEN CYLENDER'],
   };
   const PR_PRODUCT_DEPARTMENTS = Object.keys(PR_PRODUCT_CATALOG);
+  const PR_DEPT_OTHER = '__other__';
 
   const STATUSES = ['pending', 'ordered', 'received', 'cancelled'];
   const STATUS_LABEL = { pending: 'Pending', ordered: 'Ordered', received: 'Received', cancelled: 'Cancelled' };
@@ -148,7 +149,7 @@ window.Pages['pr-po-grn'] = (() => {
     };
   }
   function _blankPrItem() {
-    return { packingItemId: null, itemSearch: '', itemName: '', unit: '', quantity: '', estimatedRate: '', remarks: '', deptName: '', currentStock: '' };
+    return { packingItemId: null, itemSearch: '', itemName: '', unit: '', quantity: '', estimatedRate: '', remarks: '', deptName: '', deptCustom: false, currentStock: '' };
   }
   function _blankPrForm() {
     return { prType: 'ITEM_CODE', prDate: _today(), vendorId: null, vendorSearch: '', department: '', paymentTerms: '', remarks: '', items: [_blankPrItem()] };
@@ -547,14 +548,24 @@ window.Pages['pr-po-grn'] = (() => {
     const idCellsHtml = isDeptMaterial
       ? (
         '<td style="' + cellS + 'min-width:150px;">'
-          + '<select class="ppgf-deptmat-dept-inp" data-ri="' + i + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;">'
-            + '<option value="">Select…</option>'
-            + PR_PRODUCT_DEPARTMENTS.map(d => '<option value="' + esc(d) + '" ' + (item.deptName===d?'selected':'') + '>' + esc(d) + '</option>').join('')
-          + '</select>'
+          + (item.deptCustom
+            ? (
+              '<div style="display:flex;gap:4px;">'
+                + '<input class="ppgf-deptmat-deptother-inp" data-ri="' + i + '" type="text" placeholder="New department…" value="' + esc(item.deptName) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid var(--color-primary);border-radius:7px;font-size:12.5px;" />'
+                + '<button class="ppgf-deptmat-deptother-cancel" data-ri="' + i + '" title="Pick from list instead" style="flex-shrink:0;background:transparent;border:1.5px solid #e9ecef;border-radius:7px;cursor:pointer;color:#94a3b8;padding:0 6px;">↺</button>'
+              + '</div>'
+            )
+            : (
+              '<select class="ppgf-deptmat-dept-inp" data-ri="' + i + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;">'
+                + '<option value="">Select…</option>'
+                + PR_PRODUCT_DEPARTMENTS.map(d => '<option value="' + esc(d) + '" ' + (item.deptName===d?'selected':'') + '>' + esc(d) + '</option>').join('')
+                + '<option value="' + PR_DEPT_OTHER + '">Other (type new)</option>'
+              + '</select>'
+            ))
         + '</td>'
         + '<td style="' + cellS + 'min-width:200px;position:relative;">'
-          + '<input class="ppgf-deptmat-product-inp" data-ri="' + i + '" type="text" placeholder="' + (item.deptName ? 'Search or type product…' : 'Pick department first') + '" autocomplete="off" value="' + esc(item.itemSearch || item.itemName) + '" ' + (item.deptName ? '' : 'disabled ')
-            + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;color:#1e293b;outline:none;background:' + (item.deptName ? '#fff' : '#f1f5f9') + ';" />'
+          + '<input class="ppgf-deptmat-product-inp" data-ri="' + i + '" type="text" placeholder="' + ((item.deptCustom || item.deptName) ? 'Search or type product…' : 'Pick department first') + '" autocomplete="off" value="' + esc(item.itemSearch || item.itemName) + '" ' + ((item.deptCustom || item.deptName) ? '' : 'disabled ')
+            + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;color:#1e293b;outline:none;background:' + ((item.deptCustom || item.deptName) ? '#fff' : '#f1f5f9') + ';" />'
           + '<div class="ppgf-deptmat-product-dd" data-ri="' + i + '" style="display:none;min-width:240px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
         + '</td>'
         + '<td style="' + cellS + 'min-width:90px;"><input class="ppgf-stock-inp" data-ri="' + i + '" type="number" min="0" step="any" placeholder="0" value="' + esc(item.currentStock) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;" /></td>'
@@ -616,12 +627,24 @@ window.Pages['pr-po-grn'] = (() => {
 
     if (_prForm.prType === 'DEPT_MATERIAL') {
       const deptSel = rowEl.querySelector('.ppgf-deptmat-dept-inp[data-ri="' + ri + '"]');
+      const deptOtherInp = rowEl.querySelector('.ppgf-deptmat-deptother-inp[data-ri="' + ri + '"]');
+      const deptOtherCancel = rowEl.querySelector('.ppgf-deptmat-deptother-cancel[data-ri="' + ri + '"]');
       const prodInp = rowEl.querySelector('.ppgf-deptmat-product-inp[data-ri="' + ri + '"]');
       const prodDd = rowEl.querySelector('.ppgf-deptmat-product-dd[data-ri="' + ri + '"]');
       const stockInp = rowEl.querySelector('.ppgf-stock-inp[data-ri="' + ri + '"]');
 
       if (deptSel) deptSel.addEventListener('change', () => {
-        _prForm.items[ri].deptName = deptSel.value;
+        if (deptSel.value === PR_DEPT_OTHER) {
+          _prForm.items[ri].deptCustom = true; _prForm.items[ri].deptName = '';
+        } else {
+          _prForm.items[ri].deptName = deptSel.value;
+        }
+        _prForm.items[ri].itemName = ''; _prForm.items[ri].itemSearch = '';
+        _refreshItemsTable();
+      });
+      if (deptOtherInp) deptOtherInp.addEventListener('input', () => { _prForm.items[ri].deptName = deptOtherInp.value; });
+      if (deptOtherCancel) deptOtherCancel.addEventListener('click', () => {
+        _prForm.items[ri].deptCustom = false; _prForm.items[ri].deptName = '';
         _prForm.items[ri].itemName = ''; _prForm.items[ri].itemSearch = '';
         _refreshItemsTable();
       });
