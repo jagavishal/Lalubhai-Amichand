@@ -3665,7 +3665,13 @@ let _googleAuth = null;
 function getGoogleAuth() {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
   const key = _normalizeGooglePrivateKey(process.env.GOOGLE_PRIVATE_KEY);
-  if (!email || !key) return null;
+  // This guard used to fail silently — every sync function treated a null
+  // return as "nothing to do" with zero logging, so a missing/blank env var
+  // in production looked identical to everything working. Always log why.
+  if (!email || !key) {
+    console.error('[google-sync] Google credentials missing — GOOGLE_SERVICE_ACCOUNT_EMAIL set:', !!email, '| GOOGLE_PRIVATE_KEY set:', !!key);
+    return null;
+  }
   if (_googleAuth) return _googleAuth;
   const { google } = require('googleapis');
   _googleAuth = new google.auth.GoogleAuth({
@@ -3744,6 +3750,7 @@ async function syncPrToSheet(id) {
       pr.id, PR_TYPE_LABEL[pr.prType] || pr.prType, pr.prDate, pr.requestedBy || '', pr.department || '',
       pr.vendorName || '', _itemsSummary(pr.items), total.toFixed(2), pr.status || '', pdfLink || '',
     ]);
+    console.log('[google-sync] PR sync: row appended for', pr.id);
   } catch (e) { console.error('[google-sync] PR sync failed:', e.message); }
 }
 
@@ -3755,9 +3762,10 @@ async function syncPrToMonitoringSheet(id) {
   if (!getGoogleAuth()) return;
   try {
     const pr = await fetchPrForPdf(id);
-    if (!pr) return;
+    if (!pr) { console.error('[google-sync] PR monitoring sync: PR not found for id', id); return; }
     const timestamp = new Date().toLocaleString('en-IN');
     await appendLogRow(PR_MONITORING_SHEET_ID, MONITORING_TAB_NAME, [timestamp, pr.id, pr.requestedBy || '', pr.vendorName || '']);
+    console.log('[google-sync] PR monitoring sync: row appended for', pr.id, 'to', PR_MONITORING_SHEET_ID);
   } catch (e) { console.error('[google-sync] PR monitoring sync failed:', e.message); }
 }
 
@@ -3779,6 +3787,7 @@ async function syncPoToSheet(id) {
       po.vendorName || '', _itemsSummary(po.items), subtotal.toFixed(2), gst.toFixed(2), freight.toFixed(2), packing.toFixed(2), discount.toFixed(2), total.toFixed(2),
       po.approvalStatus || '', pdfLink || '',
     ]);
+    console.log('[google-sync] PO sync: row appended for', po.id);
   } catch (e) { console.error('[google-sync] PO sync failed:', e.message); }
 }
 
@@ -3798,6 +3807,7 @@ async function syncGrnToSheet(id) {
       gr.id, gr.grDate, gr.madeBy || '', gr.prId || '', gr.poId || '', gr.billNo || '', gr.billRecvDate || '', gr.deptHead || '',
       gr.vendorName || '', _itemsSummary(gr.items), subtotal.toFixed(2), cgst.toFixed(2), sgst.toFixed(2), roundOff.toFixed(2), total.toFixed(2), pdfLink || '',
     ]);
+    console.log('[google-sync] GRN sync: row appended for', gr.id);
   } catch (e) { console.error('[google-sync] GRN sync failed:', e.message); }
 }
 
@@ -4299,5 +4309,6 @@ async function seedJsonFallback() {
 
 app.listen(process.env.PORT || 3000, async () => {
   console.log('Server on http://localhost:' + (process.env.PORT || 3000));
+  console.log('[google-sync] credentials present at boot — email:', !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, '| key:', !!process.env.GOOGLE_PRIVATE_KEY);
   await seedJsonFallback();
 });
