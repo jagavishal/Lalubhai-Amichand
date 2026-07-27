@@ -3650,8 +3650,11 @@ const PR_MONITORING_SHEET_ID = '1AX0lB5eyUgh5RHbAv1D5mllTQyV8B9SadnPsltfLang';
 
 // Hosting-panel env-var editors routinely mangle a multi-line PEM key pasted
 // from a .env file: surrounding quotes get included literally, CRLF sneaks
-// in, or only some of the escaped "\n" sequences survive as real newlines.
-// Normalize all of that rather than fail with an opaque OpenSSL decoder error.
+// in, or only some of the escaped "\n" sequences survive as real newlines —
+// and in practice even that normalization isn't always enough, because some
+// panels truncate/alter characters inside a long pasted value outright.
+// GOOGLE_PRIVATE_KEY_B64 sidesteps all of that: a base64 blob has no
+// newlines, quotes, or other characters a text field could corrupt.
 function _normalizeGooglePrivateKey(raw) {
   if (!raw) return raw;
   let key = raw.trim();
@@ -3664,12 +3667,13 @@ function _normalizeGooglePrivateKey(raw) {
 let _googleAuth = null;
 function getGoogleAuth() {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
-  const key = _normalizeGooglePrivateKey(process.env.GOOGLE_PRIVATE_KEY);
+  const b64 = process.env.GOOGLE_PRIVATE_KEY_B64?.trim();
+  const key = b64 ? Buffer.from(b64, 'base64').toString('utf8') : _normalizeGooglePrivateKey(process.env.GOOGLE_PRIVATE_KEY);
   // This guard used to fail silently — every sync function treated a null
   // return as "nothing to do" with zero logging, so a missing/blank env var
   // in production looked identical to everything working. Always log why.
   if (!email || !key) {
-    console.error('[google-sync] Google credentials missing — GOOGLE_SERVICE_ACCOUNT_EMAIL set:', !!email, '| GOOGLE_PRIVATE_KEY set:', !!key);
+    console.error('[google-sync] Google credentials missing — GOOGLE_SERVICE_ACCOUNT_EMAIL set:', !!email, '| GOOGLE_PRIVATE_KEY set:', !!key, '| GOOGLE_PRIVATE_KEY_B64 set:', !!b64);
     return null;
   }
   if (_googleAuth) return _googleAuth;
