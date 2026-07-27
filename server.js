@@ -3728,6 +3728,21 @@ function _itemsSummary(items) {
   return (items || []).map(it => it.itemName).filter(Boolean).join(', ');
 }
 
+// Matches the existing "7/20/2026 13:41:00" style already used in the FMS
+// Monitoring sheet — M/D/YYYY, 24-hour time, in India time regardless of
+// which timezone the server itself runs in.
+function _timestampForSheet() {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hourCycle: 'h23',
+  });
+  const parts = fmt.formatToParts(new Date());
+  const get = (t) => parts.find(p => p.type === t).value;
+  return `${get('month')}/${get('day')}/${get('year')} ${get('hour')}:${get('minute')}:${get('second')}`;
+}
+
 // Drive upload is a separate failure domain from the Sheets row (e.g. the
 // service account can have Sheets access without matching Drive folder
 // permissions) — never let a Drive failure block the Sheets sync.
@@ -3767,7 +3782,7 @@ async function syncPrToMonitoringSheet(id) {
   try {
     const pr = await fetchPrForPdf(id);
     if (!pr) { console.error('[google-sync] PR monitoring sync: PR not found for id', id); return; }
-    const timestamp = new Date().toLocaleString('en-IN');
+    const timestamp = _timestampForSheet();
     await appendLogRow(PR_MONITORING_SHEET_ID, MONITORING_TAB_NAME, [timestamp, pr.id, pr.requestedBy || '', pr.vendorName || '']);
     console.log('[google-sync] PR monitoring sync: row appended for', pr.id, 'to', PR_MONITORING_SHEET_ID);
   } catch (e) { console.error('[google-sync] PR monitoring sync failed:', e.message); }
