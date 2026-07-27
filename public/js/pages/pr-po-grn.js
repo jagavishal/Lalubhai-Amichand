@@ -7,8 +7,26 @@ window.Pages['pr-po-grn'] = (() => {
     { key: 'PACKING_STICKER', label: 'Packing Sticker' },
     { key: 'PACKING_BOX',     label: 'Packing Box' },
     { key: 'ALU',              label: 'Aluminium' },
+    { key: 'DEPT_MATERIAL',   label: 'Department Material' },
   ];
   const TYPE_LABEL = {}; TYPES.forEach(t => TYPE_LABEL[t.key] = t.label);
+
+  // Department Material PR items don't come from the packing-items master —
+  // they're factory consumables/spares requested per-department, matching the
+  // store team's existing PR intake form (department picked first, product
+  // list then filtered to that department).
+  const PR_PRODUCT_CATALOG = {
+    'Accessory dept': ['BACK LIGHT MILK JUG KNOB', 'BRASS INSERT', 'S.S MILK JUG SCREW', 'STEEL CAP RIVET'],
+    'Brazing dept': ['ALU.BRAZING POWDER (MUMBAI)', 'ALU.BRAZING POWDER (PUNA)'],
+    'CNC dept': ['HYDROPAC OIL 100 FOR CNC'],
+    'Consumable': ['-297 EX.COARSE PAPER', 'APPRON', 'COCONUT OIL', 'COTTON HAND GLOVES JE', 'COTTON WASTE', 'EMERY PAPER 320 NO', 'EMERY PAPER J-297 FINE', 'EXTRA PAPER J-297', 'GREEN BAR', 'GREEN SCOTCH BRIGHT HAND PAD', 'GUMBOOT', 'KEROSENE', 'KNITTED HAND GLOVES HEAVY', 'KNITTED HAND GLOVES SMALL', 'A.P. - GREASE', 'M.S. WIRE', 'MADRASI BUFF 12 * 12', 'MS WELDING ROD NO.08', 'MS WELDING ROD NO.10', 'PVC COATED HAND GLOVES', 'QUENCHING OIL', 'RANI PAPER', 'SAFETY GOGGALS', 'SAFETY MASK', 'STEEL WOOL', 'TAPPER WHEEL', 'WHITE COTTON WASTE', 'WOODEN DHOKHA', 'WOODEN STICK', 'WOODEN WASTE', 'YELLOW CLOTHS'],
+    'Electric dept': ['2.5 MFD CAPECITOR', '35 A R/F SWITCH', '4 MFD CAPECITOR', '6 MFD CAPECITOR', 'HALOZEN LIGHT 200W', 'L&T MK-1 4 TO 10 A', 'L&T MK-1 4 TO 6.5 A', 'TUBE LIGHT', 'TUBE LIGHT 36 W'],
+    'Packing dept': ['B.O.P.P TAPP ROLL (BROWN)', 'POLYTHENE BAG 10*10', 'POLYTHENE BAG 10*12', 'POLYTHENE BAG 11*13', 'POLYTHENE BAG 12*12', 'POLYTHENE BAG 13*15', 'POLYTHENE BAG 14*16', 'POLYTHENE BAG 16*18', 'POLYTHENE BAG 18*20', 'POLYTHENE BAG 20*20', 'POLYTHENE BAG 20*22', 'POLYTHENE BAG 24*24', 'POLYTHENE BAG 26*26', 'POLYTHENE BAG 28*28', 'POLYTHENE BAG 32*32', 'POLYTHENE BAG 8*8', 'WHITE TAPE ROLL 1/2"', 'WHITE TAPE ROLL 3"', 'Pp bag 32×32'],
+    'Pressing dept': ['ALU DRWMATE POWDER', 'COMPRESSOR OIL 220 NO', 'HYDROLIC OIL 68 NO', 'LUBRICANT OIL 40 NO', 'HP EP 220 NO GEAR OIL'],
+    'Washing dept': ['AMONIUM ALUM', 'CAUSTIC SODA', 'CHROMIC ACID', 'HYDROFLORIC ACID', 'LIME POWDER', 'LIME POWDER LIQUID', 'LPG CYLENDER', 'NITRIC ACID', 'PHOSPHURIC ACID', 'SULPHURIC ACID', 'Saw firewood'],
+    'Welding dept': ['ALU WELDING ROD 1.63 MM SMALL', 'ALU.WELDING ROD 2 MM', 'OXYGEN CYLENDER'],
+  };
+  const PR_PRODUCT_DEPARTMENTS = Object.keys(PR_PRODUCT_CATALOG);
 
   const STATUSES = ['pending', 'ordered', 'received', 'cancelled'];
   const STATUS_LABEL = { pending: 'Pending', ordered: 'Ordered', received: 'Received', cancelled: 'Cancelled' };
@@ -130,7 +148,7 @@ window.Pages['pr-po-grn'] = (() => {
     };
   }
   function _blankPrItem() {
-    return { packingItemId: null, itemSearch: '', itemName: '', unit: '', quantity: '', estimatedRate: '', remarks: '' };
+    return { packingItemId: null, itemSearch: '', itemName: '', unit: '', quantity: '', estimatedRate: '', remarks: '', deptName: '', currentStock: '' };
   }
   function _blankPrForm() {
     return { prType: 'ITEM_CODE', prDate: _today(), vendorId: null, vendorSearch: '', department: '', paymentTerms: '', remarks: '', items: [_blankPrItem()] };
@@ -445,8 +463,10 @@ window.Pages['pr-po-grn'] = (() => {
       await Utils.apiFetch('/api/purchase-requisitions', {
         method: 'POST',
         body: JSON.stringify({
-          prType: _prForm.prType, prDate: _prForm.prDate, vendorId: _prForm.vendorId, department: _prForm.department, paymentTerms: _prForm.paymentTerms, remarks: _prForm.remarks,
-          items: items.map(i => ({ packingItemId: i.packingItemId, itemName: i.itemName, unit: i.unit, quantity: i.quantity, estimatedRate: i.estimatedRate, remarks: i.remarks })),
+          prType: _prForm.prType, prDate: _prForm.prDate, vendorId: _prForm.vendorId,
+          newVendorName: !_prForm.vendorId ? _prForm.vendorSearch.trim() : '',
+          department: _prForm.department, paymentTerms: _prForm.paymentTerms, remarks: _prForm.remarks,
+          items: items.map(i => ({ packingItemId: i.packingItemId, itemName: i.itemName, unit: i.unit, quantity: i.quantity, estimatedRate: i.estimatedRate, remarks: i.remarks, department: i.deptName, currentStock: i.currentStock })),
         }),
       });
       _prOpen = false; _prForm = _blankPrForm();
@@ -505,7 +525,10 @@ window.Pages['pr-po-grn'] = (() => {
       inp.style.borderColor = '#e2e8f0'; inp.style.fontWeight = '400'; inp.style.background = '#f8fafc';
       _buildVendorDropdown(inp.value); ddEl.style.display = 'block';
     });
-    inp.addEventListener('blur', () => { setTimeout(() => { ddEl.style.display = 'none'; if (!_prForm.vendorId) { _prForm.vendorSearch = ''; inp.value = ''; } }, 160); });
+    // A typed name that matches no existing vendor is kept, not wiped — "if
+    // new vendor, enter here" is a normal path here, and _savePr() sends it
+    // as newVendorName so the backend can create the client on save.
+    inp.addEventListener('blur', () => { setTimeout(() => { ddEl.style.display = 'none'; }, 160); });
     ddEl.addEventListener('mousedown', e => {
       e.preventDefault();
       const opt = e.target.closest('.ppgf-vendor-opt');
@@ -520,14 +543,33 @@ window.Pages['pr-po-grn'] = (() => {
 
   function _itemRowHtml(item, i) {
     const cellS = 'padding:5px 6px;';
+    const isDeptMaterial = _prForm.prType === 'DEPT_MATERIAL';
+    const idCellsHtml = isDeptMaterial
+      ? (
+        '<td style="' + cellS + 'min-width:150px;">'
+          + '<select class="ppgf-deptmat-dept-inp" data-ri="' + i + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;">'
+            + '<option value="">Select…</option>'
+            + PR_PRODUCT_DEPARTMENTS.map(d => '<option value="' + esc(d) + '" ' + (item.deptName===d?'selected':'') + '>' + esc(d) + '</option>').join('')
+          + '</select>'
+        + '</td>'
+        + '<td style="' + cellS + 'min-width:200px;position:relative;">'
+          + '<input class="ppgf-deptmat-product-inp" data-ri="' + i + '" type="text" placeholder="' + (item.deptName ? 'Search or type product…' : 'Pick department first') + '" autocomplete="off" value="' + esc(item.itemSearch || item.itemName) + '" ' + (item.deptName ? '' : 'disabled ')
+            + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;color:#1e293b;outline:none;background:' + (item.deptName ? '#fff' : '#f1f5f9') + ';" />'
+          + '<div class="ppgf-deptmat-product-dd" data-ri="' + i + '" style="display:none;min-width:240px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
+        + '</td>'
+        + '<td style="' + cellS + 'min-width:90px;"><input class="ppgf-stock-inp" data-ri="' + i + '" type="number" min="0" step="any" placeholder="0" value="' + esc(item.currentStock) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;" /></td>'
+      )
+      : (
+        '<td style="' + cellS + 'min-width:220px;position:relative;">'
+          + '<input class="ppgf-item-inp" data-ri="' + i + '" type="text" placeholder="Search ' + TYPE_LABEL[_prForm.prType].toLowerCase() + ' item…" autocomplete="off" value="' + esc(item.itemSearch || item.itemName) + '" '
+            + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (item.packingItemId ? 'var(--color-primary)' : '#e9ecef') + ';border-radius:7px;font-size:12.5px;color:#1e293b;outline:none;background:' + (item.packingItemId?'var(--color-primary-light)':'#fff') + ';" />'
+          + '<div class="ppgf-item-dd" data-ri="' + i + '" style="display:none;min-width:260px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
+        + '</td>'
+        + '<td style="' + cellS + 'min-width:80px;"><input class="ppgf-unit-inp" data-ri="' + i + '" type="text" placeholder="Box/Pcs" value="' + esc(item.unit) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;" /></td>'
+      );
     return '<tr data-ri="' + i + '" style="border-bottom:1px solid #eef2f7;">'
       + '<td style="' + cellS + 'text-align:center;width:28px;color:#94a3b8;font-size:12px;font-weight:600;">' + (i+1) + '</td>'
-      + '<td style="' + cellS + 'min-width:220px;position:relative;">'
-        + '<input class="ppgf-item-inp" data-ri="' + i + '" type="text" placeholder="Search ' + TYPE_LABEL[_prForm.prType].toLowerCase() + ' item…" autocomplete="off" value="' + esc(item.itemSearch || item.itemName) + '" '
-          + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (item.packingItemId ? 'var(--color-primary)' : '#e9ecef') + ';border-radius:7px;font-size:12.5px;color:#1e293b;outline:none;background:' + (item.packingItemId?'var(--color-primary-light)':'#fff') + ';" />'
-        + '<div class="ppgf-item-dd" data-ri="' + i + '" style="display:none;min-width:260px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
-      + '</td>'
-      + '<td style="' + cellS + 'min-width:80px;"><input class="ppgf-unit-inp" data-ri="' + i + '" type="text" placeholder="Box/Pcs" value="' + esc(item.unit) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;" /></td>'
+      + idCellsHtml
       + '<td style="' + cellS + 'min-width:80px;"><input class="ppgf-qty-inp" data-ri="' + i + '" type="number" min="0" step="any" placeholder="0" value="' + esc(item.quantity) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;" /></td>'
       + '<td style="' + cellS + 'min-width:100px;"><input class="ppgf-rate-inp" data-ri="' + i + '" type="number" min="0" step="any" placeholder="0.00" value="' + esc(item.estimatedRate) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;" /></td>'
       + '<td style="' + cellS + 'min-width:120px;"><input class="ppgf-lremarks-inp" data-ri="' + i + '" type="text" placeholder="Remarks" value="' + esc(item.remarks) + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;" /></td>'
@@ -535,6 +577,18 @@ window.Pages['pr-po-grn'] = (() => {
         + (_prForm.items.length > 1 ? '<button class="ppgf-remove-row" data-ri="' + i + '" style="background:transparent;border:none;cursor:pointer;color:#d1d5db;padding:3px;line-height:1;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>' : '')
       + '</td>'
     + '</tr>';
+  }
+
+  function _buildProductDropdown(ri, dept, q) {
+    const ddEl = document.querySelector('.ppgf-deptmat-product-dd[data-ri="' + ri + '"]');
+    if (!ddEl) return;
+    const pool = PR_PRODUCT_CATALOG[dept] || [];
+    const qt = q.trim().toLowerCase();
+    const matches = qt ? pool.filter(p => p.toLowerCase().includes(qt)) : pool;
+    if (!matches.length) { ddEl.innerHTML = '<div style="padding:12px 16px;font-size:13px;color:#94a3b8;">No matching product — you can type a new one</div>'; return; }
+    ddEl.innerHTML = matches.map(p =>
+      '<div class="ppgf-deptmat-product-opt" data-name="' + esc(p) + '" style="padding:9px 14px;cursor:pointer;border-bottom:1px solid #f8fafc;font-size:12.5px;color:#1e293b;">' + esc(p) + '</div>'
+    ).join('');
   }
 
   function _buildItemDropdown(ri, q) {
@@ -555,39 +609,70 @@ window.Pages['pr-po-grn'] = (() => {
   }
 
   function _bindItemRow(ri, rowEl) {
-    const inp = rowEl.querySelector('.ppgf-item-inp[data-ri="' + ri + '"]');
-    const ddEl = rowEl.querySelector('.ppgf-item-dd[data-ri="' + ri + '"]');
-    const unitInp = rowEl.querySelector('.ppgf-unit-inp[data-ri="' + ri + '"]');
     const qtyInp = rowEl.querySelector('.ppgf-qty-inp[data-ri="' + ri + '"]');
     const rateInp = rowEl.querySelector('.ppgf-rate-inp[data-ri="' + ri + '"]');
     const remInp = rowEl.querySelector('.ppgf-lremarks-inp[data-ri="' + ri + '"]');
     const removeBtn = rowEl.querySelector('.ppgf-remove-row[data-ri="' + ri + '"]');
 
-    if (inp && ddEl) {
-      inp.addEventListener('focus', () => { _buildItemDropdown(ri, inp.value); _openFixedDropdown(inp, ddEl); });
-      inp.addEventListener('input', () => {
-        _prForm.items[ri].packingItemId = null; _prForm.items[ri].itemSearch = inp.value; _prForm.items[ri].itemName = inp.value;
-        inp.style.borderColor = '#e9ecef'; inp.style.background = '#fff';
-        _buildItemDropdown(ri, inp.value); _openFixedDropdown(inp, ddEl);
+    if (_prForm.prType === 'DEPT_MATERIAL') {
+      const deptSel = rowEl.querySelector('.ppgf-deptmat-dept-inp[data-ri="' + ri + '"]');
+      const prodInp = rowEl.querySelector('.ppgf-deptmat-product-inp[data-ri="' + ri + '"]');
+      const prodDd = rowEl.querySelector('.ppgf-deptmat-product-dd[data-ri="' + ri + '"]');
+      const stockInp = rowEl.querySelector('.ppgf-stock-inp[data-ri="' + ri + '"]');
+
+      if (deptSel) deptSel.addEventListener('change', () => {
+        _prForm.items[ri].deptName = deptSel.value;
+        _prForm.items[ri].itemName = ''; _prForm.items[ri].itemSearch = '';
+        _refreshItemsTable();
       });
-      inp.addEventListener('blur', () => { setTimeout(() => { ddEl.style.display = 'none'; }, 160); });
-      ddEl.addEventListener('mousedown', e => {
-        e.preventDefault();
-        const opt = e.target.closest('.ppgf-item-opt');
-        if (!opt) return;
-        const p = _items.find(x => String(x.id) === String(opt.dataset.pid));
-        if (!p) return;
-        _prForm.items[ri].packingItemId = p.id;
-        _prForm.items[ri].itemName = p.item_name + (p.size_label ? ' (' + p.size_label + ')' : '');
-        _prForm.items[ri].itemSearch = _prForm.items[ri].itemName;
-        inp.value = _prForm.items[ri].itemName;
-        inp.style.borderColor = 'var(--color-primary)'; inp.style.background = 'var(--color-primary-light)';
-        ddEl.style.display = 'none';
-        if (!_prForm.items[ri].unit) { _prForm.items[ri].unit = 'Box'; if (unitInp) unitInp.value = 'Box'; }
-        if (qtyInp) qtyInp.focus();
-      });
+      if (prodInp && prodDd) {
+        prodInp.addEventListener('focus', () => { _buildProductDropdown(ri, _prForm.items[ri].deptName, prodInp.value); _openFixedDropdown(prodInp, prodDd); });
+        prodInp.addEventListener('input', () => {
+          _prForm.items[ri].itemSearch = prodInp.value; _prForm.items[ri].itemName = prodInp.value;
+          _buildProductDropdown(ri, _prForm.items[ri].deptName, prodInp.value); _openFixedDropdown(prodInp, prodDd);
+        });
+        prodInp.addEventListener('blur', () => { setTimeout(() => { prodDd.style.display = 'none'; }, 160); });
+        prodDd.addEventListener('mousedown', e => {
+          e.preventDefault();
+          const opt = e.target.closest('.ppgf-deptmat-product-opt');
+          if (!opt) return;
+          _prForm.items[ri].itemName = opt.dataset.name; _prForm.items[ri].itemSearch = opt.dataset.name;
+          prodInp.value = opt.dataset.name;
+          prodDd.style.display = 'none';
+          if (qtyInp) qtyInp.focus();
+        });
+      }
+      if (stockInp) stockInp.addEventListener('input', () => { _prForm.items[ri].currentStock = stockInp.value; });
+    } else {
+      const inp = rowEl.querySelector('.ppgf-item-inp[data-ri="' + ri + '"]');
+      const ddEl = rowEl.querySelector('.ppgf-item-dd[data-ri="' + ri + '"]');
+      const unitInp = rowEl.querySelector('.ppgf-unit-inp[data-ri="' + ri + '"]');
+      if (inp && ddEl) {
+        inp.addEventListener('focus', () => { _buildItemDropdown(ri, inp.value); _openFixedDropdown(inp, ddEl); });
+        inp.addEventListener('input', () => {
+          _prForm.items[ri].packingItemId = null; _prForm.items[ri].itemSearch = inp.value; _prForm.items[ri].itemName = inp.value;
+          inp.style.borderColor = '#e9ecef'; inp.style.background = '#fff';
+          _buildItemDropdown(ri, inp.value); _openFixedDropdown(inp, ddEl);
+        });
+        inp.addEventListener('blur', () => { setTimeout(() => { ddEl.style.display = 'none'; }, 160); });
+        ddEl.addEventListener('mousedown', e => {
+          e.preventDefault();
+          const opt = e.target.closest('.ppgf-item-opt');
+          if (!opt) return;
+          const p = _items.find(x => String(x.id) === String(opt.dataset.pid));
+          if (!p) return;
+          _prForm.items[ri].packingItemId = p.id;
+          _prForm.items[ri].itemName = p.item_name + (p.size_label ? ' (' + p.size_label + ')' : '');
+          _prForm.items[ri].itemSearch = _prForm.items[ri].itemName;
+          inp.value = _prForm.items[ri].itemName;
+          inp.style.borderColor = 'var(--color-primary)'; inp.style.background = 'var(--color-primary-light)';
+          ddEl.style.display = 'none';
+          if (!_prForm.items[ri].unit) { _prForm.items[ri].unit = 'Box'; if (unitInp) unitInp.value = 'Box'; }
+          if (qtyInp) qtyInp.focus();
+        });
+      }
+      if (unitInp) unitInp.addEventListener('input', () => { _prForm.items[ri].unit = unitInp.value; });
     }
-    if (unitInp) unitInp.addEventListener('input', () => { _prForm.items[ri].unit = unitInp.value; });
     if (qtyInp) qtyInp.addEventListener('input', () => { _prForm.items[ri].quantity = qtyInp.value; _updateFormTotal(); });
     if (rateInp) rateInp.addEventListener('input', () => { _prForm.items[ri].estimatedRate = rateInp.value; _updateFormTotal(); });
     if (remInp) remInp.addEventListener('input', () => { _prForm.items[ri].remarks = remInp.value; });
@@ -645,10 +730,11 @@ window.Pages['pr-po-grn'] = (() => {
             + '<table style="width:100%;border-collapse:collapse;min-width:680px;">'
               + '<thead><tr>'
                 + '<th style="' + thS + 'width:28px;">#</th>'
-                + '<th style="' + thS + '">Item</th>'
-                + '<th style="' + thS + '">Unit</th>'
-                + '<th style="' + thS + '">Qty</th>'
-                + '<th style="' + thS + '">Est. Rate</th>'
+                + (_prForm.prType === 'DEPT_MATERIAL'
+                  ? '<th style="' + thS + '">Department</th><th style="' + thS + '">Product Name</th><th style="' + thS + '">Current Stock</th>'
+                  : '<th style="' + thS + '">Item</th><th style="' + thS + '">Unit</th>')
+                + '<th style="' + thS + '">' + (_prForm.prType === 'DEPT_MATERIAL' ? 'Qty Required' : 'Qty') + '</th>'
+                + '<th style="' + thS + '">' + (_prForm.prType === 'DEPT_MATERIAL' ? 'Previous Rate' : 'Est. Rate') + '</th>'
                 + '<th style="' + thS + '">Remarks</th>'
                 + '<th style="' + thS + 'width:30px;"></th>'
               + '</tr></thead>'
@@ -721,13 +807,21 @@ window.Pages['pr-po-grn'] = (() => {
         + '</div>'
         + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
           + '<table style="width:100%;border-collapse:collapse;min-width:600px;">'
-            + '<thead><tr><th style="' + thS + '">Item</th><th style="' + thS + '">Unit</th><th style="' + thS + 'text-align:right;">Qty</th><th style="' + thS + 'text-align:right;">Rate</th><th style="' + thS + 'text-align:right;">Amount</th><th style="' + thS + '">Remarks</th></tr></thead>'
-            + '<tbody>' + (pr.items||[]).map(it =>
-              '<tr><td style="' + tdS + '">' + esc(it.itemName) + '</td><td style="' + tdS + '">' + esc(it.unit||'—') + '</td>'
-                + '<td style="' + tdS + 'text-align:right;">' + esc(it.quantity) + '</td><td style="' + tdS + 'text-align:right;">' + esc(it.estimatedRate) + '</td>'
-                + '<td style="' + tdS + 'text-align:right;font-weight:600;">' + _money(_num(it.quantity)*_num(it.estimatedRate)) + '</td>'
-                + '<td style="' + tdS + '">' + esc(it.remarks||'—') + '</td></tr>'
-            ).join('') + '</tbody>'
+            + (pr.prType === 'DEPT_MATERIAL'
+              ? '<thead><tr><th style="' + thS + '">Department</th><th style="' + thS + '">Product</th><th style="' + thS + 'text-align:right;">Current Stock</th><th style="' + thS + 'text-align:right;">Qty Required</th><th style="' + thS + 'text-align:right;">Previous Rate</th><th style="' + thS + '">Remarks</th></tr></thead>'
+                + '<tbody>' + (pr.items||[]).map(it =>
+                  '<tr><td style="' + tdS + '">' + esc(it.department||'—') + '</td><td style="' + tdS + '">' + esc(it.itemName) + '</td>'
+                    + '<td style="' + tdS + 'text-align:right;">' + esc(it.currentStock) + '</td><td style="' + tdS + 'text-align:right;">' + esc(it.quantity) + '</td>'
+                    + '<td style="' + tdS + 'text-align:right;">' + esc(it.estimatedRate) + '</td>'
+                    + '<td style="' + tdS + '">' + esc(it.remarks||'—') + '</td></tr>'
+                ).join('') + '</tbody>'
+              : '<thead><tr><th style="' + thS + '">Item</th><th style="' + thS + '">Unit</th><th style="' + thS + 'text-align:right;">Qty</th><th style="' + thS + 'text-align:right;">Rate</th><th style="' + thS + 'text-align:right;">Amount</th><th style="' + thS + '">Remarks</th></tr></thead>'
+                + '<tbody>' + (pr.items||[]).map(it =>
+                  '<tr><td style="' + tdS + '">' + esc(it.itemName) + '</td><td style="' + tdS + '">' + esc(it.unit||'—') + '</td>'
+                    + '<td style="' + tdS + 'text-align:right;">' + esc(it.quantity) + '</td><td style="' + tdS + 'text-align:right;">' + esc(it.estimatedRate) + '</td>'
+                    + '<td style="' + tdS + 'text-align:right;font-weight:600;">' + _money(_num(it.quantity)*_num(it.estimatedRate)) + '</td>'
+                    + '<td style="' + tdS + '">' + esc(it.remarks||'—') + '</td></tr>'
+                ).join('') + '</tbody>')
           + '</table>'
         + '</div>'
         + '<div style="text-align:right;font-size:13px;color:#374151;">Estimated Total: <strong style="color:#1e293b;">' + _money(_prTotal(pr)) + '</strong></div>'

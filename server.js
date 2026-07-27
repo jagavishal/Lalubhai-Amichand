@@ -273,6 +273,8 @@ const SCHEMA = [
   `ALTER TABLE purchase_requisitions ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(255) DEFAULT ''`,
   `ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS pr_id VARCHAR(16) DEFAULT NULL`,
   `CREATE INDEX idx_po_pr ON purchase_orders (pr_id)`,
+  `ALTER TABLE purchase_requisition_items ADD COLUMN IF NOT EXISTS department VARCHAR(64) DEFAULT ''`,
+  `ALTER TABLE purchase_requisition_items ADD COLUMN IF NOT EXISTS current_stock DECIMAL(12,2) DEFAULT 0`,
 ];
 
 // Seed rows for packing_items — imported once from "PR July 2026" packing-box
@@ -2558,7 +2560,7 @@ async function nextPrId() {
   return 'PR' + (lastNum + 1).toString().padStart(4, '0');
 }
 
-const PR_TYPE_LABEL = { ITEM_CODE: 'Item Code', PACKING_STICKER: 'Packing Sticker', PACKING_BOX: 'Packing Box', ALU: 'Aluminium' };
+const PR_TYPE_LABEL = { ITEM_CODE: 'Item Code', PACKING_STICKER: 'Packing Sticker', PACKING_BOX: 'Packing Box', ALU: 'Aluminium', DEPT_MATERIAL: 'Department Material' };
 
 async function sendPrApprovalEmail({ id, prType, prDate, requestedBy, vendorId, remarks, items }) {
   const mailer = getMailer();
@@ -2626,7 +2628,7 @@ async function fetchPrForPdf(id) {
   );
   if (!headers.length) return null;
   const items = await q(
-    `SELECT item_name AS itemName, unit, quantity, estimated_rate AS estimatedRate, remarks FROM purchase_requisition_items WHERE pr_id = $1 ORDER BY id ASC`,
+    `SELECT item_name AS itemName, unit, quantity, estimated_rate AS estimatedRate, remarks, department, current_stock AS currentStock FROM purchase_requisition_items WHERE pr_id = $1 ORDER BY id ASC`,
     [id]
   );
   return { ...headers[0], items };
@@ -2820,7 +2822,7 @@ app.get('/api/purchase-requisitions', requireAuth, async (req, res) => {
     const headers = requestedById
       ? await q(headerSql + ' WHERE pr.requested_by_id = $1 ORDER BY pr.created_at DESC', [requestedById])
       : await q(headerSql + ' ORDER BY pr.created_at DESC');
-    const items = await q(`SELECT id, pr_id AS prId, packing_item_id AS packingItemId, item_name AS itemName, unit, quantity, estimated_rate AS estimatedRate, remarks FROM purchase_requisition_items ORDER BY id ASC`);
+    const items = await q(`SELECT id, pr_id AS prId, packing_item_id AS packingItemId, item_name AS itemName, unit, quantity, estimated_rate AS estimatedRate, remarks, department, current_stock AS currentStock FROM purchase_requisition_items ORDER BY id ASC`);
     const byPr = new Map();
     for (const it of items) {
       if (!byPr.has(it.prId)) byPr.set(it.prId, []);
@@ -2841,20 +2843,30 @@ app.post('/api/purchase-requisitions', requireAuth, async (req, res) => {
     const id = await nextPrId();
     const user = req.session?.user;
     const c = await pool.connect();
+    // "If new vendor, enter here" — the vendor picker lets you type a name
+    // that doesn't match any existing client; rather than silently drop it
+    // (the old behavior), create the client record so it's searchable next time.
+    let vendorId = b.vendorId || null;
     try {
       await c.query('BEGIN');
+      const newVendorName = b.newVendorName?.trim();
+      if (!vendorId && newVendorName) {
+        const cnt = await c.query('SELECT COUNT(*) AS cnt FROM clients');
+        vendorId = 'VN' + (Number(cnt.rows[0].cnt) + 1).toString().padStart(4, '0');
+        await c.query(`INSERT INTO clients (id,name,status) VALUES ($1,$2,'active')`, [vendorId, newVendorName]);
+      }
       await c.query(
         `INSERT INTO purchase_requisitions (id,pr_type,pr_date,requested_by,requested_by_id,department,payment_terms,vendor_id,status,remarks)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9)`,
-        [id, b.prType||'ITEM_CODE', b.prDate, user?.name||'', user?.id||null, b.department||'', b.paymentTerms||'', b.vendorId||null, b.remarks||'']
+        [id, b.prType||'ITEM_CODE', b.prDate, user?.name||'', user?.id||null, b.department||'', b.paymentTerms||'', vendorId, b.remarks||'']
       );
       let idx = 0;
       for (const it of items) {
         idx++;
         await c.query(
-          `INSERT INTO purchase_requisition_items (id,pr_id,packing_item_id,item_name,unit,quantity,estimated_rate,remarks)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [id+'-'+idx, id, it.packingItemId||null, it.itemName.trim(), it.unit||'', parseFloat(it.quantity)||0, parseFloat(it.estimatedRate)||0, it.remarks||'']
+          `INSERT INTO purchase_requisition_items (id,pr_id,packing_item_id,item_name,unit,quantity,estimated_rate,remarks,department,current_stock)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [id+'-'+idx, id, it.packingItemId||null, it.itemName.trim(), it.unit||'', parseFloat(it.quantity)||0, parseFloat(it.estimatedRate)||0, it.remarks||'', it.department||'', parseFloat(it.currentStock)||0]
         );
       }
       await c.query('COMMIT');
@@ -2864,7 +2876,7 @@ app.post('/api/purchase-requisitions', requireAuth, async (req, res) => {
     } finally {
       c.release();
     }
-    sendPrApprovalEmail({ id, prType: b.prType||'ITEM_CODE', prDate: b.prDate, requestedBy: user?.name||'', vendorId: b.vendorId||null, remarks: b.remarks||'', items }).catch(() => {});
+    sendPrApprovalEmail({ id, prType: b.prType||'ITEM_CODE', prDate: b.prDate, requestedBy: user?.name||'', vendorId, remarks: b.remarks||'', items }).catch(() => {});
     syncPrToSheet(id).catch(() => {});
     syncPrToMonitoringSheet(id).catch(() => {});
     return res.status(201).json({ success:true, id });
