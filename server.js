@@ -1228,7 +1228,19 @@ app.get('/api/samples/:key', (req, res) => {
   res.sendFile(path.join(__dirname, 'samples', name));
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+// HTML shells (app.html etc.) must never be cached — they're what pins down
+// which ?v=N of each page script gets loaded, so a stale cached HTML file
+// silently keeps serving an old script version forever. Other static assets
+// (JS/CSS/images) keep express.static's normal caching.
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) {
+      res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.set('Pragma', 'no-cache');
+      res.set('Expires', '0');
+    }
+  },
+}));
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
@@ -4316,7 +4328,17 @@ app.get('/api/master', async (req, res) => {
 });
 
 // ── Catch-all SPA ─────────────────────────────────────────────────────────────
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'app.html')));
+// The shell references page scripts by a manually-bumped ?v=N — if this HTML
+// response itself gets cached (by the browser or a CDN/proxy in front of the
+// origin), a version bump in the file never reaches the browser because it
+// never even re-requests app.html to see the new script tag. This route must
+// never be cached.
+app.get('*', (req, res) => {
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  res.sendFile(path.join(__dirname, 'public', 'app.html'));
+});
 
 // Seed JSON store with admin user if no users exist (fallback when DB unavailable)
 async function seedJsonFallback() {
