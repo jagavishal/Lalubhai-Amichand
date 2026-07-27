@@ -556,7 +556,7 @@ window.Pages['pr-po-grn'] = (() => {
               + '</div>'
             )
             : (
-              '<select class="ppgf-deptmat-dept-inp" data-ri="' + i + '" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;">'
+              '<select class="ppgf-deptmat-dept-inp" data-ri="' + i + '" title="विभाग / વિભાગ" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;">'
                 + '<option value="">Select…</option>'
                 + PR_PRODUCT_DEPARTMENTS.map(d => '<option value="' + esc(d) + '" ' + (item.deptName===d?'selected':'') + '>' + esc(d) + '</option>').join('')
                 + '<option value="' + PR_DEPT_OTHER + '">Other (type new)</option>'
@@ -564,7 +564,7 @@ window.Pages['pr-po-grn'] = (() => {
             ))
         + '</td>'
         + '<td style="' + cellS + 'min-width:200px;position:relative;">'
-          + '<input class="ppgf-deptmat-product-inp" data-ri="' + i + '" type="text" placeholder="' + ((item.deptCustom || item.deptName) ? 'Search or type product…' : 'Pick department first') + '" autocomplete="off" value="' + esc(item.itemSearch || item.itemName) + '" ' + ((item.deptCustom || item.deptName) ? '' : 'disabled ')
+          + '<input class="ppgf-deptmat-product-inp" data-ri="' + i + '" type="text" title="उत्पाद का नाम / ઉત્પાદનનું નામ" placeholder="' + ((item.deptCustom || item.deptName) ? 'Search or type product…' : 'Pick department first') + '" autocomplete="off" value="' + esc(item.itemSearch || item.itemName) + '" ' + ((item.deptCustom || item.deptName) ? '' : 'disabled ')
             + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid #e9ecef;border-radius:7px;font-size:12.5px;color:#1e293b;outline:none;background:' + ((item.deptCustom || item.deptName) ? '#fff' : '#f1f5f9') + ';" />'
           + '<div class="ppgf-deptmat-product-dd" data-ri="' + i + '" style="display:none;min-width:240px;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;z-index:300;box-shadow:0 10px 32px rgba(0,0,0,.14);max-height:220px;overflow-y:auto;"></div>'
         + '</td>'
@@ -736,8 +736,8 @@ window.Pages['pr-po-grn'] = (() => {
           + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Type *</label>'
             + '<select class="input" id="ppgf-prtype" style="width:100%;box-sizing:border-box;">' + _typeSelectOptions(_prForm.prType) + '</select></div>'
           + _fld('ppgf-date', 'PR Date *', _prForm.prDate, '', 'date')
-          + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Vendor</label>' + _vendorDropdownHtml() + '</div>'
-          + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Department</label>'
+          + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Vendor <span style="text-transform:none;font-weight:500;color:#94a3b8;">/ वेंडर / વેન્ડર</span></label>' + _vendorDropdownHtml() + '</div>'
+          + '<div><label style="display:block;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#64748b;margin-bottom:5px;">Department <span style="text-transform:none;font-weight:500;color:#94a3b8;">/ विभाग / વિભાગ</span></label>'
             + '<select class="input" id="ppgf-department" style="width:100%;box-sizing:border-box;">' + _departmentSelectOptions(_prForm.department) + '</select></div>'
         + '</div>'
         + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'
@@ -754,10 +754,10 @@ window.Pages['pr-po-grn'] = (() => {
               + '<thead><tr>'
                 + '<th style="' + thS + 'width:28px;">#</th>'
                 + (_prForm.prType === 'DEPT_MATERIAL'
-                  ? '<th style="' + thS + '">Department</th><th style="' + thS + '">Product Name</th><th style="' + thS + '">Current Stock</th>'
+                  ? '<th style="' + thS + '" title="विभाग / વિભાગ">Department</th><th style="' + thS + '" title="उत्पाद का नाम / ઉત્પાદનનું નામ">Product Name</th><th style="' + thS + '" title="वर्तमान स्टॉक / હાલનું સ્ટોક">Current Stock</th>'
                   : '<th style="' + thS + '">Item</th><th style="' + thS + '">Unit</th>')
-                + '<th style="' + thS + '">' + (_prForm.prType === 'DEPT_MATERIAL' ? 'Qty Required' : 'Qty') + '</th>'
-                + '<th style="' + thS + '">' + (_prForm.prType === 'DEPT_MATERIAL' ? 'Previous Rate' : 'Est. Rate') + '</th>'
+                + '<th style="' + thS + '"' + (_prForm.prType === 'DEPT_MATERIAL' ? ' title="आवश्यक मात्रा / જરૂરી પ્રમાણ"' : '') + '>' + (_prForm.prType === 'DEPT_MATERIAL' ? 'Qty Required' : 'Qty') + '</th>'
+                + '<th style="' + thS + '"' + (_prForm.prType === 'DEPT_MATERIAL' ? ' title="पिछली दर / પહેલી દર"' : '') + '>' + (_prForm.prType === 'DEPT_MATERIAL' ? 'Previous Rate' : 'Est. Rate') + '</th>'
                 + '<th style="' + thS + '">Remarks</th>'
                 + '<th style="' + thS + 'width:30px;"></th>'
               + '</tr></thead>'
