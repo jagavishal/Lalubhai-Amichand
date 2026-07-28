@@ -231,6 +231,7 @@ const SCHEMA = [
   `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS transferred_to VARCHAR(255) DEFAULT NULL`,
   `CREATE TABLE IF NOT EXISTS announcements (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, message TEXT DEFAULT NULL, posted_by VARCHAR(255) NOT NULL DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS vendor_submissions (id VARCHAR(16) PRIMARY KEY, business_name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', phone VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', gst_no VARCHAR(32) DEFAULT '', address TEXT DEFAULT NULL, products TEXT DEFAULT NULL, notes TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS pr_requisitions (id VARCHAR(16) PRIMARY KEY, pr_no VARCHAR(64) NOT NULL, filled_by VARCHAR(255) NOT NULL DEFAULT '', vendors TEXT DEFAULT NULL, vendor_other VARCHAR(255) DEFAULT '', department TEXT DEFAULT NULL, department_other VARCHAR(255) DEFAULT '', accessory_product TEXT DEFAULT NULL, brazing_product TEXT DEFAULT NULL, cnc_product VARCHAR(255) DEFAULT '', consumable_product TEXT DEFAULT NULL, electric_product TEXT DEFAULT NULL, packing_product TEXT DEFAULT NULL, pressing_product TEXT DEFAULT NULL, washing_product TEXT DEFAULT NULL, welding_product TEXT DEFAULT NULL, new_product VARCHAR(255) DEFAULT '', current_stock VARCHAR(64) NOT NULL DEFAULT '', quantity_required VARCHAR(64) NOT NULL DEFAULT '', previous_rate VARCHAR(64) NOT NULL DEFAULT '', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   // PR/PO/GRN feature removed — drop its tables (idempotent, no-ops once gone).
   `DROP TABLE IF EXISTS purchase_requisition_items`,
   `DROP TABLE IF EXISTS purchase_order_items`,
@@ -1223,6 +1224,53 @@ app.get('/api/vendor-submissions', requireAuth, async (req, res) => {
     await ensureSchema();
     const rows = await q('SELECT * FROM vendor_submissions ORDER BY created_at DESC', []);
     return res.json(rows);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// ── PR Form (digitized purchase-requisition intake form) ─────────────────────
+app.post('/api/pr-requisitions', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const {
+      pr_no, filled_by, vendors, vendor_other, department, department_other,
+      accessory_product, brazing_product, cnc_product, consumable_product,
+      electric_product, packing_product, pressing_product, washing_product,
+      welding_product, new_product, current_stock, quantity_required, previous_rate,
+    } = req.body;
+    if (!pr_no || !filled_by) return res.status(400).json({ error: 'PR No. and Filled By are required' });
+    if (!(vendors && vendors.length) && !vendor_other) return res.status(400).json({ error: 'Select a vendor or enter a new one' });
+    if (!(department && department.length) && !department_other) return res.status(400).json({ error: 'Select a department or enter a new one' });
+    if (!current_stock || !quantity_required || !previous_rate) return res.status(400).json({ error: 'Current Stock, Quantity Required and Previous Rate are required' });
+    const id = 'PR' + Date.now().toString(36).toUpperCase();
+    const sessUser = req.session?.user;
+    await pool.query(
+      `INSERT INTO pr_requisitions
+        (id,pr_no,filled_by,vendors,vendor_other,department,department_other,
+         accessory_product,brazing_product,cnc_product,consumable_product,electric_product,
+         packing_product,pressing_product,washing_product,welding_product,new_product,
+         current_stock,quantity_required,previous_rate,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+      [
+        id, pr_no, filled_by,
+        Array.isArray(vendors) ? vendors.join(', ') : (vendors || ''),
+        vendor_other || '',
+        Array.isArray(department) ? department.join(', ') : (department || ''),
+        department_other || '',
+        Array.isArray(accessory_product) ? accessory_product.join(', ') : (accessory_product || ''),
+        Array.isArray(brazing_product) ? brazing_product.join(', ') : (brazing_product || ''),
+        cnc_product || '',
+        Array.isArray(consumable_product) ? consumable_product.join(', ') : (consumable_product || ''),
+        Array.isArray(electric_product) ? electric_product.join(', ') : (electric_product || ''),
+        Array.isArray(packing_product) ? packing_product.join(', ') : (packing_product || ''),
+        Array.isArray(pressing_product) ? pressing_product.join(', ') : (pressing_product || ''),
+        Array.isArray(washing_product) ? washing_product.join(', ') : (washing_product || ''),
+        Array.isArray(welding_product) ? welding_product.join(', ') : (welding_product || ''),
+        new_product || '',
+        current_stock, quantity_required, previous_rate,
+        sessUser?.name || '',
+      ]
+    );
+    return res.status(201).json({ success: true, id });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
