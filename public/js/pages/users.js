@@ -48,7 +48,6 @@ window.Pages.users = (() => {
     { key: 'race-tracker',  label: 'Race Tracker' },
     { key: 'announcements', label: 'Announcements' },
     { key: 'help-ticket',   label: 'Help Ticket' },
-    { key: 'pr-po-grn',     label: 'PR / PO / GRN' },
     { key: 'profile',       label: 'Profile' },
   ];
 
