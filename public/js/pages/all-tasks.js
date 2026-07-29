@@ -73,8 +73,11 @@ window.Pages['all-tasks'] = (function () {
   const TAB_TYPE = {
     'Delegation':     'delegation',
     'Checklist':      'Checklist',
+    'FMS':            'FMS',
     'Delegate by Me': 'delegation',
   };
+
+  const fmsEnabled = () => !!(window.currentUser?.featureFlags?.fms);
 
   function getBaseGroups(tab) {
     return (isAdmin() || tab === 'Delegate by Me')
@@ -136,11 +139,12 @@ window.Pages['all-tasks'] = (function () {
 
   /* ─── data fetch ────────────────────────────────────────────────────────── */
   async function fetchData() {
-    const [delegations, masters, users, completions] = await Promise.all([
+    const [delegations, masters, users, completions, fmsTasks] = await Promise.all([
       Utils.apiFetch('/api/delegations'),
       Utils.apiFetch('/api/masters'),
       Utils.apiFetch('/api/users'),
       Utils.apiFetch('/api/checklist-completions'),
+      fmsEnabled() ? Utils.apiFetch('/api/fms-dashboard') : Promise.resolve([]),
     ]);
     if (!delegations || !masters || !users) return false;
 
@@ -175,6 +179,9 @@ window.Pages['all-tasks'] = (function () {
           url:         '',
           createdAt:   m.createdAt || m.created_at || '',
         })),
+      // Row data itself lives in the live Google Sheet — these items already carry
+      // the exact shape getMyFmsPendingRows() produces, mergeable as-is.
+      ...(fmsTasks || []),
     ];
 
     // Group by doer
@@ -211,6 +218,23 @@ window.Pages['all-tasks'] = (function () {
       await reload();
     } catch (e) {
       Utils.showToast(e.message, 'error');
+    }
+  }
+
+  // FMS needs delay-reason/extra-field input, so it opens the same shared modal
+  // the Dashboard and the FMS task page use, instead of completing in place.
+  async function openFmsDoneModal(t) {
+    try {
+      const detail = await Utils.apiFetch(`/api/fms-tasks/${t.fmsId}`);
+      const step = (detail?.steps || []).find(s => s.id === t.stepId);
+      if (!step) { Utils.showToast('Step not found', 'error'); return; }
+      window.FmsDoneModal.open({
+        fmsId: t.fmsId, step,
+        row: { rowNumber: t.rowNumber, planValue: t.planValue, data: t.details },
+        onSaved: reload,
+      });
+    } catch (e) {
+      Utils.showToast(e.message || 'Failed to open step', 'error');
     }
   }
 
@@ -320,8 +344,11 @@ window.Pages['all-tasks'] = (function () {
 
   /* ─── render task row ───────────────────────────────────────────────────── */
   function taskRowHTML(t, serial) {
-    const canEdit   = true;
-    const canRevise = t.type !== 'Checklist' && t.status !== 'done' && t.status !== 'revise' && t.status !== 'revise_requested';
+    // FMS rows aren't owned by this app's CRUD — their data lives in the live
+    // Google Sheet, so Edit/Delete/Shift don't apply, only Done.
+    const canEdit   = t.type !== 'FMS';
+    const canDelete = t.type !== 'FMS';
+    const canRevise = t.type !== 'Checklist' && t.type !== 'FMS' && t.status !== 'done' && t.status !== 'revise' && t.status !== 'revise_requested';
     const canDone   = t.status !== 'done';
 
     const editBtn = (canEdit && hasFeature('edit'))
@@ -330,7 +357,7 @@ window.Pages['all-tasks'] = (function () {
          </button>`
       : '';
 
-    const delBtn = hasFeature('delete')
+    const delBtn = (canDelete && hasFeature('delete'))
       ? `<button class="at-action-btn at-btn-red" title="Delete" onclick="window._atDeleteTask('${esc(t.id)}','${esc(t.type)}')">
            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
          </button>`
@@ -339,6 +366,8 @@ window.Pages['all-tasks'] = (function () {
     const doneBtn = canDone
       ? (t.type === 'Checklist'
           ? `<button class="at-pill-btn at-pill-green" onclick="window._atChecklistDone('${esc(t.id)}')">Done</button>`
+          : t.type === 'FMS'
+          ? `<button class="at-pill-btn at-pill-green" onclick="window._atFmsDone('${esc(t.id)}')">Done</button>`
           : `<button class="at-pill-btn at-pill-green" onclick="window._atMarkDone('${esc(t.id)}')">Done</button>`)
       : `<button class="at-pill-btn at-pill-gray" onclick="window._atReopenTask('${esc(t.id)}','${esc(t.type)}')">Reopen</button>`;
 
@@ -371,11 +400,12 @@ window.Pages['all-tasks'] = (function () {
             <span style="font-weight:500;color:#1e293b">${esc(t.description)}</span>
             ${urlLink}
           </div>
+          ${t.type === 'FMS' && Array.isArray(t.details) && t.details.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${t.details.map(d => `<span style="font-size:10px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:1px 6px;white-space:nowrap;"><b>${esc(d.header)}:</b> ${esc(d.value) || '—'}</span>`).join('')}</div>` : ''}
           ${transferredBadge}
         </td>
         <td class="at-td" style="color:#475569;white-space:nowrap">${esc(t.doer || '—')}</td>
         <td class="at-td" style="color:#64748b;white-space:nowrap">${esc(getUserName(t.delegatedBy))}</td>
-        <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${fmt(t.dueDate)}</td>
+        <td class="at-td" style="white-space:nowrap;font-size:12px;${t.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#64748b;'}">${fmt(t.dueDate)}</td>
         <td class="at-td" style="color:#94a3b8;max-width:160px;font-size:12px">${esc(t.remarks || '—')}</td>
         <td class="at-td">${statusPill(t.status)}</td>
       </tr>`;
@@ -481,7 +511,8 @@ window.Pages['all-tasks'] = (function () {
          </button>`;
 
     /* tab buttons */
-    const tabBtns = ['Delegation', 'Checklist', 'Delegate by Me'].map(t => {
+    const tabList = ['Delegation', 'Checklist', ...(fmsEnabled() ? ['FMS'] : []), 'Delegate by Me'];
+    const tabBtns = tabList.map(t => {
       const cnt   = tabCount(t);
       const active = t === _tab;
       return `<button class="at-seg-btn${active ? ' at-seg-active' : ''}" data-tab="${esc(t)}">
@@ -684,6 +715,10 @@ window.Pages['all-tasks'] = (function () {
   window._atMarkDone = (id) => updateStatus(id, 'done');
   window._atMarkRevise = (id) => updateStatus(id, 'revise');
   window._atChecklistDone = (id) => markChecklistDone(id);
+  window._atFmsDone = (id) => {
+    const task = _grouped.flatMap(g => g.tasks).find(t => t.id === id);
+    if (task) openFmsDoneModal(task);
+  };
   window._atReopenTask = (id, type) => reopenTask(id, type);
   window._atDeleteTask = (id, type) => deleteTask(id, type);
   window._atEditTask = (id) => {

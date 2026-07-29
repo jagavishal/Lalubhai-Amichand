@@ -3,6 +3,10 @@ window.Pages = window.Pages || {};
 window.Pages.dashboard = (function () {
 
   /* ── helpers ─────────────────────────────────────────────────────── */
+  function esc(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
   function fmt(iso) {
     if (!iso) return '—';
     return new Date(iso)
@@ -369,7 +373,7 @@ window.Pages.dashboard = (function () {
                 <p id="db-tasks-count" style="font-size:11.5px;color:#64748b;margin:2px 0 0;"></p>
               </div>
               <div style="display:flex;align-items:center;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px;">
-                ${['All','Delegation','Checklist','FMS','Upcoming'].map(t =>
+                ${['All','Delegation','Checklist', ...(window.currentUser?.featureFlags?.fms ? ['FMS'] : []), 'Upcoming'].map(t =>
                   `<button class="db-tab-btn" data-tab="${t}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">${t}</button>`
                 ).join('')}
               </div>
@@ -844,6 +848,7 @@ window.Pages.dashboard = (function () {
             ${urlLink}
           </div>
           ${t.type === 'Checklist' && (t.frequency || t.department) ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${[t.frequency ? t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1) : '', t.department].filter(Boolean).join(' · ')}</div>` : ''}
+          ${t.type === 'FMS' && Array.isArray(t.details) && t.details.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${t.details.map(d => `<span style="font-size:10px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:1px 6px;white-space:nowrap;"><b>${esc(d.header)}:</b> ${esc(d.value) || '—'}</span>`).join('')}</div>` : ''}
           ${transferred}
         </td>
         <td style="${tdStyle}">
@@ -1657,13 +1662,18 @@ window.Pages.dashboard = (function () {
           body: JSON.stringify({ masterId: task.id, doer: window.currentUser?.name }),
         });
       } else if (task.type === 'FMS') {
-        const parts = task.id.split('-');
-        const stepIndex = parseInt(parts.pop());
-        const fmsId = parts.join('-');
-        await Utils.apiFetch('/api/fms/step', {
-          method: 'POST',
-          body: JSON.stringify({ fmsId, stepIndex }),
+        // FMS needs delay-reason/extra-field input, so it opens the shared modal
+        // instead of completing in place — the modal's own save flow refreshes
+        // the dashboard, so skip the generic toast+refresh below.
+        const detail = await Utils.apiFetch(`/api/fms-tasks/${task.fmsId}`);
+        const step = (detail?.steps || []).find(s => s.id === task.stepId);
+        if (!step) { Utils.showToast('Step not found', 'error'); return; }
+        window.FmsDoneModal.open({
+          fmsId: task.fmsId, step,
+          row: { rowNumber: task.rowNumber, planValue: task.planValue, data: task.details },
+          onSaved: () => _refresh(admin),
         });
+        return;
       }
       Utils.showToast('Task marked as done!');
       await _refresh(admin);

@@ -89,7 +89,7 @@
             </button>
           </div>
           <div class="flex gap-2 flex-wrap pt-2 border-t border-slate-100" id="mis-tabs">
-            ${['Delegation MIS', 'Checklist MIS', 'All MIS'].map(t => `
+            ${['Delegation MIS', 'Checklist MIS', ...(window.currentUser?.featureFlags?.fms ? ['FMS MIS'] : []), 'All MIS'].map(t => `
               <button data-tab="${this._esc(t)}" class="px-3 py-1.5 rounded-lg text-xs font-medium border transition
                 ${s.misTab === t ? 'bg-primary-50 text-primary-700 border-primary-200' : 'text-slate-600 hover:bg-slate-50 border-slate-200'}">
                 ${this._esc(t)}

@@ -65,7 +65,7 @@ async function sendDelegationEmail({ toEmail, toName, description, dueDate, prio
 }
 
 const DEFAULT_PASSWORD = 'India@123';
-const FMS_ENABLED = false;
+const FMS_ENABLED = true;
 
 const g = global;
 if (!g.__store_version) g.__store_version = 0;
@@ -204,8 +204,22 @@ const SCHEMA = [
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS remarks TEXT DEFAULT NULL`,
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS department VARCHAR(128) DEFAULT ''`,
   `CREATE TABLE IF NOT EXISTS holidays (id VARCHAR(16) PRIMARY KEY, date DATE NOT NULL, name VARCHAR(255) NOT NULL, type VARCHAR(64) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-  `CREATE TABLE IF NOT EXISTS fms (id VARCHAR(16) PRIMARY KEY, client_name VARCHAR(255) NOT NULL, platforms TEXT, mobile VARCHAR(64) DEFAULT '', doer VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-  `CREATE TABLE IF NOT EXISTS fms_steps (fms_id VARCHAR(16) NOT NULL, step_index INT NOT NULL, planned DATETIME DEFAULT NULL, actual DATETIME DEFAULT NULL, PRIMARY KEY (fms_id, step_index), CONSTRAINT fk_fms_steps FOREIGN KEY (fms_id) REFERENCES fms(id) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  // The old FMS feature was a hardcoded 8-step client-campaign tracker with no
+  // reachable nav entry — replaced below by the Google-Sheets-backed FMS module.
+  `DROP TABLE IF EXISTS fms_steps`,
+  `DROP TABLE IF EXISTS fms`,
+  // ── FMS (Flow Management System) — config-only tables. Row data itself always
+  // lives in the live external Google Sheet; these tables only store which sheet,
+  // which columns mean what, and who the doers are.
+  `CREATE TABLE IF NOT EXISTS fms_sheets (id VARCHAR(24) PRIMARY KEY, fms_name VARCHAR(255) NOT NULL, sheet_name VARCHAR(255) NOT NULL, sheet_id VARCHAR(255) NOT NULL, header_row INT NOT NULL DEFAULT 1, created_by VARCHAR(16) DEFAULT NULL, process_coordinator_id VARCHAR(16) DEFAULT NULL, intake_sheet_id VARCHAR(255) DEFAULT '', intake_sheet_name VARCHAR(255) DEFAULT '', intake_header_row INT DEFAULT NULL, intake_form_name VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS fms_sheet_steps (id VARCHAR(24) PRIMARY KEY, fms_id VARCHAR(24) NOT NULL, step_order INT NOT NULL DEFAULT 0, step_name VARCHAR(255) NOT NULL, plan_col VARCHAR(8) NOT NULL, actual_col VARCHAR(8) NOT NULL, extra_input VARCHAR(4) NOT NULL DEFAULT 'no', extra_col VARCHAR(8) DEFAULT '', show_cols TEXT DEFAULT NULL, delay_reason_col VARCHAR(8) DEFAULT '', doer_name_col VARCHAR(8) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_fms_steps_fms ON fms_sheet_steps (fms_id)`,
+  `CREATE TABLE IF NOT EXISTS fms_step_doers (step_id VARCHAR(24) NOT NULL, user_id VARCHAR(16) NOT NULL, PRIMARY KEY (step_id, user_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_fms_doers_user ON fms_step_doers (user_id)`,
+  `CREATE TABLE IF NOT EXISTS fms_extra_rows (id VARCHAR(24) PRIMARY KEY, step_id VARCHAR(24) NOT NULL, row_label VARCHAR(255) NOT NULL, col_letter VARCHAR(8) NOT NULL, field_type VARCHAR(16) NOT NULL DEFAULT 'text', dropdown_options TEXT DEFAULT '', required SMALLINT NOT NULL DEFAULT 0) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_fms_extra_step ON fms_extra_rows (step_id)`,
+  `CREATE TABLE IF NOT EXISTS fms_intake_fields (id VARCHAR(24) PRIMARY KEY, fms_id VARCHAR(24) NOT NULL, field_label VARCHAR(255) NOT NULL, col_letter VARCHAR(8) NOT NULL, field_type VARCHAR(16) NOT NULL DEFAULT 'text', dropdown_options TEXT DEFAULT '', required SMALLINT NOT NULL DEFAULT 0, sort_order INT NOT NULL DEFAULT 0, auto_fill VARCHAR(16) DEFAULT '', auto_fill_value VARCHAR(255) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_fms_intake_fms ON fms_intake_fields (fms_id)`,
   `CREATE TABLE IF NOT EXISTS profile (user_id VARCHAR(16) PRIMARY KEY, notification_email VARCHAR(255) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   "CREATE TABLE IF NOT EXISTS app_config (`key` VARCHAR(64) PRIMARY KEY, `value` TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
   `CREATE TABLE IF NOT EXISTS checklist_completions (id VARCHAR(16) PRIMARY KEY, master_id VARCHAR(16) NOT NULL, doer VARCHAR(255) DEFAULT '', completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, date DATE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -376,7 +390,7 @@ async function ensureStoreJson() {
   try { await fs.access(STORE_FILE); }
   catch {
     await fs.mkdir(DATA_DIR, { recursive: true });
-    const initial = { users: [], delegations: [], masters: [], holidays: [], fms: [], approvals: { tasks:[], transfers:[], leaves:[] }, profile: {} };
+    const initial = { users: [], delegations: [], masters: [], holidays: [], approvals: { tasks:[], transfers:[], leaves:[] }, profile: {} };
     await fs.writeFile(STORE_FILE, JSON.stringify(initial, null, 2));
   }
 }
@@ -404,38 +418,24 @@ function userOut(r) {
 
 async function readStoreDb() {
   await ensureSchema();
-  const [users, delegations, masters, holidays, fmsRows, stepRows, profileRows, completedMasters] = await Promise.all([
+  const [users, delegations, masters, holidays, profileRows, completedMasters] = await Promise.all([
     q('SELECT * FROM users ORDER BY id ASC'),
     q('SELECT * FROM delegations ORDER BY id ASC'),
     q('SELECT * FROM masters ORDER BY id ASC'),
     q('SELECT * FROM holidays ORDER BY date ASC'),
-    q('SELECT * FROM fms ORDER BY id ASC'),
-    q('SELECT * FROM fms_steps ORDER BY fms_id ASC, step_index ASC'),
     q('SELECT * FROM profile LIMIT 1'),
     // Each masters row is one dated occurrence (recurring series are pre-generated as
     // separate rows), so a checklist item is "done" once it has any completion at all —
     // not just one recorded today.
     q('SELECT DISTINCT master_id FROM checklist_completions'),
   ]);
-  const byFms = new Map();
-  for (const s of stepRows) {
-    if (!byFms.has(s.fms_id)) byFms.set(s.fms_id, []);
-    byFms.get(s.fms_id)[s.step_index] = s;
-  }
-  const FMS_STEPS_LEN = 8;
-  const fms = fmsRows.map(r => {
-    const ss = byFms.get(r.id) || [];
-    const dense = [];
-    for (let i=0; i<FMS_STEPS_LEN; i++) dense[i] = ss[i] || { planned:null, actual:null };
-    return { id:r.id, clientName:r.client_name, platforms:r.platforms||'', mobile:r.mobile||'', doer:r.doer||'', createdAt:toIso(r.created_at), steps:dense.map(s=>({planned:toIso(s.planned),actual:toIso(s.actual)})) };
-  });
   const profile = profileRows[0] ? { userId:profileRows[0].user_id, notificationEmail:profileRows[0].notification_email||'' } : { userId:null, notificationEmail:'' };
   return {
     users: users.map(userOut),
     delegations: delegations.map(r => ({ id:r.id, description:r.description, doerId:r.doer_id, doer:r.doer, delegatedBy:r.delegated_by, dueDate:toDateStr(r.due_date), client:r.client||'', status:r.status, type:r.type, priority:r.priority||'Low', url:r.url||'', approval:r.approval||'No Approval', remarks:r.remarks||'', transferredBy:r.transferred_by||null, transferredFrom:r.transferred_from||null, createdAt:toIso(r.created_at), completedAt:toIso(r.completed_at) })),
     masters: masters.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) })),
     holidays: holidays.map(r => ({ id:r.id, date:toDateStr(r.date), name:r.name, type:r.type||'' })),
-    fms, approvals:{ tasks:[], transfers:[], leaves:[] }, profile,
+    approvals:{ tasks:[], transfers:[], leaves:[] }, profile,
     completedMasterIds: completedMasters.map(r => r.master_id),
   };
 }
@@ -447,7 +447,6 @@ async function writeStoreDb(data) {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
-    await c.query('DELETE FROM fms_steps'); await c.query('DELETE FROM fms');
     await c.query('DELETE FROM users'); await c.query('DELETE FROM delegations');
     await c.query('DELETE FROM masters'); await c.query('DELETE FROM holidays'); await c.query('DELETE FROM profile');
     for (const u of data.users||[]) {
@@ -463,14 +462,6 @@ async function writeStoreDb(data) {
         [m.id,m.task,m.assignedTo||'',m.frequency||'Daily',m.startDate||null,m.endDate||null,m.remarks||'',m.department||'',m.createdAt||null]);
     }
     for (const h of data.holidays||[]) { await c.query(`INSERT INTO holidays (id,date,name,type) VALUES ($1,$2,$3,$4)`, [h.id,h.date,h.name,h.type||'']); }
-    for (const f of data.fms||[]) {
-      await c.query(`INSERT INTO fms (id,client_name,platforms,mobile,doer,created_at) VALUES ($1,$2,$3,$4,$5,COALESCE($6::timestamptz,NOW()))`,
-        [f.id,f.clientName,f.platforms||'',f.mobile||'',f.doer||'',f.createdAt||null]);
-      for (let i=0; i<(f.steps||[]).length; i++) {
-        const s=f.steps[i];
-        await c.query(`INSERT INTO fms_steps (fms_id,step_index,planned,actual) VALUES ($1,$2,$3,$4)`, [f.id,i,s.planned||null,s.actual||null]);
-      }
-    }
     if (data.profile?.userId) await c.query(`INSERT INTO profile (user_id,notification_email) VALUES ($1,$2)`, [data.profile.userId,data.profile.notificationEmail||'']);
     bumpStoreVersion();
     await c.query('COMMIT');
@@ -521,10 +512,6 @@ function computeDashboard(store, filter='all', doerFilter='') {
     });
   }
   return { total, completed, pending, revised, upcoming, pendingTasks:items.sort((a,b)=>new Date(b.createdAt||b.date)-new Date(a.createdAt||a.date)).slice(0,1000) };
-}
-
-function buildPlannedSteps(startDate=new Date()) {
-  return Array.from({length:8}, (_,i) => { const d=new Date(startDate); d.setDate(d.getDate()+i+1); return {planned:d.toISOString(),actual:null}; });
 }
 
 function normDate(s) {
@@ -788,7 +775,7 @@ app.post('/api/auth/login', async (req, res) => {
       department: user.department || '',
       roles,
     };
-    return res.json({ user: { ...req.session.user, picture: user.picture || null } });
+    return res.json({ user: { ...req.session.user, picture: user.picture || null, featureFlags: { fms: FMS_ENABLED } } });
   } catch (err) {
     console.error('[auth/login]', err.message);
     return res.status(500).json({ error: err.message });
@@ -814,9 +801,9 @@ app.get('/api/auth/session', async (req, res) => {
       picture = su?.picture || null;
       permissions = su?.permissions || null;
     }
-    return res.json({ user: { ...u, picture, permissions } });
+    return res.json({ user: { ...u, picture, permissions, featureFlags: { fms: FMS_ENABLED } } });
   } catch {
-    return res.json({ user: u });
+    return res.json({ user: { ...u, featureFlags: { fms: FMS_ENABLED } } });
   }
 });
 
@@ -829,7 +816,32 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
   // Non-admins only ever see their own tasks — ignore any doer they pass in,
   // admins can filter by any doer (or leave it blank to see everyone's).
   const doer = isAdminUser ? (req.query.doer || '') : (user.name || '');
-  return res.json(computeDashboard(store, 'all', doer));
+  const result = computeDashboard(store, 'all', doer);
+
+  if (FMS_ENABLED) {
+    try {
+      // Mirror the same doer-scoping computeDashboard just applied above: an admin
+      // viewing "everyone" sees every pending FMS step, but an admin drilled into one
+      // specific employee's dashboard (?doer=) should see only that employee's steps too.
+      let fmsUserId = user.id, fmsUserName = user.name, fmsIsAdmin = isAdminUser;
+      if (isAdminUser && doer) {
+        const target = (store.users || []).find(u => (u.name || '').trim().toLowerCase() === doer.trim().toLowerCase());
+        fmsUserId = target ? target.id : null;
+        fmsUserName = doer;
+        fmsIsAdmin = false;
+      }
+      const fmsTasks = (fmsIsAdmin || fmsUserId) ? await fmsSheet.getMyFmsPendingRows({ userId: fmsUserId, userName: fmsUserName, isAdmin: fmsIsAdmin }) : [];
+      result.total += fmsTasks.length;
+      result.pending += fmsTasks.length;
+      result.pendingTasks = result.pendingTasks.concat(fmsTasks)
+        .sort((a, b) => new Date(b.createdAt || b.date) - new Date(a.createdAt || a.date))
+        .slice(0, 1000);
+    } catch (e) {
+      console.error('[fms] dashboard merge failed:', e.message);
+    }
+  }
+
+  return res.json(result);
 });
 
 // ── Delegations ───────────────────────────────────────────────────────────────
@@ -1895,34 +1907,8 @@ app.patch('/api/leaves', requireAuth, requireAdmin, async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
-// ── FMS ───────────────────────────────────────────────────────────────────────
-app.get('/api/fms', requireAuth, async (req, res) => {
-  const store = await readStore();
-  return res.json(store.fms||[]);
-});
-
-app.post('/api/fms', requireAuth, async (req, res) => {
-  const body = req.body;
-  if (!body.clientName||!body.clientName.trim()) return res.status(400).json({ error:'Client name required' });
-  const store = await readStore();
-  const entry = { id:'FMS'+Date.now(), createdAt:new Date().toISOString(), clientName:body.clientName.trim(), platforms:body.platforms||'', mobile:body.mobile||'', doer:body.doer||'', steps:buildPlannedSteps(new Date()) };
-  store.fms = store.fms||[];
-  store.fms.push(entry);
-  await writeStore(store);
-  return res.status(201).json(entry);
-});
-
-// ── FMS Step ──────────────────────────────────────────────────────────────────
-app.post('/api/fms/step', requireAuth, async (req, res) => {
-  const { fmsId, stepIndex } = req.body;
-  const store = await readStore();
-  const entry = (store.fms||[]).find(f=>f.id===fmsId);
-  if (!entry) return res.status(404).json({ error:'Not found' });
-  if (!entry.steps[stepIndex]) return res.status(400).json({ error:'Invalid step' });
-  entry.steps[stepIndex].actual = new Date().toISOString();
-  await writeStore(store);
-  return res.json({ success:true });
-});
+// ── FMS (Flow Management System) API — see fmsSheet.js wiring further down,
+// registered once getGoogleAuth()/ensureLogTab() etc. exist (search "FMS routes").
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 app.get('/api/clients', requireAuth, async (req, res) => {
@@ -2029,6 +2015,215 @@ function getGoogleAuth() {
   });
   return _googleAuth;
 }
+
+// ── FMS (Flow Management System) — Google-Sheets-backed recurring workflow tracker ──
+// Config lives in fms_sheets/fms_sheet_steps/fms_step_doers/fms_extra_rows/fms_intake_fields;
+// row data always lives in the live external sheet, never copied into our own DB.
+const fmsSheet = require('./backend/lib/fmsSheet.js')({ q, pool, getGoogleAuth });
+
+function fmsGate(req, res, next) {
+  if (!FMS_ENABLED) return res.status(404).json({ error: 'FMS is disabled' });
+  next();
+}
+
+app.get('/api/fms', requireAuth, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const user = req.session.user;
+    const admin = isAdminUser(user);
+    const sheets = await fmsSheet.getFmsSheetsWithStats(user.id, admin);
+    return res.json(sheets);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/fms', requireAdmin, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const b = req.body;
+    if (!b.fmsName?.trim()) return res.status(400).json({ error: 'FMS name required' });
+    if (!b.sheetId?.trim()) return res.status(400).json({ error: 'Google Sheet URL/ID required' });
+    const sheet = await fmsSheet.createFmsSheet({
+      fmsName: b.fmsName.trim(), sheetName: b.sheetName || '', sheetId: b.sheetId,
+      headerRow: b.headerRow || 1, createdBy: req.session.user.id, steps: b.steps || [],
+      processCoordinatorId: b.processCoordinatorId || null,
+    });
+    return res.status(201).json(sheet);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// Registered before the parametrized /api/fms/:id routes below, since Express
+// matches path shape + method in registration order and both these literal
+// paths share the same two-segment shape as /api/fms/:id.
+app.post('/api/fms/fetch-headers', requireAdmin, fmsGate, async (req, res) => {
+  try {
+    const { sheetUrlOrId, tabName, headerRow } = req.body;
+    if (!sheetUrlOrId || !tabName) return res.status(400).json({ error: 'sheetUrlOrId and tabName required' });
+    const headers = await fmsSheet.fetchHeaders(sheetUrlOrId, tabName, headerRow || 1);
+    return res.json(headers);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/fms/sheet-column-values', requireAdmin, fmsGate, async (req, res) => {
+  try {
+    const { sheetUrlOrId, tabName, colLetter, headerRow } = req.query;
+    if (!sheetUrlOrId || !tabName || !colLetter) return res.status(400).json({ error: 'sheetUrlOrId, tabName and colLetter required' });
+    await ensureSchema();
+    const result = await fmsSheet.sheetColumnValues(sheetUrlOrId, tabName, colLetter, headerRow || 1);
+    return res.json(result);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/fms/:id/pc', requireAuth, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const sheet = await fmsSheet.getFmsSheet(req.params.id);
+    if (!sheet) return res.status(404).json({ error: 'Not found' });
+    const user = req.session.user;
+    const admin = isAdminUser(user);
+    if (!admin && sheet.process_coordinator_id !== user.id) return res.status(403).json({ error: 'Forbidden' });
+    const rows = await fmsSheet.getPendingAcrossSteps(req.params.id);
+    return res.json({ sheet, rows });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/fms/:id/sync', requireAuth, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const user = req.session.user;
+    const admin = isAdminUser(user);
+    const sheets = await fmsSheet.getFmsSheetsWithStats(user.id, admin);
+    const one = sheets.find(s => s.id === req.params.id);
+    if (!one) return res.status(404).json({ error: 'Not found' });
+    return res.json(one);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/fms/:id/intake-fields', requireAdmin, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const sheet = await fmsSheet.getFmsSheet(req.params.id);
+    if (!sheet) return res.status(404).json({ error: 'Not found' });
+    const fields = await fmsSheet.getIntakeFields(req.params.id);
+    return res.json({ sheet, fields });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/fms/:id/intake-fields', requireAdmin, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const b = req.body;
+    await fmsSheet.saveIntakeSheetConfig(req.params.id, {
+      intakeSheetId: b.intakeSheetId || '', intakeSheetName: b.intakeSheetName || '',
+      intakeHeaderRow: b.intakeHeaderRow || null, intakeFormName: b.intakeFormName || '',
+    });
+    await fmsSheet.saveIntakeFields(req.params.id, b.fields || []);
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/fms/:id', requireAdmin, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const sheet = await fmsSheet.getFmsSheet(req.params.id);
+    if (!sheet) return res.status(404).json({ error: 'Not found' });
+    const steps = await fmsSheet.getFullSteps(req.params.id);
+    return res.json({ ...sheet, steps });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/fms/:id', requireAdmin, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const b = req.body;
+    const sheet = await fmsSheet.updateFmsSheet(req.params.id, {
+      fmsName: b.fmsName || '', sheetName: b.sheetName || '', sheetId: b.sheetId || '',
+      headerRow: b.headerRow || 1, steps: b.steps || [], processCoordinatorId: b.processCoordinatorId || null,
+    });
+    return res.json(sheet);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/fms/:id', requireAdmin, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    await fmsSheet.deleteFmsSheet(req.params.id);
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── FMS task-facing routes ───────────────────────────────────────────────────
+app.get('/api/fms-tasks/:id', requireAuth, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const sheet = await fmsSheet.getFmsSheet(req.params.id);
+    if (!sheet) return res.status(404).json({ error: 'Not found' });
+    const user = req.session.user;
+    const admin = isAdminUser(user);
+    const steps = await fmsSheet.getStepsForTaskView(req.params.id, user.id, admin);
+    const relevantSteps = admin ? steps : steps.filter(s => s.isMyStep);
+    const pendingByStep = await fmsSheet.getPendingRowsForFmsSteps(req.params.id, relevantSteps, { userName: user.name, isAdmin: admin });
+    const stepsOut = steps.map(s => ({
+      ...s,
+      pending: pendingByStep[s.id] ? pendingByStep[s.id].rows : [],
+      totalPending: pendingByStep[s.id] ? pendingByStep[s.id].totalPending : 0,
+    }));
+    const isCoordinator = admin || sheet.process_coordinator_id === user.id;
+    return res.json({ sheet, steps: stepsOut, isCoordinator });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/fms-tasks/:id/intake', requireAuth, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const sheet = await fmsSheet.getFmsSheet(req.params.id);
+    if (!sheet) return res.status(404).json({ error: 'Not found' });
+    const fields = await fmsSheet.getIntakeFields(req.params.id);
+    return res.json({ sheet: { id: sheet.id, fms_name: sheet.fms_name, intake_form_name: sheet.intake_form_name }, fields });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/fms-tasks/:id/intake', requireAuth, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const sheet = await fmsSheet.getFmsSheet(req.params.id);
+    if (!sheet) return res.status(404).json({ error: 'Not found' });
+    const fields = await fmsSheet.getIntakeFields(req.params.id);
+    const result = await fmsSheet.submitIntakeRow(sheet, fields, req.body.values || {}, { userName: req.session.user.name });
+    return res.status(201).json(result);
+  } catch (err) { return res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/fms-tasks/:id/steps/:stepId/done', requireAuth, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const sheet = await fmsSheet.getFmsSheet(req.params.id);
+    if (!sheet) return res.status(404).json({ error: 'Not found' });
+    const steps = await fmsSheet.getFullSteps(req.params.id);
+    const step = steps.find(s => s.id === req.params.stepId);
+    if (!step) return res.status(404).json({ error: 'Step not found' });
+    const user = req.session.user;
+    const admin = isAdminUser(user);
+    if (!admin && !step.isMyStep && !(step.doers || []).some(d => d.user_id === user.id)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const { rowNumber, delayReason, extraInputs, doerName } = req.body;
+    if (!rowNumber) return res.status(400).json({ error: 'rowNumber required' });
+    await fmsSheet.writeStepDone({ sheet, step, rowNumber, delayReason, extraInputs, doerName: doerName || user.name });
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// Client-side refresh path for the Dashboard's FMS tab (server-render calls
+// getMyFmsPendingRows() directly inside /api/dashboard — see computeDashboard()).
+app.get('/api/fms-dashboard', requireAuth, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const user = req.session.user;
+    const admin = isAdminUser(user);
+    const rows = await fmsSheet.getMyFmsPendingRows({ userId: user.id, userName: user.name, isAdmin: admin });
+    return res.json(rows);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
 
 async function ensureLogTab(spreadsheetId, tabName, headerRow) {
   const { google } = require('googleapis');
@@ -2998,6 +3193,36 @@ app.get('/api/mis', requireAuth, async (req, res) => {
   const fromDT = start+' 00:00:00'; const toDT = end+' 23:59:59';
 
   try {
+    // FMS data is Google-Sheets-backed, not store/DB rows — handled the same way
+    // regardless of USE_DB, ahead of the store-vs-DB split below.
+    if (type === 'FMS MIS' && FMS_ENABLED) {
+      if (employee) {
+        const detailRows = await fmsSheet.getFmsMisDetailRows(employee, start, end);
+        const rows = detailRows.map((r, i) => ({
+          '#': i + 1,
+          'Description': `${r.fmsName} · ${r.stepName}`,
+          'Assigned By': '—',
+          'Due Date': r.planValue || '',
+          'Status': r.status === 'completed' ? 'done' : 'pending',
+        }));
+        return res.json({ rows, summary: {} });
+      }
+      const misRows = await fmsSheet.getFmsMisRows(start, end);
+      const rows = misRows.map(e => ({
+        ...e, revised: 0,
+        score: e.total > 0 ? Math.round(((e.completed / e.total) - 1) * 100 - (e.delayed / e.total) * 50) : 0,
+      }));
+      const summary = {
+        'Total Steps': misRows.reduce((s, e) => s + e.total, 0),
+        'Employees': rows.length,
+        'Completed': misRows.reduce((s, e) => s + e.completed, 0),
+        'Pending': misRows.reduce((s, e) => s + e.pending, 0),
+        'Delayed': misRows.reduce((s, e) => s + e.delayed, 0),
+        'Period': `${fmtDate(fromISO)} – ${fmtDate(toISO)}`,
+      };
+      return res.json({ rows, summary, view: 'employee' });
+    }
+
     if (!USE_DB) {
       const store = await readStore();
       if (employee&&(type==='Delegation MIS'||type==='All MIS')) {
