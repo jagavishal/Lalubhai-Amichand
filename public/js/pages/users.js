@@ -44,6 +44,7 @@ window.Pages.users = (() => {
     { key: 'fms',           label: 'FMS Master' },
     { key: 'client-master', label: 'Vendor Master' },
     { key: 'pr-form',       label: 'PR Form' },
+    { key: 'po-creation',   label: 'PO Creation' },
     { key: 'meetings',      label: 'Meetings' },
     { key: 'leave-tracker', label: 'Leave Tracker' },
     { key: 'race-tracker',  label: 'Race Tracker' },

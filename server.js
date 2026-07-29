@@ -2175,6 +2175,185 @@ async function syncGrnToSheet(id) {
   } catch (e) { console.error('[google-sync] GRN sync failed:', e.message); }
 }
 
+// ── PO Creation (fills the store team's live "PO July 2026" Google Sheet directly —
+// that sheet IS the database here, nothing is mirrored locally). Each of the 3
+// tabs below is a reusable template: submitting a PO overwrites it with the new
+// PO's data, then a copy of that tab is archived as "PO <number>", exactly
+// mirroring how the store team already works this sheet by hand today (the live
+// "PurchaseOrder" tab always shows whatever PO was filled in last, e.g. "PO 251").
+const PO_CREATION_SHEET_ID = '1QB4fZQ1IVFeGs9YKXgGb-dAvsVrTQnBjPCEBzyd0KrM';
+
+// Cell refs below were reverse-engineered from the live template tabs. Every
+// column not listed here is a formula (VLOOKUP against Vendor Details /
+// ITEM_CODES, usually an ARRAYFORMULA spill anchored in the header row) and
+// must never be written to directly — writing over a spill throws in Sheets.
+const PO_FORMAT_CONFIG = {
+  PurchaseOrder: {
+    tabName: 'PurchaseOrder',
+    partyLabel: 'CUSTOMER NAME',
+    hasShipTo: true,
+    header: { poNo: 'J7', date: 'J6', prNo: 'J8', department: 'J9', party: 'A13', shipTo: 'G13', deliverySchedule: 'A16', poValidity: 'C16', paymentTerms: 'G16', poMadeBy: 'J16' },
+    items: { firstRow: 18, lastRow: 58, clearCols: ['A', 'J'], fields: { itemCode: 'A', hsnCode: 'D', uom: 'E', qty: 'F', unitPrice: 'G', gst: 'H' } },
+  },
+  'ENR PO': {
+    tabName: 'ENR PO',
+    partyLabel: 'VENDOR',
+    hasShipTo: false,
+    header: { poNo: 'J9', date: 'J8', prNo: 'J10', department: 'J11', party: 'A16', deliverySchedule: 'F23', poValidity: 'G23', paymentTerms: 'B23', poMadeBy: 'A23' },
+    items: { firstRow: 26, lastRow: 55, clearCols: ['A', 'J'], fields: { itemCode: 'A', customerCodeRef: 'D', barcode: 'E', stickerQty: 'G', rate: 'H', taxPercent: 'I' } },
+  },
+  'Diamond PO': {
+    tabName: 'Diamond PO',
+    partyLabel: 'VENDOR',
+    hasShipTo: false,
+    header: { poNo: 'J9', date: 'J8', prNo: 'J10', department: 'J11', party: 'A16', deliverySchedule: 'G23', poValidity: 'H23', paymentTerms: 'B23', poMadeBy: 'A23' },
+    items: { firstRow: 27, lastRow: 55, clearCols: ['A', 'L'], fields: { itemCode: 'A', boxQty: 'H', boxRate: 'I', plateQty: 'J', plateRate: 'K' } },
+  },
+};
+
+// ITEM_CODES packs three unrelated item catalogs side by side at different
+// column ranges — one per PO format — each looked up by the sheet's own
+// VLOOKUP formulas.
+const PO_ITEM_CATALOG_RANGE = {
+  PurchaseOrder: 'A2:C6000',
+  'ENR PO': 'AC2:AE6000',
+  'Diamond PO': 'Q2:S6000',
+};
+
+let _poItemCatalogCache = {}; // format -> { at, rows: [{code,description,size}] }
+const PO_ITEM_CATALOG_TTL_MS = 5 * 60 * 1000;
+
+async function _loadPoItemCatalog(format) {
+  const cached = _poItemCatalogCache[format];
+  if (cached && (Date.now() - cached.at) < PO_ITEM_CATALOG_TTL_MS) return cached.rows;
+  const auth = getGoogleAuth();
+  if (!auth) return [];
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const range = `'ITEM_CODES'!${PO_ITEM_CATALOG_RANGE[format]}`;
+  const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range, valueRenderOption: 'FORMATTED_VALUE' });
+  const rows = (result.data.values || [])
+    .filter(r => r[0])
+    .map(r => ({ code: r[0] || '', description: r[1] || '', size: r[2] || '' }));
+  _poItemCatalogCache[format] = { at: Date.now(), rows };
+  return rows;
+}
+
+async function _poSheetMeta() {
+  const auth = getGoogleAuth();
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: PO_CREATION_SHEET_ID });
+  const sheetIdByTitle = {};
+  let maxPoNo = 0;
+  for (const s of meta.data.sheets) {
+    sheetIdByTitle[s.properties.title] = s.properties.sheetId;
+    const m = /^PO\s+(\d+)$/i.exec(s.properties.title.trim());
+    if (m) maxPoNo = Math.max(maxPoNo, parseInt(m[1], 10));
+  }
+  return { nextPoNo: maxPoNo + 1, sheetIdByTitle, sheetCount: meta.data.sheets.length };
+}
+
+// GET /api/po-creation/masters — vendor list, ship-to locations (PurchaseOrder
+// only), and the next PO number, all read live off the sheet (no local mirror).
+app.get('/api/po-creation/masters', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const [vendorsRes, shipToRes, meta] = await Promise.all([
+      sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:E200`, valueRenderOption: 'FORMATTED_VALUE' }),
+      sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!I3:I45`, valueRenderOption: 'FORMATTED_VALUE' }),
+      _poSheetMeta(),
+    ]);
+    const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+    const shipToLocations = (shipToRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+    return res.json({ vendors, shipToLocations, nextPoNumber: meta.nextPoNo });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/po-creation/items?format=...&q=... — item-code typeahead, sourced
+// straight from ITEM_CODES (cached in memory a few minutes at a time).
+app.get('/api/po-creation/items', requireAuth, async (req, res) => {
+  try {
+    const format = req.query.format;
+    if (!PO_ITEM_CATALOG_RANGE[format]) return res.status(400).json({ error: 'Unknown format' });
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const rows = await _loadPoItemCatalog(format);
+    const matches = (q ? rows.filter(r => r.code.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)) : rows).slice(0, 50);
+    return res.json(matches);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/po-creation — fills the live template tab for the chosen format,
+// then archives a copy of it as a new "PO <n>" tab. This IS the database
+// write; nothing is stored locally.
+app.post('/api/po-creation', requireAuth, async (req, res) => {
+  try {
+    const cfg = PO_FORMAT_CONFIG[req.body?.format];
+    if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
+    const { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items } = req.body;
+    if (!date || !party || !poMadeBy) return res.status(400).json({ error: 'Date, ' + cfg.partyLabel + ' and PO Made By are required' });
+    const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemCode || '').trim());
+    if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const { nextPoNo, sheetIdByTitle, sheetCount } = await _poSheetMeta();
+    const tab = cfg.tabName;
+    const sourceSheetId = sheetIdByTitle[tab];
+    if (sourceSheetId === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the PO sheet` });
+
+    // 1) Clear the previous PO's item rows so nothing from it bleeds into this one.
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId: PO_CREATION_SHEET_ID,
+      range: `'${tab}'!${cfg.items.clearCols[0]}${cfg.items.firstRow}:${cfg.items.clearCols[1]}${cfg.items.lastRow}`,
+    });
+
+    // 2) Write the header fields + item rows in one batch.
+    const data = [];
+    const put = (a1, value) => { if (value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
+    put(cfg.header.poNo, nextPoNo);
+    put(cfg.header.date, date);
+    put(cfg.header.prNo, prNo);
+    put(cfg.header.department, department);
+    put(cfg.header.party, party);
+    if (cfg.hasShipTo) put(cfg.header.shipTo, shipTo);
+    put(cfg.header.deliverySchedule, deliverySchedule);
+    put(cfg.header.poValidity, poValidity);
+    put(cfg.header.paymentTerms, paymentTerms);
+    put(cfg.header.poMadeBy, poMadeBy);
+
+    cleanItems.forEach((it, i) => {
+      const row = cfg.items.firstRow + i;
+      if (row > cfg.items.lastRow) return; // beyond the template's own capacity — drop silently
+      Object.entries(cfg.items.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
+    });
+
+    if (data.length) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: PO_CREATION_SHEET_ID,
+        requestBody: { valueInputOption: 'USER_ENTERED', data },
+      });
+    }
+
+    // 3) Archive this fill as its own permanent tab, appended at the end
+    // (matching where every existing "PO <n>" archive tab already lives) —
+    // the template itself stays put, ready for the next PO.
+    const newTabName = 'PO ' + nextPoNo;
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: PO_CREATION_SHEET_ID,
+      requestBody: { requests: [{ duplicateSheet: { sourceSheetId, insertSheetIndex: sheetCount, newSheetName: newTabName } }] },
+    });
+
+    return res.json({ success: true, poNumber: nextPoNo, tabName: newTabName });
+  } catch (e) { console.error('[po-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
+});
+
 // ── Payment Entries ───────────────────────────────────────────────────────────
 
 // GET /api/payment-entries — return all draft entries
