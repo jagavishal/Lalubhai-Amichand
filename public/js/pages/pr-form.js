@@ -70,41 +70,29 @@ window.Pages['pr-form'] = (() => {
       + '</label>';
   }
 
-  function _checkboxGroup(cls, label, sublabel, options, includeOther) {
-    const rows = options.map(o => _chkRow(cls, o)).join('') + (includeOther ? _chkRow(cls, 'Other', true) : '');
-    const inner = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:2px 12px;max-height:260px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px 10px;">' + rows + '</div>';
-    return _fieldWrap(label, sublabel, inner, true);
-  }
+  const _CHEVRON = '<svg class="pr-msd-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .15s;flex-shrink:0;color:#94a3b8;"><path d="m6 9 6 6 6-6"/></svg>';
 
-  // Collapsed-by-default accordion card — used for the optional per-department
-  // product-name checkbox groups so the form doesn't force a huge initial scroll
-  // through every department's list at once.
-  const _CHEVRON = '<svg class="pr-group-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .15s;flex-shrink:0;color:#94a3b8;"><path d="m6 9 6 6 6-6"/></svg>';
-
-  function _collapsibleGroup(cls, label, sublabel, options, includeOther, groupId) {
+  // Closed-by-default multi-select "dropdown" — looks like a single select field until
+  // clicked, then opens a floating panel of checkboxes so several options can be picked
+  // without permanently occupying page height (unlike a plain checkbox grid).
+  function _multiSelectDropdown(cls, label, sublabel, options, includeOther, cfg) {
+    cfg = cfg || {};
+    const placeholder = cfg.placeholder || 'Select…';
     const rows = options.map(o => _chkRow(cls, o)).join('') + (includeOther ? _chkRow(cls, 'Other', true) : '');
-    return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">'
-      + '<button type="button" class="pr-group-toggle" data-target="' + groupId + '" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 18px;background:transparent;border:none;cursor:pointer;text-align:left;">'
-        + '<div style="min-width:0;">'
-          + '<div style="font-size:13px;font-weight:700;color:#1e293b;">' + esc(label) + '</div>'
-          + '<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">' + esc(sublabel) + '</div>'
-        + '</div>'
-        + '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">'
-          + '<span class="pr-group-count" data-cls="' + cls + '" style="display:none;font-size:11px;font-weight:700;color:var(--color-primary-text);background:var(--color-primary);padding:2px 8px;border-radius:10px;"></span>'
+    const searchHtml = cfg.searchable
+      ? '<input type="text" class="pr-msd-search" placeholder="Search…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12.5px;margin-bottom:6px;outline:none;" />'
+      : '';
+    const inner = '<div class="pr-msd" data-cls="' + cls + '" data-placeholder="' + esc(placeholder) + '">'
+        + '<button type="button" class="pr-msd-control" style="width:100%;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;background:#fff;cursor:pointer;">'
+          + '<span class="pr-msd-summary" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;color:#94a3b8;">' + esc(placeholder) + '</span>'
           + _CHEVRON
+        + '</button>'
+        + '<div class="pr-msd-panel" style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:40;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.14);padding:8px;">'
+          + searchHtml
+          + '<div class="pr-msd-options" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:2px 10px;max-height:240px;overflow-y:auto;">' + rows + '</div>'
         + '</div>'
-      + '</button>'
-      + '<div class="pr-group-body" id="' + groupId + '" style="display:none;padding:0 18px 16px;">'
-        + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:2px 12px;max-height:220px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px 10px;">' + rows + '</div>'
-      + '</div>'
-    + '</div>';
-  }
-
-  function _vendorGroup() {
-    const rows = VENDOR_LIST.map(o => _chkRow('pr-vendor-chk', o)).join('') + _chkRow('pr-vendor-chk', 'Other', true);
-    const inner = '<input type="text" id="pr-vendor-search" placeholder="Search vendor…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12.5px;margin-bottom:8px;outline:none;" />'
-      + '<div id="pr-vendor-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:2px 12px;max-height:280px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px 10px;">' + rows + '</div>';
-    return _fieldWrap('Available Options of Vendors', 'ઉપલબ્ધ વેન્ડરના વિકલ્પો / वेंडरों के उपलब्ध विकल्प', inner, true, true);
+      + '</div>';
+    return _fieldWrap(label, sublabel, inner, cfg.required !== false, cfg.full);
   }
 
   function _cncGroup() {
@@ -172,39 +160,66 @@ window.Pages['pr-form'] = (() => {
     }
   }
 
-  function _bindGroupAccordion(formEl) {
-    formEl.addEventListener('click', (e) => {
-      const toggle = e.target.closest('.pr-group-toggle');
-      if (!toggle) return;
-      const body = document.getElementById(toggle.dataset.target);
-      if (!body) return;
-      const expanded = body.style.display === 'block';
-      body.style.display = expanded ? 'none' : 'block';
-      const chevron = toggle.querySelector('.pr-group-chevron');
-      if (chevron) chevron.style.transform = expanded ? '' : 'rotate(180deg)';
-    });
-    formEl.addEventListener('change', (e) => {
-      if (!e.target.matches('input[type="checkbox"]')) return;
-      const cls = Array.from(e.target.classList).find(c => c.endsWith('-chk'));
-      if (!cls) return;
-      const badge = formEl.querySelector('.pr-group-count[data-cls="' + cls + '"]');
-      if (!badge) return;
-      const count = _checkedValues(cls).length;
-      badge.textContent = count;
-      badge.style.display = count ? 'inline-block' : 'none';
-    });
+  /* ── Multi-select dropdown behaviour (open/close, live summary, search) ── */
+  let _docClickHandler = null;
+
+  function _closeAllDropdowns(formEl) {
+    formEl.querySelectorAll('.pr-msd.open').forEach(m => _setDropdownOpen(m, false));
   }
 
-  function _bindVendorSearch() {
-    const input = document.getElementById('pr-vendor-search');
-    if (!input) return;
-    input.addEventListener('input', () => {
-      const q = input.value.trim().toLowerCase();
-      document.querySelectorAll('#pr-vendor-list .pr-chk-row').forEach(row => {
+  function _setDropdownOpen(msd, open) {
+    msd.classList.toggle('open', open);
+    const panel   = msd.querySelector('.pr-msd-panel');
+    const chevron = msd.querySelector('.pr-msd-chevron');
+    if (panel)   panel.style.display   = open ? 'block' : 'none';
+    if (chevron) chevron.style.transform = open ? 'rotate(180deg)' : '';
+  }
+
+  function _updateDropdownSummary(msd) {
+    const cls     = msd.dataset.cls;
+    const summary = msd.querySelector('.pr-msd-summary');
+    const values   = _checkedValues(cls);
+    if (!values.length) {
+      summary.textContent = msd.dataset.placeholder;
+      summary.style.color = '#94a3b8';
+    } else {
+      summary.textContent = values.length === 1 ? values[0] : (values[0] + '  +' + (values.length - 1) + ' more');
+      summary.style.color = '#1e293b';
+    }
+  }
+
+  function _bindMultiSelectDropdowns(formEl) {
+    formEl.addEventListener('click', (e) => {
+      const control = e.target.closest('.pr-msd-control');
+      if (control) {
+        const msd = control.closest('.pr-msd');
+        const willOpen = !msd.classList.contains('open');
+        _closeAllDropdowns(formEl);
+        _setDropdownOpen(msd, willOpen);
+        return;
+      }
+      if (!e.target.closest('.pr-msd')) _closeAllDropdowns(formEl);
+    });
+
+    formEl.addEventListener('change', (e) => {
+      if (!e.target.matches('input[type="checkbox"]')) return;
+      const msd = e.target.closest('.pr-msd');
+      if (msd) _updateDropdownSummary(msd);
+    });
+
+    formEl.addEventListener('input', (e) => {
+      if (!e.target.matches('.pr-msd-search')) return;
+      const panel = e.target.closest('.pr-msd-panel');
+      const q = e.target.value.trim().toLowerCase();
+      panel.querySelectorAll('.pr-chk-row').forEach(row => {
         if (row.classList.contains('pr-other-row')) return;
         row.style.display = (!q || (row.dataset.name || '').includes(q)) ? 'flex' : 'none';
       });
     });
+
+    if (_docClickHandler) document.removeEventListener('click', _docClickHandler);
+    _docClickHandler = (e) => { if (!formEl.contains(e.target)) _closeAllDropdowns(formEl); };
+    document.addEventListener('click', _docClickHandler);
   }
 
   /* ── Render ─────────────────────────────────────────────────── */
@@ -215,6 +230,8 @@ window.Pages['pr-form'] = (() => {
     el.innerHTML = '<style>'
         + '.pr-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;}'
         + '.pr-form-full{grid-column:1 / -1;}'
+        + '.pr-msd{position:relative;}'
+        + '.pr-msd-control:hover{border-color:#cbd5e1;}'
         + '@media (max-width:760px){.pr-form-grid{grid-template-columns:1fr;}}'
       + '</style>'
       + '<div style="max-width:980px;margin:0 auto;padding:4px 0 40px;">'
@@ -225,20 +242,20 @@ window.Pages['pr-form'] = (() => {
       + '<form id="pr-form-el" class="pr-form-grid">'
         + _textField('pr-no', 'Purchase Requisition Number (PR NO.)', 'पी.आर. नंबर / પી.આર. નંબર', true)
         + _textField('pr-filled-by', 'Name of Person Filling the Form', 'फ़ॉर्म भरने वाले व्यक्ति का नाम / ફોર્મ ભરતા વ્યક્તિનું નામ', true)
-        + _vendorGroup()
+        + _multiSelectDropdown('pr-vendor-chk', 'Available Options of Vendors', 'ઉપલબ્ધ વેન્ડરના વિકલ્પો / वेंडरों के उपलब्ध विकल्प', VENDOR_LIST, true, { placeholder: 'Select vendor(s)…', searchable: true, full: true })
         + _textField('pr-vendor-other', 'If New Vendor then Enter Here', 'જો નવો વેન્ડર હોય તો અહીં દાખલ કરો / अगर नया वेंडर हो तो यहां दर्ज करें', false)
-        + _checkboxGroup('pr-dept-chk', 'Department', 'વિભાગ / विभाग', DEPARTMENT_LIST, true)
+        + _multiSelectDropdown('pr-dept-chk', 'Department', 'વિભાગ / विभाग', DEPARTMENT_LIST, true, { placeholder: 'Select department(s)…' })
         + _textField('pr-dept-other', 'If New Department then Enter Here', 'જો નવો વિભાગ હોય તો અહીં દાખલ કરો / अगर नया विभाग हो तो यहां दर्ज करें', false)
-        + '<div class="pr-form-full" style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Product Name (tap a department to expand)</div>'
-        + _collapsibleGroup('pr-accessory-chk', 'Accessory Product Name', 'અનુસંગી ઉત્પાદનનું નામ / सहायक उत्पाद का नाम', PRODUCT_CATALOG.accessory, true, 'pr-grp-accessory')
-        + _collapsibleGroup('pr-brazing-chk', 'Brazing Product Name', 'બ્રેઝિંગ ઉત્પાદનનું નામ / ब्रेजिंग उत्पाद का नाम', PRODUCT_CATALOG.brazing, false, 'pr-grp-brazing')
+        + '<div class="pr-form-full" style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Product Name (optional)</div>'
+        + _multiSelectDropdown('pr-accessory-chk', 'Accessory Product Name', 'અનુસંગી ઉત્પાદનનું નામ / सहायक उत्पाद का नाम', PRODUCT_CATALOG.accessory, true, { required: false })
+        + _multiSelectDropdown('pr-brazing-chk', 'Brazing Product Name', 'બ્રેઝિંગ ઉત્પાદનનું નામ / ब्रेजिंग उत्पाद का नाम', PRODUCT_CATALOG.brazing, false, { required: false })
         + _cncGroup()
-        + _collapsibleGroup('pr-consumable-chk', 'Consumable Product Name', 'ઉપયોગી વસ્તુનું નામ / उपभोज्य उत्पाद का नाम', PRODUCT_CATALOG.consumable, true, 'pr-grp-consumable')
-        + _collapsibleGroup('pr-electric-chk', 'Electric Product Name', 'ઇલેક્ટ્રિક ઉત્પાદનનું નામ / विद्युत उत्पाद का नाम', PRODUCT_CATALOG.electric, true, 'pr-grp-electric')
-        + _collapsibleGroup('pr-packing-chk', 'Packing Product Name', 'પેકિંગ ઉત્પાદનનું નામ / पैकिंग उत्पाद का नाम', PRODUCT_CATALOG.packing, true, 'pr-grp-packing')
-        + _collapsibleGroup('pr-pressing-chk', 'Pressing Product Name', 'પેકિંગ ઉત્પાદનનું નામ / पैकिंग उत्पाद का नाम', PRODUCT_CATALOG.pressing, true, 'pr-grp-pressing')
-        + _collapsibleGroup('pr-washing-chk', 'Washing Product Name', 'ધોઈ ઉત્પાદનનું નામ / धोनेका उत्पाद का नाम', PRODUCT_CATALOG.washing, true, 'pr-grp-washing')
-        + _collapsibleGroup('pr-welding-chk', 'Welding Product Name', 'વેલ્ડીંગ ઉત્પાદનનું નામ / वेल्डिंग उत्पाद का नाम', PRODUCT_CATALOG.welding, true, 'pr-grp-welding')
+        + _multiSelectDropdown('pr-consumable-chk', 'Consumable Product Name', 'ઉપયોગી વસ્તુનું નામ / उपभोज्य उत्पाद का नाम', PRODUCT_CATALOG.consumable, true, { required: false, searchable: true })
+        + _multiSelectDropdown('pr-electric-chk', 'Electric Product Name', 'ઇલેક્ટ્રિક ઉત્પાદનનું નામ / विद्युत उत्पाद का नाम', PRODUCT_CATALOG.electric, true, { required: false })
+        + _multiSelectDropdown('pr-packing-chk', 'Packing Product Name', 'પેકિંગ ઉત્પાદનનું નામ / पैकिंग उत्पाद का नाम', PRODUCT_CATALOG.packing, true, { required: false })
+        + _multiSelectDropdown('pr-pressing-chk', 'Pressing Product Name', 'પેકિંગ ઉત્પાદનનું નામ / पैकिंग उत्पाद का नाम', PRODUCT_CATALOG.pressing, true, { required: false })
+        + _multiSelectDropdown('pr-washing-chk', 'Washing Product Name', 'ધોઈ ઉત્પાદનનું નામ / धोनेका उत्पाद का नाम', PRODUCT_CATALOG.washing, true, { required: false })
+        + _multiSelectDropdown('pr-welding-chk', 'Welding Product Name', 'વેલ્ડીંગ ઉત્પાદનનું નામ / वेल्डिंग उत्पाद का नाम', PRODUCT_CATALOG.welding, true, { required: false })
         + _textField('pr-new-product', 'If New Product then Enter Here', 'જો નવો ઉત્પાદન હોય તો અહીં દાખલ કરો / अगर नया उत्पाद है तो यहाँ दर्ज करें', false)
         + '<div class="pr-form-full" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">'
           + _numberField('pr-current-stock', 'Current Stock', 'वर्तमान स्टॉक / હાલનું સ્ટોક', true)
@@ -251,8 +268,7 @@ window.Pages['pr-form'] = (() => {
 
     const formEl = document.getElementById('pr-form-el');
     formEl.addEventListener('submit', _submit);
-    _bindGroupAccordion(formEl);
-    _bindVendorSearch();
+    _bindMultiSelectDropdowns(formEl);
   }
 
   return {
