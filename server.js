@@ -2307,12 +2307,13 @@ app.get('/api/po-creation/items', requireAuth, async (req, res) => {
 // Sheets' own UI uses for File > Download > PDF (scoped to a single gid) —
 // there's no per-tab PDF export in the documented Sheets/Drive API, so this
 // borrows the docs.google.com export URL with an OAuth bearer token instead
-// of a browser session cookie.
-async function _exportPoTabPdf(sourceSheetId) {
+// of a browser session cookie. Shared by PO Creation and GRN Creation (any
+// spreadsheet the same service account can read).
+async function _exportSheetTabPdf(spreadsheetId, sourceSheetId) {
   const auth = getGoogleAuth();
   const client = await auth.getClient();
   const { token } = await client.getAccessToken();
-  const url = `https://docs.google.com/spreadsheets/d/${PO_CREATION_SHEET_ID}/export`
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export`
     + `?format=pdf&gid=${sourceSheetId}&size=A4&portrait=true&fitw=true`
     + `&gridlines=false&printtitle=false&sheetnames=false`
     + `&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3`;
@@ -2398,7 +2399,7 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     // PO itself from being created (same resilience as the PR/PO PDF sync).
     let pdfLink = null;
     try {
-      const pdfBuffer = await _exportPoTabPdf(sourceSheetId);
+      const pdfBuffer = await _exportSheetTabPdf(PO_CREATION_SHEET_ID, sourceSheetId);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PO ${nextPoNo} - ${tab}.pdf`);
     } catch (e) { console.error('[po-creation] PDF export failed:', e.message); }
 
@@ -2434,6 +2435,459 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
     return res.json(rows.slice(0, 200));
   } catch (e) {
     // No PO has been created via the ERP yet — the log tab doesn't exist.
+    if (/unable to parse range/i.test(e.message || '')) return res.json([]);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// ── PR Creation (fills the store team's live "PR July 2026" Google Sheet directly —
+// that sheet IS the database here, nothing is mirrored locally). Mirrors PO Creation's
+// approach exactly: each of the 4 tabs below is a reusable template; submitting a PR
+// overwrites it, exports that tab as a PDF (Drive-hosted), and logs the PR in the
+// "ERP PR Log" tab — the template itself stays put, ready for the next PR. Distinct
+// from PR_SHEET_ID's other (unused) consumers above (syncPrToSheet / Web App Log),
+// which do a one-way summary log of a DB-created PR — a different shape, left alone.
+const PR_CREATION_SHEET_ID = PR_SHEET_ID;
+const PR_CREATION_LOG_TAB = 'ERP PR Log';
+
+// Cell refs reverse-engineered from the live template tabs (formula render + merge
+// inspection), same discipline as PO_FORMAT_CONFIG above. Every column not listed
+// here is a formula (VLOOKUP/ARRAYFORMULA spill against the matching ITEM_CODE*
+// tab) and must never be written to directly. Department is a formula derived from
+// the first item's own category on every format except ALU, where it's manual.
+const PR_FORMAT_CONFIG = {
+  ITEM_CODE: {
+    tabName: 'Purchase Requisition',
+    partyLabel: 'VENDOR NAME',
+    header: { prNo: 'B4', requestedBy: 'C4', vendorName: 'E4', personWhoRaisedPr: 'F4', estimatedDelDate: 'I4', termsOfPayment: 'J4', dateRequested: 'L4' },
+    departmentCell: 'D4',
+    items: { firstRow: 7, lastRow: 20, clearCols: ['B', 'L'], fields: { itemCode: 'B', monthlyConsumption: 'D', qtyRequired: 'E', uom: 'F', stock: 'G', lastOrderedDate: 'H', lastUnitPrice: 'I', tax: 'J' } },
+    summary: { totalCell: 'L21' },
+  },
+  PACKING_STICKER: {
+    tabName: 'PURCHASE REQUISITION(PACKING_STICKER)',
+    partyLabel: 'PARTY NAME',
+    header: { prNo: 'A3', requestedBy: 'B3', orderNo: 'C3', partyName: 'D3', dateRequested: 'K3' },
+    items: { firstRow: 7, lastRow: 25, clearCols: ['A', 'K'], fields: { itemCode: 'A', stickerQty: 'I', rate: 'J' } },
+    summary: { totalCell: 'K26' },
+  },
+  PACKING_BOX: {
+    tabName: 'PURCHASE REQUISITION(PACKING_BOX)',
+    partyLabel: 'PARTY NAME',
+    header: { prNo: 'A4', requestedBy: 'B4', orderNo: 'C4', partyName: 'D4', termsOfPayment: 'L4', estimatedDelDate: 'M4', dateRequested: 'N4' },
+    items: { firstRow: 8, lastRow: 22, clearCols: ['A', 'N'], fields: { itemCode: 'A', boxQty: 'J', boxRate: 'K', plateQty: 'L', plateRate: 'M' } },
+    summary: { totalCell: 'N23' },
+  },
+  ALU: {
+    tabName: 'purchase_requisition(ALU)',
+    partyLabel: 'VENDOR NAME',
+    header: { prNo: 'B4', requestedBy: 'C4', department: 'D4', vendorName: 'E4', termsOfPayment: 'G4', estimatedDeliveryDate: 'H4', dateRequested: 'I4' },
+    items: { firstRow: 7, lastRow: 20, clearCols: ['B', 'I'], fields: { itemCode: 'B', qtyRequired: 'E', uom: 'F', tax: 'G', rate: 'H', stock: 'I' } },
+    summary: { totalCell: 'H21' },
+  },
+};
+
+const PR_ITEM_CATALOG_RANGE = {
+  ITEM_CODE: { tab: 'ITEM_CODE', range: 'A2:C1003' },
+  PACKING_STICKER: { tab: 'ITEM_CODE(PACKING_STICKER)', range: 'A2:C1082' },
+  PACKING_BOX: { tab: 'ITEM_CODE(PACKING_BOX)', range: 'A2:C989' },
+  ALU: { tab: 'ITEM_CODE(ALU)', range: 'A2:C2103' },
+};
+
+let _prItemCatalogCache = {}; // format -> { at, rows: [{code,description,size}] }
+
+async function _loadPrItemCatalog(format) {
+  const cached = _prItemCatalogCache[format];
+  if (cached && (Date.now() - cached.at) < PO_ITEM_CATALOG_TTL_MS) return cached.rows;
+  const auth = getGoogleAuth();
+  if (!auth) return [];
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const cat = PR_ITEM_CATALOG_RANGE[format];
+  if (!cat) return [];
+  const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${cat.tab}'!${cat.range}`, valueRenderOption: 'FORMATTED_VALUE' });
+  const rows = (result.data.values || [])
+    .filter(r => r[0])
+    .map(r => ({ code: r[0] || '', description: r[1] || '', size: r[2] || '' }));
+  _prItemCatalogCache[format] = { at: Date.now(), rows };
+  return rows;
+}
+
+async function _prSheetMeta() {
+  const auth = getGoogleAuth();
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: PR_CREATION_SHEET_ID });
+  const sheetIdByTitle = {};
+  let maxPrNo = 0;
+  for (const s of meta.data.sheets) {
+    sheetIdByTitle[s.properties.title] = s.properties.sheetId;
+    const m = /^PR\s+(\d+)$/i.exec(s.properties.title.trim());
+    if (m) maxPrNo = Math.max(maxPrNo, parseInt(m[1], 10));
+  }
+  return { nextPrNo: maxPrNo + 1, sheetIdByTitle };
+}
+
+// Same borrowed docs.google.com export approach as _exportPoTabPdf — no per-tab
+// PDF export exists in the documented Sheets/Drive API.
+async function _exportPrTabPdf(sourceSheetId) {
+  const auth = getGoogleAuth();
+  const client = await auth.getClient();
+  const { token } = await client.getAccessToken();
+  const url = `https://docs.google.com/spreadsheets/d/${PR_CREATION_SHEET_ID}/export`
+    + `?format=pdf&gid=${sourceSheetId}&size=A4&portrait=true&fitw=true`
+    + `&gridlines=false&printtitle=false&sheetnames=false`
+    + `&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3`;
+  const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+  if (!resp.ok) throw new Error('PDF export failed: HTTP ' + resp.status);
+  const buf = Buffer.from(await resp.arrayBuffer());
+  if (buf.slice(0, 4).toString() !== '%PDF') throw new Error('PDF export returned non-PDF content');
+  return buf;
+}
+
+// GET /api/pr-creation/masters — vendor list and the next PR number, read live
+// off the sheet (no local mirror). No department master exists in this sheet —
+// it's formula-derived on every format except ALU, where it's a free-text field.
+app.get('/api/pr-creation/masters', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const [vendorsRes, meta] = await Promise.all([
+      sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'Vendor Name'!A3:A1000`, valueRenderOption: 'FORMATTED_VALUE' }),
+      _prSheetMeta(),
+    ]);
+    const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+    return res.json({ vendors, nextPrNumber: meta.nextPrNo });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/pr-creation/items?format=...&q=... — item-code typeahead, sourced
+// straight from the format's ITEM_CODE* tab (cached a few minutes at a time).
+app.get('/api/pr-creation/items', requireAuth, async (req, res) => {
+  try {
+    const format = req.query.format;
+    if (!PR_ITEM_CATALOG_RANGE[format]) return res.status(400).json({ error: 'Unknown format' });
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const rows = await _loadPrItemCatalog(format);
+    const matches = (q ? rows.filter(r => r.code.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)) : rows).slice(0, 50);
+    return res.json(matches);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/pr-creation — fills the live template tab for the chosen format,
+// exports it as a PDF (saved to Drive), and logs the PR in "ERP PR Log". This
+// IS the database write; nothing is stored locally.
+app.post('/api/pr-creation', requireAuth, async (req, res) => {
+  try {
+    const cfg = PR_FORMAT_CONFIG[req.body?.format];
+    if (!cfg) return res.status(400).json({ error: 'Unknown PR format' });
+    const {
+      requestedBy, vendorName, partyName, personWhoRaisedPr, orderNo,
+      department, termsOfPayment, estimatedDelDate, dateRequested, items,
+    } = req.body;
+    const party = vendorName || partyName || '';
+    if (!requestedBy || !party) return res.status(400).json({ error: 'Requested By and ' + cfg.partyLabel + ' are required' });
+    const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemCode || '').trim());
+    if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const { nextPrNo, sheetIdByTitle } = await _prSheetMeta();
+    const tab = cfg.tabName;
+    const sourceSheetId = sheetIdByTitle[tab];
+    if (sourceSheetId === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the PR sheet` });
+
+    // 1) Clear the previous PR's item rows so nothing from it bleeds into this one.
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId: PR_CREATION_SHEET_ID,
+      range: `'${tab}'!${cfg.items.clearCols[0]}${cfg.items.firstRow}:${cfg.items.clearCols[1]}${cfg.items.lastRow}`,
+    });
+
+    // 2) Write header fields and item rows in one batch.
+    const data = [];
+    const put = (a1, value) => { if (a1 && value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
+    put(cfg.header.prNo, nextPrNo);
+    put(cfg.header.requestedBy, requestedBy);
+    put(cfg.header.vendorName, party);
+    put(cfg.header.partyName, party);
+    put(cfg.header.personWhoRaisedPr, personWhoRaisedPr);
+    put(cfg.header.orderNo, orderNo);
+    put(cfg.header.department, department); // ALU only — the other formats derive it
+    put(cfg.header.termsOfPayment, termsOfPayment);
+    put(cfg.header.estimatedDelDate, estimatedDelDate);
+    put(cfg.header.estimatedDeliveryDate, estimatedDelDate);
+    put(cfg.header.dateRequested, dateRequested);
+
+    cleanItems.forEach((it, i) => {
+      const row = cfg.items.firstRow + i;
+      if (row > cfg.items.lastRow) return; // beyond the template's own capacity — drop silently
+      Object.entries(cfg.items.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
+    });
+
+    if (data.length) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: PR_CREATION_SHEET_ID,
+        requestBody: { valueInputOption: 'USER_ENTERED', data },
+      });
+    }
+
+    // 3) Read back the sheet's own computed Total (single source of truth), and —
+    // for the 3 auto-derived formats — the formula-derived Department, for the log.
+    let totalAmount = null, departmentOut = department || '';
+    try {
+      const deptCell = cfg.header.department ? null : cfg.departmentCell;
+      const ranges = [`'${tab}'!${cfg.summary.totalCell}`];
+      if (deptCell) ranges.push(`'${tab}'!${deptCell}`);
+      const readRes = await sheets.spreadsheets.values.batchGet({ spreadsheetId: PR_CREATION_SHEET_ID, ranges, valueRenderOption: 'UNFORMATTED_VALUE' });
+      totalAmount = readRes.data.valueRanges?.[0]?.values?.[0]?.[0] ?? null;
+      if (deptCell) departmentOut = readRes.data.valueRanges?.[1]?.values?.[0]?.[0] ?? '';
+    } catch (e) { console.error('[pr-creation] total/department read-back failed:', e.message); }
+
+    // 4) Export this fill as a PDF and save it to Drive — a Drive hiccup must
+    // never block the PR itself from being created.
+    let pdfLink = null;
+    try {
+      const pdfBuffer = await _exportPrTabPdf(sourceSheetId);
+      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PR ${nextPrNo} - ${tab}.pdf`);
+    } catch (e) { console.error('[pr-creation] PDF export failed:', e.message); }
+
+    // 5) Log this PR so the ERP can list it — the sheet is still the database,
+    // this is just another tab in it, same pattern as PO Creation's own log.
+    const sessUser = req.session?.user;
+    await ensureLogTab(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, ['PR No', 'Format', 'Date', 'Vendor/Party', 'Requested By', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At']);
+    await appendLogRow(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, [
+      nextPrNo, tab, dateRequested || '', party, requestedBy, departmentOut, totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
+    ]);
+
+    return res.json({ success: true, prNumber: nextPrNo, totalAmount, department: departmentOut, pdfLink });
+  } catch (e) { console.error('[pr-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/pr-creation/list — recent PRs created via the ERP, read straight
+// from the "ERP PR Log" tab (most recent first).
+app.get('/api/pr-creation/list', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const rows = (result.data.values || []).filter(r => r[0]).map(r => ({
+      prNo: r[0] || '', format: r[1] || '', date: r[2] || '', party: r[3] || '', requestedBy: r[4] || '',
+      department: r[5] || '', total: r[6] || '', pdfLink: r[7] || '', createdBy: r[8] || '', createdAt: r[9] || '',
+    })).reverse();
+    return res.json(rows.slice(0, 200));
+  } catch (e) {
+    // No PR has been created via the ERP yet — the log tab doesn't exist.
+    if (/unable to parse range/i.test(e.message || '')) return res.json([]);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GRN Creation (same pattern as PO Creation above: fills the store team's
+// live "GRN June 2026" Google Sheet directly — that sheet IS the database
+// here too). The "GRN" tab is a single reusable template (no multi-format
+// split like PO): submitting overwrites it in place, exports it as a PDF
+// (Drive-hosted), and logs it in "ERP GRN Log" — the template stays put,
+// ready for the next GRN.
+const GRN_CREATION_SHEET_ID = '15io7qclrqbmm8j0xduBbHakVTLHYpe8UC3c_1RajWsk';
+const GRN_CREATION_LOG_TAB = 'ERP GRN Log';
+const GRN_TEMPLATE_TAB = 'GRN';
+
+// Cell refs reverse-engineered from the live template (formula render + merge
+// inspection, 2026-07-29). Columns C:H on each item row are an ARRAYFORMULA
+// spill anchored at C6:H6 (VLOOKUP against item_code by Item No.) — never
+// write to them, they populate automatically once Item No. (B) is written.
+// Column L per row is a REAL per-row formula (=I*K), unlike PO's spill-driven
+// amount columns — clearing it would delete the formula for good, so the
+// clear step below only ever touches B (item no.) and I:K (qty/uom/rate).
+//
+// The sheet's own "vendor details" / "item_code" tabs are IMPORTRANGE
+// pull-throughs of PR_SHEET_ID's "Vendor Name" tab and the PO sheet's
+// ITEM_CODES tab respectively — IMPORTRANGE needs a one-time manual "Allow
+// access" click in the Sheets UI that a service account can't grant itself,
+// and at inspection time neither had been authorized (#REF! on both). Masters
+// below read straight from those two source sheets instead, sidestepping the
+// dependency entirely — the item catalog literally reuses PO Creation's own
+// _loadPoItemCatalog('PurchaseOrder') cache since it's the exact same range.
+const GRN_HEADER_CELLS = {
+  grNo: 'B4', madeBy: 'C4', prNo: 'D4', vendorName: 'E4', poNo: 'F4',
+  billNo: 'G4', billRecvDate: 'H4', deptHead: 'I4', date: 'L4',
+};
+const GRN_ITEMS = { firstRow: 7, lastRow: 26, itemNoCol: 'B', qtyCol: 'I', uomCol: 'J', rateCol: 'K' };
+const GRN_SUMMARY_CELLS = { cgst: 'L28', sgst: 'L29', roundOff: 'L30' };
+const GRN_COMMENTS_CELL = 'B28';
+const GRN_SUBTOTAL_CELL = 'L27';
+const GRN_TOTAL_CELL = 'L31';
+
+async function _grnSheetMeta() {
+  const auth = getGoogleAuth();
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: GRN_CREATION_SHEET_ID });
+  const sheetIdByTitle = {};
+  let maxGrNo = 0;
+  for (const s of meta.data.sheets) {
+    sheetIdByTitle[s.properties.title] = s.properties.sheetId;
+    const m = /^GR\s+(\d+)$/i.exec(s.properties.title.trim());
+    if (m) maxGrNo = Math.max(maxGrNo, parseInt(m[1], 10));
+  }
+  return { nextGrNo: maxGrNo + 1, sheetIdByTitle };
+}
+
+// GET /api/grn-creation/masters — vendor list (from PR_SHEET_ID's "Vendor
+// Name" tab, the same source the GRN sheet's own broken IMPORTRANGE points
+// at) and the next GR number, read live (no local mirror).
+app.get('/api/grn-creation/masters', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const [vendorsRes, meta] = await Promise.all([
+      sheets.spreadsheets.values.get({ spreadsheetId: PR_SHEET_ID, range: `'Vendor Name'!A3:A2000`, valueRenderOption: 'FORMATTED_VALUE' }),
+      _grnSheetMeta(),
+    ]);
+    const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+    return res.json({ vendors, nextGrNumber: meta.nextGrNo });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/grn-creation/items?q=... — item-no typeahead. Reuses PO
+// Creation's own item catalog cache (_loadPoItemCatalog) since the GRN
+// sheet's item_code tab is an IMPORTRANGE of the exact same PO ITEM_CODES
+// range — no separate cache needed.
+app.get('/api/grn-creation/items', requireAuth, async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const rows = await _loadPoItemCatalog('PurchaseOrder');
+    const matches = (q ? rows.filter(r => r.code.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)) : rows).slice(0, 50);
+    return res.json(matches);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/grn-creation — fills the live "GRN" template tab, exports it as a
+// PDF (saved to Drive), and logs it in "ERP GRN Log". This IS the database
+// write; nothing is stored locally.
+app.post('/api/grn-creation', requireAuth, async (req, res) => {
+  try {
+    const { date, madeBy, prNo, vendorName, poNo, billNo, billRecvDate, deptHead, items, cgst, sgst, roundOff, comments } = req.body;
+    if (!date || !vendorName || !madeBy) return res.status(400).json({ error: 'Date, Vendor Name and Made By are required' });
+    const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemNo || '').trim());
+    if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const { nextGrNo, sheetIdByTitle } = await _grnSheetMeta();
+    const tab = GRN_TEMPLATE_TAB;
+    const sourceSheetId = sheetIdByTitle[tab];
+    if (sourceSheetId === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the GRN sheet` });
+
+    // 1) Clear the previous GRN's item rows so nothing from it bleeds into
+    // this one — only the manual columns (see comment on GRN_ITEMS above).
+    await sheets.spreadsheets.values.batchClear({
+      spreadsheetId: GRN_CREATION_SHEET_ID,
+      requestBody: { ranges: [
+        `'${tab}'!${GRN_ITEMS.itemNoCol}${GRN_ITEMS.firstRow}:${GRN_ITEMS.itemNoCol}${GRN_ITEMS.lastRow}`,
+        `'${tab}'!${GRN_ITEMS.qtyCol}${GRN_ITEMS.firstRow}:${GRN_ITEMS.rateCol}${GRN_ITEMS.lastRow}`,
+      ] },
+    });
+
+    // 2) Write header fields, item rows, and CGST/SGST/Round Off in one
+    // batch. The summary fields are always written — even when 0 — since
+    // they feed the sheet's own Total formula and must never carry over a
+    // previous GRN's numbers. Comments is likewise always written (possibly
+    // blank) so a previous GRN's note can't linger on this one.
+    const data = [];
+    const put = (a1, value) => { if (value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
+    put(GRN_HEADER_CELLS.grNo, nextGrNo);
+    put(GRN_HEADER_CELLS.madeBy, madeBy);
+    put(GRN_HEADER_CELLS.prNo, prNo);
+    put(GRN_HEADER_CELLS.vendorName, vendorName);
+    put(GRN_HEADER_CELLS.poNo, poNo);
+    put(GRN_HEADER_CELLS.billNo, billNo);
+    put(GRN_HEADER_CELLS.billRecvDate, billRecvDate);
+    put(GRN_HEADER_CELLS.deptHead, deptHead);
+    put(GRN_HEADER_CELLS.date, date);
+    data.push({ range: `'${tab}'!${GRN_COMMENTS_CELL}`, values: [[comments || '']] });
+    data.push({ range: `'${tab}'!${GRN_SUMMARY_CELLS.cgst}`, values: [[parseFloat(cgst) || 0]] });
+    data.push({ range: `'${tab}'!${GRN_SUMMARY_CELLS.sgst}`, values: [[parseFloat(sgst) || 0]] });
+    data.push({ range: `'${tab}'!${GRN_SUMMARY_CELLS.roundOff}`, values: [[parseFloat(roundOff) || 0]] });
+
+    cleanItems.forEach((it, i) => {
+      const row = GRN_ITEMS.firstRow + i;
+      if (row > GRN_ITEMS.lastRow) return; // beyond the template's own capacity — drop silently
+      put(`${GRN_ITEMS.itemNoCol}${row}`, it.itemNo);
+      put(`${GRN_ITEMS.qtyCol}${row}`, it.qty);
+      put(`${GRN_ITEMS.uomCol}${row}`, it.uom);
+      put(`${GRN_ITEMS.rateCol}${row}`, it.rate);
+    });
+
+    if (data.length) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: GRN_CREATION_SHEET_ID,
+        requestBody: { valueInputOption: 'USER_ENTERED', data },
+      });
+    }
+
+    // 3) Read back the sheet's own computed Subtotal/Total (single source of
+    // truth — never recompute the formula's math server-side).
+    let subtotal = null, totalAmount = null;
+    try {
+      const totalsRes = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: GRN_CREATION_SHEET_ID,
+        ranges: [`'${tab}'!${GRN_SUBTOTAL_CELL}`, `'${tab}'!${GRN_TOTAL_CELL}`],
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      });
+      subtotal = totalsRes.data.valueRanges?.[0]?.values?.[0]?.[0] ?? null;
+      totalAmount = totalsRes.data.valueRanges?.[1]?.values?.[0]?.[0] ?? null;
+    } catch (e) { console.error('[grn-creation] total read-back failed:', e.message); }
+
+    // 4) Export this fill as a PDF and save it to Drive. A PDF/Drive hiccup
+    // must never block the GRN itself from being created.
+    let pdfLink = null;
+    try {
+      const pdfBuffer = await _exportSheetTabPdf(GRN_CREATION_SHEET_ID, sourceSheetId);
+      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `GR ${nextGrNo}.pdf`);
+    } catch (e) { console.error('[grn-creation] PDF export failed:', e.message); }
+
+    // 5) Log this GRN so the ERP can list it — same pattern as "ERP PO Log".
+    const sessUser = req.session?.user;
+    await ensureLogTab(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, ['GR No', 'Date', 'Made By', 'PR No', 'Vendor Name', 'PO No', 'Bill No', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At']);
+    await appendLogRow(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, [
+      // Leading "'" forces the ISO date to stay literal text instead of being
+      // reparsed into a locale-formatted date — same convention as ERP PO Log.
+      nextGrNo, "'" + date, madeBy, prNo || '', vendorName, poNo || '', billNo || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
+    ]);
+
+    return res.json({ success: true, grNumber: nextGrNo, subtotal, totalAmount, pdfLink });
+  } catch (e) { console.error('[grn-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/grn-creation/list — recent GRNs created via the ERP, read straight
+// from the "ERP GRN Log" tab (most recent first).
+app.get('/api/grn-creation/list', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const rows = (result.data.values || []).filter(r => r[0]).map(r => ({
+      grNo: r[0] || '', date: r[1] || '', madeBy: r[2] || '', prNo: r[3] || '', vendorName: r[4] || '',
+      poNo: r[5] || '', billNo: r[6] || '', total: r[7] || '', pdfLink: r[8] || '', createdBy: r[9] || '', createdAt: r[10] || '',
+    })).reverse();
+    return res.json(rows.slice(0, 200));
+  } catch (e) {
+    // No GRN has been created via the ERP yet — the log tab doesn't exist.
     if (/unable to parse range/i.test(e.message || '')) return res.json([]);
     return res.status(500).json({ error: e.message });
   }
