@@ -43,24 +43,24 @@ window.Pages['pr-form'] = (() => {
     return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  function _fieldWrap(label, sublabel, innerHtml, required) {
-    return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;">'
+  function _fieldWrap(label, sublabel, innerHtml, required, full) {
+    return '<div class="' + (full ? 'pr-form-full ' : '') + 'pr-form-card" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;">'
       + '<div style="font-size:13px;font-weight:700;color:#1e293b;">' + esc(label) + (required ? ' <span style="color:#ef4444;">*</span>' : '') + '</div>'
       + '<div style="font-size:11.5px;color:#94a3b8;margin:2px 0 10px;">' + esc(sublabel) + '</div>'
       + innerHtml
       + '</div>';
   }
 
-  function _textField(id, label, sublabel, required) {
+  function _textField(id, label, sublabel, required, full) {
     return _fieldWrap(label, sublabel,
       '<input type="text" id="' + id + '" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;" />',
-      required);
+      required, full);
   }
 
-  function _numberField(id, label, sublabel, required) {
+  function _numberField(id, label, sublabel, required, full) {
     return _fieldWrap(label, sublabel,
       '<input type="text" inputmode="decimal" id="' + id + '" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;" />',
-      required);
+      required, full);
   }
 
   function _chkRow(cls, value, isOther) {
@@ -104,7 +104,7 @@ window.Pages['pr-form'] = (() => {
     const rows = VENDOR_LIST.map(o => _chkRow('pr-vendor-chk', o)).join('') + _chkRow('pr-vendor-chk', 'Other', true);
     const inner = '<input type="text" id="pr-vendor-search" placeholder="Search vendor…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12.5px;margin-bottom:8px;outline:none;" />'
       + '<div id="pr-vendor-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:2px 12px;max-height:280px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px 10px;">' + rows + '</div>';
-    return _fieldWrap('Available Options of Vendors', 'ઉપલબ્ધ વેન્ડરના વિકલ્પો / वेंडरों के उपलब्ध विकल्प', inner, true);
+    return _fieldWrap('Available Options of Vendors', 'ઉપલબ્ધ વેન્ડરના વિકલ્પો / वेंडरों के उपलब्ध विकल्प', inner, true, true);
   }
 
   function _cncGroup() {
@@ -212,19 +212,24 @@ window.Pages['pr-form'] = (() => {
     const el = document.getElementById('main-content');
     if (!el) return;
 
-    el.innerHTML = '<div style="max-width:760px;margin:0 auto;padding:4px 0 40px;">'
+    el.innerHTML = '<style>'
+        + '.pr-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;}'
+        + '.pr-form-full{grid-column:1 / -1;}'
+        + '@media (max-width:760px){.pr-form-grid{grid-template-columns:1fr;}}'
+      + '</style>'
+      + '<div style="max-width:980px;margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:20px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">PR Form</h1>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Checking safety stock and raising a Purchase Requisition after receiving the requirement from a department head.</p>'
       + '</div>'
-      + '<form id="pr-form-el" style="display:flex;flex-direction:column;gap:16px;">'
+      + '<form id="pr-form-el" class="pr-form-grid">'
         + _textField('pr-no', 'Purchase Requisition Number (PR NO.)', 'पी.आर. नंबर / પી.આર. નંબર', true)
         + _textField('pr-filled-by', 'Name of Person Filling the Form', 'फ़ॉर्म भरने वाले व्यक्ति का नाम / ફોર્મ ભરતા વ્યક્તિનું નામ', true)
         + _vendorGroup()
         + _textField('pr-vendor-other', 'If New Vendor then Enter Here', 'જો નવો વેન્ડર હોય તો અહીં દાખલ કરો / अगर नया वेंडर हो तो यहां दर्ज करें', false)
         + _checkboxGroup('pr-dept-chk', 'Department', 'વિભાગ / विभाग', DEPARTMENT_LIST, true)
         + _textField('pr-dept-other', 'If New Department then Enter Here', 'જો નવો વિભાગ હોય તો અહીં દાખલ કરો / अगर नया विभाग हो तो यहां दर्ज करें', false)
-        + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Product Name (tap a department to expand)</div>'
+        + '<div class="pr-form-full" style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Product Name (tap a department to expand)</div>'
         + _collapsibleGroup('pr-accessory-chk', 'Accessory Product Name', 'અનુસંગી ઉત્પાદનનું નામ / सहायक उत्पाद का नाम', PRODUCT_CATALOG.accessory, true, 'pr-grp-accessory')
         + _collapsibleGroup('pr-brazing-chk', 'Brazing Product Name', 'બ્રેઝિંગ ઉત્પાદનનું નામ / ब्रेजिंग उत्पाद का नाम', PRODUCT_CATALOG.brazing, false, 'pr-grp-brazing')
         + _cncGroup()
@@ -235,12 +240,12 @@ window.Pages['pr-form'] = (() => {
         + _collapsibleGroup('pr-washing-chk', 'Washing Product Name', 'ધોઈ ઉત્પાદનનું નામ / धोनेका उत्पाद का नाम', PRODUCT_CATALOG.washing, true, 'pr-grp-washing')
         + _collapsibleGroup('pr-welding-chk', 'Welding Product Name', 'વેલ્ડીંગ ઉત્પાદનનું નામ / वेल्डिंग उत्पाद का नाम', PRODUCT_CATALOG.welding, true, 'pr-grp-welding')
         + _textField('pr-new-product', 'If New Product then Enter Here', 'જો નવો ઉત્પાદન હોય તો અહીં દાખલ કરો / अगर नया उत्पाद है तो यहाँ दर्ज करें', false)
-        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">'
+        + '<div class="pr-form-full" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">'
           + _numberField('pr-current-stock', 'Current Stock', 'वर्तमान स्टॉक / હાલનું સ્ટોક', true)
           + _numberField('pr-qty-required', 'Quantity Required', 'आवश्यक मात्रा / જરૂરી પ્રમાણ', true)
           + _numberField('pr-previous-rate', 'Previous Rate', 'पिछली दर / પહેલી દર', true)
         + '</div>'
-        + '<button type="submit" id="pr-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Submit PR</button>'
+        + '<button type="submit" id="pr-submit-btn" class="pr-form-full" style="justify-self:start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Submit PR</button>'
       + '</form>'
     + '</div>';
 
