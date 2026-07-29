@@ -43,7 +43,6 @@ window.Pages.users = (() => {
     { key: 'mis',           label: 'MIS Report' },
     { key: 'fms',           label: 'FMS Master' },
     { key: 'client-master', label: 'Vendor Master' },
-    { key: 'pr-form',       label: 'PR Form' },
     { key: 'pr-creation',   label: 'PR Creation' },
     { key: 'po-creation',   label: 'PO Creation' },
     { key: 'grn-creation',  label: 'GRN Creation' },
