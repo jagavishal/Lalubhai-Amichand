@@ -76,6 +76,30 @@ window.Pages['pr-form'] = (() => {
     return _fieldWrap(label, sublabel, inner, true);
   }
 
+  // Collapsed-by-default accordion card — used for the optional per-department
+  // product-name checkbox groups so the form doesn't force a huge initial scroll
+  // through every department's list at once.
+  const _CHEVRON = '<svg class="pr-group-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .15s;flex-shrink:0;color:#94a3b8;"><path d="m6 9 6 6 6-6"/></svg>';
+
+  function _collapsibleGroup(cls, label, sublabel, options, includeOther, groupId) {
+    const rows = options.map(o => _chkRow(cls, o)).join('') + (includeOther ? _chkRow(cls, 'Other', true) : '');
+    return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;">'
+      + '<button type="button" class="pr-group-toggle" data-target="' + groupId + '" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 18px;background:transparent;border:none;cursor:pointer;text-align:left;">'
+        + '<div style="min-width:0;">'
+          + '<div style="font-size:13px;font-weight:700;color:#1e293b;">' + esc(label) + '</div>'
+          + '<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">' + esc(sublabel) + '</div>'
+        + '</div>'
+        + '<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">'
+          + '<span class="pr-group-count" data-cls="' + cls + '" style="display:none;font-size:11px;font-weight:700;color:var(--color-primary-text);background:var(--color-primary);padding:2px 8px;border-radius:10px;"></span>'
+          + _CHEVRON
+        + '</div>'
+      + '</button>'
+      + '<div class="pr-group-body" id="' + groupId + '" style="display:none;padding:0 18px 16px;">'
+        + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:2px 12px;max-height:220px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px 10px;">' + rows + '</div>'
+      + '</div>'
+    + '</div>';
+  }
+
   function _vendorGroup() {
     const rows = VENDOR_LIST.map(o => _chkRow('pr-vendor-chk', o)).join('') + _chkRow('pr-vendor-chk', 'Other', true);
     const inner = '<input type="text" id="pr-vendor-search" placeholder="Search vendor…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12.5px;margin-bottom:8px;outline:none;" />'
@@ -148,6 +172,29 @@ window.Pages['pr-form'] = (() => {
     }
   }
 
+  function _bindGroupAccordion(formEl) {
+    formEl.addEventListener('click', (e) => {
+      const toggle = e.target.closest('.pr-group-toggle');
+      if (!toggle) return;
+      const body = document.getElementById(toggle.dataset.target);
+      if (!body) return;
+      const expanded = body.style.display === 'block';
+      body.style.display = expanded ? 'none' : 'block';
+      const chevron = toggle.querySelector('.pr-group-chevron');
+      if (chevron) chevron.style.transform = expanded ? '' : 'rotate(180deg)';
+    });
+    formEl.addEventListener('change', (e) => {
+      if (!e.target.matches('input[type="checkbox"]')) return;
+      const cls = Array.from(e.target.classList).find(c => c.endsWith('-chk'));
+      if (!cls) return;
+      const badge = formEl.querySelector('.pr-group-count[data-cls="' + cls + '"]');
+      if (!badge) return;
+      const count = _checkedValues(cls).length;
+      badge.textContent = count;
+      badge.style.display = count ? 'inline-block' : 'none';
+    });
+  }
+
   function _bindVendorSearch() {
     const input = document.getElementById('pr-vendor-search');
     if (!input) return;
@@ -177,15 +224,16 @@ window.Pages['pr-form'] = (() => {
         + _textField('pr-vendor-other', 'If New Vendor then Enter Here', 'જો નવો વેન્ડર હોય તો અહીં દાખલ કરો / अगर नया वेंडर हो तो यहां दर्ज करें', false)
         + _checkboxGroup('pr-dept-chk', 'Department', 'વિભાગ / विभाग', DEPARTMENT_LIST, true)
         + _textField('pr-dept-other', 'If New Department then Enter Here', 'જો નવો વિભાગ હોય તો અહીં દાખલ કરો / अगर नया विभाग हो तो यहां दर्ज करें', false)
-        + _checkboxGroup('pr-accessory-chk', 'Accessory Product Name', 'અનુસંગી ઉત્પાદનનું નામ / सहायक उत्पाद का नाम', PRODUCT_CATALOG.accessory, true)
-        + _checkboxGroup('pr-brazing-chk', 'Brazing Product Name', 'બ્રેઝિંગ ઉત્પાદનનું નામ / ब्रेजिंग उत्पाद का नाम', PRODUCT_CATALOG.brazing, false)
+        + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Product Name (tap a department to expand)</div>'
+        + _collapsibleGroup('pr-accessory-chk', 'Accessory Product Name', 'અનુસંગી ઉત્પાદનનું નામ / सहायक उत्पाद का नाम', PRODUCT_CATALOG.accessory, true, 'pr-grp-accessory')
+        + _collapsibleGroup('pr-brazing-chk', 'Brazing Product Name', 'બ્રેઝિંગ ઉત્પાદનનું નામ / ब्रेजिंग उत्पाद का नाम', PRODUCT_CATALOG.brazing, false, 'pr-grp-brazing')
         + _cncGroup()
-        + _checkboxGroup('pr-consumable-chk', 'Consumable Product Name', 'ઉપયોગી વસ્તુનું નામ / उपभोज्य उत्पाद का नाम', PRODUCT_CATALOG.consumable, true)
-        + _checkboxGroup('pr-electric-chk', 'Electric Product Name', 'ઇલેક્ટ્રિક ઉત્પાદનનું નામ / विद्युत उत्पाद का नाम', PRODUCT_CATALOG.electric, true)
-        + _checkboxGroup('pr-packing-chk', 'Packing Product Name', 'પેકિંગ ઉત્પાદનનું નામ / पैकिंग उत्पाद का नाम', PRODUCT_CATALOG.packing, true)
-        + _checkboxGroup('pr-pressing-chk', 'Pressing Product Name', 'પેકિંગ ઉત્પાદનનું નામ / पैकिंग उत्पाद का नाम', PRODUCT_CATALOG.pressing, true)
-        + _checkboxGroup('pr-washing-chk', 'Washing Product Name', 'ધોઈ ઉત્પાદનનું નામ / धोनेका उत्पाद का नाम', PRODUCT_CATALOG.washing, true)
-        + _checkboxGroup('pr-welding-chk', 'Welding Product Name', 'વેલ્ડીંગ ઉત્પાદનનું નામ / वेल्डिंग उत्पाद का नाम', PRODUCT_CATALOG.welding, true)
+        + _collapsibleGroup('pr-consumable-chk', 'Consumable Product Name', 'ઉપયોગી વસ્તુનું નામ / उपभोज्य उत्पाद का नाम', PRODUCT_CATALOG.consumable, true, 'pr-grp-consumable')
+        + _collapsibleGroup('pr-electric-chk', 'Electric Product Name', 'ઇલેક્ટ્રિક ઉત્પાદનનું નામ / विद्युत उत्पाद का नाम', PRODUCT_CATALOG.electric, true, 'pr-grp-electric')
+        + _collapsibleGroup('pr-packing-chk', 'Packing Product Name', 'પેકિંગ ઉત્પાદનનું નામ / पैकिंग उत्पाद का नाम', PRODUCT_CATALOG.packing, true, 'pr-grp-packing')
+        + _collapsibleGroup('pr-pressing-chk', 'Pressing Product Name', 'પેકિંગ ઉત્પાદનનું નામ / पैकिंग उत्पाद का नाम', PRODUCT_CATALOG.pressing, true, 'pr-grp-pressing')
+        + _collapsibleGroup('pr-washing-chk', 'Washing Product Name', 'ધોઈ ઉત્પાદનનું નામ / धोनेका उत्पाद का नाम', PRODUCT_CATALOG.washing, true, 'pr-grp-washing')
+        + _collapsibleGroup('pr-welding-chk', 'Welding Product Name', 'વેલ્ડીંગ ઉત્પાદનનું નામ / वेल्डिंग उत्पाद का नाम', PRODUCT_CATALOG.welding, true, 'pr-grp-welding')
         + _textField('pr-new-product', 'If New Product then Enter Here', 'જો નવો ઉત્પાદન હોય તો અહીં દાખલ કરો / अगर नया उत्पाद है तो यहाँ दर्ज करें', false)
         + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">'
           + _numberField('pr-current-stock', 'Current Stock', 'वर्तमान स्टॉक / હાલનું સ્ટોક', true)
@@ -196,7 +244,9 @@ window.Pages['pr-form'] = (() => {
       + '</form>'
     + '</div>';
 
-    document.getElementById('pr-form-el').addEventListener('submit', _submit);
+    const formEl = document.getElementById('pr-form-el');
+    formEl.addEventListener('submit', _submit);
+    _bindGroupAccordion(formEl);
     _bindVendorSearch();
   }
 
