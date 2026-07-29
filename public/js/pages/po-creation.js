@@ -5,7 +5,8 @@ window.Pages = window.Pages || {};
 // the sheet itself is the database (see POST /api/po-creation in server.js).
 // Three formats, each its own template tab in that sheet: PurchaseOrder / ENR PO
 // / Diamond PO. Submitting fills the matching tab, exports it as a PDF (saved
-// to Drive), and logs it — the "Recent POs" list below reads that same log.
+// to Drive), and logs it — see the separate "PO List" tab for the created-PO
+// history with filters (po-list.js).
 window.Pages['po-creation'] = (() => {
   const FORMATS = ['PurchaseOrder', 'ENR PO', 'Diamond PO'];
   const FORMAT_LABEL = { PurchaseOrder: 'Purchase Order', 'ENR PO': 'ENR PO', 'Diamond PO': 'Diamond PO' };
@@ -137,31 +138,6 @@ window.Pages['po-creation'] = (() => {
       }
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load PO masters', 'error');
-    }
-  }
-
-  /* ── Recent POs list (read from the ERP PO Log tab) ────────────────────── */
-  async function _loadRecentPos() {
-    const body = document.getElementById('poc-list-body');
-    if (!body) return;
-    try {
-      const rows = await Utils.apiFetch('/api/po-creation/list');
-      if (!rows || !rows.length) {
-        body.innerHTML = '<tr><td colspan="7" style="padding:14px;text-align:center;color:#94a3b8;font-size:12.5px;">No POs created yet</td></tr>';
-        return;
-      }
-      body.innerHTML = rows.map(r => ''
-        + '<tr style="border-bottom:1px solid #f1f5f9;">'
-          + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">#' + esc(r.poNo) + '</td>'
-          + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.format) + '</td>'
-          + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
-          + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.party) + '</td>'
-          + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.department) + '</td>'
-          + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
-          + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
-        + '</tr>').join('');
-    } catch (e) {
-      body.innerHTML = '<tr><td colspan="7" style="padding:14px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(e.message || 'Failed to load') + '</td></tr>';
     }
   }
 
@@ -469,17 +445,6 @@ window.Pages['po-creation'] = (() => {
         + '</div>'
         + '<button type="submit" id="poc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Purchase Order</button>'
       + '</form>'
-      + '<div style="margin-top:32px;">'
-        + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:0 2px 8px;">Recent POs</div>'
-        + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-          + '<table style="width:100%;border-collapse:collapse;min-width:720px;">'
-            + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-              + ['PO No','Format','Date','Party','Department','Total (INR)','PDF'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + h + '</th>').join('')
-            + '</tr></thead>'
-            + '<tbody id="poc-list-body"><tr><td colspan="7" style="padding:14px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
-          + '</table>'
-        + '</div>'
-      + '</div>'
     + '</div>';
 
     document.querySelectorAll('.poc-format-tab').forEach(btn => {
@@ -499,7 +464,6 @@ window.Pages['po-creation'] = (() => {
     form.addEventListener('input', _onFormInput);
 
     if (!_mastersLoaded) _loadMasters();
-    _loadRecentPos();
   }
 
   return {

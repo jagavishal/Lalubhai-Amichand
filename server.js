@@ -2408,7 +2408,10 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     const sessUser = req.session?.user;
     await ensureLogTab(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, ['PO No', 'Format', 'Date', 'Party', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At']);
     await appendLogRow(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, [
-      nextPoNo, tab, date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
+      // Leading "'" forces the ISO date to stay literal text instead of being
+      // reparsed into a locale-formatted date — the PO List page's date-range
+      // filter compares these as plain "YYYY-MM-DD" strings.
+      nextPoNo, tab, "'" + date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
     ]);
 
     return res.json({ success: true, poNumber: nextPoNo, totalAmount, pdfLink });
