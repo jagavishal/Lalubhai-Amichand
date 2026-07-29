@@ -2178,15 +2178,26 @@ async function syncGrnToSheet(id) {
 // ── PO Creation (fills the store team's live "PO July 2026" Google Sheet directly —
 // that sheet IS the database here, nothing is mirrored locally). Each of the 3
 // tabs below is a reusable template: submitting a PO overwrites it with the new
-// PO's data, then a copy of that tab is archived as "PO <number>", exactly
-// mirroring how the store team already works this sheet by hand today (the live
-// "PurchaseOrder" tab always shows whatever PO was filled in last, e.g. "PO 251").
+// PO's data, exports that tab as a PDF (Drive-hosted), and logs the PO in the
+// "ERP PO Log" tab — the template itself stays put, ready for the next PO.
 const PO_CREATION_SHEET_ID = '1QB4fZQ1IVFeGs9YKXgGb-dAvsVrTQnBjPCEBzyd0KrM';
+const PO_CREATION_LOG_TAB = 'ERP PO Log';
 
-// Cell refs below were reverse-engineered from the live template tabs. Every
-// column not listed here is a formula (VLOOKUP against Vendor Details /
-// ITEM_CODES, usually an ARRAYFORMULA spill anchored in the header row) and
-// must never be written to directly — writing over a spill throws in Sheets.
+// Fixed dropdown list backing the sheet's own Department data-validation rule
+// (Vendor Details!N3:N31 on the PurchaseOrder/Diamond PO tabs).
+const PO_DEPARTMENTS = [
+  'Press Shop', 'Accessories', 'Fitting', 'Spinning', 'Milk Jug Fitting', 'Washing', 'Packing',
+  'Tool Room', 'Store', 'Time Keeper', 'Cnc', 'Circles', 'Riveting Department', 'ST STEEL', 'PRESSING', 'ALU CIRCLE',
+];
+
+// Cell refs below were reverse-engineered from the live template tabs (formula
+// render + merge inspection). Every column not listed here is a formula
+// (VLOOKUP against Vendor Details / ITEM_CODES, usually an ARRAYFORMULA spill
+// anchored in the header row) and must never be written to directly — writing
+// over a spill throws in Sheets. `summary` fields sit below the item table
+// (freight/shipping/discount etc. feeding the sheet's own Total formula) —
+// always written (defaulting to 0) so a previous PO's numbers can never bleed
+// into a new one.
 const PO_FORMAT_CONFIG = {
   PurchaseOrder: {
     tabName: 'PurchaseOrder',
@@ -2194,6 +2205,7 @@ const PO_FORMAT_CONFIG = {
     hasShipTo: true,
     header: { poNo: 'J7', date: 'J6', prNo: 'J8', department: 'J9', party: 'A13', shipTo: 'G13', deliverySchedule: 'A16', poValidity: 'C16', paymentTerms: 'G16', poMadeBy: 'J16' },
     items: { firstRow: 18, lastRow: 58, clearCols: ['A', 'J'], fields: { itemCode: 'A', hsnCode: 'D', uom: 'E', qty: 'F', unitPrice: 'G', gst: 'H' } },
+    summary: { fields: { freightCharges: 'I61', packingCharges: 'I62', discount: 'I63' }, totalCell: 'I64' },
   },
   'ENR PO': {
     tabName: 'ENR PO',
@@ -2201,6 +2213,7 @@ const PO_FORMAT_CONFIG = {
     hasShipTo: false,
     header: { poNo: 'J9', date: 'J8', prNo: 'J10', department: 'J11', party: 'A16', deliverySchedule: 'F23', poValidity: 'G23', paymentTerms: 'B23', poMadeBy: 'A23' },
     items: { firstRow: 26, lastRow: 55, clearCols: ['A', 'J'], fields: { itemCode: 'A', customerCodeRef: 'D', barcode: 'E', stickerQty: 'G', rate: 'H', taxPercent: 'I' } },
+    summary: { fields: { shipping: 'J57', other: 'J58', discountPercent: 'I59' }, totalCell: 'J60' },
   },
   'Diamond PO': {
     tabName: 'Diamond PO',
@@ -2208,6 +2221,7 @@ const PO_FORMAT_CONFIG = {
     hasShipTo: false,
     header: { poNo: 'J9', date: 'J8', prNo: 'J10', department: 'J11', party: 'A16', deliverySchedule: 'G23', poValidity: 'H23', paymentTerms: 'B23', poMadeBy: 'A23' },
     items: { firstRow: 27, lastRow: 55, clearCols: ['A', 'L'], fields: { itemCode: 'A', boxQty: 'H', boxRate: 'I', plateQty: 'J', plateRate: 'K' } },
+    summary: { fields: { gstPercent: 'J57', shipping: 'K58', other: 'K59', discountPercent: 'J60' }, totalCell: 'K61' },
   },
 };
 
@@ -2255,21 +2269,24 @@ async function _poSheetMeta() {
 }
 
 // GET /api/po-creation/masters — vendor list, ship-to locations (PurchaseOrder
-// only), and the next PO number, all read live off the sheet (no local mirror).
+// only), departments (the sheet's own Department dropdown list), and the next
+// PO number — all read live off the sheet (no local mirror).
 app.get('/api/po-creation/masters', requireAuth, async (req, res) => {
   try {
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const [vendorsRes, shipToRes, meta] = await Promise.all([
+    const [vendorsRes, shipToRes, deptRes, meta] = await Promise.all([
       sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:E200`, valueRenderOption: 'FORMATTED_VALUE' }),
       sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!I3:I45`, valueRenderOption: 'FORMATTED_VALUE' }),
+      sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!N3:N31`, valueRenderOption: 'FORMATTED_VALUE' }),
       _poSheetMeta(),
     ]);
     const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
     const shipToLocations = (shipToRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    return res.json({ vendors, shipToLocations, nextPoNumber: meta.nextPoNo });
+    const departments = (deptRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+    return res.json({ vendors, shipToLocations, departments: departments.length ? departments : PO_DEPARTMENTS, nextPoNumber: meta.nextPoNo });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -2286,14 +2303,34 @@ app.get('/api/po-creation/items', requireAuth, async (req, res) => {
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
+// Renders one template tab to PDF via the same authenticated export endpoint
+// Sheets' own UI uses for File > Download > PDF (scoped to a single gid) —
+// there's no per-tab PDF export in the documented Sheets/Drive API, so this
+// borrows the docs.google.com export URL with an OAuth bearer token instead
+// of a browser session cookie.
+async function _exportPoTabPdf(sourceSheetId) {
+  const auth = getGoogleAuth();
+  const client = await auth.getClient();
+  const { token } = await client.getAccessToken();
+  const url = `https://docs.google.com/spreadsheets/d/${PO_CREATION_SHEET_ID}/export`
+    + `?format=pdf&gid=${sourceSheetId}&size=A4&portrait=true&fitw=true`
+    + `&gridlines=false&printtitle=false&sheetnames=false`
+    + `&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3`;
+  const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+  if (!resp.ok) throw new Error('PDF export failed: HTTP ' + resp.status);
+  const buf = Buffer.from(await resp.arrayBuffer());
+  if (buf.slice(0, 4).toString() !== '%PDF') throw new Error('PDF export returned non-PDF content');
+  return buf;
+}
+
 // POST /api/po-creation — fills the live template tab for the chosen format,
-// then archives a copy of it as a new "PO <n>" tab. This IS the database
-// write; nothing is stored locally.
+// exports it as a PDF (saved to Drive), and logs the PO in "ERP PO Log". This
+// IS the database write; nothing is stored locally.
 app.post('/api/po-creation', requireAuth, async (req, res) => {
   try {
     const cfg = PO_FORMAT_CONFIG[req.body?.format];
     if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
-    const { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items } = req.body;
+    const { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary } = req.body;
     if (!date || !party || !poMadeBy) return res.status(400).json({ error: 'Date, ' + cfg.partyLabel + ' and PO Made By are required' });
     const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemCode || '').trim());
     if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
@@ -2303,7 +2340,7 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
 
-    const { nextPoNo, sheetIdByTitle, sheetCount } = await _poSheetMeta();
+    const { nextPoNo, sheetIdByTitle } = await _poSheetMeta();
     const tab = cfg.tabName;
     const sourceSheetId = sheetIdByTitle[tab];
     if (sourceSheetId === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the PO sheet` });
@@ -2314,7 +2351,10 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
       range: `'${tab}'!${cfg.items.clearCols[0]}${cfg.items.firstRow}:${cfg.items.clearCols[1]}${cfg.items.lastRow}`,
     });
 
-    // 2) Write the header fields + item rows in one batch.
+    // 2) Write header fields, item rows, and summary fields (freight/shipping/
+    // discount/GST%) in one batch. Summary fields are always written — even
+    // when 0 — since they feed the sheet's own Total formula and must never
+    // carry over a previous PO's numbers.
     const data = [];
     const put = (a1, value) => { if (value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
     put(cfg.header.poNo, nextPoNo);
@@ -2327,6 +2367,10 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     put(cfg.header.poValidity, poValidity);
     put(cfg.header.paymentTerms, paymentTerms);
     put(cfg.header.poMadeBy, poMadeBy);
+
+    Object.entries(cfg.summary.fields).forEach(([field, a1]) => {
+      data.push({ range: `'${tab}'!${a1}`, values: [[parseFloat(summary?.[field]) || 0]] });
+    });
 
     cleanItems.forEach((it, i) => {
       const row = cfg.items.firstRow + i;
@@ -2341,17 +2385,55 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
       });
     }
 
-    // 3) Archive this fill as its own permanent tab, appended at the end
-    // (matching where every existing "PO <n>" archive tab already lives) —
-    // the template itself stays put, ready for the next PO.
-    const newTabName = 'PO ' + nextPoNo;
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: PO_CREATION_SHEET_ID,
-      requestBody: { requests: [{ duplicateSheet: { sourceSheetId, insertSheetIndex: sheetCount, newSheetName: newTabName } }] },
-    });
+    // 3) Read back the sheet's own computed Total (single source of truth —
+    // never recompute the formula's math server-side).
+    let totalAmount = null;
+    try {
+      const totalRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${tab}'!${cfg.summary.totalCell}`, valueRenderOption: 'UNFORMATTED_VALUE' });
+      totalAmount = totalRes.data.values?.[0]?.[0] ?? null;
+    } catch (e) { console.error('[po-creation] total read-back failed:', e.message); }
 
-    return res.json({ success: true, poNumber: nextPoNo, tabName: newTabName });
+    // 4) Export this fill as a PDF and save it to Drive — replaces the old
+    // per-PO archive-tab approach. A PDF/Drive hiccup must never block the
+    // PO itself from being created (same resilience as the PR/PO PDF sync).
+    let pdfLink = null;
+    try {
+      const pdfBuffer = await _exportPoTabPdf(sourceSheetId);
+      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PO ${nextPoNo} - ${tab}.pdf`);
+    } catch (e) { console.error('[po-creation] PDF export failed:', e.message); }
+
+    // 5) Log this PO so the ERP can list it (the sheet is still the database —
+    // this is just another tab in it, same pattern as the existing Monitoring/
+    // Web App Log tabs already used elsewhere in this app).
+    const sessUser = req.session?.user;
+    await ensureLogTab(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, ['PO No', 'Format', 'Date', 'Party', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At']);
+    await appendLogRow(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, [
+      nextPoNo, tab, date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
+    ]);
+
+    return res.json({ success: true, poNumber: nextPoNo, totalAmount, pdfLink });
   } catch (e) { console.error('[po-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/po-creation/list — recent POs created via the ERP, read straight
+// from the "ERP PO Log" tab (most recent first).
+app.get('/api/po-creation/list', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:I1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const rows = (result.data.values || []).filter(r => r[0]).map(r => ({
+      poNo: r[0] || '', format: r[1] || '', date: r[2] || '', party: r[3] || '', department: r[4] || '',
+      total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', createdAt: r[8] || '',
+    })).reverse();
+    return res.json(rows.slice(0, 200));
+  } catch (e) {
+    // No PO has been created via the ERP yet — the log tab doesn't exist.
+    if (/unable to parse range/i.test(e.message || '')) return res.json([]);
+    return res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Payment Entries ───────────────────────────────────────────────────────────

@@ -4,13 +4,20 @@ window.Pages = window.Pages || {};
 // Mirrors the store team's live "PO July 2026" Google Sheet field-for-field —
 // the sheet itself is the database (see POST /api/po-creation in server.js).
 // Three formats, each its own template tab in that sheet: PurchaseOrder / ENR PO
-// / Diamond PO. Submitting fills the matching tab and archives it as "PO <n>",
-// exactly like the store team already does by hand.
+// / Diamond PO. Submitting fills the matching tab, exports it as a PDF (saved
+// to Drive), and logs it — the "Recent POs" list below reads that same log.
 window.Pages['po-creation'] = (() => {
   const FORMATS = ['PurchaseOrder', 'ENR PO', 'Diamond PO'];
   const FORMAT_LABEL = { PurchaseOrder: 'Purchase Order', 'ENR PO': 'ENR PO', 'Diamond PO': 'Diamond PO' };
   const PARTY_LABEL  = { PurchaseOrder: 'Customer Name', 'ENR PO': 'Vendor', 'Diamond PO': 'Vendor' };
   const ITEM_CODE_LABEL = { PurchaseOrder: 'Item Code', 'ENR PO': 'Item #', 'Diamond PO': 'Item #' };
+
+  // Fallback list — replaced by the live sheet's own Department dropdown
+  // (Vendor Details!N3:N31) once /api/po-creation/masters resolves.
+  let _departments = [
+    'Press Shop', 'Accessories', 'Fitting', 'Spinning', 'Milk Jug Fitting', 'Washing', 'Packing',
+    'Tool Room', 'Store', 'Time Keeper', 'Cnc', 'Circles', 'Riveting Department', 'ST STEEL', 'PRESSING', 'ALU CIRCLE',
+  ];
 
   // Manual columns per format, in on-sheet order — everything else (description,
   // size, amount/total) is computed by the sheet's own formulas once Item Code
@@ -38,17 +45,55 @@ window.Pages['po-creation'] = (() => {
     ],
   };
 
+  // Read-only, live-computed columns — same math the sheet's own formulas do,
+  // shown here purely as a preview (the sheet recomputes these itself; these
+  // values are never sent to the server).
+  const ITEM_COMPUTED = {
+    PurchaseOrder: [
+      { key: 'amount',        label: 'Amount (INR)',         compute: v => _num(v.qty) * _num(v.unitPrice) },
+      { key: 'amountWithTax', label: 'Amount w/ Tax (INR)',   compute: v => { const a = _num(v.qty) * _num(v.unitPrice); return a + a * _num(v.gst) / 100; } },
+    ],
+    'ENR PO': [
+      { key: 'total', label: 'Total Amount (INR)', compute: v => { const b = _num(v.stickerQty) * _num(v.rate); return b + b * _num(v.taxPercent) / 100; } },
+    ],
+    'Diamond PO': [
+      { key: 'total', label: 'Total (INR)', compute: v => _num(v.boxQty) * _num(v.boxRate) + _num(v.plateQty) * _num(v.plateRate) },
+    ],
+  };
+
+  // Financial fields below the item table that feed the sheet's own Total
+  // formula — always sent (defaulting to 0) so a previous PO's numbers can
+  // never bleed into a new one.
+  const SUMMARY_FIELDS = {
+    PurchaseOrder: [
+      { key: 'freightCharges', label: 'Freight Charges' },
+      { key: 'packingCharges', label: 'Packing Charges' },
+      { key: 'discount',       label: 'Discount' },
+    ],
+    'ENR PO': [
+      { key: 'shipping',        label: 'Shipping' },
+      { key: 'other',           label: 'Other' },
+      { key: 'discountPercent', label: 'Discount %' },
+    ],
+    'Diamond PO': [
+      { key: 'gstPercent',      label: 'GST %' },
+      { key: 'shipping',        label: 'Shipping' },
+      { key: 'other',           label: 'Other' },
+      { key: 'discountPercent', label: 'Discount %' },
+    ],
+  };
+
   /* ── state ──────────────────────────────────────────────────── */
   let _format = 'PurchaseOrder';
   let _mastersLoaded = false;
   let _vendors = [];
   let _shipToLocations = [];
   let _nextPoNumber = null;
-  let _saving = false;
-  let _itemRowSeq = 0;
 
   function _today() { return new Date().toISOString().slice(0, 10); }
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
+  function _fmtMoney(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
   /* ── Helpers (styled like the PR Form tab, for a consistent look) ─────── */
   function _fieldWrap(label, innerHtml, extra) {
@@ -66,25 +111,57 @@ window.Pages['po-creation'] = (() => {
     return _fieldWrap(label, '<div id="' + id + '" style="padding:8px 10px;border:1.5px dashed #e2e8f0;border-radius:8px;font-size:13px;color:#64748b;background:#f8fafc;">' + esc(value) + '</div>');
   }
 
-  /* ── Masters (vendors / ship-to / next PO number) ──────────────────── */
+  /* ── Masters (vendors / ship-to / departments / next PO number) ───────── */
   async function _loadMasters() {
     try {
       const data = await Utils.apiFetch('/api/po-creation/masters');
       if (!data) return;
       _vendors = data.vendors || [];
       _shipToLocations = data.shipToLocations || [];
+      if (Array.isArray(data.departments) && data.departments.length) _departments = data.departments;
       _nextPoNumber = data.nextPoNumber;
       _mastersLoaded = true;
       const el = document.getElementById('poc-next-no');
       if (el) el.textContent = _nextPoNumber != null ? ('#' + _nextPoNumber) : '—';
-      // Options render before this fetch resolves (shows "Loading…") — patch the
-      // select in place so an in-progress fill on other fields isn't wiped out.
+      // Options render before this fetch resolves (shows "Loading…") — patch
+      // selects in place so an in-progress fill on other fields isn't wiped out.
       const shipToSel = document.getElementById('poc-ship-to');
       if (shipToSel && _shipToLocations.length) {
         shipToSel.innerHTML = _shipToLocations.map(s => '<option value="' + esc(s) + '"' + (s.includes('(Factory)') ? ' selected' : '') + '>' + esc(s) + '</option>').join('');
       }
+      const deptSel = document.getElementById('poc-department');
+      if (deptSel) {
+        const current = deptSel.value;
+        deptSel.innerHTML = '<option value="">Select…</option>' + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
+        if (current) deptSel.value = current;
+      }
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load PO masters', 'error');
+    }
+  }
+
+  /* ── Recent POs list (read from the ERP PO Log tab) ────────────────────── */
+  async function _loadRecentPos() {
+    const body = document.getElementById('poc-list-body');
+    if (!body) return;
+    try {
+      const rows = await Utils.apiFetch('/api/po-creation/list');
+      if (!rows || !rows.length) {
+        body.innerHTML = '<tr><td colspan="7" style="padding:14px;text-align:center;color:#94a3b8;font-size:12.5px;">No POs created yet</td></tr>';
+        return;
+      }
+      body.innerHTML = rows.map(r => ''
+        + '<tr style="border-bottom:1px solid #f1f5f9;">'
+          + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">#' + esc(r.poNo) + '</td>'
+          + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.format) + '</td>'
+          + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
+          + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.party) + '</td>'
+          + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.department) + '</td>'
+          + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
+          + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
+        + '</tr>').join('');
+    } catch (e) {
+      body.innerHTML = '<tr><td colspan="7" style="padding:14px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(e.message || 'Failed to load') + '</td></tr>';
     }
   }
 
@@ -117,7 +194,7 @@ window.Pages['po-creation'] = (() => {
       input.value = opt.dataset.v;
       dd.style.display = 'none';
     });
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { once: false });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
   }
 
   /* ── Item-code typeahead per row — fixed-position dropdown so it isn't
@@ -159,14 +236,67 @@ window.Pages['po-creation'] = (() => {
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
   }
 
+  /* ── Live computed previews (Amount / Amount w/ Tax / Total, Grand Total) ─ */
+  function _recomputeRow(row) {
+    const vals = {};
+    row.querySelectorAll('.poc-item-field').forEach(inp => { vals[inp.dataset.field] = inp.value; });
+    ITEM_COMPUTED[_format].forEach(c => {
+      const cell = row.querySelector('.poc-item-computed[data-key="' + c.key + '"]');
+      if (cell) cell.textContent = _fmtMoney(c.compute(vals));
+    });
+  }
+
+  function _recomputeGrandTotal() {
+    const el = document.getElementById('poc-grand-total');
+    if (!el) return;
+    let subtotal = 0, taxInclusive = 0, itemsSum = 0;
+    document.querySelectorAll('#poc-items-tbody .poc-item-row').forEach(row => {
+      const vals = {};
+      row.querySelectorAll('.poc-item-field').forEach(inp => { vals[inp.dataset.field] = inp.value; });
+      if (_format === 'PurchaseOrder') {
+        const amt = _num(vals.qty) * _num(vals.unitPrice);
+        subtotal += amt;
+        taxInclusive += amt + amt * _num(vals.gst) / 100;
+      } else if (_format === 'ENR PO') {
+        const base = _num(vals.stickerQty) * _num(vals.rate);
+        itemsSum += base + base * _num(vals.taxPercent) / 100;
+      } else if (_format === 'Diamond PO') {
+        itemsSum += _num(vals.boxQty) * _num(vals.boxRate) + _num(vals.plateQty) * _num(vals.plateRate);
+      }
+    });
+
+    const s = {};
+    document.querySelectorAll('.poc-summary-field').forEach(inp => { s[inp.dataset.field] = inp.value; });
+
+    let total = 0;
+    if (_format === 'PurchaseOrder') {
+      total = taxInclusive + _num(s.freightCharges) + _num(s.packingCharges) - _num(s.discount);
+    } else if (_format === 'ENR PO') {
+      total = itemsSum + _num(s.shipping) + _num(s.other) - itemsSum * _num(s.discountPercent) / 100;
+    } else if (_format === 'Diamond PO') {
+      const gstAmt = itemsSum * _num(s.gstPercent) / 100;
+      total = itemsSum + gstAmt + _num(s.shipping) + _num(s.other) - itemsSum * _num(s.discountPercent) / 100;
+    }
+    el.textContent = '₹' + _fmtMoney(total);
+  }
+
+  function _onFormInput(e) {
+    if (e.target.matches('.poc-item-field')) {
+      const row = e.target.closest('.poc-item-row');
+      if (row) _recomputeRow(row);
+    }
+    if (e.target.matches('.poc-item-field, .poc-summary-field')) _recomputeGrandTotal();
+  }
+
   /* ── Item rows ──────────────────────────────────────────────────────── */
   function _itemRowHtml() {
-    const key = ++_itemRowSeq;
     const fields = ITEM_FIELDS[_format];
+    const computed = ITEM_COMPUTED[_format];
     const fieldCells = fields.map(f => ''
       + '<td style="padding:6px;"><input type="text" inputmode="' + (f.numeric ? 'decimal' : 'text') + '" data-field="' + f.key + '" class="poc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
     ).join('');
-    return '<tr class="poc-item-row" data-key="' + key + '" style="border-bottom:1px solid #f1f5f9;">'
+    const computedCells = computed.map(c => '<td class="poc-item-computed" data-key="' + c.key + '" style="padding:6px 10px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;">0.00</td>').join('');
+    return '<tr class="poc-item-row" style="border-bottom:1px solid #f1f5f9;">'
       + '<td style="padding:6px;min-width:150px;position:relative;">'
         + '<input type="text" class="poc-item-code" autocomplete="off" placeholder="' + esc(ITEM_CODE_LABEL[_format]) + '…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
         + '<div class="poc-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
@@ -174,20 +304,24 @@ window.Pages['po-creation'] = (() => {
       + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="poc-item-desc">—</td>'
       + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="poc-item-size">—</td>'
       + fieldCells
+      + computedCells
       + '<td style="padding:6px;text-align:center;"><button type="button" class="poc-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
     + '</tr>';
   }
 
   function _itemsTableHtml() {
     const fields = ITEM_FIELDS[_format];
+    const computed = ITEM_COMPUTED[_format];
     const headCells = fields.map(f => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(f.label) + '</th>').join('');
+    const computedHeadCells = computed.map(c => '<th style="padding:8px 6px;text-align:right;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">' + esc(c.label) + '</th>').join('');
     return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:820px;">'
+      + '<table style="width:100%;border-collapse:collapse;min-width:960px;">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
           + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(ITEM_CODE_LABEL[_format]) + '</th>'
           + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Description</th>'
           + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Size</th>'
           + headCells
+          + computedHeadCells
           + '<th></th>'
         + '</tr></thead>'
         + '<tbody id="poc-items-tbody">' + _itemRowHtml() + '</tbody>'
@@ -202,6 +336,7 @@ window.Pages['po-creation'] = (() => {
       const tbody = document.getElementById('poc-items-tbody');
       if (tbody.querySelectorAll('.poc-item-row').length <= 1) { Utils.showToast('At least one item row is required', 'warning'); return; }
       rowEl.remove();
+      _recomputeGrandTotal();
     });
   }
 
@@ -209,17 +344,25 @@ window.Pages['po-creation'] = (() => {
     document.querySelectorAll('#poc-items-tbody .poc-item-row').forEach(_bindItemRow);
   }
 
+  /* ── Summary (financial) fields ─────────────────────────────────────── */
+  function _summaryFieldsHtml() {
+    return SUMMARY_FIELDS[_format].map(f => _fieldWrap(f.label,
+      '<input type="text" inputmode="decimal" data-field="' + f.key + '" class="poc-summary-field" style="' + _inputStyle + '" placeholder="0" />'
+    )).join('');
+  }
+
   /* ── Header fields per format ───────────────────────────────────────── */
   function _headerFieldsHtml() {
     const shipToOptions = _shipToLocations.length
       ? _shipToLocations.map(s => '<option value="' + esc(s) + '"' + (s.includes('(Factory)') ? ' selected' : '') + '>' + esc(s) + '</option>').join('')
       : '<option value="">Loading…</option>';
+    const deptOptions = '<option value="">Select…</option>' + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
 
     const common = ''
       + _textField('poc-date', 'Date', { type: 'date', value: _today() })
       + _readonlyField('poc-next-no', 'P.O. NO (auto-assigned)', _nextPoNumber != null ? ('#' + _nextPoNumber) : 'Loading…')
       + _textField('poc-pr-no', 'P.R. NO')
-      + _textField('poc-department', 'Department')
+      + _fieldWrap('Department', '<select id="poc-department" style="' + _inputStyle + 'background:#fff;">' + deptOptions + '</select>')
       + _partyField();
 
     const shipTo = _format === 'PurchaseOrder'
@@ -259,11 +402,17 @@ window.Pages['po-creation'] = (() => {
     }).filter(it => it.itemCode);
   }
 
+  function _collectSummary() {
+    const summary = {};
+    document.querySelectorAll('.poc-summary-field').forEach(inp => { summary[inp.dataset.field] = inp.value.trim(); });
+    return summary;
+  }
+
   async function _submit(e) {
     e.preventDefault();
     const date = document.getElementById('poc-date').value;
     const prNo = document.getElementById('poc-pr-no').value.trim();
-    const department = document.getElementById('poc-department').value.trim();
+    const department = document.getElementById('poc-department').value;
     const party = document.getElementById('poc-party').value.trim();
     const shipTo = _format === 'PurchaseOrder' ? document.getElementById('poc-ship-to').value : '';
     const deliverySchedule = document.getElementById('poc-delivery-schedule').value;
@@ -271,6 +420,7 @@ window.Pages['po-creation'] = (() => {
     const paymentTerms = document.getElementById('poc-payment-terms').value.trim();
     const poMadeBy = document.getElementById('poc-po-made-by').value.trim();
     const items = _collectItems();
+    const summary = _collectSummary();
 
     if (!date) { Utils.showToast('Date is required', 'error'); return; }
     if (!party) { Utils.showToast(PARTY_LABEL[_format] + ' is required', 'error'); return; }
@@ -279,20 +429,17 @@ window.Pages['po-creation'] = (() => {
 
     const btn = document.getElementById('poc-submit-btn');
     btn.disabled = true; btn.textContent = 'Creating…';
-    _saving = true;
     try {
       const result = await Utils.apiFetch('/api/po-creation', {
         method: 'POST',
-        body: JSON.stringify({ format: _format, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items }),
+        body: JSON.stringify({ format: _format, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary }),
       });
-      Utils.showToast('PO #' + result.poNumber + ' created (archived as "' + result.tabName + '")', 'success');
+      Utils.showToast('PO #' + result.poNumber + ' created' + (result.pdfLink ? ' — PDF saved to Drive' : ' (PDF export failed, PO still saved)'), result.pdfLink ? 'success' : 'warning');
       await _loadMasters();
       renderPage();
     } catch (err) {
       Utils.showToast(err.message || 'Failed to create PO', 'error');
       btn.disabled = false; btn.textContent = 'Create Purchase Order';
-    } finally {
-      _saving = false;
     }
   }
 
@@ -301,10 +448,10 @@ window.Pages['po-creation'] = (() => {
     const el = document.getElementById('main-content');
     if (!el) return;
 
-    el.innerHTML = '<div style="max-width:980px;margin:0 auto;padding:4px 0 40px;">'
+    el.innerHTML = '<div style="max-width:1080px;margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">PO Creation</h1>'
-        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fills the same live PO Google Sheet the store team already uses — creating a PO here writes it straight into that sheet and archives it as its own tab.</p>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fills the same live PO Google Sheet the store team already uses, then saves a PDF of it to Drive.</p>'
       + '</div>'
       + _tabsHtml()
       + '<form id="poc-form" style="display:flex;flex-direction:column;gap:16px;">'
@@ -314,8 +461,25 @@ window.Pages['po-creation'] = (() => {
         + '<div>'
           + '<button type="button" id="poc-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item</button>'
         + '</div>'
+        + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Charges</div>'
+        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">' + _summaryFieldsHtml() + '</div>'
+        + '<div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
+          + '<span style="font-size:12.5px;font-weight:700;color:#64748b;">Estimated Total</span>'
+          + '<span id="poc-grand-total" style="font-size:17px;font-weight:800;color:#0f172a;">₹0.00</span>'
+        + '</div>'
         + '<button type="submit" id="poc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Purchase Order</button>'
       + '</form>'
+      + '<div style="margin-top:32px;">'
+        + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:0 2px 8px;">Recent POs</div>'
+        + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+          + '<table style="width:100%;border-collapse:collapse;min-width:720px;">'
+            + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+              + ['PO No','Format','Date','Party','Department','Total (INR)','PDF'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + h + '</th>').join('')
+            + '</tr></thead>'
+            + '<tbody id="poc-list-body"><tr><td colspan="7" style="padding:14px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '</table>'
+        + '</div>'
+      + '</div>'
     + '</div>';
 
     document.querySelectorAll('.poc-format-tab').forEach(btn => {
@@ -330,9 +494,12 @@ window.Pages['po-creation'] = (() => {
       _bindItemRow(document.getElementById('poc-items-tbody').lastElementChild);
     });
 
-    document.getElementById('poc-form').addEventListener('submit', _submit);
+    const form = document.getElementById('poc-form');
+    form.addEventListener('submit', _submit);
+    form.addEventListener('input', _onFormInput);
 
     if (!_mastersLoaded) _loadMasters();
+    _loadRecentPos();
   }
 
   return {
