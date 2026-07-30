@@ -2066,7 +2066,7 @@ app.get('/api/fms', requireAuth, fmsGate, async (req, res) => {
     const admin = isAdminUser(user);
     const sheets = await fmsSheet.getFmsSheetsWithStats(user.id, admin);
     return res.json(sheets);
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/fms', requireAdmin, fmsGate, async (req, res) => {
@@ -2081,7 +2081,7 @@ app.post('/api/fms', requireAdmin, fmsGate, async (req, res) => {
       processCoordinatorId: b.processCoordinatorId || null,
     });
     return res.status(201).json(sheet);
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 // Registered before the parametrized /api/fms/:id routes below, since Express
@@ -2093,7 +2093,7 @@ app.post('/api/fms/fetch-headers', requireAdmin, fmsGate, async (req, res) => {
     if (!sheetUrlOrId || !tabName) return res.status(400).json({ error: 'sheetUrlOrId and tabName required' });
     const headers = await fmsSheet.fetchHeaders(sheetUrlOrId, tabName, headerRow || 1);
     return res.json(headers);
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/fms/sheet-column-values', requireAdmin, fmsGate, async (req, res) => {
@@ -2103,7 +2103,7 @@ app.get('/api/fms/sheet-column-values', requireAdmin, fmsGate, async (req, res) 
     await ensureSchema();
     const result = await fmsSheet.sheetColumnValues(sheetUrlOrId, tabName, colLetter, headerRow || 1);
     return res.json(result);
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/fms/:id/pc', requireAuth, fmsGate, async (req, res) => {
@@ -2116,7 +2116,7 @@ app.get('/api/fms/:id/pc', requireAuth, fmsGate, async (req, res) => {
     if (!admin && sheet.process_coordinator_id !== user.id) return res.status(403).json({ error: 'Forbidden' });
     const rows = await fmsSheet.getPendingAcrossSteps(req.params.id);
     return res.json({ sheet, rows });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/fms/:id/sync', requireAuth, fmsGate, async (req, res) => {
@@ -2128,7 +2128,7 @@ app.get('/api/fms/:id/sync', requireAuth, fmsGate, async (req, res) => {
     const one = sheets.find(s => s.id === req.params.id);
     if (!one) return res.status(404).json({ error: 'Not found' });
     return res.json(one);
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/fms/:id/intake-fields', requireAdmin, fmsGate, async (req, res) => {
@@ -2138,7 +2138,7 @@ app.get('/api/fms/:id/intake-fields', requireAdmin, fmsGate, async (req, res) =>
     if (!sheet) return res.status(404).json({ error: 'Not found' });
     const fields = await fmsSheet.getIntakeFields(req.params.id);
     return res.json({ sheet, fields });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/fms/:id/intake-fields', requireAdmin, fmsGate, async (req, res) => {
@@ -2151,7 +2151,7 @@ app.put('/api/fms/:id/intake-fields', requireAdmin, fmsGate, async (req, res) =>
     });
     await fmsSheet.saveIntakeFields(req.params.id, b.fields || []);
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/fms/:id', requireAdmin, fmsGate, async (req, res) => {
@@ -2161,7 +2161,7 @@ app.get('/api/fms/:id', requireAdmin, fmsGate, async (req, res) => {
     if (!sheet) return res.status(404).json({ error: 'Not found' });
     const steps = await fmsSheet.getFullSteps(req.params.id);
     return res.json({ ...sheet, steps });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/fms/:id', requireAdmin, fmsGate, async (req, res) => {
@@ -2173,7 +2173,7 @@ app.put('/api/fms/:id', requireAdmin, fmsGate, async (req, res) => {
       headerRow: b.headerRow || 1, steps: b.steps || [], processCoordinatorId: b.processCoordinatorId || null,
     });
     return res.json(sheet);
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/fms/:id', requireAdmin, fmsGate, async (req, res) => {
@@ -2181,7 +2181,7 @@ app.delete('/api/fms/:id', requireAdmin, fmsGate, async (req, res) => {
     await ensureSchema();
     await fmsSheet.deleteFmsSheet(req.params.id);
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 // ── FMS task-facing routes ───────────────────────────────────────────────────
@@ -2202,7 +2202,7 @@ app.get('/api/fms-tasks/:id', requireAuth, fmsGate, async (req, res) => {
     }));
     const isCoordinator = admin || sheet.process_coordinator_id === user.id;
     return res.json({ sheet, steps: stepsOut, isCoordinator });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/fms-tasks/:id/intake', requireAuth, fmsGate, async (req, res) => {
@@ -2212,7 +2212,7 @@ app.get('/api/fms-tasks/:id/intake', requireAuth, fmsGate, async (req, res) => {
     if (!sheet) return res.status(404).json({ error: 'Not found' });
     const fields = await fmsSheet.getIntakeFields(req.params.id);
     return res.json({ sheet: { id: sheet.id, fms_name: sheet.fms_name, intake_form_name: sheet.intake_form_name }, fields });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/fms-tasks/:id/intake', requireAuth, fmsGate, async (req, res) => {
@@ -2223,7 +2223,7 @@ app.post('/api/fms-tasks/:id/intake', requireAuth, fmsGate, async (req, res) => 
     const fields = await fmsSheet.getIntakeFields(req.params.id);
     const result = await fmsSheet.submitIntakeRow(sheet, fields, req.body.values || {}, { userName: req.session.user.name });
     return res.status(201).json(result);
-  } catch (err) { return res.status(400).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(400).json({ error: err.message }); }
 });
 
 app.post('/api/fms-tasks/:id/steps/:stepId/done', requireAuth, fmsGate, async (req, res) => {
@@ -2243,7 +2243,7 @@ app.post('/api/fms-tasks/:id/steps/:stepId/done', requireAuth, fmsGate, async (r
     if (!rowNumber) return res.status(400).json({ error: 'rowNumber required' });
     await fmsSheet.writeStepDone({ sheet, step, rowNumber, delayReason, extraInputs, doerName: doerName || user.name });
     return res.json({ success: true });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 // Client-side refresh path for the Dashboard's FMS tab (server-render calls
@@ -2255,7 +2255,7 @@ app.get('/api/fms-dashboard', requireAuth, fmsGate, async (req, res) => {
     const admin = isAdminUser(user);
     const rows = await fmsSheet.getMyFmsPendingRows({ userId: user.id, userName: user.name, isAdmin: admin });
     return res.json(rows);
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 async function ensureLogTab(spreadsheetId, tabName, headerRow) {
