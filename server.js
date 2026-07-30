@@ -1240,6 +1240,14 @@ app.get('/api/vendor-submissions', requireAuth, async (req, res) => {
 });
 
 // ── PR Form (digitized purchase-requisition intake form) ─────────────────────
+// "RM_1_res" is the native Google Form response tab the store team's original
+// PR Form (the paper-to-Google-Form workflow this app's PR Form tab digitizes)
+// already appended to — same spreadsheet, same 20-column shape. Keep writing
+// there too so the app's submissions land in that one continuous history
+// instead of starting a second, disconnected log.
+const PR_FORM_RESPONSES_SHEET_ID = '1CHOh_MRtlI6Bpw1ztmKthZ7vkgVVNn9xdV48DGU87kY';
+const PR_FORM_RESPONSES_TAB = 'RM_1_res';
+
 app.post('/api/pr-requisitions', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
@@ -1255,6 +1263,18 @@ app.post('/api/pr-requisitions', requireAuth, async (req, res) => {
     if (!current_stock || !quantity_required || !previous_rate) return res.status(400).json({ error: 'Current Stock, Quantity Required and Previous Rate are required' });
     const id = 'PR' + Date.now().toString(36).toUpperCase();
     const sessUser = req.session?.user;
+    const joined = {
+      vendors: Array.isArray(vendors) ? vendors.join(', ') : (vendors || ''),
+      department: Array.isArray(department) ? department.join(', ') : (department || ''),
+      accessory_product: Array.isArray(accessory_product) ? accessory_product.join(', ') : (accessory_product || ''),
+      brazing_product: Array.isArray(brazing_product) ? brazing_product.join(', ') : (brazing_product || ''),
+      consumable_product: Array.isArray(consumable_product) ? consumable_product.join(', ') : (consumable_product || ''),
+      electric_product: Array.isArray(electric_product) ? electric_product.join(', ') : (electric_product || ''),
+      packing_product: Array.isArray(packing_product) ? packing_product.join(', ') : (packing_product || ''),
+      pressing_product: Array.isArray(pressing_product) ? pressing_product.join(', ') : (pressing_product || ''),
+      washing_product: Array.isArray(washing_product) ? washing_product.join(', ') : (washing_product || ''),
+      welding_product: Array.isArray(welding_product) ? welding_product.join(', ') : (welding_product || ''),
+    };
     await pool.query(
       `INSERT INTO pr_requisitions
         (id,pr_no,filled_by,vendors,vendor_other,department,department_other,
@@ -1264,24 +1284,26 @@ app.post('/api/pr-requisitions', requireAuth, async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
       [
         id, pr_no, filled_by,
-        Array.isArray(vendors) ? vendors.join(', ') : (vendors || ''),
-        vendor_other || '',
-        Array.isArray(department) ? department.join(', ') : (department || ''),
-        department_other || '',
-        Array.isArray(accessory_product) ? accessory_product.join(', ') : (accessory_product || ''),
-        Array.isArray(brazing_product) ? brazing_product.join(', ') : (brazing_product || ''),
-        cnc_product || '',
-        Array.isArray(consumable_product) ? consumable_product.join(', ') : (consumable_product || ''),
-        Array.isArray(electric_product) ? electric_product.join(', ') : (electric_product || ''),
-        Array.isArray(packing_product) ? packing_product.join(', ') : (packing_product || ''),
-        Array.isArray(pressing_product) ? pressing_product.join(', ') : (pressing_product || ''),
-        Array.isArray(washing_product) ? washing_product.join(', ') : (washing_product || ''),
-        Array.isArray(welding_product) ? welding_product.join(', ') : (welding_product || ''),
+        joined.vendors, vendor_other || '',
+        joined.department, department_other || '',
+        joined.accessory_product, joined.brazing_product, cnc_product || '', joined.consumable_product, joined.electric_product,
+        joined.packing_product, joined.pressing_product, joined.washing_product, joined.welding_product,
         new_product || '',
         current_stock, quantity_required, previous_rate,
         sessUser?.name || '',
       ]
     );
+    try {
+      await appendLogRow(PR_FORM_RESPONSES_SHEET_ID, PR_FORM_RESPONSES_TAB, [
+        _timestampForSheet(), pr_no, filled_by,
+        joined.vendors, vendor_other || '',
+        joined.department, department_other || '',
+        joined.accessory_product, joined.brazing_product, cnc_product || '', joined.consumable_product, joined.electric_product,
+        joined.packing_product, joined.pressing_product, joined.washing_product, joined.welding_product,
+        new_product || '',
+        current_stock, quantity_required, previous_rate,
+      ]);
+    } catch (e) { console.error('[pr-form] RM_1_res sync failed:', e.message); }
     return res.status(201).json({ success: true, id });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -2524,6 +2546,15 @@ app.get('/api/po-creation/items', requireAuth, async (req, res) => {
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
+// The docs.google.com PDF-export pipeline (below) is a separate subsystem
+// from the Sheets values API — a write is fully recalculated and readable
+// via the API almost instantly, but the export/print renderer can lag a
+// moment behind, so exporting immediately after a write can render item
+// rows and totals as blank/0 even though the formulas themselves are intact
+// and the very next API read already shows the correct numbers. This short
+// pause before every export gives that renderer time to catch up.
+function _sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
 // Renders one template tab to PDF via the same authenticated export endpoint
 // Sheets' own UI uses for File > Download > PDF (scoped to a single gid) —
 // there's no per-tab PDF export in the documented Sheets/Drive API, so this
@@ -2620,6 +2651,7 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     // PO itself from being created (same resilience as the PR/PO PDF sync).
     let pdfLink = null;
     try {
+      await _sleep(2000);
       const pdfBuffer = await _exportSheetTabPdf(PO_CREATION_SHEET_ID, sourceSheetId);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PO ${nextPoNo} - ${tab}.pdf`, PO_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[po-creation] PDF export failed:', e.message); }
@@ -2885,6 +2917,7 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     // never block the PR itself from being created.
     let pdfLink = null;
     try {
+      await _sleep(2000);
       const pdfBuffer = await _exportPrTabPdf(sourceSheetId);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PR ${nextPrNo} - ${tab}.pdf`, PR_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[pr-creation] PDF export failed:', e.message); }
@@ -3100,6 +3133,7 @@ app.post('/api/grn-creation', requireAuth, async (req, res) => {
     // must never block the GRN itself from being created.
     let pdfLink = null;
     try {
+      await _sleep(2000);
       const pdfBuffer = await _exportSheetTabPdf(GRN_CREATION_SHEET_ID, sourceSheetId);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `GR ${nextGrNo}.pdf`, GRN_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[grn-creation] PDF export failed:', e.message); }
