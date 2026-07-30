@@ -35,6 +35,12 @@ window.FmsDoneModal = (function () {
     return !!(d && d < new Date());
   }
 
+  // Only ask for a delay reason if the step actually has somewhere to save it —
+  // no delay_reason_col configured means there's nothing to write it into.
+  function needsDelayReason() {
+    return isLate() && !!_step?.delay_reason_col;
+  }
+
   function nowPreview() {
     return new Date().toLocaleString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
   }
@@ -63,7 +69,7 @@ window.FmsDoneModal = (function () {
 
   function bodyHTML() {
     const details = normalizeDetails(_row.data);
-    const late = isLate();
+    const showDelayReason = needsDelayReason();
     const extraRows = (_step.extraRows || []);
 
     return `
@@ -91,7 +97,7 @@ window.FmsDoneModal = (function () {
           </div>
         </div>
 
-        ${late ? `
+        ${showDelayReason ? `
         <div>
           <label class="label">Reason for Delay <span style="color:#dc2626;">*</span></label>
           <textarea id="fms-done-delay" class="input" rows="2" placeholder="Why is this late?">${esc(_delayReason)}</textarea>
@@ -147,7 +153,7 @@ window.FmsDoneModal = (function () {
   }
 
   async function save() {
-    if (isLate() && !_delayReason.trim()) {
+    if (needsDelayReason() && !_delayReason.trim()) {
       window.Utils.showToast('Please enter a reason for the delay', 'error');
       return;
     }
@@ -657,39 +663,37 @@ window.Pages.fms = (() => {
             ${iconBtn('fms-step-remove danger', 'Remove step', false, '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/>')}
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-bottom:8px;">
-          <div><label class="label">Step Name</label><input class="input fms-step-field" data-step="${i}" data-k="stepName" value="${esc(step.stepName)}" /></div>
-          <div><label class="label">Step Doer(s)</label>${doerChipsHTML || '<div style="padding:9px 0;font-size:11.5px;color:#94a3b8;">Pick below</div>'}</div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-          <div><label class="label">Plan Column</label>${colSelectHTML(i, 'planCol', step.planCol, 'Select column…')}</div>
-          <div><label class="label">Actual Column</label>${colSelectHTML(i, 'actualCol', step.actualCol, 'Select column…')}</div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-          <div><label class="label">Delay Reason Col (optional)</label>${colSelectHTML(i, 'delayReasonCol', step.delayReasonCol, 'None')}</div>
-          <div><label class="label">Doer Name Col (optional)</label>${colSelectHTML(i, 'doerNameCol', step.doerNameCol, 'None')}</div>
-        </div>
-
-        <div style="margin-bottom:10px;">
-          <label class="label">Show These Columns</label>
-          <div style="max-height:110px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;">${showColChecks}</div>
-        </div>
+        <div style="margin-bottom:8px;"><label class="label">Step Name</label><input class="input fms-step-field" data-step="${i}" data-k="stepName" value="${esc(step.stepName)}" /></div>
 
         <div style="margin-bottom:10px;">
           <div style="display:flex;align-items:center;justify-content:space-between;">
-            <label class="label" style="margin:0;">Assigned Doers</label>
+            <label class="label" style="margin:0;">Step Doer(s)</label>
             <div style="display:flex;align-items:center;gap:6px;">
               <input class="input fms-loadcol-input" data-step="${i}" placeholder="Col letter" style="width:80px;padding:5px 8px;font-size:11.5px;" />
               <button type="button" class="btn-secondary btn-sm fms-loaddoers-btn" data-step="${i}">Load Doers From Column</button>
             </div>
           </div>
-          <div style="max-height:120px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;margin-top:6px;">${doerChecks || '<span style="font-size:11.5px;color:#94a3b8;">No users found.</span>'}</div>
+          ${doerChipsHTML}
+          <div style="max-height:130px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;margin-top:6px;">${doerChecks || '<span style="font-size:11.5px;color:#94a3b8;">No users found.</span>'}</div>
           ${loadResult ? `
           <div style="margin-top:6px;padding:8px;background:#f8fafc;border-radius:8px;font-size:11.5px;">
             <div style="color:#16a34a;font-weight:600;">Matched: ${loadResult.matched.map(m => esc(m.user_name)).join(', ') || '—'}</div>
             ${loadResult.unmatched.length ? `<div style="color:#dc2626;margin-top:2px;">Unmatched: ${loadResult.unmatched.map(esc).join(', ')}</div>` : ''}
             ${loadResult.matched.length ? `<button type="button" class="btn-secondary btn-sm fms-adopt-matched" data-step="${i}" style="margin-top:6px;">Add All Matched</button>` : ''}
           </div>` : ''}
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+          <div><label class="label">Plan Column</label>${colSelectHTML(i, 'planCol', step.planCol, 'Select column…')}</div>
+          <div><label class="label">Actual Column</label>${colSelectHTML(i, 'actualCol', step.actualCol, 'Select column…')}</div>
+        </div>
+        <div style="max-width:calc(50% - 4px);margin-bottom:10px;">
+          <label class="label">Doer Name Col (optional)</label>${colSelectHTML(i, 'doerNameCol', step.doerNameCol, 'None')}
+        </div>
+
+        <div style="margin-bottom:10px;">
+          <label class="label">Show These Columns</label>
+          <div style="max-height:110px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;">${showColChecks}</div>
         </div>
 
         <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#334155;cursor:pointer;margin-bottom:8px;">
