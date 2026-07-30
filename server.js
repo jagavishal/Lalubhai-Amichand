@@ -2504,6 +2504,53 @@ function _normalizePrNo(raw) {
   return isNaN(n) ? s : _padSeqNo('PR', n);
 }
 
+// Same bare-vs-prefixed tolerance as _normalizePrNo, generalized to compare
+// any log's own No. column against a key from a request — strips any leading
+// letters and compares the numeric part, so "PO253" and "253" match the same
+// row regardless of which form either happens to be in.
+function _seqKey(raw) {
+  const s = String(raw ?? '').trim();
+  const n = parseInt(s.replace(/^[A-Za-z]+/, ''), 10);
+  return isNaN(n) ? s : String(n);
+}
+
+// Finds the row in a log tab whose column-A value matches `key` (bare-vs-
+// prefixed tolerant) and deletes that row outright (not just clears it) via
+// deleteDimension — used by the PO/PR/GRN "Delete" list actions.
+async function _deleteLogRowByKey(spreadsheetId, tabName, key) {
+  const { google } = require('googleapis');
+  const auth = getGoogleAuth();
+  const sheets = google.sheets({ version: 'v4', auth });
+  const meta = await sheets.spreadsheets.get({ spreadsheetId });
+  const tab = meta.data.sheets.find(s => s.properties.title === tabName);
+  if (!tab) { const e = new Error(`"${tabName}" tab not found`); e.notFound = true; throw e; }
+  const colARes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `'${tabName}'!A:A`, valueRenderOption: 'FORMATTED_VALUE' });
+  const values = colARes.data.values || [];
+  const target = _seqKey(key);
+  const rowIndex = values.findIndex((r, i) => i > 0 && _seqKey(r[0]) === target);
+  if (rowIndex === -1) { const e = new Error('Entry not found'); e.notFound = true; throw e; }
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests: [{ deleteDimension: { range: { sheetId: tab.properties.sheetId, dimension: 'ROWS', startIndex: rowIndex, endIndex: rowIndex + 1 } } }] },
+  });
+}
+
+// Finds the row in a log tab whose column-A value matches `key` and returns
+// its full row (FORMATTED_VALUE) plus its 0-indexed sheet row number — used
+// by Edit to reload a past entry's stored header/items, and to overwrite that
+// same row in place afterward instead of appending a new one.
+async function _findLogRowByKey(spreadsheetId, tabName, key, lastCol) {
+  const { google } = require('googleapis');
+  const auth = getGoogleAuth();
+  const sheets = google.sheets({ version: 'v4', auth });
+  const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `'${tabName}'!A2:${lastCol}1000`, valueRenderOption: 'FORMATTED_VALUE' });
+  const values = res.data.values || [];
+  const target = _seqKey(key);
+  const idx = values.findIndex(r => _seqKey(r[0]) === target);
+  if (idx === -1) return null;
+  return { row: values[idx], sheetRowNumber: idx + 2 }; // +2: skip header row, convert to 1-indexed sheet row
+}
+
 async function _poSheetMeta() {
   const auth = getGoogleAuth();
   const { google } = require('googleapis');
@@ -2694,12 +2741,20 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     // "PR No" is appended at the end (not inserted after "PO No") so the
     // column positions of every already-logged row stay valid — this column
     // was added later, on top of an already-populated log tab.
-    await ensureLogTab(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, ['PO No', 'Format', 'Date', 'Party', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'PR No']);
+    // "Form JSON" is appended at the end so existing rows' column positions
+    // stay valid — same discipline as "PR No" above. It's a full snapshot of
+    // every field the create form needs (not just what has its own log
+    // column) so the PO List "Edit" action can fully reload a past PO: the
+    // live template tab only ever reflects the most recent submission for
+    // that format, so anything not captured here is unrecoverable once a
+    // later PO overwrites it.
+    await ensureLogTab(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, ['PO No', 'Format', 'Date', 'Party', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'PR No', 'Form JSON']);
     await appendLogRow(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, [
       // Leading "'" forces the ISO date to stay literal text instead of being
       // reparsed into a locale-formatted date — the PO List page's date-range
       // filter compares these as plain "YYYY-MM-DD" strings.
       poNoFormatted, tab, "'" + date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(), prNo || '',
+      JSON.stringify({ format: tab, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary }),
     ]);
 
     return res.json({ success: true, poNumber: poNoFormatted, totalAmount, pdfLink });
@@ -2714,17 +2769,34 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
-    const rows = (result.data.values || []).filter(r => r[0]).map(r => ({
-      poNo: r[0] || '', format: r[1] || '', date: r[2] || '', party: r[3] || '', department: r[4] || '',
-      total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', createdAt: r[8] || '', prNo: r[9] || '',
-    })).reverse();
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const rows = (result.data.values || []).filter(r => r[0]).map(r => {
+      let form = null;
+      try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
+      return {
+        poNo: r[0] || '', format: r[1] || '', date: r[2] || '', party: r[3] || '', department: r[4] || '',
+        total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', createdAt: r[8] || '', prNo: r[9] || '', form,
+      };
+    }).reverse();
     return res.json(rows.slice(0, 200));
   } catch (e) {
     // No PO has been created via the ERP yet — the log tab doesn't exist.
     if (/unable to parse range/i.test(e.message || '')) return res.json([]);
     return res.status(500).json({ error: e.message });
   }
+});
+
+// DELETE /api/po-creation?poNo=... — removes that PO's row from "ERP PO Log"
+// (its own PO number is freed up for reuse). Does not touch the archived PDF
+// in Drive — that stays as a record even after the entry is removed from the
+// list.
+app.delete('/api/po-creation', requireAuth, async (req, res) => {
+  try {
+    const poNo = req.query.poNo;
+    if (!poNo) return res.status(400).json({ error: 'poNo is required' });
+    await _deleteLogRowByKey(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, poNo);
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });
 
 // GET /api/po-creation/pending-prs — PRs (from the separate "PR July 2026"
@@ -2758,7 +2830,7 @@ app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
       .filter(r => r[0] && !usedPrNos.has(_normalizePrNo(r[0])))
       .map(r => {
         let items = [];
-        try { items = JSON.parse(r[10] || '[]'); } catch { items = []; }
+        try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
         return { prNo: _normalizePrNo(r[0]), prTabName: r[1] || '', date: r[2] || '', party: r[3] || '', requestedBy: r[4] || '', department: r[5] || '', items };
       })
       .reverse();
@@ -3016,15 +3088,17 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     // 5) Log this PR so the ERP can list it — the sheet is still the database,
     // this is just another tab in it, same pattern as PO Creation's own log.
     const sessUser = req.session?.user;
-    // "Items JSON" is appended at the end (not inserted mid-row) so existing
+    // "Form JSON" is appended at the end (not inserted mid-row) so existing
     // logged rows' column positions stay valid — same discipline as PO Log's
-    // "PR No" column. It's what lets PO Creation (or an eventual PR edit view)
-    // pull a PR's full item detail back later: the live template tab only
-    // ever reflects the MOST RECENT submission for that format, so anything
-    // not captured here is unrecoverable once a later PR overwrites it.
-    await ensureLogTab(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, ['PR No', 'Format', 'Date', 'Vendor/Party', 'Requested By', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Items JSON']);
+    // "PR No" column. It's a full snapshot of every field the create form
+    // needs, used by both PO Creation's P.R. NO picker (item detail only) and
+    // PR Summary's own "Edit" action (the whole form): the live template tab
+    // only ever reflects the MOST RECENT submission for that format, so
+    // anything not captured here is unrecoverable once a later PR overwrites it.
+    await ensureLogTab(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, ['PR No', 'Format', 'Date', 'Vendor/Party', 'Requested By', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Form JSON']);
     await appendLogRow(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, [
-      prNoFormatted, tab, dateRequested || '', party, requestedBy, departmentOut, totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(), JSON.stringify(cleanItems),
+      prNoFormatted, tab, dateRequested || '', party, requestedBy, departmentOut, totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
+      JSON.stringify({ format: req.body.format, requestedBy, vendorName, partyName, personWhoRaisedPr, orderNo, department, termsOfPayment, estimatedDelDate, dateRequested, items: cleanItems }),
     ]);
 
     return res.json({ success: true, prNumber: prNoFormatted, totalAmount, department: departmentOut, pdfLink });
@@ -3039,17 +3113,33 @@ app.get('/api/pr-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
-    const rows = (result.data.values || []).filter(r => r[0]).map(r => ({
-      prNo: r[0] || '', format: r[1] || '', date: r[2] || '', party: r[3] || '', requestedBy: r[4] || '',
-      department: r[5] || '', total: r[6] || '', pdfLink: r[7] || '', createdBy: r[8] || '', createdAt: r[9] || '',
-    })).reverse();
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const rows = (result.data.values || []).filter(r => r[0]).map(r => {
+      let form = null;
+      try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
+      return {
+        prNo: r[0] || '', format: r[1] || '', date: r[2] || '', party: r[3] || '', requestedBy: r[4] || '',
+        department: r[5] || '', total: r[6] || '', pdfLink: r[7] || '', createdBy: r[8] || '', createdAt: r[9] || '', form,
+      };
+    }).reverse();
     return res.json(rows.slice(0, 200));
   } catch (e) {
     // No PR has been created via the ERP yet — the log tab doesn't exist.
     if (/unable to parse range/i.test(e.message || '')) return res.json([]);
     return res.status(500).json({ error: e.message });
   }
+});
+
+// DELETE /api/pr-creation?prNo=... — removes that PR's row from "ERP PR Log"
+// (its own PR number is freed up for reuse). Does not touch the archived PDF
+// in Drive.
+app.delete('/api/pr-creation', requireAuth, async (req, res) => {
+  try {
+    const prNo = req.query.prNo;
+    if (!prNo) return res.status(400).json({ error: 'prNo is required' });
+    await _deleteLogRowByKey(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, prNo);
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });
 
 // ── GRN Creation (same pattern as PO Creation above: fills the store team's
@@ -3154,7 +3244,7 @@ app.get('/api/grn-creation/pr-list', requireAuth, async (req, res) => {
       .filter(r => r[0])
       .map(r => {
         let items = [];
-        try { items = JSON.parse(r[10] || '[]'); } catch { items = []; }
+        try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
         return { prNo: _normalizePrNo(r[0]), party: r[3] || '', department: r[5] || '', items };
       })
       .reverse();
@@ -3271,11 +3361,17 @@ app.post('/api/grn-creation', requireAuth, async (req, res) => {
 
     // 5) Log this GRN so the ERP can list it — same pattern as "ERP PO Log".
     const sessUser = req.session?.user;
-    await ensureLogTab(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, ['GR No', 'Date', 'Made By', 'PR No', 'Vendor Name', 'PO No', 'Bill No', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At']);
+    // "Form JSON" is appended at the end so existing rows' column positions
+    // stay valid — same discipline as PO/PR Log. Lets GRN List's "Edit"
+    // action fully reload a past GRN: the live template tab only ever
+    // reflects the most recent submission, so anything not captured here is
+    // unrecoverable once a later GRN overwrites it.
+    await ensureLogTab(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, ['GR No', 'Date', 'Made By', 'PR No', 'Vendor Name', 'PO No', 'Bill No', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Form JSON']);
     await appendLogRow(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, [
       // Leading "'" forces the ISO date to stay literal text instead of being
       // reparsed into a locale-formatted date — same convention as ERP PO Log.
       nextGrNo, "'" + date, madeBy, prNo || '', vendorName, poNo || '', billNo || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
+      JSON.stringify({ date, madeBy, prNo, vendorName, poNo, billNo, billRecvDate, deptHead, comments, cgst, sgst, roundOff, items: cleanItems }),
     ]);
 
     return res.json({ success: true, grNumber: nextGrNo, subtotal, totalAmount, pdfLink });
@@ -3290,17 +3386,33 @@ app.get('/api/grn-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
-    const rows = (result.data.values || []).filter(r => r[0]).map(r => ({
-      grNo: r[0] || '', date: r[1] || '', madeBy: r[2] || '', prNo: r[3] || '', vendorName: r[4] || '',
-      poNo: r[5] || '', billNo: r[6] || '', total: r[7] || '', pdfLink: r[8] || '', createdBy: r[9] || '', createdAt: r[10] || '',
-    })).reverse();
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const rows = (result.data.values || []).filter(r => r[0]).map(r => {
+      let form = null;
+      try { form = JSON.parse(r[11] || 'null'); } catch { form = null; }
+      return {
+        grNo: r[0] || '', date: r[1] || '', madeBy: r[2] || '', prNo: r[3] || '', vendorName: r[4] || '',
+        poNo: r[5] || '', billNo: r[6] || '', total: r[7] || '', pdfLink: r[8] || '', createdBy: r[9] || '', createdAt: r[10] || '', form,
+      };
+    }).reverse();
     return res.json(rows.slice(0, 200));
   } catch (e) {
     // No GRN has been created via the ERP yet — the log tab doesn't exist.
     if (/unable to parse range/i.test(e.message || '')) return res.json([]);
     return res.status(500).json({ error: e.message });
   }
+});
+
+// DELETE /api/grn-creation?grNo=... — removes that GRN's row from "ERP GRN
+// Log" (its own GR number is freed up for reuse). Does not touch the
+// archived PDF in Drive.
+app.delete('/api/grn-creation', requireAuth, async (req, res) => {
+  try {
+    const grNo = req.query.grNo;
+    if (!grNo) return res.status(400).json({ error: 'grNo is required' });
+    await _deleteLogRowByKey(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, grNo);
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });
 
 // ── Payment Entries ───────────────────────────────────────────────────────────

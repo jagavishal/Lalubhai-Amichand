@@ -15,6 +15,12 @@ window.Pages['grn-creation'] = (() => {
   let _prListLoaded = false;
   let _prList = []; // every PR from PR Creation's own ERP PR Log, for the PR No. suggestion dropdown
 
+  // Editing an existing GRN (from GRN List's "Edit" action) — submitting
+  // saves a fresh GRN/PDF as usual, then deletes this old entry so the
+  // corrected one takes its place; not a true in-place edit (number changes).
+  let _editingGrNo = null;
+  let _pendingFormToApply = null;
+
   // GRN List (in-page tab) state — read-only history from the ERP GRN Log tab.
   let _grlRows = [];
   let _grlLoaded = false;
@@ -316,19 +322,19 @@ window.Pages['grn-creation'] = (() => {
     if (!body) return;
 
     if (!_grlLoaded) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_grlLoadError) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_grlLoadError) + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_grlLoadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     const rows = _grlFilteredRows();
     if (countEl) countEl.textContent = rows.length + ' of ' + _grlRows.length;
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_grlRows.length ? 'No GRNs match these filters' : 'No GRNs created yet') + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_grlRows.length ? 'No GRNs match these filters' : 'No GRNs created yet') + '</td></tr>';
       return;
     }
     body.innerHTML = rows.map(r => ''
@@ -341,7 +347,80 @@ window.Pages['grn-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+          + (r.form ? '<button type="button" class="grnc-edit-btn" data-gr="' + esc(r.grNo) + '" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Edit</button>' : '')
+          + '<button type="button" class="grnc-delete-btn" data-gr="' + esc(r.grNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Delete</button>'
+        + '</td>'
       + '</tr>').join('');
+  }
+
+  function _grlBindRowActions() {
+    const body = document.getElementById('grnl-body');
+    if (!body || body.dataset.actionsBound) return;
+    body.dataset.actionsBound = '1';
+    body.addEventListener('click', async (e) => {
+      const editBtn = e.target.closest('.grnc-edit-btn');
+      if (editBtn) {
+        const r = _grlRows.find(x => String(x.grNo) === editBtn.dataset.gr);
+        if (r && r.form) _openGrnForEdit(r);
+        return;
+      }
+      const delBtn = e.target.closest('.grnc-delete-btn');
+      if (delBtn) {
+        const ok = await Utils.showConfirm('GR #' + delBtn.dataset.gr + ' will be permanently removed from the list (its archived PDF in Drive is untouched).', { title: 'Delete GRN', confirmText: 'Delete', danger: true });
+        if (!ok) return;
+        try {
+          await Utils.apiFetch('/api/grn-creation?grNo=' + encodeURIComponent(delBtn.dataset.gr), { method: 'DELETE' });
+          Utils.showToast('GR #' + delBtn.dataset.gr + ' deleted', 'success');
+          await _grlLoad();
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to delete', 'error');
+        }
+      }
+    });
+  }
+
+  function _openGrnForEdit(r) {
+    _editingGrNo = r.grNo;
+    _view = 'create';
+    _pendingFormToApply = r.form;
+    renderPage();
+  }
+
+  // Reloads a past GRN's own stored Form JSON verbatim — used by GRN List's
+  // "Edit" action.
+  function _fillGrnFormFromStoredForm(form) {
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el && val !== undefined && val !== null && val !== '') el.value = val; };
+    setVal('grnc-date', form.date);
+    setVal('grnc-made-by', form.madeBy);
+    setVal('grnc-pr-no', form.prNo);
+    setVal('grnc-po-no', form.poNo);
+    setVal('grnc-vendor', form.vendorName);
+    setVal('grnc-bill-no', form.billNo);
+    setVal('grnc-bill-recv-date', form.billRecvDate);
+    setVal('grnc-dept-head', form.deptHead);
+    setVal('grnc-comments', form.comments);
+    setVal('grnc-cgst', form.cgst);
+    setVal('grnc-sgst', form.sgst);
+    setVal('grnc-round-off', form.roundOff);
+
+    const tbody = document.getElementById('grnc-items-tbody');
+    if (tbody && Array.isArray(form.items) && form.items.length) {
+      tbody.innerHTML = '';
+      form.items.forEach(it => {
+        tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
+        const row = tbody.lastElementChild;
+        _bindItemRow(row);
+        const noInput = row.querySelector('.grnc-item-no');
+        if (noInput) noInput.value = it.itemNo || '';
+        ['qty', 'uom', 'rate'].forEach(field => {
+          const fieldInput = row.querySelector('[data-field="' + field + '"]');
+          if (fieldInput) fieldInput.value = it[field] || '';
+        });
+        _recomputeRow(row);
+      });
+      _recomputeGrandTotal();
+    }
   }
 
   function _grlFilterBarHtml() {
@@ -378,9 +457,9 @@ window.Pages['grn-creation'] = (() => {
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
         + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['GR No', 'Date', 'Vendor', 'PR No', 'PO No', 'Total (INR)', 'Created By', 'PDF'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + ['GR No', 'Date', 'Vendor', 'PR No', 'PO No', 'Total (INR)', 'Created By', 'PDF', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
-          + '<tbody id="grnl-body"><tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '<tbody id="grnl-body"><tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
       + '</div>';
   }
@@ -448,18 +527,23 @@ window.Pages['grn-creation'] = (() => {
     if (!items.length) { Utils.showToast('Add at least one item', 'error'); return; }
 
     const btn = document.getElementById('grnc-submit-btn');
+    const wasEditingGrNo = _editingGrNo;
     btn.disabled = true; btn.textContent = 'Creating…';
     try {
       const result = await Utils.apiFetch('/api/grn-creation', {
         method: 'POST',
         body: JSON.stringify({ date, madeBy, prNo, poNo, vendorName, billNo, billRecvDate, deptHead, comments, cgst, sgst, roundOff, items }),
       });
+      if (wasEditingGrNo) {
+        try { await Utils.apiFetch('/api/grn-creation?grNo=' + encodeURIComponent(wasEditingGrNo), { method: 'DELETE' }); } catch {}
+      }
+      _editingGrNo = null;
       Utils.showToast('GR #' + result.grNumber + ' created' + (result.pdfLink ? ' — PDF saved to Drive' : ' (PDF export failed, GRN still saved)'), result.pdfLink ? 'success' : 'warning');
       await _loadMasters();
       renderPage();
     } catch (err) {
       Utils.showToast(err.message || 'Failed to create GRN', 'error');
-      btn.disabled = false; btn.textContent = 'Create GRN';
+      btn.disabled = false; btn.textContent = wasEditingGrNo ? 'Save as New GRN' : 'Create GRN';
     }
   }
 
@@ -469,9 +553,14 @@ window.Pages['grn-creation'] = (() => {
     if (!el) return;
 
     const isList = _view === 'list';
+    const editingBanner = '<div id="grnc-editing-banner" style="display:' + (_editingGrNo ? 'flex' : 'none') + ';align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;font-size:12.5px;color:#1d4ed8;">'
+        + '<span>Editing GR #' + esc(_editingGrNo || '') + ' — submitting saves a new GRN and removes this old entry.</span>'
+        + '<button type="button" id="grnc-cancel-edit" style="border:none;background:transparent;color:#1d4ed8;font-weight:700;cursor:pointer;font-size:12.5px;">Cancel</button>'
+      + '</div>';
     const bodyHtml = isList
       ? _grlViewHtml()
       : '<form id="grnc-form" style="display:flex;flex-direction:column;gap:16px;">'
+        + editingBanner
         + _headerFieldsHtml()
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
         + _itemsTableHtml()
@@ -490,7 +579,7 @@ window.Pages['grn-creation'] = (() => {
           + '<span style="font-size:12.5px;font-weight:700;color:#64748b;">Estimated Total</span>'
           + '<span id="grnc-grand-total" style="font-size:17px;font-weight:800;color:#0f172a;">₹0.00</span>'
         + '</div>'
-        + '<button type="submit" id="grnc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create GRN</button>'
+        + '<button type="submit" id="grnc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">' + (_editingGrNo ? 'Save as New GRN' : 'Create GRN') + '</button>'
       + '</form>';
 
     el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '1080px') + ';margin:0 auto;padding:4px 0 40px;">'
@@ -502,11 +591,12 @@ window.Pages['grn-creation'] = (() => {
       + bodyHtml
     + '</div>';
 
-    document.querySelector('.grnc-create-tab').addEventListener('click', () => { _view = 'create'; renderPage(); });
-    document.querySelector('.grnc-list-tab').addEventListener('click', () => { _view = 'list'; renderPage(); });
+    document.querySelector('.grnc-create-tab').addEventListener('click', () => { _view = 'create'; _editingGrNo = null; renderPage(); });
+    document.querySelector('.grnc-list-tab').addEventListener('click', () => { _view = 'list'; _editingGrNo = null; renderPage(); });
 
     if (isList) {
       _grlBindFilterBar();
+      _grlBindRowActions();
       _grlLoad();
       return;
     }
@@ -526,6 +616,14 @@ window.Pages['grn-creation'] = (() => {
 
     if (!_mastersLoaded) _loadMasters();
     if (!_prListLoaded) _loadPrList();
+
+    if (_pendingFormToApply) {
+      const f = _pendingFormToApply;
+      _pendingFormToApply = null;
+      _fillGrnFormFromStoredForm(f);
+    }
+    const cancelBtn = document.getElementById('grnc-cancel-edit');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => { _editingGrNo = null; renderPage(); });
   }
 
   return {

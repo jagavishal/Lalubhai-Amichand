@@ -123,6 +123,12 @@ window.Pages['po-creation'] = (() => {
   let _polFFrom = '';
   let _polFTo = '';
 
+  // Editing an existing PO (from PO List's "Edit" action) — submitting saves
+  // a fresh PO/PDF as usual, then deletes this old entry so the corrected
+  // one takes its place; not a true in-place edit (the number changes).
+  let _editingPoNo = null;
+  let _pendingFormToApply = null;
+
   function _today() { return new Date().toISOString().slice(0, 10); }
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
@@ -266,6 +272,52 @@ window.Pages['po-creation'] = (() => {
       });
       _recomputeRow(row);
     });
+    _recomputeGrandTotal();
+  }
+
+  // Reloads a past PO's own stored Form JSON verbatim (own field names, no
+  // cross-format mapping needed) — used by PO List's "Edit" action, after
+  // _openPoForEdit has already made sure _format matches form.format.
+  function _fillFormFromStoredForm(form) {
+    const setVal = (id, val) => { const el = document.getElementById(id); if (el && val !== undefined && val !== null && val !== '') el.value = val; };
+    setVal('poc-pr-no', form.prNo);
+    setVal('poc-party', form.party);
+    setVal('poc-delivery-schedule', form.deliverySchedule);
+    setVal('poc-po-validity', form.poValidity);
+    setVal('poc-payment-terms', form.paymentTerms);
+    setVal('poc-po-made-by', form.poMadeBy);
+    const deptSel = document.getElementById('poc-department');
+    if (deptSel && form.department) {
+      if (!deptSel.querySelector('option[value="' + CSS.escape(form.department) + '"]')) {
+        deptSel.insertAdjacentHTML('beforeend', '<option value="' + esc(form.department) + '">' + esc(form.department) + '</option>');
+      }
+      deptSel.value = form.department;
+    }
+    const shipToSel = document.getElementById('poc-ship-to');
+    if (shipToSel && form.shipTo) shipToSel.value = form.shipTo;
+
+    Object.entries(form.summary || {}).forEach(([field, val]) => {
+      const el = document.querySelector('.poc-summary-field[data-field="' + field + '"]');
+      if (el) el.value = val;
+    });
+
+    const tbody = document.getElementById('poc-items-tbody');
+    if (tbody && Array.isArray(form.items) && form.items.length) {
+      tbody.innerHTML = '';
+      form.items.forEach(it => {
+        tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
+        const row = tbody.lastElementChild;
+        _bindItemRow(row);
+        const codeInput = row.querySelector('.poc-item-code');
+        if (codeInput) codeInput.value = it.itemCode || '';
+        Object.entries(it).forEach(([field, val]) => {
+          if (field === 'itemCode') return;
+          const fieldInput = row.querySelector('[data-field="' + field + '"]');
+          if (fieldInput) fieldInput.value = val;
+        });
+        _recomputeRow(row);
+      });
+    }
     _recomputeGrandTotal();
   }
 
@@ -494,19 +546,19 @@ window.Pages['po-creation'] = (() => {
     if (!body) return;
 
     if (!_polLoaded) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_polLoadError) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_polLoadError) + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_polLoadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     const rows = _polFilteredRows();
     if (countEl) countEl.textContent = rows.length + ' of ' + _polRows.length;
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_polRows.length ? 'No POs match these filters' : 'No POs created yet') + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_polRows.length ? 'No POs match these filters' : 'No POs created yet') + '</td></tr>';
       return;
     }
     body.innerHTML = rows.map(r => ''
@@ -519,7 +571,49 @@ window.Pages['po-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+          + (r.form ? '<button type="button" class="poc-edit-btn" data-po="' + esc(r.poNo) + '" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Edit</button>' : '')
+          + '<button type="button" class="poc-delete-btn" data-po="' + esc(r.poNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Delete</button>'
+        + '</td>'
       + '</tr>').join('');
+  }
+
+  function _polBindRowActions() {
+    const body = document.getElementById('pol-body');
+    if (!body || body.dataset.actionsBound) return;
+    body.dataset.actionsBound = '1';
+    body.addEventListener('click', async (e) => {
+      const editBtn = e.target.closest('.poc-edit-btn');
+      if (editBtn) {
+        const r = _polRows.find(x => String(x.poNo) === editBtn.dataset.po);
+        if (r && r.form) _openPoForEdit(r);
+        return;
+      }
+      const delBtn = e.target.closest('.poc-delete-btn');
+      if (delBtn) {
+        const ok = await Utils.showConfirm('PO #' + delBtn.dataset.po + ' will be permanently removed from the list (its archived PDF in Drive is untouched).', { title: 'Delete PO', confirmText: 'Delete', danger: true });
+        if (!ok) return;
+        try {
+          await Utils.apiFetch('/api/po-creation?poNo=' + encodeURIComponent(delBtn.dataset.po), { method: 'DELETE' });
+          Utils.showToast('PO #' + delBtn.dataset.po + ' deleted', 'success');
+          await _polLoad();
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to delete', 'error');
+        }
+      }
+    });
+  }
+
+  // Reopens a past PO in the Create view, prefilled from its stored Form
+  // JSON (header + items + charges) — submitting creates a fresh PO number
+  // and, on success, removes the old entry being edited so the list shows
+  // the corrected version in its place.
+  function _openPoForEdit(r) {
+    _editingPoNo = r.poNo;
+    _view = 'create';
+    _format = FORMATS.includes(r.form.format) ? r.form.format : _format;
+    _pendingFormToApply = r.form;
+    renderPage();
   }
 
   function _polFilterBarHtml() {
@@ -563,9 +657,9 @@ window.Pages['po-creation'] = (() => {
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
         + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['PO No','Format','Date','Party','Department','Total (INR)','Created By','PDF'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + h + '</th>').join('')
+            + ['PO No','Format','Date','Party','Department','Total (INR)','Created By','PDF','Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + h + '</th>').join('')
           + '</tr></thead>'
-          + '<tbody id="pol-body"><tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '<tbody id="pol-body"><tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
       + '</div>';
   }
@@ -693,18 +787,23 @@ window.Pages['po-creation'] = (() => {
     if (!items.length) { Utils.showToast('Add at least one item', 'error'); return; }
 
     const btn = document.getElementById('poc-submit-btn');
+    const wasEditingPoNo = _editingPoNo;
     btn.disabled = true; btn.textContent = 'Creating…';
     try {
       const result = await Utils.apiFetch('/api/po-creation', {
         method: 'POST',
         body: JSON.stringify({ format: _format, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary }),
       });
+      if (wasEditingPoNo) {
+        try { await Utils.apiFetch('/api/po-creation?poNo=' + encodeURIComponent(wasEditingPoNo), { method: 'DELETE' }); } catch {}
+      }
+      _editingPoNo = null;
       await _loadMasters();
       renderPage();
       _showPoCreatedModal(result.poNumber, result.pdfLink);
     } catch (err) {
       Utils.showToast(err.message || 'Failed to create PO', 'error');
-      btn.disabled = false; btn.textContent = 'Create Purchase Order';
+      btn.disabled = false; btn.textContent = wasEditingPoNo ? 'Save as New Purchase Order' : 'Create Purchase Order';
     }
   }
 
@@ -714,9 +813,14 @@ window.Pages['po-creation'] = (() => {
     if (!el) return;
 
     const isList = _view === 'list';
+    const editingBanner = '<div id="poc-editing-banner" style="display:' + (_editingPoNo ? 'flex' : 'none') + ';align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;font-size:12.5px;color:#1d4ed8;">'
+        + '<span>Editing PO #' + esc(_editingPoNo || '') + ' — submitting saves a new PO and removes this old entry.</span>'
+        + '<button type="button" id="poc-cancel-edit" style="border:none;background:transparent;color:#1d4ed8;font-weight:700;cursor:pointer;font-size:12.5px;">Cancel</button>'
+      + '</div>';
     const bodyHtml = isList
       ? _polViewHtml()
       : '<form id="poc-form" style="display:flex;flex-direction:column;gap:16px;">'
+        + editingBanner
         + _headerFieldsHtml()
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
         + _itemsTableHtml()
@@ -729,7 +833,7 @@ window.Pages['po-creation'] = (() => {
           + '<span style="font-size:12.5px;font-weight:700;color:#64748b;">Estimated Total</span>'
           + '<span id="poc-grand-total" style="font-size:17px;font-weight:800;color:#0f172a;">₹0.00</span>'
         + '</div>'
-        + '<button type="submit" id="poc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Purchase Order</button>'
+        + '<button type="submit" id="poc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">' + (_editingPoNo ? 'Save as New Purchase Order' : 'Create Purchase Order') + '</button>'
       + '</form>';
 
     el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '1080px') + ';margin:0 auto;padding:4px 0 40px;">'
@@ -742,13 +846,14 @@ window.Pages['po-creation'] = (() => {
     + '</div>';
 
     document.querySelectorAll('.poc-format-tab').forEach(btn => {
-      btn.addEventListener('click', () => { _view = 'create'; _format = btn.dataset.format; renderPage(); });
+      btn.addEventListener('click', () => { _view = 'create'; _format = btn.dataset.format; _editingPoNo = null; renderPage(); });
     });
     const listTab = document.querySelector('.poc-list-tab');
-    if (listTab) listTab.addEventListener('click', () => { _view = 'list'; renderPage(); });
+    if (listTab) listTab.addEventListener('click', () => { _view = 'list'; _editingPoNo = null; renderPage(); });
 
     if (isList) {
       _polBindFilterBar();
+      _polBindRowActions();
       _polLoad();
       return;
     }
@@ -774,6 +879,13 @@ window.Pages['po-creation'] = (() => {
       _pendingPrToApply = null;
       _fillPrIntoForm(pr);
     }
+    if (_pendingFormToApply) {
+      const form = _pendingFormToApply;
+      _pendingFormToApply = null;
+      _fillFormFromStoredForm(form);
+    }
+    const cancelEditBtn = document.getElementById('poc-cancel-edit');
+    if (cancelEditBtn) cancelEditBtn.addEventListener('click', () => { _editingPoNo = null; renderPage(); });
   }
 
   return {
