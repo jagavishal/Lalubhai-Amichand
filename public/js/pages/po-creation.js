@@ -91,6 +91,8 @@ window.Pages['po-creation'] = (() => {
   let _vendors = [];
   let _shipToLocations = [];
   let _nextPoNumber = null;
+  let _pendingPrsLoaded = false;
+  let _pendingPrs = []; // PRs (from the PR Creation sheet) not yet used on any PO
 
   // PO List (in-page tab) state — read-only history from the ERP PO Log tab.
   let _polRows = [];
@@ -150,6 +152,61 @@ window.Pages['po-creation'] = (() => {
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load PO masters', 'error');
     }
+  }
+
+  async function _loadPendingPrs() {
+    try {
+      _pendingPrs = await Utils.apiFetch('/api/po-creation/pending-prs') || [];
+      _pendingPrsLoaded = true;
+    } catch (e) {
+      Utils.showToast(e.message || 'Failed to load pending PRs', 'error');
+    }
+  }
+
+  /* ── P.R. NO — free-text input (still fully editable/typeable) with a
+     suggestion dropdown of pending PRs (raised via PR Creation, not yet used
+     on any PO); picking one prefills Party/Department from that PR ──────── */
+  function _prNoField() {
+    return _fieldWrap('P.R. NO', ''
+      + '<input type="text" id="poc-pr-no" autocomplete="off" placeholder="Type, or pick a pending PR…" style="' + _inputStyle + '" />'
+      + '<div id="poc-prno-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>');
+  }
+
+  function _bindPrNoField() {
+    const input = document.getElementById('poc-pr-no');
+    const dd = document.getElementById('poc-prno-dd');
+    if (!input || !dd) return;
+    const showMatches = () => {
+      const q = input.value.trim().toLowerCase();
+      const matches = (q
+        ? _pendingPrs.filter(p => String(p.prNo).toLowerCase().includes(q) || (p.party || '').toLowerCase().includes(q))
+        : _pendingPrs).slice(0, 30);
+      if (!matches.length) { dd.style.display = 'none'; return; }
+      dd.innerHTML = matches.map(p => '<div class="poc-prno-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-pr="' + esc(p.prNo) + '" data-party="' + esc(p.party) + '" data-dept="' + esc(p.department) + '">'
+        + '<b>#' + esc(p.prNo) + '</b> — ' + esc(p.party) + (p.department ? ' <span style="color:#94a3b8;">(' + esc(p.department) + ')</span>' : '') + '</div>').join('');
+      const rect = input.getBoundingClientRect();
+      dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 260) + 'px';
+      dd.style.display = 'block';
+    };
+    input.addEventListener('input', showMatches);
+    input.addEventListener('focus', showMatches);
+    dd.addEventListener('mousedown', (e) => {
+      const opt = e.target.closest('.poc-prno-opt');
+      if (!opt) return;
+      input.value = opt.dataset.pr;
+      dd.style.display = 'none';
+      // Prefill only — every field (including this one) stays freely editable.
+      const partyInput = document.getElementById('poc-party');
+      if (partyInput && opt.dataset.party) partyInput.value = opt.dataset.party;
+      const deptSel = document.getElementById('poc-department');
+      if (deptSel && opt.dataset.dept) {
+        if (!deptSel.querySelector('option[value="' + CSS.escape(opt.dataset.dept) + '"]')) {
+          deptSel.insertAdjacentHTML('beforeend', '<option value="' + esc(opt.dataset.dept) + '">' + esc(opt.dataset.dept) + '</option>');
+        }
+        deptSel.value = opt.dataset.dept;
+      }
+    });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
   }
 
   /* ── Party (customer/vendor) typeahead — plain text input + filtered list,
@@ -470,7 +527,7 @@ window.Pages['po-creation'] = (() => {
     const common = ''
       + _textField('poc-date', 'Date', { type: 'date', value: _today() })
       + _readonlyField('poc-next-no', 'P.O. NO (auto-assigned)', _nextPoNumber != null ? _nextPoNumber : 'Loading…')
-      + _textField('poc-pr-no', 'P.R. NO')
+      + _prNoField()
       + _fieldWrap('Department', '<select id="poc-department" style="' + _inputStyle + 'background:#fff;">' + deptOptions + '</select>')
       + _partyField();
 
@@ -637,6 +694,7 @@ window.Pages['po-creation'] = (() => {
     }
 
     _bindPartyField();
+    _bindPrNoField();
     _bindAllItemRows();
 
     document.getElementById('poc-add-item').addEventListener('click', () => {
@@ -649,6 +707,7 @@ window.Pages['po-creation'] = (() => {
     form.addEventListener('input', _onFormInput);
 
     if (!_mastersLoaded) _loadMasters();
+    if (!_pendingPrsLoaded) _loadPendingPrs();
   }
 
   return {

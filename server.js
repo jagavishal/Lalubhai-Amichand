@@ -2680,12 +2680,15 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     // this is just another tab in it, same pattern as the existing Monitoring/
     // Web App Log tabs already used elsewhere in this app).
     const sessUser = req.session?.user;
-    await ensureLogTab(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, ['PO No', 'Format', 'Date', 'Party', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At']);
+    // "PR No" is appended at the end (not inserted after "PO No") so the
+    // column positions of every already-logged row stay valid — this column
+    // was added later, on top of an already-populated log tab.
+    await ensureLogTab(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, ['PO No', 'Format', 'Date', 'Party', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'PR No']);
     await appendLogRow(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, [
       // Leading "'" forces the ISO date to stay literal text instead of being
       // reparsed into a locale-formatted date — the PO List page's date-range
       // filter compares these as plain "YYYY-MM-DD" strings.
-      poNoFormatted, tab, "'" + date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
+      poNoFormatted, tab, "'" + date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(), prNo || '',
     ]);
 
     return res.json({ success: true, poNumber: poNoFormatted, totalAmount, pdfLink });
@@ -2700,10 +2703,10 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:I1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).filter(r => r[0]).map(r => ({
       poNo: r[0] || '', format: r[1] || '', date: r[2] || '', party: r[3] || '', department: r[4] || '',
-      total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', createdAt: r[8] || '',
+      total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', createdAt: r[8] || '', prNo: r[9] || '',
     })).reverse();
     return res.json(rows.slice(0, 200));
   } catch (e) {
@@ -2711,6 +2714,41 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
     if (/unable to parse range/i.test(e.message || '')) return res.json([]);
     return res.status(500).json({ error: e.message });
   }
+});
+
+// GET /api/po-creation/pending-prs — PRs (from the separate "PR July 2026"
+// sheet's own ERP PR Log) that haven't been used on any PO yet, for the P.R.
+// NO field's suggestion dropdown. "Pending" = its PR No doesn't appear in the
+// PR No column POs have already logged against.
+app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    let prRows = [];
+    try {
+      const prRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:F1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      prRows = prRes.data.values || [];
+    } catch (e) {
+      if (!/unable to parse range/i.test(e.message || '')) throw e;
+    }
+
+    let usedPrNos = new Set();
+    try {
+      const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!J2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      usedPrNos = new Set((poRes.data.values || []).map(r => String(r[0] || '').trim()).filter(Boolean));
+    } catch (e) {
+      if (!/unable to parse range/i.test(e.message || '')) throw e;
+    }
+
+    const pending = prRows
+      .filter(r => r[0] && !usedPrNos.has(String(r[0]).trim()))
+      .map(r => ({ prNo: r[0], format: r[1] || '', date: r[2] || '', party: r[3] || '', requestedBy: r[4] || '', department: r[5] || '' }))
+      .reverse();
+    return res.json(pending.slice(0, 200));
+  } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
 // ── PR Creation (fills the store team's live "PR July 2026" Google Sheet directly —
