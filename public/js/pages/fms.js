@@ -621,11 +621,16 @@ window.Pages.fms = (() => {
     return h ? `${esc(baseLabel)} <span style="font-weight:400;color:#94a3b8;">(${esc(h.name)})</span>` : esc(baseLabel);
   }
 
-  function stepBlockHTML(step, i, totalSteps) {
-    const selectedDoerNames = _users.filter(u => step.doerIds.includes(u.id)).map(u => u.name);
-    const doerBoxContent = selectedDoerNames.length
-      ? `<div style="display:flex;flex-wrap:wrap;gap:4px;">${selectedDoerNames.map(n => `<span style="display:inline-flex;align-items:center;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:#fef3c7;color:#92400e;">${esc(n)}</span>`).join('')}</div>`
+  // Rebuilt in place on every doer checkbox toggle (see bindAddEditModal) — kept
+  // as a standalone function so that patch never has to re-render the whole modal.
+  function doerBoxContentHTML(doerIds) {
+    const names = _users.filter(u => doerIds.includes(u.id)).map(u => u.name);
+    return names.length
+      ? `<div style="display:flex;flex-wrap:wrap;gap:4px;">${names.map(n => `<span style="display:inline-flex;align-items:center;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:#fef3c7;color:#92400e;">${esc(n)}</span>`).join('')}</div>`
       : `<span style="color:#94a3b8;">Select users…</span>`;
+  }
+
+  function stepBlockHTML(step, i, totalSteps) {
     const doerPickerOpen = !!_modalDoerPickerOpen[i];
 
     const doerChecks = _users.map(u => `
@@ -634,10 +639,12 @@ window.Pages.fms = (() => {
         ${esc(u.name)}
       </label>`).join('');
 
+    // Wrapped chip-style checkboxes (not one-per-line) so a wide header row fits
+    // in a compact area instead of a tall scrolling list.
     const showColChecks = _modalHeaders.length ? _modalHeaders.map(h => `
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#334155;padding:2px 0;cursor:pointer;">
+      <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#334155;padding:3px 8px;border:1px solid #e2e8f0;border-radius:6px;cursor:pointer;white-space:nowrap;">
         <input type="checkbox" class="fms-showcol-chk" data-step="${i}" data-idx="${h.index}" ${step.showCols.includes(h.index) ? 'checked' : ''} />
-        ${esc(h.name)} <span style="color:#94a3b8;">(${esc(h.col)})</span>
+        ${esc(h.name)}
       </label>`).join('') : '';
 
     const loadResult = _modalLoadResult[i];
@@ -675,7 +682,7 @@ window.Pages.fms = (() => {
           <div><label class="label">Step Name</label><input class="input fms-step-field" data-step="${i}" data-k="stepName" placeholder="Step Name" value="${esc(step.stepName)}" /></div>
           <div>
             <label class="label">Step Doer(s)</label>
-            <div class="input fms-doer-toggle" data-step="${i}" style="cursor:pointer;min-height:38px;display:flex;align-items:center;">${doerBoxContent}</div>
+            <div class="input fms-doer-toggle" id="fms-doer-box-${i}" data-step="${i}" style="cursor:pointer;min-height:38px;display:flex;align-items:center;">${doerBoxContentHTML(step.doerIds)}</div>
           </div>
         </div>
         ${doerPickerOpen ? `
@@ -697,7 +704,7 @@ window.Pages.fms = (() => {
         <div style="margin-bottom:10px;">
           <label class="label">Columns to Show in FMS Tasks <span style="font-weight:400;color:#94a3b8;">(blank = show all)</span></label>
           ${!_modalHeaders.length ? `<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">Will populate once headers are loaded.</div>` : ''}
-          <div style="max-height:110px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;">${showColChecks || '<span style="font-size:11.5px;color:#94a3b8;">Fetch headers above to pick columns.</span>'}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;max-height:110px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;">${showColChecks || '<span style="font-size:11.5px;color:#94a3b8;">Fetch headers above to pick columns.</span>'}</div>
         </div>
 
         <div style="display:flex;gap:8px;align-items:flex-end;max-width:calc(50% - 4px);margin-bottom:10px;">
@@ -825,11 +832,15 @@ window.Pages.fms = (() => {
       el.addEventListener('change', sync);
     });
     overlay.querySelectorAll('.fms-doer-chk').forEach(el => el.addEventListener('change', (e) => {
-      const step = _modalForm.steps[parseInt(el.dataset.step, 10)];
+      const stepIdx = parseInt(el.dataset.step, 10);
+      const step = _modalForm.steps[stepIdx];
       const uid = el.dataset.uid;
       if (e.target.checked) { if (!step.doerIds.includes(uid)) step.doerIds.push(uid); }
       else step.doerIds = step.doerIds.filter(id => id !== uid);
-      renderAddEditModal();
+      // Patch just the chip box in place — no full modal re-render, so the
+      // checklist stays open and scroll position doesn't jump on every click.
+      const box = document.getElementById(`fms-doer-box-${stepIdx}`);
+      if (box) box.innerHTML = doerBoxContentHTML(step.doerIds);
     }));
     overlay.querySelectorAll('.fms-showcol-chk').forEach(el => el.addEventListener('change', (e) => {
       const step = _modalForm.steps[parseInt(el.dataset.step, 10)];
