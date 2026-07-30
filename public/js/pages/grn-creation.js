@@ -12,6 +12,8 @@ window.Pages['grn-creation'] = (() => {
   let _mastersLoaded = false;
   let _vendors = [];
   let _nextGrNumber = null;
+  let _prListLoaded = false;
+  let _prList = []; // every PR from PR Creation's own ERP PR Log, for the PR No. suggestion dropdown
 
   // GRN List (in-page tab) state — read-only history from the ERP GRN Log tab.
   let _grlRows = [];
@@ -55,6 +57,87 @@ window.Pages['grn-creation'] = (() => {
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load GRN masters', 'error');
     }
+  }
+
+  async function _loadPrList() {
+    try {
+      _prList = await Utils.apiFetch('/api/grn-creation/pr-list') || [];
+      _prListLoaded = true;
+    } catch (e) {
+      Utils.showToast(e.message || 'Failed to load PR list', 'error');
+    }
+  }
+
+  /* ── PR No. — free-text input (still fully editable/typeable) with a
+     suggestion dropdown of every PR raised via PR Creation; picking one
+     prefills Vendor Name and carries that PR's items over (mapped field-for-
+     field) — everything stays editable afterward, nothing gets locked ────── */
+  function _prNoField() {
+    return _fieldWrap('PR No.', ''
+      + '<input type="text" id="grnc-pr-no" autocomplete="off" placeholder="Type, or pick a PR…" style="' + _inputStyle + '" />'
+      + '<div id="grnc-prno-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>');
+  }
+
+  function _mapPrItemToGrn(it) {
+    return {
+      itemNo: it.itemCode || '',
+      qty: it.qtyRequired || it.stickerQty || it.boxQty || '',
+      uom: it.uom || '',
+      rate: it.lastUnitPrice || it.rate || it.boxRate || '',
+    };
+  }
+
+  function _fillPrIntoForm(pr) {
+    const prInput = document.getElementById('grnc-pr-no');
+    if (prInput) prInput.value = pr.prNo;
+    const vendorInput = document.getElementById('grnc-vendor');
+    if (vendorInput && pr.party) vendorInput.value = pr.party;
+
+    const tbody = document.getElementById('grnc-items-tbody');
+    if (!tbody || !Array.isArray(pr.items) || !pr.items.length) return;
+    tbody.innerHTML = '';
+    pr.items.forEach(it => {
+      tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
+      const row = tbody.lastElementChild;
+      _bindItemRow(row);
+      const mapped = _mapPrItemToGrn(it);
+      const noInput = row.querySelector('.grnc-item-no');
+      if (noInput) noInput.value = mapped.itemNo;
+      ['qty', 'uom', 'rate'].forEach(field => {
+        const fieldInput = row.querySelector('[data-field="' + field + '"]');
+        if (fieldInput) fieldInput.value = mapped[field];
+      });
+      _recomputeRow(row);
+    });
+    _recomputeGrandTotal();
+  }
+
+  function _bindPrNoField() {
+    const input = document.getElementById('grnc-pr-no');
+    const dd = document.getElementById('grnc-prno-dd');
+    if (!input || !dd) return;
+    const showMatches = () => {
+      const q = input.value.trim().toLowerCase();
+      const matches = (q
+        ? _prList.filter(p => String(p.prNo).toLowerCase().includes(q) || (p.party || '').toLowerCase().includes(q))
+        : _prList).slice(0, 30);
+      if (!matches.length) { dd.style.display = 'none'; return; }
+      dd.innerHTML = matches.map(p => '<div class="grnc-prno-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-pr="' + esc(p.prNo) + '">'
+        + '<b>#' + esc(p.prNo) + '</b> — ' + esc(p.party) + (p.department ? ' <span style="color:#94a3b8;">(' + esc(p.department) + ')</span>' : '') + '</div>').join('');
+      const rect = input.getBoundingClientRect();
+      dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 260) + 'px';
+      dd.style.display = 'block';
+    };
+    input.addEventListener('input', showMatches);
+    input.addEventListener('focus', showMatches);
+    dd.addEventListener('mousedown', (e) => {
+      const opt = e.target.closest('.grnc-prno-opt');
+      if (!opt) return;
+      dd.style.display = 'none';
+      const pr = _prList.find(p => String(p.prNo) === opt.dataset.pr);
+      if (pr) _fillPrIntoForm(pr); else input.value = opt.dataset.pr;
+    });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
   }
 
   /* ── Vendor typeahead — plain text input + filtered list, same pattern as
@@ -308,7 +391,7 @@ window.Pages['grn-creation'] = (() => {
       + _textField('grnc-date', 'Date of Making GRN', { type: 'date', value: _today() })
       + _readonlyField('grnc-next-no', 'GR NO. (auto-assigned)', _nextGrNumber != null ? ('#' + _nextGrNumber) : 'Loading…')
       + _textField('grnc-made-by', 'Made By', { value: (window.currentUser && window.currentUser.name) || '' })
-      + _textField('grnc-pr-no', 'PR No.')
+      + _prNoField()
       + _textField('grnc-po-no', 'PO No.')
       + _vendorField()
       + _textField('grnc-bill-no', 'Bill No')
@@ -429,6 +512,7 @@ window.Pages['grn-creation'] = (() => {
     }
 
     _bindVendorField();
+    _bindPrNoField();
     _bindAllItemRows();
 
     document.getElementById('grnc-add-item').addEventListener('click', () => {
@@ -441,6 +525,7 @@ window.Pages['grn-creation'] = (() => {
     form.addEventListener('input', _onFormInput);
 
     if (!_mastersLoaded) _loadMasters();
+    if (!_prListLoaded) _loadPrList();
   }
 
   return {

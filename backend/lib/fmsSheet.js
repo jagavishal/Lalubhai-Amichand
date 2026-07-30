@@ -95,7 +95,14 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
   }
 
   // Matches server.js's own _timestampForSheet() convention (IST, regardless of
-  // server timezone) but in a DD-MM-YYYY form so parsePlanDate() can round-trip it.
+  // server timezone) in a DD/MM/YYYY form so parsePlanDate() can round-trip it.
+  // Slashes, not dashes: Google Sheets' USER_ENTERED auto-detection reliably
+  // recognizes "DD/MM/YYYY HH:MM:SS" as a real date/time (same as
+  // _timestampForSheet()'s own slash-separated format elsewhere in this app),
+  // but does not reliably recognize the dash-separated form — that previously
+  // landed as plain text, which is why any date formula reading this column
+  // failed. parsePlanDate() already accepts either separator, so this is a
+  // safe change with no round-trip-parsing side effect.
   function nowIST() {
     const fmt = new Intl.DateTimeFormat('en-GB', {
       timeZone: 'Asia/Kolkata',
@@ -104,7 +111,7 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     });
     const parts = fmt.formatToParts(new Date());
     const get = (t) => parts.find(p => p.type === t).value;
-    return `${get('day')}-${get('month')}-${get('year')} ${get('hour')}:${get('minute')}:${get('second')}`;
+    return `${get('day')}/${get('month')}/${get('year')} ${get('hour')}:${get('minute')}:${get('second')}`;
   }
 
   // An open-ended range (e.g. 'Tab'!A3:ZZ) pulls every row Sheets considers part

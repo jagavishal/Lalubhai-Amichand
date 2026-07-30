@@ -84,6 +84,24 @@ window.Pages['po-creation'] = (() => {
     ],
   };
 
+  // Maps a PR Creation tab name (returned as prTabName by /pending-prs) to the
+  // PO format it corresponds to, and maps that PR format's own item fields
+  // onto this PO format's item fields — lets picking a pending PR carry its
+  // items over, not just its header fields. ALU has no clean PO analog, so it
+  // falls back to PurchaseOrder.
+  const PR_TAB_TO_PO_FORMAT = {
+    'Purchase Requisition': 'PurchaseOrder',
+    'PURCHASE REQUISITION(PACKING_STICKER)': 'ENR PO',
+    'PURCHASE REQUISITION(PACKING_BOX)': 'Diamond PO',
+    'purchase_requisition(ALU)': 'PurchaseOrder',
+  };
+  const PR_ITEM_MAPPERS = {
+    'Purchase Requisition': it => ({ itemCode: it.itemCode || '', hsnCode: '', uom: it.uom || '', qty: it.qtyRequired || '', unitPrice: it.lastUnitPrice || '', gst: it.tax || '' }),
+    'PURCHASE REQUISITION(PACKING_STICKER)': it => ({ itemCode: it.itemCode || '', customerCodeRef: '', barcode: '', stickerQty: it.stickerQty || '', rate: it.rate || '', taxPercent: '' }),
+    'PURCHASE REQUISITION(PACKING_BOX)': it => ({ itemCode: it.itemCode || '', boxQty: it.boxQty || '', boxRate: it.boxRate || '', plateQty: it.plateQty || '', plateRate: it.plateRate || '' }),
+    'purchase_requisition(ALU)': it => ({ itemCode: it.itemCode || '', hsnCode: '', uom: it.uom || '', qty: it.qtyRequired || '', unitPrice: it.rate || '', gst: it.tax || '' }),
+  };
+
   /* ── state ──────────────────────────────────────────────────── */
   let _view = 'create'; // 'create' | 'list'
   let _format = 'PurchaseOrder';
@@ -93,6 +111,7 @@ window.Pages['po-creation'] = (() => {
   let _nextPoNumber = null;
   let _pendingPrsLoaded = false;
   let _pendingPrs = []; // PRs (from the PR Creation sheet) not yet used on any PO
+  let _pendingPrToApply = null; // set when a PR selection also needs a format switch + re-render first
 
   // PO List (in-page tab) state — read-only history from the ERP PO Log tab.
   let _polRows = [];
@@ -193,20 +212,61 @@ window.Pages['po-creation'] = (() => {
     dd.addEventListener('mousedown', (e) => {
       const opt = e.target.closest('.poc-prno-opt');
       if (!opt) return;
-      input.value = opt.dataset.pr;
       dd.style.display = 'none';
-      // Prefill only — every field (including this one) stays freely editable.
-      const partyInput = document.getElementById('poc-party');
-      if (partyInput && opt.dataset.party) partyInput.value = opt.dataset.party;
-      const deptSel = document.getElementById('poc-department');
-      if (deptSel && opt.dataset.dept) {
-        if (!deptSel.querySelector('option[value="' + CSS.escape(opt.dataset.dept) + '"]')) {
-          deptSel.insertAdjacentHTML('beforeend', '<option value="' + esc(opt.dataset.dept) + '">' + esc(opt.dataset.dept) + '</option>');
-        }
-        deptSel.value = opt.dataset.dept;
-      }
+      const pr = _pendingPrs.find(p => String(p.prNo) === opt.dataset.pr);
+      if (pr) _applyPendingPr(pr); else input.value = opt.dataset.pr;
     });
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+  }
+
+  /* ── Applying a picked pending PR — prefills Party/Department, carries the
+     PR's own items over (mapped field-for-field), and switches format first
+     if the PR's format doesn't match the one currently open. Everything
+     stays a prefill: every field (including P.R. NO itself) is still freely
+     editable afterward, nothing gets locked. ──────────────────────────────── */
+  function _applyPendingPr(pr) {
+    const targetFormat = PR_TAB_TO_PO_FORMAT[pr.prTabName] || _format;
+    if (targetFormat !== _format) {
+      _format = targetFormat;
+      _pendingPrToApply = pr;
+      renderPage(); // _fillPrIntoForm runs after the new format's DOM exists
+    } else {
+      _fillPrIntoForm(pr);
+    }
+  }
+
+  function _fillPrIntoForm(pr) {
+    const prInput = document.getElementById('poc-pr-no');
+    if (prInput) prInput.value = pr.prNo;
+    const partyInput = document.getElementById('poc-party');
+    if (partyInput && pr.party) partyInput.value = pr.party;
+    const deptSel = document.getElementById('poc-department');
+    if (deptSel && pr.department) {
+      if (!deptSel.querySelector('option[value="' + CSS.escape(pr.department) + '"]')) {
+        deptSel.insertAdjacentHTML('beforeend', '<option value="' + esc(pr.department) + '">' + esc(pr.department) + '</option>');
+      }
+      deptSel.value = pr.department;
+    }
+
+    const mapper = PR_ITEM_MAPPERS[pr.prTabName];
+    const tbody = document.getElementById('poc-items-tbody');
+    if (!mapper || !tbody || !Array.isArray(pr.items) || !pr.items.length) return;
+    tbody.innerHTML = '';
+    pr.items.forEach(it => {
+      tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
+      const row = tbody.lastElementChild;
+      _bindItemRow(row);
+      const mapped = mapper(it);
+      const codeInput = row.querySelector('.poc-item-code');
+      if (codeInput) codeInput.value = mapped.itemCode || '';
+      Object.entries(mapped).forEach(([field, val]) => {
+        if (field === 'itemCode') return;
+        const fieldInput = row.querySelector('[data-field="' + field + '"]');
+        if (fieldInput) fieldInput.value = val;
+      });
+      _recomputeRow(row);
+    });
+    _recomputeGrandTotal();
   }
 
   /* ── Party (customer/vendor) typeahead — plain text input + filtered list,
@@ -708,6 +768,12 @@ window.Pages['po-creation'] = (() => {
 
     if (!_mastersLoaded) _loadMasters();
     if (!_pendingPrsLoaded) _loadPendingPrs();
+
+    if (_pendingPrToApply) {
+      const pr = _pendingPrToApply;
+      _pendingPrToApply = null;
+      _fillPrIntoForm(pr);
+    }
   }
 
   return {

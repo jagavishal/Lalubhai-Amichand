@@ -2493,6 +2493,17 @@ function _padSeqNo(prefix, n) {
   return prefix + String(n).padStart(3, '0');
 }
 
+// A few PR/PO/GRN log rows were written before the "PR047"/"PO047"-style
+// prefix existed and just hold a bare number — normalize either shape to the
+// prefixed form so display and used/pending-set comparisons never mismatch
+// a bare "171" against a prefixed "PR171" for the same PR.
+function _normalizePrNo(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  const n = parseInt(s.replace(/^[A-Za-z]+/, ''), 10);
+  return isNaN(n) ? s : _padSeqNo('PR', n);
+}
+
 async function _poSheetMeta() {
   const auth = getGoogleAuth();
   const { google } = require('googleapis');
@@ -2729,7 +2740,7 @@ app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
 
     let prRows = [];
     try {
-      const prRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:F1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      const prRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
       prRows = prRes.data.values || [];
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
@@ -2738,14 +2749,18 @@ app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
     let usedPrNos = new Set();
     try {
       const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!J2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
-      usedPrNos = new Set((poRes.data.values || []).map(r => String(r[0] || '').trim()).filter(Boolean));
+      usedPrNos = new Set((poRes.data.values || []).map(r => _normalizePrNo(r[0])).filter(Boolean));
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
     }
 
     const pending = prRows
-      .filter(r => r[0] && !usedPrNos.has(String(r[0]).trim()))
-      .map(r => ({ prNo: r[0], format: r[1] || '', date: r[2] || '', party: r[3] || '', requestedBy: r[4] || '', department: r[5] || '' }))
+      .filter(r => r[0] && !usedPrNos.has(_normalizePrNo(r[0])))
+      .map(r => {
+        let items = [];
+        try { items = JSON.parse(r[10] || '[]'); } catch { items = []; }
+        return { prNo: _normalizePrNo(r[0]), prTabName: r[1] || '', date: r[2] || '', party: r[3] || '', requestedBy: r[4] || '', department: r[5] || '', items };
+      })
       .reverse();
     return res.json(pending.slice(0, 200));
   } catch (e) { return res.status(500).json({ error: e.message }); }
@@ -3001,9 +3016,15 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     // 5) Log this PR so the ERP can list it — the sheet is still the database,
     // this is just another tab in it, same pattern as PO Creation's own log.
     const sessUser = req.session?.user;
-    await ensureLogTab(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, ['PR No', 'Format', 'Date', 'Vendor/Party', 'Requested By', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At']);
+    // "Items JSON" is appended at the end (not inserted mid-row) so existing
+    // logged rows' column positions stay valid — same discipline as PO Log's
+    // "PR No" column. It's what lets PO Creation (or an eventual PR edit view)
+    // pull a PR's full item detail back later: the live template tab only
+    // ever reflects the MOST RECENT submission for that format, so anything
+    // not captured here is unrecoverable once a later PR overwrites it.
+    await ensureLogTab(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, ['PR No', 'Format', 'Date', 'Vendor/Party', 'Requested By', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Items JSON']);
     await appendLogRow(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, [
-      prNoFormatted, tab, dateRequested || '', party, requestedBy, departmentOut, totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
+      prNoFormatted, tab, dateRequested || '', party, requestedBy, departmentOut, totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(), JSON.stringify(cleanItems),
     ]);
 
     return res.json({ success: true, prNumber: prNoFormatted, totalAmount, department: departmentOut, pdfLink });
@@ -3109,6 +3130,35 @@ app.get('/api/grn-creation/masters', requireAuth, async (req, res) => {
     ]);
     const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
     return res.json({ vendors, nextGrNumber: meta.nextGrNo });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/grn-creation/pr-list — every PR logged in PR Creation's own "ERP PR
+// Log" (a GRN can reference any PR regardless of whether it's already gone
+// through a PO, unlike PO Creation's "pending" filter), for the PR No.
+// field's suggestion dropdown; includes each PR's items for auto-fill.
+app.get('/api/grn-creation/pr-list', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    let prRows = [];
+    try {
+      const prRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      prRows = prRes.data.values || [];
+    } catch (e) {
+      if (!/unable to parse range/i.test(e.message || '')) throw e;
+    }
+    const list = prRows
+      .filter(r => r[0])
+      .map(r => {
+        let items = [];
+        try { items = JSON.parse(r[10] || '[]'); } catch { items = []; }
+        return { prNo: _normalizePrNo(r[0]), party: r[3] || '', department: r[5] || '', items };
+      })
+      .reverse();
+    return res.json(list.slice(0, 200));
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
