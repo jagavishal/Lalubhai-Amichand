@@ -107,9 +107,16 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     return `${get('day')}-${get('month')}-${get('year')} ${get('hour')}:${get('minute')}:${get('second')}`;
   }
 
+  // An open-ended range (e.g. 'Tab'!A3:ZZ) pulls every row Sheets considers part
+  // of the grid — on a sheet with tens of thousands of configured rows that's a
+  // multi-megabyte fetch on every single list/detail load, and reliably times out
+  // the client's 15s request. Bound it to a generous but finite window instead.
+  const FMS_MAX_DATA_ROWS = 5000;
+
   async function fetchSheetData(sheet) {
     const headerRow = sheet.header_row || 1;
-    const rows = await fetchRange(sheet.sheet_id, `'${sheet.sheet_name}'!A${headerRow}:ZZ`);
+    const lastRow = headerRow + FMS_MAX_DATA_ROWS;
+    const rows = await fetchRange(sheet.sheet_id, `'${sheet.sheet_name}'!A${headerRow}:ZZ${lastRow}`);
     const headerRowVals = rows[0] || [];
     const headers = headerRowVals.map((h, i) => stripZW(h) || idxToCol(i));
     const dataRows = rows.slice(1);
@@ -284,8 +291,9 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     const users = await q('SELECT id, name FROM users');
     const userMap = {};
     users.forEach(u => { userMap[u.id] = u.name; });
-    const out = [];
-    for (const sheet of sheets) {
+    // Each sheet's stats need one Sheets API round-trip — run them concurrently
+    // so N configured FMS sheets don't multiply the list's load time.
+    return Promise.all(sheets.map(async (sheet) => {
       const steps = await getFullSteps(sheet.id);
       let totalEntries = 0, totalPending = 0;
       try {
@@ -298,15 +306,14 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
       } catch (e) {
         console.error('[fms] stats fetch failed for', sheet.id, e.message);
       }
-      out.push({
+      return {
         ...sheet,
         totalSteps: steps.length,
         totalEntries,
         totalPending,
         coordinatorName: userMap[sheet.process_coordinator_id] || '',
-      });
-    }
-    return out;
+      };
+    }));
   }
 
   // Task-facing view of a single FMS shows several steps at once — fetch the
@@ -467,7 +474,7 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     const colIdxs = colLetters.map(colToIdx);
     const minColIdx = Math.min(...colIdxs);
     const maxColIdx = Math.max(...colIdxs);
-    const range = `'${target.sheetName}'!${idxToCol(minColIdx)}${target.headerRow + 1}:${idxToCol(maxColIdx)}`;
+    const range = `'${target.sheetName}'!${idxToCol(minColIdx)}${target.headerRow + 1}:${idxToCol(maxColIdx)}${target.headerRow + 1 + FMS_MAX_DATA_ROWS}`;
     const rows = await fetchRange(target.sheetId, range);
     let rowOffset = rows.length;
     for (let i = 0; i < rows.length; i++) {
