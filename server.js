@@ -2468,8 +2468,23 @@ async function _poSheetMeta() {
   let maxPoNo = 0;
   for (const s of meta.data.sheets) {
     sheetIdByTitle[s.properties.title] = s.properties.sheetId;
+    // Legacy archive tabs ("PO 179".."PO 251") from before PDF export replaced
+    // tab-duplication — still the floor for numbering, but no new ones get
+    // created anymore, so this alone would freeze nextPoNo forever. The real,
+    // growing sequence lives in ERP PO Log's own PO No column (read below).
     const m = /^PO\s+(\d+)$/i.exec(s.properties.title.trim());
     if (m) maxPoNo = Math.max(maxPoNo, parseInt(m[1], 10));
+  }
+  try {
+    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    for (const row of (logRes.data.values || [])) {
+      const n = parseInt(row[0], 10);
+      if (!isNaN(n)) maxPoNo = Math.max(maxPoNo, n);
+    }
+  } catch (e) {
+    // Log tab doesn't exist yet (no PO created via the ERP so far) — fine, the
+    // legacy-tab-derived maxPoNo above is the correct floor in that case.
+    if (!/unable to parse range/i.test(e.message || '')) console.error('[po-creation] log read for numbering failed:', e.message);
   }
   return { nextPoNo: maxPoNo + 1, sheetIdByTitle, sheetCount: meta.data.sheets.length };
 }
@@ -2728,8 +2743,20 @@ async function _prSheetMeta() {
   let maxPrNo = 0;
   for (const s of meta.data.sheets) {
     sheetIdByTitle[s.properties.title] = s.properties.sheetId;
+    // Legacy archive tabs — no new ones get created since PDF export replaced
+    // tab-duplication, so this alone would freeze nextPrNo forever. The real,
+    // growing sequence lives in ERP PR Log's own PR No column (read below).
     const m = /^PR\s+(\d+)$/i.exec(s.properties.title.trim());
     if (m) maxPrNo = Math.max(maxPrNo, parseInt(m[1], 10));
+  }
+  try {
+    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    for (const row of (logRes.data.values || [])) {
+      const n = parseInt(row[0], 10);
+      if (!isNaN(n)) maxPrNo = Math.max(maxPrNo, n);
+    }
+  } catch (e) {
+    if (!/unable to parse range/i.test(e.message || '')) console.error('[pr-creation] log read for numbering failed:', e.message);
   }
   return { nextPrNo: maxPrNo + 1, sheetIdByTitle };
 }
@@ -2940,8 +2967,20 @@ async function _grnSheetMeta() {
   let maxGrNo = 0;
   for (const s of meta.data.sheets) {
     sheetIdByTitle[s.properties.title] = s.properties.sheetId;
+    // Legacy archive tabs — no new ones get created since PDF export replaced
+    // tab-duplication, so this alone would freeze nextGrNo forever. The real,
+    // growing sequence lives in ERP GRN Log's own GR No column (read below).
     const m = /^GR\s+(\d+)$/i.exec(s.properties.title.trim());
     if (m) maxGrNo = Math.max(maxGrNo, parseInt(m[1], 10));
+  }
+  try {
+    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    for (const row of (logRes.data.values || [])) {
+      const n = parseInt(row[0], 10);
+      if (!isNaN(n)) maxGrNo = Math.max(maxGrNo, n);
+    }
+  } catch (e) {
+    if (!/unable to parse range/i.test(e.message || '')) console.error('[grn-creation] log read for numbering failed:', e.message);
   }
   return { nextGrNo: maxGrNo + 1, sheetIdByTitle };
 }
