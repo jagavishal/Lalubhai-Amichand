@@ -593,7 +593,27 @@ window.Pages.fms = (() => {
     return `<option value="">— None —</option>` + _users.map(u => `<option value="${esc(u.id)}" ${u.id === selectedId ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
   }
 
-  function stepBlockHTML(step, i) {
+  // Column-letter fields (Plan/Actual/Delay Reason/Doer Name) are all "pick a
+  // column from the fetched header row" — a dropdown once headers are loaded,
+  // but keep whatever is already configured as a selectable option even if it
+  // no longer matches a fetched header (sheet reshuffled, or not fetched yet).
+  function colSelectHTML(i, key, currentVal, placeholder) {
+    const currentMissing = currentVal && !_modalHeaders.some(h => h.col === currentVal);
+    return `
+      <select class="input fms-step-field" data-step="${i}" data-k="${key}">
+        <option value="">${esc(placeholder)}</option>
+        ${currentMissing ? `<option value="${esc(currentVal)}" selected>${esc(currentVal)} (current)</option>` : ''}
+        ${_modalHeaders.map(h => `<option value="${esc(h.col)}" ${currentVal === h.col ? 'selected' : ''}>${esc(h.name)} (${esc(h.col)})</option>`).join('')}
+      </select>`;
+  }
+
+  function stepBlockHTML(step, i, totalSteps) {
+    const selectedDoerNames = _users.filter(u => step.doerIds.includes(u.id)).map(u => u.name);
+    const doerChipsHTML = selectedDoerNames.length ? `
+      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">
+        ${selectedDoerNames.map(n => `<span style="display:inline-flex;align-items:center;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:#fef3c7;color:#92400e;">${esc(n)}</span>`).join('')}
+      </div>` : '';
+
     const doerChecks = _users.map(u => `
       <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#334155;padding:2px 0;cursor:pointer;">
         <input type="checkbox" class="fms-doer-chk" data-step="${i}" data-uid="${esc(u.id)}" ${step.doerIds.includes(u.id) ? 'checked' : ''} />
@@ -621,20 +641,33 @@ window.Pages.fms = (() => {
         <button type="button" class="icon-btn danger fms-extra-remove" data-step="${i}" data-row="${j}" title="Remove"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
       </div>`).join('');
 
+    const iconBtn = (cls, title, disabled, svgPath) => `
+      <button type="button" class="icon-btn ${cls}" data-step="${i}" title="${title}" ${disabled ? 'disabled style="opacity:.3;cursor:default;"' : ''}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${svgPath}</svg>
+      </button>`;
+
     return `
       <div class="fms-step-block" data-step="${i}" style="border:1px solid #e2e8f0;border-radius:10px;padding:14px;margin-bottom:12px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-          <div style="font-size:12.5px;font-weight:700;color:#0f172a;">Step ${i + 1}</div>
-          <button type="button" class="icon-btn danger fms-step-remove" data-step="${i}" title="Remove step"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg></button>
+          <div style="font-size:12.5px;font-weight:700;color:var(--color-primary-strong,#b45309);">Step ${i + 1}</div>
+          <div style="display:flex;align-items:center;gap:2px;">
+            ${iconBtn('fms-step-up', 'Move up', i === 0, '<path d="m18 15-6-6-6 6"/>')}
+            ${iconBtn('fms-step-down', 'Move down', i === totalSteps - 1, '<path d="m6 9 6 6 6-6"/>')}
+            ${iconBtn('fms-step-dup', 'Duplicate step', false, '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>')}
+            ${iconBtn('fms-step-remove danger', 'Remove step', false, '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/>')}
+          </div>
         </div>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;margin-bottom:8px;">
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-bottom:8px;">
           <div><label class="label">Step Name</label><input class="input fms-step-field" data-step="${i}" data-k="stepName" value="${esc(step.stepName)}" /></div>
-          <div><label class="label">Plan Col</label><input class="input fms-step-field" data-step="${i}" data-k="planCol" value="${esc(step.planCol)}" style="text-transform:uppercase;" /></div>
-          <div><label class="label">Actual Col</label><input class="input fms-step-field" data-step="${i}" data-k="actualCol" value="${esc(step.actualCol)}" style="text-transform:uppercase;" /></div>
+          <div><label class="label">Step Doer(s)</label>${doerChipsHTML || '<div style="padding:9px 0;font-size:11.5px;color:#94a3b8;">Pick below</div>'}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+          <div><label class="label">Plan Column</label>${colSelectHTML(i, 'planCol', step.planCol, 'Select column…')}</div>
+          <div><label class="label">Actual Column</label>${colSelectHTML(i, 'actualCol', step.actualCol, 'Select column…')}</div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-          <div><label class="label">Delay Reason Col (optional)</label><input class="input fms-step-field" data-step="${i}" data-k="delayReasonCol" value="${esc(step.delayReasonCol)}" style="text-transform:uppercase;" /></div>
-          <div><label class="label">Doer Name Col (optional)</label><input class="input fms-step-field" data-step="${i}" data-k="doerNameCol" value="${esc(step.doerNameCol)}" style="text-transform:uppercase;" /></div>
+          <div><label class="label">Delay Reason Col (optional)</label>${colSelectHTML(i, 'delayReasonCol', step.delayReasonCol, 'None')}</div>
+          <div><label class="label">Doer Name Col (optional)</label>${colSelectHTML(i, 'doerNameCol', step.doerNameCol, 'None')}</div>
         </div>
 
         <div style="margin-bottom:10px;">
@@ -673,6 +706,9 @@ window.Pages.fms = (() => {
 
   function modalBodyHTML() {
     const f = _modalForm;
+    const headerStatusHTML = _modalHeaders.length
+      ? `<button type="button" id="fms-m-refetch" style="width:100%;text-align:left;padding:8px 12px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;font-size:12px;font-weight:600;cursor:pointer;">✅ ${_modalHeaders.length} columns loaded — click to refetch</button>`
+      : `<button type="button" id="fms-m-refetch" style="width:100%;text-align:left;padding:8px 12px;border-radius:8px;background:#fffbeb;border:1px solid #fde68a;color:#b45309;font-size:12px;font-weight:600;cursor:pointer;">⚠️ Fetch headers to enable the column dropdowns below</button>`;
     return `
       <div style="display:flex;flex-direction:column;gap:12px;">
         <div><label class="label">FMS Name *</label><input id="fms-m-name" class="input" value="${esc(f.fmsName)}" /></div>
@@ -681,17 +717,12 @@ window.Pages.fms = (() => {
           <div><label class="label">Tab Name *</label><input id="fms-m-tabname" class="input" value="${esc(f.sheetName)}" /></div>
           <div><label class="label">Header Row</label><input id="fms-m-headerrow" class="input" type="number" min="1" value="${esc(f.headerRow)}" /></div>
         </div>
-        <div style="display:flex;gap:8px;align-items:flex-end;">
-          <div style="flex:1;"><label class="label">Process Coordinator</label><select id="fms-m-pc" class="input">${userOptionsHTML(f.processCoordinatorId)}</select></div>
-          <button type="button" id="fms-m-fetchheaders" class="btn-secondary">Fetch Headers</button>
-        </div>
+        <div><label class="label">Process Coordinator</label><select id="fms-m-pc" class="input">${userOptionsHTML(f.processCoordinatorId)}</select></div>
+        ${headerStatusHTML}
 
         <div style="border-top:1px solid #e2e8f0;padding-top:12px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-            <div style="font-size:13px;font-weight:700;color:#0f172a;">Steps</div>
-            <button type="button" id="fms-m-addstep" class="btn-secondary btn-sm">+ Add Step</button>
-          </div>
-          <div id="fms-m-steps">${f.steps.map(stepBlockHTML).join('')}</div>
+          <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:8px;">Steps</div>
+          <div id="fms-m-steps">${f.steps.map((s, i) => stepBlockHTML(s, i, f.steps.length)).join('')}</div>
         </div>
       </div>`;
   }
@@ -705,16 +736,20 @@ window.Pages.fms = (() => {
           <div class="modal-header">
             <div style="flex:1;">
               <div class="modal-title">${_modalMode === 'edit' ? 'Edit FMS' : 'Add FMS'}</div>
-              <div class="modal-subtitle">Config only — row data always stays in the live Google Sheet</div>
+              <div class="modal-subtitle">Point at a Google Sheet, then configure each step's columns</div>
             </div>
+            <button type="button" id="fms-m-addstep-top" class="btn-secondary btn-sm" style="margin-right:4px;">+ Add Step</button>
             <button id="fms-modal-close" class="icon-btn" type="button" aria-label="Close">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
           <div class="modal-body" style="max-height:60vh;overflow-y:auto;">${modalBodyHTML()}</div>
-          <div class="modal-footer">
-            <button id="fms-modal-cancel" class="btn-secondary">Cancel</button>
-            <button id="fms-modal-save" class="btn-primary" ${_modalSaving ? 'disabled' : ''}>${_modalSaving ? 'Saving…' : 'Save FMS'}</button>
+          <div class="modal-footer" style="display:flex;align-items:center;justify-content:space-between;">
+            <span style="font-size:11.5px;color:#94a3b8;">${_modalForm.steps.length} step${_modalForm.steps.length === 1 ? '' : 's'}</span>
+            <div style="display:flex;gap:8px;">
+              <button id="fms-modal-cancel" class="btn-secondary">Cancel</button>
+              <button id="fms-modal-save" class="btn-primary" ${_modalSaving ? 'disabled' : ''}>${_modalSaving ? 'Saving…' : (_modalMode === 'edit' ? '💾 Save Changes' : 'Save FMS')}</button>
+            </div>
           </div>
         </div>
       </div>`;
@@ -736,21 +771,44 @@ window.Pages.fms = (() => {
     document.getElementById('fms-m-tabname')?.addEventListener('input', (e) => { _modalForm.sheetName = e.target.value; });
     document.getElementById('fms-m-headerrow')?.addEventListener('input', (e) => { _modalForm.headerRow = parseInt(e.target.value, 10) || 1; });
     document.getElementById('fms-m-pc')?.addEventListener('change', (e) => { _modalForm.processCoordinatorId = e.target.value || null; });
-    document.getElementById('fms-m-fetchheaders')?.addEventListener('click', fetchModalHeaders);
-    document.getElementById('fms-m-addstep')?.addEventListener('click', () => { _modalForm.steps.push(newStep()); renderAddEditModal(); });
+    document.getElementById('fms-m-refetch')?.addEventListener('click', fetchModalHeaders);
+    document.getElementById('fms-m-addstep-top')?.addEventListener('click', () => { _modalForm.steps.push(newStep()); renderAddEditModal(); });
 
     overlay.querySelectorAll('.fms-step-remove').forEach(b => b.addEventListener('click', () => {
       _modalForm.steps.splice(parseInt(b.dataset.step, 10), 1);
       renderAddEditModal();
     }));
-    overlay.querySelectorAll('.fms-step-field').forEach(el => el.addEventListener('input', (e) => {
-      _modalForm.steps[parseInt(el.dataset.step, 10)][el.dataset.k] = e.target.value;
+    overlay.querySelectorAll('.fms-step-up').forEach(b => b.addEventListener('click', () => {
+      const i = parseInt(b.dataset.step, 10);
+      if (i <= 0) return;
+      const [s] = _modalForm.steps.splice(i, 1);
+      _modalForm.steps.splice(i - 1, 0, s);
+      renderAddEditModal();
     }));
+    overlay.querySelectorAll('.fms-step-down').forEach(b => b.addEventListener('click', () => {
+      const i = parseInt(b.dataset.step, 10);
+      if (i >= _modalForm.steps.length - 1) return;
+      const [s] = _modalForm.steps.splice(i, 1);
+      _modalForm.steps.splice(i + 1, 0, s);
+      renderAddEditModal();
+    }));
+    overlay.querySelectorAll('.fms-step-dup').forEach(b => b.addEventListener('click', () => {
+      const i = parseInt(b.dataset.step, 10);
+      const copy = JSON.parse(JSON.stringify(_modalForm.steps[i]));
+      _modalForm.steps.splice(i + 1, 0, copy);
+      renderAddEditModal();
+    }));
+    overlay.querySelectorAll('.fms-step-field').forEach(el => {
+      const sync = (e) => { _modalForm.steps[parseInt(el.dataset.step, 10)][el.dataset.k] = e.target.value; };
+      el.addEventListener('input', sync);
+      el.addEventListener('change', sync);
+    });
     overlay.querySelectorAll('.fms-doer-chk').forEach(el => el.addEventListener('change', (e) => {
       const step = _modalForm.steps[parseInt(el.dataset.step, 10)];
       const uid = el.dataset.uid;
       if (e.target.checked) { if (!step.doerIds.includes(uid)) step.doerIds.push(uid); }
       else step.doerIds = step.doerIds.filter(id => id !== uid);
+      renderAddEditModal();
     }));
     overlay.querySelectorAll('.fms-showcol-chk').forEach(el => el.addEventListener('change', (e) => {
       const step = _modalForm.steps[parseInt(el.dataset.step, 10)];
