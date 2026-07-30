@@ -1970,6 +1970,17 @@ app.delete('/api/clients', requireAuth, async (req, res) => {
 const PR_SHEET_ID = '18SNUNQPwZMC0OLCKmU8eltvLLY4VC1kO8rZw75UNg1k';
 const GRN_SHEET_ID = '1mvhf6SN7_5h1HEuKoBc1CJRqnYwoOAzNAgvGuSbSi38';
 const PDF_DRIVE_FOLDER_ID = '1szkgiMRZ8RAvQxQiwOho4Hqd7JO5VzoI';
+// PO/PR/GRN each save into their own subfolder of the "PR/PO/GRN ERP pdfs"
+// Shared Drive (0AO3U0bKj4seJUk9PVA). This has to be a Shared Drive, not a
+// regular "My Drive" folder — service accounts have zero storage quota of
+// their own, so file creation in a plain folder fails even with Editor
+// access; only a Shared Drive's pooled quota lets them create files at all.
+// (The old PDF_DRIVE_FOLDER_ID above is a regular folder, view-only for the
+// service account anyway, and kept only for the unused legacy sync functions
+// below — never used for a real upload.)
+const PO_PDF_DRIVE_FOLDER_ID = '1iFcj9bv3QmIuaNKQSIKrNy6_8FhGzn6e';
+const PR_PDF_DRIVE_FOLDER_ID = '1Nr33UmAqIUEC4KQmaAnZlFjhv57mVWi4';
+const GRN_PDF_DRIVE_FOLDER_ID = '11ELSLuEbVIqUeibZwmvPiRg-MOUVPJXQ';
 const LOG_TAB_NAME = 'Web App Log';
 // PO log replaced the old per-PO-spreadsheet "Web App Log" tab with this shared
 // monitoring spreadsheet so PO activity shows up alongside other ops tracking.
@@ -2249,13 +2260,13 @@ async function appendLogRow(spreadsheetId, tabName, rowValues) {
   });
 }
 
-async function uploadPdfToDrive(buffer, filename) {
+async function uploadPdfToDrive(buffer, filename, folderId = PDF_DRIVE_FOLDER_ID) {
   const { google } = require('googleapis');
   const auth = getGoogleAuth();
   if (!auth) return null;
   const drive = google.drive({ version: 'v3', auth });
   const file = await drive.files.create({
-    requestBody: { name: filename, parents: [PDF_DRIVE_FOLDER_ID] },
+    requestBody: { name: filename, parents: [folderId] },
     media: { mimeType: 'application/pdf', body: Readable.from(buffer) },
     fields: 'id,webViewLink',
     supportsAllDrives: true,
@@ -2286,9 +2297,9 @@ function _timestampForSheet() {
 // Drive upload is a separate failure domain from the Sheets row (e.g. the
 // service account can have Sheets access without matching Drive folder
 // permissions) — never let a Drive failure block the Sheets sync.
-async function safeUploadPdfToDrive(buffer, filename) {
+async function safeUploadPdfToDrive(buffer, filename, folderId) {
   try {
-    return await uploadPdfToDrive(buffer, filename);
+    return await uploadPdfToDrive(buffer, filename, folderId);
   } catch (e) {
     console.error('[google-sync] Drive upload failed:', e.message);
     return null;
@@ -2595,7 +2606,7 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     let pdfLink = null;
     try {
       const pdfBuffer = await _exportSheetTabPdf(PO_CREATION_SHEET_ID, sourceSheetId);
-      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PO ${nextPoNo} - ${tab}.pdf`);
+      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PO ${nextPoNo} - ${tab}.pdf`, PO_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[po-creation] PDF export failed:', e.message); }
 
     // 5) Log this PO so the ERP can list it (the sheet is still the database —
@@ -2848,7 +2859,7 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     let pdfLink = null;
     try {
       const pdfBuffer = await _exportPrTabPdf(sourceSheetId);
-      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PR ${nextPrNo} - ${tab}.pdf`);
+      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PR ${nextPrNo} - ${tab}.pdf`, PR_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[pr-creation] PDF export failed:', e.message); }
 
     // 5) Log this PR so the ERP can list it — the sheet is still the database,
@@ -3051,7 +3062,7 @@ app.post('/api/grn-creation', requireAuth, async (req, res) => {
     let pdfLink = null;
     try {
       const pdfBuffer = await _exportSheetTabPdf(GRN_CREATION_SHEET_ID, sourceSheetId);
-      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `GR ${nextGrNo}.pdf`);
+      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `GR ${nextGrNo}.pdf`, GRN_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[grn-creation] PDF export failed:', e.message); }
 
     // 5) Log this GRN so the ERP can list it — same pattern as "ERP PO Log".
