@@ -253,7 +253,7 @@ window.Pages['pr-creation'] = (() => {
       previewSize.textContent = opt.dataset.size || '—';
       dd.style.display = 'none';
     });
-    window.addEventListener('scroll', () => { dd.style.display = 'none'; }, true);
+    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
   }
 
