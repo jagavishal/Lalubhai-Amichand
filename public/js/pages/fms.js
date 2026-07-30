@@ -217,6 +217,7 @@ window.Pages.fms = (() => {
   let _modalHeaders = [];    // [{name,col,index}] from fetch-headers
   let _modalForm = null;     // { fmsName, sheetName, sheetId, headerRow, processCoordinatorId, steps:[...] }
   let _modalLoadResult = {}; // stepIdx -> { matched, unmatched }
+  let _modalDoerPickerOpen = {}; // stepIdx -> bool, whether the doer checklist is expanded
 
   // Intake config modal state
   let _intakeModalOpen = false, _intakeModalId = null, _intakeModalSaving = false;
@@ -599,10 +600,10 @@ window.Pages.fms = (() => {
     return `<option value="">— None —</option>` + _users.map(u => `<option value="${esc(u.id)}" ${u.id === selectedId ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
   }
 
-  // Column-letter fields (Plan/Actual/Delay Reason/Doer Name) are all "pick a
-  // column from the fetched header row" — a dropdown once headers are loaded,
-  // but keep whatever is already configured as a selectable option even if it
-  // no longer matches a fetched header (sheet reshuffled, or not fetched yet).
+  // Column-letter fields (Plan/Actual/Doer Name) are all "pick a column from
+  // the fetched header row" — a dropdown once headers are loaded, but keep
+  // whatever is already configured as a selectable option even if it no
+  // longer matches a fetched header (sheet reshuffled, or not fetched yet).
   function colSelectHTML(i, key, currentVal, placeholder) {
     const currentMissing = currentVal && !_modalHeaders.some(h => h.col === currentVal);
     return `
@@ -613,12 +614,19 @@ window.Pages.fms = (() => {
       </select>`;
   }
 
+  // Shows the underlying sheet header text next to the label once a column is
+  // picked, e.g. "Plan Column (Plan 1)" — a quick sanity check for the admin.
+  function colLabelHTML(baseLabel, currentVal) {
+    const h = _modalHeaders.find(x => x.col === currentVal);
+    return h ? `${esc(baseLabel)} <span style="font-weight:400;color:#94a3b8;">(${esc(h.name)})</span>` : esc(baseLabel);
+  }
+
   function stepBlockHTML(step, i, totalSteps) {
     const selectedDoerNames = _users.filter(u => step.doerIds.includes(u.id)).map(u => u.name);
-    const doerChipsHTML = selectedDoerNames.length ? `
-      <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">
-        ${selectedDoerNames.map(n => `<span style="display:inline-flex;align-items:center;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:#fef3c7;color:#92400e;">${esc(n)}</span>`).join('')}
-      </div>` : '';
+    const doerBoxContent = selectedDoerNames.length
+      ? `<div style="display:flex;flex-wrap:wrap;gap:4px;">${selectedDoerNames.map(n => `<span style="display:inline-flex;align-items:center;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:#fef3c7;color:#92400e;">${esc(n)}</span>`).join('')}</div>`
+      : `<span style="color:#94a3b8;">Select users…</span>`;
+    const doerPickerOpen = !!_modalDoerPickerOpen[i];
 
     const doerChecks = _users.map(u => `
       <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#334155;padding:2px 0;cursor:pointer;">
@@ -630,7 +638,7 @@ window.Pages.fms = (() => {
       <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#334155;padding:2px 0;cursor:pointer;">
         <input type="checkbox" class="fms-showcol-chk" data-step="${i}" data-idx="${h.index}" ${step.showCols.includes(h.index) ? 'checked' : ''} />
         ${esc(h.name)} <span style="color:#94a3b8;">(${esc(h.col)})</span>
-      </label>`).join('') : `<div style="font-size:11.5px;color:#94a3b8;">Fetch headers first (Sheet/Tab/Header row above) to pick columns to show.</div>`;
+      </label>`).join('') : '';
 
     const loadResult = _modalLoadResult[i];
     const extraRowsHTML = step.extraRows.map((er, j) => `
@@ -663,37 +671,41 @@ window.Pages.fms = (() => {
             ${iconBtn('fms-step-remove danger', 'Remove step', false, '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/>')}
           </div>
         </div>
-        <div style="margin-bottom:8px;"><label class="label">Step Name</label><input class="input fms-step-field" data-step="${i}" data-k="stepName" value="${esc(step.stepName)}" /></div>
-
-        <div style="margin-bottom:10px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;">
-            <label class="label" style="margin:0;">Step Doer(s)</label>
-            <div style="display:flex;align-items:center;gap:6px;">
-              <input class="input fms-loadcol-input" data-step="${i}" placeholder="Col letter" style="width:80px;padding:5px 8px;font-size:11.5px;" />
-              <button type="button" class="btn-secondary btn-sm fms-loaddoers-btn" data-step="${i}">Load Doers From Column</button>
-            </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+          <div><label class="label">Step Name</label><input class="input fms-step-field" data-step="${i}" data-k="stepName" placeholder="Step Name" value="${esc(step.stepName)}" /></div>
+          <div>
+            <label class="label">Step Doer(s)</label>
+            <div class="input fms-doer-toggle" data-step="${i}" style="cursor:pointer;min-height:38px;display:flex;align-items:center;">${doerBoxContent}</div>
           </div>
-          ${doerChipsHTML}
-          <div style="max-height:130px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;margin-top:6px;">${doerChecks || '<span style="font-size:11.5px;color:#94a3b8;">No users found.</span>'}</div>
+        </div>
+        ${doerPickerOpen ? `
+        <div style="margin-bottom:10px;">
+          <div style="max-height:150px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;">${doerChecks || '<span style="font-size:11.5px;color:#94a3b8;">No users found.</span>'}</div>
           ${loadResult ? `
           <div style="margin-top:6px;padding:8px;background:#f8fafc;border-radius:8px;font-size:11.5px;">
             <div style="color:#16a34a;font-weight:600;">Matched: ${loadResult.matched.map(m => esc(m.user_name)).join(', ') || '—'}</div>
             ${loadResult.unmatched.length ? `<div style="color:#dc2626;margin-top:2px;">Unmatched: ${loadResult.unmatched.map(esc).join(', ')}</div>` : ''}
             ${loadResult.matched.length ? `<button type="button" class="btn-secondary btn-sm fms-adopt-matched" data-step="${i}" style="margin-top:6px;">Add All Matched</button>` : ''}
           </div>` : ''}
-        </div>
+        </div>` : ''}
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-          <div><label class="label">Plan Column</label>${colSelectHTML(i, 'planCol', step.planCol, 'Select column…')}</div>
-          <div><label class="label">Actual Column</label>${colSelectHTML(i, 'actualCol', step.actualCol, 'Select column…')}</div>
-        </div>
-        <div style="max-width:calc(50% - 4px);margin-bottom:10px;">
-          <label class="label">Doer Name Col (optional)</label>${colSelectHTML(i, 'doerNameCol', step.doerNameCol, 'None')}
+          <div><label class="label">${colLabelHTML('Plan Column', step.planCol)}</label>${colSelectHTML(i, 'planCol', step.planCol, 'Column e.g. I')}</div>
+          <div><label class="label">${colLabelHTML('Actual Column', step.actualCol)}</label>${colSelectHTML(i, 'actualCol', step.actualCol, 'Column e.g. J')}</div>
         </div>
 
         <div style="margin-bottom:10px;">
-          <label class="label">Show These Columns</label>
-          <div style="max-height:110px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;">${showColChecks}</div>
+          <label class="label">Columns to Show in FMS Tasks <span style="font-weight:400;color:#94a3b8;">(blank = show all)</span></label>
+          ${!_modalHeaders.length ? `<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">Will populate once headers are loaded.</div>` : ''}
+          <div style="max-height:110px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;">${showColChecks || '<span style="font-size:11.5px;color:#94a3b8;">Fetch headers above to pick columns.</span>'}</div>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:flex-end;max-width:calc(50% - 4px);margin-bottom:10px;">
+          <div style="flex:1;">
+            <label class="label">Doer Name Column <span style="font-weight:400;color:#94a3b8;">(auto-saved on completion)</span></label>
+            ${colSelectHTML(i, 'doerNameCol', step.doerNameCol, 'None')}
+          </div>
+          <button type="button" class="btn-secondary btn-sm fms-loaddoers-btn" data-step="${i}" style="white-space:nowrap;padding:9px 12px;">Load Doers</button>
         </div>
 
         <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#334155;cursor:pointer;margin-bottom:8px;">
@@ -710,19 +722,21 @@ window.Pages.fms = (() => {
 
   function modalBodyHTML() {
     const f = _modalForm;
-    const headerStatusHTML = _modalHeaders.length
-      ? `<button type="button" id="fms-m-refetch" style="width:100%;text-align:left;padding:8px 12px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0;color:#16a34a;font-size:12px;font-weight:600;cursor:pointer;">✅ ${_modalHeaders.length} columns loaded — click to refetch</button>`
-      : `<button type="button" id="fms-m-refetch" style="width:100%;text-align:left;padding:8px 12px;border-radius:8px;background:#fffbeb;border:1px solid #fde68a;color:#b45309;font-size:12px;font-weight:600;cursor:pointer;">⚠️ Fetch headers to enable the column dropdowns below</button>`;
+    const fetchBtnHTML = _modalHeaders.length
+      ? `<button type="button" id="fms-m-refetch" class="btn-secondary" style="width:100%;justify-content:center;">✅ ${_modalHeaders.length} columns loaded — click to refetch</button>`
+      : `<button type="button" id="fms-m-refetch" class="btn-secondary" style="width:100%;justify-content:center;">🔍 Fetch Column Headers</button>`;
     return `
       <div style="display:flex;flex-direction:column;gap:12px;">
-        <div><label class="label">FMS Name *</label><input id="fms-m-name" class="input" value="${esc(f.fmsName)}" /></div>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;">
-          <div><label class="label">Google Sheet URL/ID *</label><input id="fms-m-sheetid" class="input" value="${esc(f.sheetId)}" /></div>
-          <div><label class="label">Tab Name *</label><input id="fms-m-tabname" class="input" value="${esc(f.sheetName)}" /></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div><label class="label">FMS Name <span style="font-weight:400;color:#94a3b8;">(display name)</span></label><input id="fms-m-name" class="input" placeholder="e.g. Factory O2O, Recruitment FMS…" value="${esc(f.fmsName)}" /></div>
+          <div><label class="label">Google Sheet Tab Name</label><input id="fms-m-tabname" class="input" placeholder="e.g. Sheet1" value="${esc(f.sheetName)}" /></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div><label class="label">Google Sheet ID <span style="font-weight:400;color:#94a3b8;">(or full URL)</span></label><input id="fms-m-sheetid" class="input" placeholder="Sheet ID or full URL" value="${esc(f.sheetId)}" /></div>
           <div><label class="label">Header Row</label><input id="fms-m-headerrow" class="input" type="number" min="1" value="${esc(f.headerRow)}" /></div>
         </div>
         <div><label class="label">Process Coordinator</label><select id="fms-m-pc" class="input">${userOptionsHTML(f.processCoordinatorId)}</select></div>
-        ${headerStatusHTML}
+        ${fetchBtnHTML}
 
         <div style="border-top:1px solid #e2e8f0;padding-top:12px;">
           <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:8px;">Steps</div>
@@ -731,6 +745,8 @@ window.Pages.fms = (() => {
       </div>`;
   }
 
+  const FMS_ICON_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+
   function renderAddEditModal() {
     const existing = document.getElementById('fms-modal-overlay');
     if (!_modalOpen) { if (existing) existing.remove(); return; }
@@ -738,8 +754,9 @@ window.Pages.fms = (() => {
       <div id="fms-modal-overlay" class="modal-overlay" style="display:flex;">
         <div class="modal-box" style="max-width:760px;max-height:88vh;">
           <div class="modal-header">
+            <div class="modal-header-icon">${FMS_ICON_SVG}</div>
             <div style="flex:1;">
-              <div class="modal-title">${_modalMode === 'edit' ? 'Edit FMS' : 'Add FMS'}</div>
+              <div class="modal-title">${_modalMode === 'edit' ? 'Edit FMS Flow' : 'New FMS Flow'}</div>
               <div class="modal-subtitle">Point at a Google Sheet, then configure each step's columns</div>
             </div>
             <button type="button" id="fms-m-addstep-top" class="btn-secondary btn-sm" style="margin-right:4px;">+ Add Step</button>
@@ -848,6 +865,11 @@ window.Pages.fms = (() => {
       const step = _modalForm.steps[parseInt(el.dataset.step, 10)];
       step.extraRows[parseInt(el.dataset.row, 10)].required = e.target.checked;
     }));
+    overlay.querySelectorAll('.fms-doer-toggle').forEach(el => el.addEventListener('click', () => {
+      const i = parseInt(el.dataset.step, 10);
+      _modalDoerPickerOpen[i] = !_modalDoerPickerOpen[i];
+      renderAddEditModal();
+    }));
     overlay.querySelectorAll('.fms-loaddoers-btn').forEach(b => b.addEventListener('click', () => loadDoersFromColumn(parseInt(b.dataset.step, 10))));
     overlay.querySelectorAll('.fms-adopt-matched').forEach(b => b.addEventListener('click', () => {
       const i = parseInt(b.dataset.step, 10);
@@ -876,33 +898,32 @@ window.Pages.fms = (() => {
   }
 
   async function loadDoersFromColumn(stepIdx) {
-    const overlay = document.getElementById('fms-modal-overlay');
-    const colInput = overlay?.querySelector(`.fms-loadcol-input[data-step="${stepIdx}"]`);
-    const colLetter = (colInput?.value || '').trim().toUpperCase();
-    if (!colLetter) { window.Utils.showToast('Enter a column letter first', 'error'); return; }
-    if (!_modalForm.sheetId.trim() || !_modalForm.sheetName.trim()) { window.Utils.showToast('Enter the Sheet URL/ID and Tab Name first', 'error'); return; }
+    const colLetter = (_modalForm.steps[stepIdx]?.doerNameCol || '').trim().toUpperCase();
+    if (!colLetter) { window.Utils.showToast('Pick a Doer Name Column first', 'error'); return; }
+    if (!_modalForm.sheetId.trim() || !_modalForm.sheetName.trim()) { window.Utils.showToast('Enter the Sheet ID and Tab Name first', 'error'); return; }
     try {
       const qs = new URLSearchParams({ sheetUrlOrId: _modalForm.sheetId, tabName: _modalForm.sheetName, colLetter, headerRow: _modalForm.headerRow }).toString();
       const result = await window.Utils.apiFetch(`/api/fms/sheet-column-values?${qs}`);
       _modalLoadResult[stepIdx] = result;
+      _modalDoerPickerOpen[stepIdx] = true;
       renderAddEditModal();
     } catch (e) { window.Utils.showToast(e.message || 'Failed to load column values', 'error'); }
   }
 
   function closeAddEditModal() {
-    _modalOpen = false; _modalSaving = false; _modalForm = null; _modalHeaders = []; _modalLoadResult = {};
+    _modalOpen = false; _modalSaving = false; _modalForm = null; _modalHeaders = []; _modalLoadResult = {}; _modalDoerPickerOpen = {};
     renderAddEditModal();
   }
 
   async function openAddModal() {
-    _modalMode = 'create'; _modalEditId = null; _modalHeaders = []; _modalLoadResult = {};
+    _modalMode = 'create'; _modalEditId = null; _modalHeaders = []; _modalLoadResult = {}; _modalDoerPickerOpen = {};
     _modalForm = { fmsName: '', sheetName: '', sheetId: '', headerRow: 1, processCoordinatorId: null, steps: [newStep()] };
     _modalOpen = true;
     renderAddEditModal();
   }
 
   async function openEditModal(id) {
-    _modalMode = 'edit'; _modalEditId = id; _modalHeaders = []; _modalLoadResult = {};
+    _modalMode = 'edit'; _modalEditId = id; _modalHeaders = []; _modalLoadResult = {}; _modalDoerPickerOpen = {};
     _modalOpen = true;
     _modalForm = { fmsName: '', sheetName: '', sheetId: '', headerRow: 1, processCoordinatorId: null, steps: [] };
     renderAddEditModal();
