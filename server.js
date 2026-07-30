@@ -282,7 +282,8 @@ async function seedIfEmpty() {
 
 async function fixCollations() {
   if (!USE_DB) return;
-  const tables = ['users','delegations','masters','clients','checklist_completions','daily_tasks','leaves','user_sessions'];
+  const tables = ['users','delegations','masters','clients','checklist_completions','daily_tasks','leaves','user_sessions',
+    'fms_sheets','fms_sheet_steps','fms_step_doers','fms_extra_rows','fms_intake_fields'];
   // A couple of these tables carry a leftover FOREIGN KEY constraint from an
   // earlier schema iteration (the current schema style is FK-less, app-generated
   // string ids) that blocks ALTER ... CONVERT TO CHARACTER SET on either side of
