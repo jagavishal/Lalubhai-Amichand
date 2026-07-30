@@ -365,6 +365,45 @@ window.Pages['pr-creation'] = (() => {
     }).filter(it => it.itemCode);
   }
 
+  /* ── Success popup — shows the Drive PDF link right after creation, same
+     as PO Creation's ────────────────────────────────────────────────────── */
+  function _showPrCreatedModal(prNumber, pdfLink) {
+    const existing = document.getElementById('pcr-success-overlay');
+    if (existing) existing.remove();
+
+    const pdfSection = pdfLink
+      ? '<a href="' + esc(pdfLink) + '" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:8px;padding:10px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);font-size:13.5px;font-weight:700;text-decoration:none;">'
+        + '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 12v6M9 15h6"/></svg>'
+        + 'Open PDF in Drive</a>'
+      : '<div style="font-size:12px;color:#b45309;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:10px 14px;text-align:left;">PDF wasn\'t saved (Drive export/upload failed) — the PR itself is safely saved in the sheet. Check the Drive folder\'s sharing permissions for the service account.</div>';
+
+    const overlay = document.createElement('div');
+    overlay.id = 'pcr-success-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10000;display:grid;place-items:center;padding:16px;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
+    overlay.innerHTML = ''
+      + '<div style="background:#fff;border-radius:18px;width:100%;max-width:380px;box-shadow:0 24px 64px rgba(0,0,0,.2);overflow:hidden;animation:pop-in 200ms cubic-bezier(.16,1,.3,1);">'
+        + '<div style="padding:26px 24px 22px;text-align:center;">'
+          + '<div style="width:46px;height:46px;border-radius:50%;background:#f0fdf4;display:grid;place-items:center;margin:0 auto 14px;">'
+            + '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>'
+          + '</div>'
+          + '<div style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:4px;">PR #' + esc(prNumber) + ' Created</div>'
+          + '<div style="font-size:12.5px;color:#64748b;margin-bottom:18px;">Saved into the live PR Google Sheet.</div>'
+          + pdfSection
+        + '</div>'
+        + '<div style="padding:0 24px 22px;display:flex;justify-content:center;">'
+          + '<button id="pcr-success-close" style="padding:8px 20px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:12.5px;font-weight:600;cursor:pointer;">Close</button>'
+        + '</div>'
+      + '</div>';
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    document.getElementById('pcr-success-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', function escHandler(e) {
+      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', escHandler); }
+    });
+  }
+
   async function _createSubmit(e) {
     e.preventDefault();
     const body = { format: _format, items: _collectItems() };
@@ -382,9 +421,9 @@ window.Pages['pr-creation'] = (() => {
     try {
       const result = await Utils.apiFetch('/api/pr-creation', { method: 'POST', body: JSON.stringify(body) });
       _lastDepartment = result.department || '';
-      Utils.showToast('PR #' + result.prNumber + ' created' + (result.pdfLink ? ' — PDF saved to Drive' : ' (PDF export failed, PR still saved)'), result.pdfLink ? 'success' : 'warning');
       await _loadMasters();
       renderPage();
+      _showPrCreatedModal(result.prNumber, result.pdfLink);
     } catch (err) {
       Utils.showToast(err.message || 'Failed to create PR', 'error');
       btn.disabled = false; btn.textContent = 'Create Purchase Requisition';

@@ -3,15 +3,23 @@ window.Pages = window.Pages || {};
 // ── GRN Creation ─────────────────────────────────────────────────────────────
 // Mirrors the store team's live "GRN June 2026" Google Sheet field-for-field —
 // the sheet itself is the database (see POST /api/grn-creation in server.js).
-// Unlike PO Creation there's only one template ("GRN"), no format tabs.
-// Submitting fills that tab, exports it as a PDF (saved to Drive), and logs
-// it — see the separate "GRN List" tab for the created-GRN history with
-// filters (grn-list.js).
+// Only one template ("GRN"), no format tabs like PO Creation. Submitting fills
+// that tab, exports it as a PDF (saved to Drive), and logs it — the "GRN List"
+// tab (in-page, alongside Create) shows that created-GRN history with filters.
 window.Pages['grn-creation'] = (() => {
   /* ── state ──────────────────────────────────────────────────── */
+  let _view = 'create'; // 'create' | 'list'
   let _mastersLoaded = false;
   let _vendors = [];
   let _nextGrNumber = null;
+
+  // GRN List (in-page tab) state — read-only history from the ERP GRN Log tab.
+  let _grlRows = [];
+  let _grlLoaded = false;
+  let _grlLoadError = '';
+  let _grlFVendor = '';
+  let _grlFFrom = '';
+  let _grlFTo = '';
 
   function _today() { return new Date().toISOString().slice(0, 10); }
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -194,6 +202,106 @@ window.Pages['grn-creation'] = (() => {
     document.querySelectorAll('#grnc-items-tbody .grnc-item-row').forEach(_bindItemRow);
   }
 
+  /* ── GRN List (in-page tab) — read-only history from the ERP GRN Log tab,
+     filterable by vendor/date range ─────────────────────────────────────── */
+  async function _grlLoad() {
+    _grlLoaded = false;
+    _grlLoadError = '';
+    _grlRenderTable();
+    try {
+      _grlRows = await Utils.apiFetch('/api/grn-creation/list') || [];
+    } catch (e) {
+      _grlRows = [];
+      _grlLoadError = e.message || 'Failed to load GRNs';
+    }
+    _grlLoaded = true;
+    _grlRenderTable();
+  }
+
+  function _grlFilteredRows() {
+    return _grlRows.filter(r => {
+      if (_grlFVendor && !(r.vendorName || '').toLowerCase().includes(_grlFVendor.toLowerCase())) return false;
+      if (_grlFFrom && (r.date || '') < _grlFFrom) return false;
+      if (_grlFTo && (r.date || '') > _grlFTo) return false;
+      return true;
+    });
+  }
+
+  function _grlRenderTable() {
+    const body = document.getElementById('grnl-body');
+    const countEl = document.getElementById('grnl-count');
+    if (!body) return;
+
+    if (!_grlLoaded) {
+      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      if (countEl) countEl.textContent = '';
+      return;
+    }
+    if (_grlLoadError) {
+      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_grlLoadError) + '</td></tr>';
+      if (countEl) countEl.textContent = '';
+      return;
+    }
+    const rows = _grlFilteredRows();
+    if (countEl) countEl.textContent = rows.length + ' of ' + _grlRows.length;
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_grlRows.length ? 'No GRNs match these filters' : 'No GRNs created yet') + '</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(r => ''
+      + '<tr style="border-bottom:1px solid #f1f5f9;">'
+        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">#' + esc(r.grNo) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.vendorName) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.prNo) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.poNo) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
+      + '</tr>').join('');
+  }
+
+  function _grlFilterBarHtml() {
+    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+      + '<input type="text" id="grnl-vendor" placeholder="Search vendor…" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
+      + '<input type="date" id="grnl-from" style="' + _inputStyle + 'width:auto;" />'
+      + '<span style="color:#94a3b8;font-size:12px;">to</span>'
+      + '<input type="date" id="grnl-to" style="' + _inputStyle + 'width:auto;" />'
+      + '<button type="button" id="grnl-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
+      + '<button type="button" id="grnl-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
+    + '</div>';
+  }
+
+  function _grlBindFilterBar() {
+    document.getElementById('grnl-vendor').addEventListener('input', (e) => { _grlFVendor = e.target.value; _grlRenderTable(); });
+    document.getElementById('grnl-from').addEventListener('change', (e) => { _grlFFrom = e.target.value; _grlRenderTable(); });
+    document.getElementById('grnl-to').addEventListener('change', (e) => { _grlFTo = e.target.value; _grlRenderTable(); });
+    document.getElementById('grnl-clear').addEventListener('click', () => {
+      _grlFVendor = ''; _grlFFrom = ''; _grlFTo = '';
+      document.getElementById('grnl-vendor').value = '';
+      document.getElementById('grnl-from').value = '';
+      document.getElementById('grnl-to').value = '';
+      _grlRenderTable();
+    });
+    document.getElementById('grnl-refresh').addEventListener('click', _grlLoad);
+  }
+
+  function _grlViewHtml() {
+    return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;">'
+        + '<p style="font-size:12.5px;color:#64748b;margin:0;">Every GRN created here, read live from the sheet\'s ERP GRN Log.</p>'
+        + '<span id="grnl-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
+      + '</div>'
+      + _grlFilterBarHtml()
+      + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+        + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
+          + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+            + ['GR No', 'Date', 'Vendor', 'PR No', 'PO No', 'Total (INR)', 'Created By', 'PDF'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+          + '</tr></thead>'
+          + '<tbody id="grnl-body"><tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+        + '</table>'
+      + '</div>';
+  }
+
   /* ── Header fields ──────────────────────────────────────────────────── */
   function _headerFieldsHtml() {
     return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
@@ -206,6 +314,22 @@ window.Pages['grn-creation'] = (() => {
       + _textField('grnc-bill-no', 'Bill No')
       + _textField('grnc-bill-recv-date', 'Bill Recv. Date', { type: 'date' })
       + _textField('grnc-dept-head', 'Dept. Head')
+    + '</div>';
+  }
+
+  /* ── Tabs (Create + GRN List, same in-page-tab pattern as PO Creation) ── */
+  function _tabTab(label, active, extraAttrs) {
+    return '<button type="button" ' + extraAttrs + ' style="'
+      + 'padding:9px 16px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:700;'
+      + 'color:' + (active ? 'var(--color-primary)' : '#94a3b8') + ';'
+      + 'border-bottom:2px solid ' + (active ? 'var(--color-primary)' : 'transparent') + ';margin-bottom:-1px;'
+      + '">' + esc(label) + '</button>';
+  }
+
+  function _tabsHtml() {
+    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
+      + _tabTab('Create GRN', _view === 'create', 'class="grnc-create-tab"')
+      + _tabTab('GRN List', _view === 'list', 'class="grnc-list-tab"')
     + '</div>';
   }
 
@@ -261,12 +385,10 @@ window.Pages['grn-creation'] = (() => {
     const el = document.getElementById('main-content');
     if (!el) return;
 
-    el.innerHTML = '<div style="max-width:1080px;margin:0 auto;padding:4px 0 40px;">'
-      + '<div style="margin-bottom:14px;">'
-        + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">GRN Creation</h1>'
-        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fills the same live GRN Google Sheet the store team already uses, then saves a PDF of it to Drive.</p>'
-      + '</div>'
-      + '<form id="grnc-form" style="display:flex;flex-direction:column;gap:16px;">'
+    const isList = _view === 'list';
+    const bodyHtml = isList
+      ? _grlViewHtml()
+      : '<form id="grnc-form" style="display:flex;flex-direction:column;gap:16px;">'
         + _headerFieldsHtml()
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
         + _itemsTableHtml()
@@ -286,8 +408,25 @@ window.Pages['grn-creation'] = (() => {
           + '<span id="grnc-grand-total" style="font-size:17px;font-weight:800;color:#0f172a;">₹0.00</span>'
         + '</div>'
         + '<button type="submit" id="grnc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create GRN</button>'
-      + '</form>'
+      + '</form>';
+
+    el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '1080px') + ';margin:0 auto;padding:4px 0 40px;">'
+      + '<div style="margin-bottom:14px;">'
+        + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">GRN Creation</h1>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fills the same live GRN Google Sheet the store team already uses, then saves a PDF of it to Drive.</p>'
+      + '</div>'
+      + _tabsHtml()
+      + bodyHtml
     + '</div>';
+
+    document.querySelector('.grnc-create-tab').addEventListener('click', () => { _view = 'create'; renderPage(); });
+    document.querySelector('.grnc-list-tab').addEventListener('click', () => { _view = 'list'; renderPage(); });
+
+    if (isList) {
+      _grlBindFilterBar();
+      _grlLoad();
+      return;
+    }
 
     _bindVendorField();
     _bindAllItemRows();

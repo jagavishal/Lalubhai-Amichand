@@ -46,7 +46,6 @@ window.Pages.users = (() => {
     { key: 'pr-creation',   label: 'PR Creation' },
     { key: 'po-creation',   label: 'PO Creation' },
     { key: 'grn-creation',  label: 'GRN Creation' },
-    { key: 'grn-list',      label: 'GRN List' },
     { key: 'meetings',      label: 'Meetings' },
     { key: 'leave-tracker', label: 'Leave Tracker' },
     { key: 'race-tracker',  label: 'Race Tracker' },
