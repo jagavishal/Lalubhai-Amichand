@@ -2448,7 +2448,12 @@ const PO_FORMAT_CONFIG = {
     partyLabel: 'VENDOR',
     hasShipTo: false,
     header: { poNo: 'J9', date: 'J8', prNo: 'J10', department: 'J11', party: 'A16', deliverySchedule: 'G23', poValidity: 'H23', paymentTerms: 'B23', poMadeBy: 'A23' },
-    items: { firstRow: 27, lastRow: 55, clearCols: ['A', 'L'], fields: { itemCode: 'A', boxQty: 'H', boxRate: 'I', plateQty: 'J', plateRate: 'K' } },
+    // clearCols stops at K, NOT L: column L holds a real per-row formula
+    // (=IF(AND(H=,I=,J=,K=),"",H*I+J*K)) typed into each row individually,
+    // not a spill from the header (unlike PurchaseOrder/ENR PO's amount
+    // columns) — clearing over it would delete it for good the first time
+    // this format is ever submitted. Confirmed still intact; keep it that way.
+    items: { firstRow: 27, lastRow: 55, clearCols: ['A', 'K'], fields: { itemCode: 'A', boxQty: 'H', boxRate: 'I', plateQty: 'J', plateRate: 'K' } },
     summary: { fields: { gstPercent: 'J57', shipping: 'K58', other: 'K59', discountPercent: 'J60' }, totalCell: 'K61' },
   },
 };
@@ -2638,6 +2643,12 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
       });
     }
 
+    // A write is already fully recalculated internally, but both the very
+    // next values.get (the Total read-back below) and the PDF export can
+    // otherwise catch the sheet mid-recalculation and see stale/blank
+    // formula results — this single pause covers both.
+    await _sleep(2000);
+
     // 3) Read back the sheet's own computed Total (single source of truth —
     // never recompute the formula's math server-side).
     let totalAmount = null;
@@ -2651,7 +2662,6 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     // PO itself from being created (same resilience as the PR/PO PDF sync).
     let pdfLink = null;
     try {
-      await _sleep(2000);
       const pdfBuffer = await _exportSheetTabPdf(PO_CREATION_SHEET_ID, sourceSheetId);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PO ${nextPoNo} - ${tab}.pdf`, PO_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[po-creation] PDF export failed:', e.message); }
@@ -2714,7 +2724,12 @@ const PR_FORMAT_CONFIG = {
     partyLabel: 'VENDOR NAME',
     header: { prNo: 'B4', requestedBy: 'C4', vendorName: 'E4', personWhoRaisedPr: 'F4', estimatedDelDate: 'I4', termsOfPayment: 'J4', dateRequested: 'L4' },
     departmentCell: 'D4',
-    items: { firstRow: 7, lastRow: 20, clearCols: ['B', 'L'], fields: { itemCode: 'B', monthlyConsumption: 'D', qtyRequired: 'E', uom: 'F', stock: 'G', lastOrderedDate: 'H', lastUnitPrice: 'I', tax: 'J' } },
+    // clearCols stops at K, NOT L: column L holds a real per-row formula
+    // (=iferror(E{row}*I{row},"")) typed into each row individually, not an
+    // ARRAYFORMULA spill from the header — clearing over it deletes it for
+    // good (confirmed: it happened after the first 2 live submissions and
+    // had to be restored). Never widen this range to include L.
+    items: { firstRow: 7, lastRow: 20, clearCols: ['B', 'K'], fields: { itemCode: 'B', monthlyConsumption: 'D', qtyRequired: 'E', uom: 'F', stock: 'G', lastOrderedDate: 'H', lastUnitPrice: 'I', tax: 'J' } },
     summary: { totalCell: 'L21' },
   },
   PACKING_STICKER: {
@@ -2728,7 +2743,12 @@ const PR_FORMAT_CONFIG = {
     tabName: 'PURCHASE REQUISITION(PACKING_BOX)',
     partyLabel: 'PARTY NAME',
     header: { prNo: 'A4', requestedBy: 'B4', orderNo: 'C4', partyName: 'D4', termsOfPayment: 'L4', estimatedDelDate: 'M4', dateRequested: 'N4' },
-    items: { firstRow: 8, lastRow: 22, clearCols: ['A', 'N'], fields: { itemCode: 'A', boxQty: 'J', boxRate: 'K', plateQty: 'L', plateRate: 'M' } },
+    // clearCols stops at M, NOT N: column N holds a real per-row formula
+    // (=iferror(SUMPRODUCT(J,K)+SUMPRODUCT(L,M),"")) per row, same class of
+    // bug as ITEM_CODE's column L above — confirmed still intact (this
+    // format hasn't been submitted live yet), but would be destroyed on
+    // first use if N stayed in the clear range. Never widen this to include N.
+    items: { firstRow: 8, lastRow: 22, clearCols: ['A', 'M'], fields: { itemCode: 'A', boxQty: 'J', boxRate: 'K', plateQty: 'L', plateRate: 'M' } },
     summary: { totalCell: 'N23' },
   },
   ALU: {
@@ -2901,6 +2921,12 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
       });
     }
 
+    // A write is already fully recalculated internally, but both the very
+    // next values.get (the Total/Department read-back below) and the PDF
+    // export can otherwise catch the sheet mid-recalculation and see
+    // stale/blank formula results — this single pause covers both.
+    await _sleep(2000);
+
     // 3) Read back the sheet's own computed Total (single source of truth), and —
     // for the 3 auto-derived formats — the formula-derived Department, for the log.
     let totalAmount = null, departmentOut = department || '';
@@ -2917,7 +2943,6 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     // never block the PR itself from being created.
     let pdfLink = null;
     try {
-      await _sleep(2000);
       const pdfBuffer = await _exportPrTabPdf(sourceSheetId);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PR ${nextPrNo} - ${tab}.pdf`, PR_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[pr-creation] PDF export failed:', e.message); }
@@ -3116,6 +3141,12 @@ app.post('/api/grn-creation', requireAuth, async (req, res) => {
       });
     }
 
+    // A write is already fully recalculated internally, but both the very
+    // next values.get (the Subtotal/Total read-back below) and the PDF
+    // export can otherwise catch the sheet mid-recalculation and see
+    // stale/blank formula results — this single pause covers both.
+    await _sleep(2000);
+
     // 3) Read back the sheet's own computed Subtotal/Total (single source of
     // truth — never recompute the formula's math server-side).
     let subtotal = null, totalAmount = null;
@@ -3133,7 +3164,6 @@ app.post('/api/grn-creation', requireAuth, async (req, res) => {
     // must never block the GRN itself from being created.
     let pdfLink = null;
     try {
-      await _sleep(2000);
       const pdfBuffer = await _exportSheetTabPdf(GRN_CREATION_SHEET_ID, sourceSheetId);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `GR ${nextGrNo}.pdf`, GRN_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[grn-creation] PDF export failed:', e.message); }
