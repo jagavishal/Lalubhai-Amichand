@@ -908,7 +908,7 @@ window.Pages['pr-creation'] = (() => {
     const formTab = _tabTab('PR Form', _view === 'form', 'class="pcr-form-tab"');
     const formatTabs = FORMATS.map(f => _tabTab(FORMAT_LABEL[f], _view === 'create' && f === _format, 'class="pcr-format-tab" data-format="' + esc(f) + '"')).join('');
     const summaryTab = _tabTab('PR Summary', _view === 'list', 'class="pcr-summary-tab"');
-    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;flex-wrap:wrap;">' + formTab + formatTabs + summaryTab + '</div>';
+    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;flex-wrap:wrap;">' + formatTabs + formTab + summaryTab + '</div>';
   }
 
   /* ── Render ─────────────────────────────────────────────────────────── */
