@@ -621,8 +621,8 @@ window.Pages.fms = (() => {
     return h ? `${esc(baseLabel)} <span style="font-weight:400;color:#94a3b8;">(${esc(h.name)})</span>` : esc(baseLabel);
   }
 
-  // Rebuilt in place on every doer checkbox toggle (see bindAddEditModal) — kept
-  // as a standalone function so that patch never has to re-render the whole modal.
+  // Rebuilt in place on every doer checkbox toggle (see bindStepsList) — kept
+  // as a standalone function so that patch never has to re-render anything else.
   function doerBoxContentHTML(doerIds) {
     const names = _users.filter(u => doerIds.includes(u.id)).map(u => u.name);
     return names.length
@@ -709,8 +709,7 @@ window.Pages.fms = (() => {
             <div class="input fms-doer-toggle" id="fms-doer-box-${i}" data-step="${i}" style="cursor:pointer;min-height:38px;display:flex;align-items:center;">${doerBoxContentHTML(step.doerIds)}</div>
           </div>
         </div>
-        ${doerPickerOpen ? `
-        <div style="margin-bottom:10px;">
+        <div id="fms-doer-list-${i}" style="margin-bottom:10px;${doerPickerOpen ? '' : 'display:none;'}">
           <div style="max-height:150px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;">${doerChecks || '<span style="font-size:11.5px;color:#94a3b8;">No users found.</span>'}</div>
           ${loadResult ? `
           <div style="margin-top:6px;padding:8px;background:#f8fafc;border-radius:8px;font-size:11.5px;">
@@ -718,7 +717,7 @@ window.Pages.fms = (() => {
             ${loadResult.unmatched.length ? `<div style="color:#dc2626;margin-top:2px;">Unmatched: ${loadResult.unmatched.map(esc).join(', ')}</div>` : ''}
             ${loadResult.matched.length ? `<button type="button" class="btn-secondary btn-sm fms-adopt-matched" data-step="${i}" style="margin-top:6px;">Add All Matched</button>` : ''}
           </div>` : ''}
-        </div>` : ''}
+        </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
           <div><label class="label">${colLabelHTML('Plan Column', step.planCol)}</label>${colSelectHTML(i, 'planCol', step.planCol, 'Column e.g. I')}</div>
@@ -743,11 +742,10 @@ window.Pages.fms = (() => {
           <input type="checkbox" class="fms-extrainput-chk" data-step="${i}" ${step.extraInput ? 'checked' : ''} />
           Collect additional fields when this step is completed
         </label>
-        ${step.extraInput ? `
-        <div>
+        <div id="fms-extra-section-${i}" style="${step.extraInput ? '' : 'display:none;'}">
           ${extraRowsHTML}
           <button type="button" class="btn-secondary btn-sm fms-extra-add" data-step="${i}">+ Add Field</button>
-        </div>` : ''}
+        </div>
       </div>`;
   }
 
@@ -797,7 +795,7 @@ window.Pages.fms = (() => {
           </div>
           <div class="modal-body" style="max-height:60vh;overflow-y:auto;">${modalBodyHTML()}</div>
           <div class="modal-footer" style="display:flex;align-items:center;justify-content:space-between;">
-            <span style="font-size:11.5px;color:#94a3b8;">${_modalForm.steps.length} step${_modalForm.steps.length === 1 ? '' : 's'}</span>
+            <span id="fms-m-stepcount" style="font-size:11.5px;color:#94a3b8;">${_modalForm.steps.length} step${_modalForm.steps.length === 1 ? '' : 's'}</span>
             <div style="display:flex;gap:8px;">
               <button id="fms-modal-cancel" class="btn-secondary">Cancel</button>
               <button id="fms-modal-save" class="btn-primary" ${_modalSaving ? 'disabled' : ''}>${_modalSaving ? 'Saving…' : (_modalMode === 'edit' ? '💾 Save Changes' : 'Save FMS')}</button>
@@ -806,17 +804,32 @@ window.Pages.fms = (() => {
         </div>
       </div>`;
     if (existing) existing.outerHTML = html; else document.body.insertAdjacentHTML('beforeend', html);
-    bindAddEditModal();
+    bindTopFields();
+    bindStepsList();
   }
 
-  function bindAddEditModal() {
+  // Rebuilds ONLY the #fms-m-steps container (and the footer step count) —
+  // used for every structural step-list change (add/remove/reorder/duplicate
+  // step, add/remove extra field, adopt matched doers) so the top-level fields
+  // (FMS Name, Sheet ID, ...) and the modal chrome are never touched, and so
+  // typing/selecting in one step never has to wait for the whole modal to
+  // re-render around it.
+  function refreshStepsList() {
+    const container = document.getElementById('fms-m-steps');
+    if (!container) return;
+    container.innerHTML = _modalForm.steps.map((s, i) => stepBlockHTML(s, i, _modalForm.steps.length)).join('');
+    bindStepsList();
+    const countEl = document.getElementById('fms-m-stepcount');
+    if (countEl) countEl.textContent = `${_modalForm.steps.length} step${_modalForm.steps.length === 1 ? '' : 's'}`;
+  }
+
+  function bindTopFields() {
     const overlay = document.getElementById('fms-modal-overlay');
     if (!overlay) return;
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeAddEditModal(); });
     document.getElementById('fms-modal-close')?.addEventListener('click', closeAddEditModal);
     document.getElementById('fms-modal-cancel')?.addEventListener('click', closeAddEditModal);
     document.getElementById('fms-modal-save')?.addEventListener('click', saveAddEditModal);
-    document.getElementById('fms-modal-close-x')?.addEventListener('click', closeAddEditModal);
 
     document.getElementById('fms-m-name')?.addEventListener('input', (e) => { _modalForm.fmsName = e.target.value; });
     document.getElementById('fms-m-sheetid')?.addEventListener('input', (e) => { _modalForm.sheetId = e.target.value; });
@@ -824,76 +837,88 @@ window.Pages.fms = (() => {
     document.getElementById('fms-m-headerrow')?.addEventListener('input', (e) => { _modalForm.headerRow = parseInt(e.target.value, 10) || 1; });
     document.getElementById('fms-m-pc')?.addEventListener('change', (e) => { _modalForm.processCoordinatorId = e.target.value || null; });
     document.getElementById('fms-m-refetch')?.addEventListener('click', fetchModalHeaders);
-    document.getElementById('fms-m-addstep-top')?.addEventListener('click', () => { _modalForm.steps.push(newStep()); renderAddEditModal(); });
+    document.getElementById('fms-m-addstep-top')?.addEventListener('click', () => { _modalForm.steps.push(newStep()); refreshStepsList(); });
+  }
 
-    overlay.querySelectorAll('.fms-step-remove').forEach(b => b.addEventListener('click', () => {
+  function bindStepsList() {
+    const container = document.getElementById('fms-m-steps');
+    if (!container) return;
+
+    container.querySelectorAll('.fms-step-remove').forEach(b => b.addEventListener('click', () => {
       _modalForm.steps.splice(parseInt(b.dataset.step, 10), 1);
-      renderAddEditModal();
+      refreshStepsList();
     }));
-    overlay.querySelectorAll('.fms-step-up').forEach(b => b.addEventListener('click', () => {
+    container.querySelectorAll('.fms-step-up').forEach(b => b.addEventListener('click', () => {
       const i = parseInt(b.dataset.step, 10);
       if (i <= 0) return;
       const [s] = _modalForm.steps.splice(i, 1);
       _modalForm.steps.splice(i - 1, 0, s);
-      renderAddEditModal();
+      refreshStepsList();
     }));
-    overlay.querySelectorAll('.fms-step-down').forEach(b => b.addEventListener('click', () => {
+    container.querySelectorAll('.fms-step-down').forEach(b => b.addEventListener('click', () => {
       const i = parseInt(b.dataset.step, 10);
       if (i >= _modalForm.steps.length - 1) return;
       const [s] = _modalForm.steps.splice(i, 1);
       _modalForm.steps.splice(i + 1, 0, s);
-      renderAddEditModal();
+      refreshStepsList();
     }));
-    overlay.querySelectorAll('.fms-step-dup').forEach(b => b.addEventListener('click', () => {
+    container.querySelectorAll('.fms-step-dup').forEach(b => b.addEventListener('click', () => {
       const i = parseInt(b.dataset.step, 10);
       const copy = JSON.parse(JSON.stringify(_modalForm.steps[i]));
       _modalForm.steps.splice(i + 1, 0, copy);
-      renderAddEditModal();
+      refreshStepsList();
     }));
-    overlay.querySelectorAll('.fms-step-field').forEach(el => {
+    container.querySelectorAll('.fms-step-field').forEach(el => {
       const sync = (e) => { _modalForm.steps[parseInt(el.dataset.step, 10)][el.dataset.k] = e.target.value; };
       el.addEventListener('input', sync);
       el.addEventListener('change', sync);
     });
-    overlay.querySelectorAll('.fms-doer-chk').forEach(el => el.addEventListener('change', (e) => {
+    container.querySelectorAll('.fms-doer-chk').forEach(el => el.addEventListener('change', (e) => {
       const stepIdx = parseInt(el.dataset.step, 10);
       const step = _modalForm.steps[stepIdx];
       const uid = el.dataset.uid;
       if (e.target.checked) { if (!step.doerIds.includes(uid)) step.doerIds.push(uid); }
       else step.doerIds = step.doerIds.filter(id => id !== uid);
-      // Patch just the chip box in place — no full modal re-render, so the
+      // Patch just the chip box in place — no re-render at all, so the
       // checklist stays open and scroll position doesn't jump on every click.
       const box = document.getElementById(`fms-doer-box-${stepIdx}`);
       if (box) box.innerHTML = doerBoxContentHTML(step.doerIds);
     }));
-    overlay.querySelectorAll('.fms-showcol-chk').forEach(el => el.addEventListener('change', (e) => {
+    container.querySelectorAll('.fms-showcol-chk').forEach(el => el.addEventListener('change', (e) => {
       const step = _modalForm.steps[parseInt(el.dataset.step, 10)];
       const idx = parseInt(el.dataset.idx, 10);
       if (e.target.checked) { if (!step.showCols.includes(idx)) step.showCols.push(idx); }
       else step.showCols = step.showCols.filter(x => x !== idx);
     }));
-    overlay.querySelectorAll('.fms-extrainput-chk').forEach(el => el.addEventListener('change', (e) => {
-      const step = _modalForm.steps[parseInt(el.dataset.step, 10)];
+    container.querySelectorAll('.fms-extrainput-chk').forEach(el => el.addEventListener('change', (e) => {
+      const stepIdx = parseInt(el.dataset.step, 10);
+      const step = _modalForm.steps[stepIdx];
       step.extraInput = e.target.checked;
-      if (step.extraInput && !step.extraRows.length) step.extraRows.push(newExtraField());
-      renderAddEditModal();
+      const needsFirstField = step.extraInput && !step.extraRows.length;
+      if (needsFirstField) {
+        step.extraRows.push(newExtraField());
+        refreshStepsList(); // a field row has to appear — needs real DOM, not just a display toggle
+      } else {
+        const section = document.getElementById(`fms-extra-section-${stepIdx}`);
+        if (section) section.style.display = step.extraInput ? '' : 'none';
+      }
     }));
-    overlay.querySelectorAll('.fms-extra-add').forEach(b => b.addEventListener('click', () => {
+    container.querySelectorAll('.fms-extra-add').forEach(b => b.addEventListener('click', () => {
       _modalForm.steps[parseInt(b.dataset.step, 10)].extraRows.push(newExtraField());
-      renderAddEditModal();
+      refreshStepsList();
     }));
-    overlay.querySelectorAll('.fms-extra-remove').forEach(b => b.addEventListener('click', () => {
+    container.querySelectorAll('.fms-extra-remove').forEach(b => b.addEventListener('click', () => {
       const step = _modalForm.steps[parseInt(b.dataset.step, 10)];
       step.extraRows.splice(parseInt(b.dataset.row, 10), 1);
-      renderAddEditModal();
+      refreshStepsList();
     }));
-    overlay.querySelectorAll('.fms-extra-field').forEach(el => {
+    container.querySelectorAll('.fms-extra-field').forEach(el => {
       const sync = (e) => {
         const stepIdx = parseInt(el.dataset.step, 10);
         const rowIdx = parseInt(el.dataset.row, 10);
         _modalForm.steps[stepIdx].extraRows[rowIdx][el.dataset.k] = e.target.value;
         // Only the Dropdown Options field's enabled state depends on fieldType —
-        // patch that one input directly instead of re-rendering the whole modal.
+        // patch that one input directly instead of re-rendering anything.
         if (el.dataset.k === 'fieldType') {
           const optsInput = document.getElementById(`fms-extra-opts-${stepIdx}-${rowIdx}`);
           if (optsInput) {
@@ -906,24 +931,27 @@ window.Pages.fms = (() => {
       el.addEventListener('input', sync);
       el.addEventListener('change', sync);
     });
-    overlay.querySelectorAll('.fms-extra-req').forEach(el => el.addEventListener('change', (e) => {
+    container.querySelectorAll('.fms-extra-req').forEach(el => el.addEventListener('change', (e) => {
       const step = _modalForm.steps[parseInt(el.dataset.step, 10)];
       step.extraRows[parseInt(el.dataset.row, 10)].required = e.target.checked;
     }));
-    overlay.querySelectorAll('.fms-doer-toggle').forEach(el => el.addEventListener('click', () => {
+    container.querySelectorAll('.fms-doer-toggle').forEach(el => el.addEventListener('click', () => {
       const i = parseInt(el.dataset.step, 10);
       _modalDoerPickerOpen[i] = !_modalDoerPickerOpen[i];
-      renderAddEditModal();
+      // Pure display toggle — no re-render, so opening/closing the doer list
+      // for each step while configuring a multi-step FMS never causes a flash.
+      const list = document.getElementById(`fms-doer-list-${i}`);
+      if (list) list.style.display = _modalDoerPickerOpen[i] ? '' : 'none';
     }));
-    overlay.querySelectorAll('.fms-loaddoers-btn').forEach(b => b.addEventListener('click', () => loadDoersFromColumn(parseInt(b.dataset.step, 10))));
-    overlay.querySelectorAll('.fms-adopt-matched').forEach(b => b.addEventListener('click', () => {
+    container.querySelectorAll('.fms-loaddoers-btn').forEach(b => b.addEventListener('click', () => loadDoersFromColumn(parseInt(b.dataset.step, 10))));
+    container.querySelectorAll('.fms-adopt-matched').forEach(b => b.addEventListener('click', () => {
       const i = parseInt(b.dataset.step, 10);
       const result = _modalLoadResult[i];
       if (!result) return;
       const step = _modalForm.steps[i];
       result.matched.forEach(m => { if (!step.doerIds.includes(m.user_id)) step.doerIds.push(m.user_id); });
       delete _modalLoadResult[i];
-      renderAddEditModal();
+      refreshStepsList();
     }));
   }
 
@@ -938,7 +966,12 @@ window.Pages.fms = (() => {
         body: JSON.stringify({ sheetUrlOrId: _modalForm.sheetId, tabName: _modalForm.sheetName, headerRow: _modalForm.headerRow }),
       }) || [];
       window.Utils.showToast(`Fetched ${_modalHeaders.length} columns`);
-      renderAddEditModal();
+      // Only the fetch button's own label and every step's column dropdowns
+      // depend on _modalHeaders — patch the button directly and refresh just
+      // the steps list, leaving the top fields (FMS Name, Sheet ID, ...) alone.
+      const btn = document.getElementById('fms-m-refetch');
+      if (btn) btn.innerHTML = `✅ ${_modalHeaders.length} columns loaded — click to refetch`;
+      refreshStepsList();
     } catch (e) { window.Utils.showToast(e.message || 'Failed to fetch headers', 'error'); }
   }
 
@@ -951,7 +984,7 @@ window.Pages.fms = (() => {
       const result = await window.Utils.apiFetch(`/api/fms/sheet-column-values?${qs}`);
       _modalLoadResult[stepIdx] = result;
       _modalDoerPickerOpen[stepIdx] = true;
-      renderAddEditModal();
+      refreshStepsList();
     } catch (e) { window.Utils.showToast(e.message || 'Failed to load column values', 'error'); }
   }
 
