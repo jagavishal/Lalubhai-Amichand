@@ -648,18 +648,42 @@ window.Pages.fms = (() => {
       </label>`).join('') : '';
 
     const loadResult = _modalLoadResult[i];
+    // Column pickers stay consistent everywhere — a dropdown fed by the fetched
+    // headers, same as Plan/Actual/Doer Name Column, just bound to the nested
+    // extraRows array via the .fms-extra-field handler instead of .fms-step-field.
+    const extraColSelectHTML = (j, currentVal) => {
+      const currentMissing = currentVal && !_modalHeaders.some(h => h.col === currentVal);
+      return `
+        <select class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="colLetter">
+          <option value="">Select column…</option>
+          ${currentMissing ? `<option value="${esc(currentVal)}" selected>${esc(currentVal)} (current)</option>` : ''}
+          ${_modalHeaders.map(h => `<option value="${esc(h.col)}" ${currentVal === h.col ? 'selected' : ''}>${esc(h.name)} (${esc(h.col)})</option>`).join('')}
+        </select>`;
+    };
     const extraRowsHTML = step.extraRows.map((er, j) => `
-      <div style="display:grid;grid-template-columns:1.4fr 0.7fr 0.9fr 1.2fr 0.6fr auto;gap:6px;align-items:center;margin-bottom:6px;">
-        <input class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="rowLabel" placeholder="Label" value="${esc(er.rowLabel)}" />
-        <input class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="colLetter" placeholder="Col" value="${esc(er.colLetter)}" style="text-transform:uppercase;" />
-        <select class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="fieldType">
-          ${['text', 'number', 'date', 'link', 'dropdown'].map(t => `<option value="${t}" ${er.fieldType === t ? 'selected' : ''}>${t}</option>`).join('')}
-        </select>
-        <input class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="dropdownOptions" placeholder="Dropdown options (comma-sep)" value="${esc(er.dropdownOptions)}" ${er.fieldType !== 'dropdown' ? 'disabled style="opacity:.4;"' : ''} />
-        <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#64748b;">
-          <input type="checkbox" class="fms-extra-req" data-step="${i}" data-row="${j}" ${er.required ? 'checked' : ''} /> req
-        </label>
-        <button type="button" class="icon-btn danger fms-extra-remove" data-step="${i}" data-row="${j}" title="Remove"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      <div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-bottom:8px;position:relative;">
+        <button type="button" class="icon-btn danger fms-extra-remove" data-step="${i}" data-row="${j}" title="Remove field" style="position:absolute;top:8px;right:8px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;padding-right:26px;">
+          <div><label class="label">Field Label</label><input class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="rowLabel" placeholder="e.g. PR No." value="${esc(er.rowLabel)}" /></div>
+          <div><label class="label">Column</label>${extraColSelectHTML(j, er.colLetter)}</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1.4fr auto;gap:8px;align-items:end;">
+          <div>
+            <label class="label">Field Type</label>
+            <select class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="fieldType">
+              ${['text', 'number', 'date', 'link', 'dropdown'].map(t => `<option value="${t}" ${er.fieldType === t ? 'selected' : ''}>${t}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label class="label">Dropdown Options</label>
+            <input class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="dropdownOptions" placeholder="comma,separated,options" value="${esc(er.dropdownOptions)}" ${er.fieldType !== 'dropdown' ? 'disabled style="opacity:.4;"' : ''} />
+          </div>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;color:#64748b;white-space:nowrap;padding-bottom:10px;cursor:pointer;">
+            <input type="checkbox" class="fms-extra-req" data-step="${i}" data-row="${j}" ${er.required ? 'checked' : ''} /> Required
+          </label>
+        </div>
       </div>`).join('');
 
     const iconBtn = (cls, title, disabled, svgPath) => `
