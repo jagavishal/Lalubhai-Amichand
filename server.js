@@ -2487,6 +2487,12 @@ async function _loadPoItemCatalog(format) {
   return rows;
 }
 
+// PR/PO numbers display as "PR001"/"PO001" (3-digit, zero-padded) instead of a
+// bare integer — grows naturally past 3 digits (e.g. "PO1000") with no special-casing.
+function _padSeqNo(prefix, n) {
+  return prefix + String(n).padStart(3, '0');
+}
+
 async function _poSheetMeta() {
   const auth = getGoogleAuth();
   const { google } = require('googleapis');
@@ -2506,7 +2512,9 @@ async function _poSheetMeta() {
   try {
     const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' });
     for (const row of (logRes.data.values || [])) {
-      const n = parseInt(row[0], 10);
+      // Older rows logged a bare integer; newer ones log "PO047" — strip any
+      // leading letters so both parse the same way.
+      const n = parseInt(String(row[0] ?? '').replace(/^[A-Za-z]+/, ''), 10);
       if (!isNaN(n)) maxPoNo = Math.max(maxPoNo, n);
     }
   } catch (e) {
@@ -2535,7 +2543,7 @@ app.get('/api/po-creation/masters', requireAuth, async (req, res) => {
     const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
     const shipToLocations = (shipToRes.data.values || []).filter(r => r[0]).map(r => r[0]);
     const departments = (deptRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    return res.json({ vendors, shipToLocations, departments: departments.length ? departments : PO_DEPARTMENTS, nextPoNumber: meta.nextPoNo });
+    return res.json({ vendors, shipToLocations, departments: departments.length ? departments : PO_DEPARTMENTS, nextPoNumber: _padSeqNo('PO', meta.nextPoNo) });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -2600,6 +2608,7 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     const sheets = google.sheets({ version: 'v4', auth });
 
     const { nextPoNo, sheetIdByTitle } = await _poSheetMeta();
+    const poNoFormatted = _padSeqNo('PO', nextPoNo);
     const tab = cfg.tabName;
     const sourceSheetId = sheetIdByTitle[tab];
     if (sourceSheetId === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the PO sheet` });
@@ -2616,7 +2625,7 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     // carry over a previous PO's numbers.
     const data = [];
     const put = (a1, value) => { if (value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
-    put(cfg.header.poNo, nextPoNo);
+    put(cfg.header.poNo, poNoFormatted);
     put(cfg.header.date, date);
     put(cfg.header.prNo, prNo);
     put(cfg.header.department, department);
@@ -2664,7 +2673,7 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     let pdfLink = null;
     try {
       const pdfBuffer = await _exportSheetTabPdf(PO_CREATION_SHEET_ID, sourceSheetId);
-      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PO ${nextPoNo} - ${tab}.pdf`, PO_PDF_DRIVE_FOLDER_ID);
+      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${poNoFormatted} - ${tab}.pdf`, PO_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[po-creation] PDF export failed:', e.message); }
 
     // 5) Log this PO so the ERP can list it (the sheet is still the database —
@@ -2676,10 +2685,10 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
       // Leading "'" forces the ISO date to stay literal text instead of being
       // reparsed into a locale-formatted date — the PO List page's date-range
       // filter compares these as plain "YYYY-MM-DD" strings.
-      nextPoNo, tab, "'" + date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
+      poNoFormatted, tab, "'" + date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
     ]);
 
-    return res.json({ success: true, poNumber: nextPoNo, totalAmount, pdfLink });
+    return res.json({ success: true, poNumber: poNoFormatted, totalAmount, pdfLink });
   } catch (e) { console.error('[po-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
 });
 
@@ -2805,7 +2814,9 @@ async function _prSheetMeta() {
   try {
     const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' });
     for (const row of (logRes.data.values || [])) {
-      const n = parseInt(row[0], 10);
+      // Older rows logged a bare integer; newer ones log "PR047" — strip any
+      // leading letters so both parse the same way.
+      const n = parseInt(String(row[0] ?? '').replace(/^[A-Za-z]+/, ''), 10);
       if (!isNaN(n)) maxPrNo = Math.max(maxPrNo, n);
     }
   } catch (e) {
@@ -2845,7 +2856,7 @@ app.get('/api/pr-creation/masters', requireAuth, async (req, res) => {
       _prSheetMeta(),
     ]);
     const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    return res.json({ vendors, nextPrNumber: meta.nextPrNo });
+    return res.json({ vendors, nextPrNumber: _padSeqNo('PR', meta.nextPrNo) });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -2884,6 +2895,7 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     const sheets = google.sheets({ version: 'v4', auth });
 
     const { nextPrNo, sheetIdByTitle } = await _prSheetMeta();
+    const prNoFormatted = _padSeqNo('PR', nextPrNo);
     const tab = cfg.tabName;
     const sourceSheetId = sheetIdByTitle[tab];
     if (sourceSheetId === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the PR sheet` });
@@ -2897,7 +2909,7 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     // 2) Write header fields and item rows in one batch.
     const data = [];
     const put = (a1, value) => { if (a1 && value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
-    put(cfg.header.prNo, nextPrNo);
+    put(cfg.header.prNo, prNoFormatted);
     put(cfg.header.requestedBy, requestedBy);
     put(cfg.header.vendorName, party);
     put(cfg.header.partyName, party);
@@ -2945,7 +2957,7 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     let pdfLink = null;
     try {
       const pdfBuffer = await _exportPrTabPdf(sourceSheetId);
-      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `PR ${nextPrNo} - ${tab}.pdf`, PR_PDF_DRIVE_FOLDER_ID);
+      pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${prNoFormatted} - ${tab}.pdf`, PR_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[pr-creation] PDF export failed:', e.message); }
 
     // 5) Log this PR so the ERP can list it — the sheet is still the database,
@@ -2953,10 +2965,10 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     const sessUser = req.session?.user;
     await ensureLogTab(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, ['PR No', 'Format', 'Date', 'Vendor/Party', 'Requested By', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At']);
     await appendLogRow(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, [
-      nextPrNo, tab, dateRequested || '', party, requestedBy, departmentOut, totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
+      prNoFormatted, tab, dateRequested || '', party, requestedBy, departmentOut, totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
     ]);
 
-    return res.json({ success: true, prNumber: nextPrNo, totalAmount, department: departmentOut, pdfLink });
+    return res.json({ success: true, prNumber: prNoFormatted, totalAmount, department: departmentOut, pdfLink });
   } catch (e) { console.error('[pr-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
 });
 

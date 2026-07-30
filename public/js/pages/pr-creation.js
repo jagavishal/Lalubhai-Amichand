@@ -175,7 +175,7 @@ window.Pages['pr-creation'] = (() => {
       _nextPrNumber = data.nextPrNumber;
       _mastersLoaded = true;
       const el = document.getElementById('pcr-next-no');
-      if (el) el.textContent = _nextPrNumber != null ? ('#' + _nextPrNumber) : '—';
+      if (el) el.textContent = _nextPrNumber != null ? _nextPrNumber : '—';
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load PR masters', 'error');
     }
@@ -348,7 +348,7 @@ window.Pages['pr-creation'] = (() => {
       ? _textField('pcr-department', 'Department')
       : (deptMode === 'auto' ? _readonlyField('pcr-department-preview', 'Department (auto, from first item)', _lastDepartment || 'Filled in after saving') : '');
     return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
-      + _readonlyField('pcr-next-no', 'PR NO (auto-assigned)', _nextPrNumber != null ? ('#' + _nextPrNumber) : 'Loading…')
+      + _readonlyField('pcr-next-no', 'PR NO (auto-assigned)', _nextPrNumber != null ? _nextPrNumber : 'Loading…')
       + _partyField()
       + common
       + dept
@@ -386,7 +386,7 @@ window.Pages['pr-creation'] = (() => {
           + '<div style="width:46px;height:46px;border-radius:50%;background:#f0fdf4;display:grid;place-items:center;margin:0 auto 14px;">'
             + '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>'
           + '</div>'
-          + '<div style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:4px;">PR #' + esc(prNumber) + ' Created</div>'
+          + '<div style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:4px;">' + esc(prNumber) + ' Created</div>'
           + '<div style="font-size:12.5px;color:#64748b;margin-bottom:18px;">Saved into the live PR Google Sheet.</div>'
           + pdfSection
         + '</div>'
@@ -522,7 +522,7 @@ window.Pages['pr-creation'] = (() => {
     }
     body.innerHTML = rows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
-        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">#' + esc(r.prNo) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.prNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:600;">' + esc(FORMAT_LABEL[r.format] || r.format) + '</span></td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.party) + '</td>'
