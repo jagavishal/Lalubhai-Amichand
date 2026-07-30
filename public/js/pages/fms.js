@@ -678,7 +678,7 @@ window.Pages.fms = (() => {
           </div>
           <div>
             <label class="label">Dropdown Options</label>
-            <input class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="dropdownOptions" placeholder="comma,separated,options" value="${esc(er.dropdownOptions)}" ${er.fieldType !== 'dropdown' ? 'disabled style="opacity:.4;"' : ''} />
+            <input id="fms-extra-opts-${i}-${j}" class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="dropdownOptions" placeholder="comma,separated,options" value="${esc(er.dropdownOptions)}" ${er.fieldType !== 'dropdown' ? 'disabled style="opacity:.4;"' : ''} />
           </div>
           <label style="display:flex;align-items:center;gap:4px;font-size:11.5px;color:#64748b;white-space:nowrap;padding-bottom:10px;cursor:pointer;">
             <input type="checkbox" class="fms-extra-req" data-step="${i}" data-row="${j}" ${er.required ? 'checked' : ''} /> Required
@@ -889,9 +889,19 @@ window.Pages.fms = (() => {
     }));
     overlay.querySelectorAll('.fms-extra-field').forEach(el => {
       const sync = (e) => {
-        const step = _modalForm.steps[parseInt(el.dataset.step, 10)];
-        step.extraRows[parseInt(el.dataset.row, 10)][el.dataset.k] = e.target.value;
-        if (el.dataset.k === 'fieldType') renderAddEditModal();
+        const stepIdx = parseInt(el.dataset.step, 10);
+        const rowIdx = parseInt(el.dataset.row, 10);
+        _modalForm.steps[stepIdx].extraRows[rowIdx][el.dataset.k] = e.target.value;
+        // Only the Dropdown Options field's enabled state depends on fieldType —
+        // patch that one input directly instead of re-rendering the whole modal.
+        if (el.dataset.k === 'fieldType') {
+          const optsInput = document.getElementById(`fms-extra-opts-${stepIdx}-${rowIdx}`);
+          if (optsInput) {
+            const isDropdown = e.target.value === 'dropdown';
+            optsInput.disabled = !isDropdown;
+            optsInput.style.opacity = isDropdown ? '' : '.4';
+          }
+        }
       };
       el.addEventListener('input', sync);
       el.addEventListener('change', sync);
