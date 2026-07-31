@@ -753,22 +753,22 @@ window.Pages['client-master'] = (() => {
         });
       });
 
-      // Notepad (.txt) — no header row; each line has 26 comma-separated slots with the
-      // bank's reserved/blank columns in between (matches the bank's exact raw template —
-      // positions 0,1,2,3,4 = type/code/account/amount/name, 13 = reference (9 commas after
-      // name, per the bank's original format), 20 = date, 22 = IFSC, 25 = beneficiary email).
+      // Notepad (.txt) — no header row; each line has 27 comma-separated slots with the
+      // bank's reserved/blank columns in between (matches the bank's exact raw template,
+      // byte-counted from a real accepted sample line) — positions 0,1,2,3,4 =
+      // type/code/account/amount/name, 13 = reference, 21 = date, 23 = IFSC, 26 = beneficiary email.
       const csvRows = [];
       rows.forEach(r => {
-        const line = new Array(26).fill('');
+        const line = new Array(27).fill('');
         line[0]  = r.txnType;
         line[1]  = r.sno;
         line[2]  = r.accountNo;
         line[3]  = r.amount;
         line[4]  = r.name;
         line[13] = r.narration;
-        line[20] = dateStr;
-        line[22] = r.ifsc;
-        line[25] = r.email;
+        line[21] = dateStr;
+        line[23] = r.ifsc;
+        line[26] = r.email;
         csvRows.push(line.join(','));
       });
       downloadBlob(csvRows.join('\r\n'), 'text/plain;charset=utf-8;', 'RBI_Bulk_' + fileStamp + '.txt');
