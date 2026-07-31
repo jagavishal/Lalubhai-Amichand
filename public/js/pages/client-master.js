@@ -755,9 +755,8 @@ window.Pages['client-master'] = (() => {
 
       // Notepad (.txt) — no header row; each line has 26 comma-separated slots with the
       // bank's reserved/blank columns in between (matches the bank's exact raw template —
-      // positions 0,1,2,3,4 = type/code/account/amount/name, 12 = reference, 20 = date,
-      // 22 = IFSC, 25 = beneficiary email — same 3-slot gap after IFSC seen in a real
-      // sample line, kept anchored to the already bank-verified date/IFSC positions).
+      // positions 0,1,2,3,4 = type/code/account/amount/name, 13 = reference (9 commas after
+      // name, per the bank's original format), 20 = date, 22 = IFSC, 25 = beneficiary email).
       const csvRows = [];
       rows.forEach(r => {
         const line = new Array(26).fill('');
@@ -766,7 +765,7 @@ window.Pages['client-master'] = (() => {
         line[2]  = r.accountNo;
         line[3]  = r.amount;
         line[4]  = r.name;
-        line[12] = r.narration;
+        line[13] = r.narration;
         line[20] = dateStr;
         line[22] = r.ifsc;
         line[25] = r.email;

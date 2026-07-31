@@ -3226,7 +3226,9 @@ app.get('/api/grn-creation/masters', requireAuth, async (req, res) => {
 // GET /api/grn-creation/pr-list — every PR logged in PR Creation's own "ERP PR
 // Log" (a GRN can reference any PR regardless of whether it's already gone
 // through a PO, unlike PO Creation's "pending" filter), for the PR No.
-// field's suggestion dropdown; includes each PR's items for auto-fill.
+// field's suggestion dropdown; includes each PR's items for auto-fill, plus
+// the PO No. it was turned into (if any) by cross-referencing "ERP PO Log"'s
+// own PR No column — a PR doesn't carry its resulting PO number itself.
 app.get('/api/grn-creation/pr-list', requireAuth, async (req, res) => {
   try {
     const auth = getGoogleAuth();
@@ -3240,12 +3242,23 @@ app.get('/api/grn-creation/pr-list', requireAuth, async (req, res) => {
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
     }
+    const poByPrNo = new Map();
+    try {
+      const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      for (const r of (poRes.data.values || [])) {
+        const prKey = _normalizePrNo(r[9]);
+        if (prKey && r[0]) poByPrNo.set(prKey, _padSeqNo('PO', parseInt(String(r[0]).replace(/^[A-Za-z]+/, ''), 10)) || r[0]);
+      }
+    } catch (e) {
+      if (!/unable to parse range/i.test(e.message || '')) throw e;
+    }
     const list = prRows
       .filter(r => r[0])
       .map(r => {
         let items = [];
         try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
-        return { prNo: _normalizePrNo(r[0]), party: r[3] || '', department: r[5] || '', items };
+        const prNo = _normalizePrNo(r[0]);
+        return { prNo, party: r[3] || '', department: r[5] || '', poNo: poByPrNo.get(prNo) || '', items };
       })
       .reverse();
     return res.json(list.slice(0, 200));

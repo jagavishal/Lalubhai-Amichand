@@ -98,6 +98,8 @@ window.Pages['grn-creation'] = (() => {
     if (prInput) prInput.value = pr.prNo;
     const vendorInput = document.getElementById('grnc-vendor');
     if (vendorInput && pr.party) vendorInput.value = pr.party;
+    const poNoInput = document.getElementById('grnc-po-no');
+    if (poNoInput && pr.poNo) poNoInput.value = pr.poNo;
 
     const tbody = document.getElementById('grnc-items-tbody');
     if (!tbody || !Array.isArray(pr.items) || !pr.items.length) return;
