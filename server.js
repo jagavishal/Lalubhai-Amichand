@@ -3169,13 +3169,20 @@ const GRN_TEMPLATE_TAB = 'GRN';
 // sheet (not just the item rows), and auto-updated every formula reference
 // to match. Verified live: old J(UOM)/K(Rate)/L(=I*K totals formula) are now
 // L/M/N — confirmed by the per-row total formula reading "=I26*M26" and the
-// summary block's "=SUM(N7:N26)" / "=SUM(N27:N30)". The header row's Date
-// cell (old L4) shifted the same way to N4, and CGST/SGST/Round Off/Total
-// (old L28:L31) shifted to N28:N31. Column N is that real per-row/summary
-// formula chain — never write to it, clearing it would delete the formula
-// for good. The clear step below only ever touches B (item no.) and I:M
-// (received qty/approved qty/rejected qty/uom/rate), which are now
-// conveniently contiguous.
+// summary block's "=SUM(N7:N26)" / "=SUM(N27:N30)", and confirmed working end
+// to end on a real generated GRN PDF (Subtotal/CGST/SGST/RoundOff/Total all
+// printed correctly). Column N is that real per-row/summary formula chain —
+// never write to it, clearing it would delete the formula for good. The
+// clear step below only ever touches B (item no.) and I:M (received qty/
+// approved qty/rejected qty/uom/rate), which are now conveniently contiguous.
+//
+// The header row's Date cell is a special case: it's a MERGED cell (M4:N4,
+// confirmed via spreadsheets.get's `merges`), and Google Sheets only ever
+// displays/accepts a write on a merge's anchor (top-left) cell — N4 silently
+// wrote nothing. Its real write target is M4, the merge anchor (found by
+// checking `merges` after a real GRN's Date came out blank on the printed
+// PDF — the plain per-row formula shift logic above does NOT apply to
+// merged header cells, don't assume one from the other again).
 //
 // The sheet's own "vendor details" / "item_code" tabs are IMPORTRANGE
 // pull-throughs of PR_SHEET_ID's "Vendor Name" tab and the PO sheet's
@@ -3187,7 +3194,7 @@ const GRN_TEMPLATE_TAB = 'GRN';
 // _loadPoItemCatalog('PurchaseOrder') cache since it's the exact same range.
 const GRN_HEADER_CELLS = {
   grNo: 'B4', madeBy: 'C4', prNo: 'D4', vendorName: 'E4', poNo: 'F4',
-  billNo: 'G4', billRecvDate: 'H4', deptHead: 'I4', date: 'N4',
+  billNo: 'G4', billRecvDate: 'H4', deptHead: 'I4', date: 'M4',
 };
 // Column I keeps its original meaning of "how many units this row is about"
 // but is now Received Qty specifically, now that Approved (J) and Rejected
