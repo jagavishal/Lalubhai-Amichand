@@ -2514,41 +2514,35 @@ function _seqKey(raw) {
   return isNaN(n) ? s : String(n);
 }
 
-// Finds the row in a log tab whose column-A value matches `key` (bare-vs-
-// prefixed tolerant) and deletes that row outright (not just clears it) via
-// deleteDimension — used by the PO/PR/GRN "Delete" list actions.
-async function _deleteLogRowByKey(spreadsheetId, tabName, key) {
+// Finds the 0-indexed sheet row whose column-A value matches `key`
+// (bare-vs-prefixed tolerant) — shared by anything that needs to locate a
+// PO/PR/GRN log row by its own number before acting on it.
+async function _findRowIndexByKey(spreadsheetId, tabName, key) {
   const { google } = require('googleapis');
   const auth = getGoogleAuth();
   const sheets = google.sheets({ version: 'v4', auth });
-  const meta = await sheets.spreadsheets.get({ spreadsheetId });
-  const tab = meta.data.sheets.find(s => s.properties.title === tabName);
-  if (!tab) { const e = new Error(`"${tabName}" tab not found`); e.notFound = true; throw e; }
   const colARes = await sheets.spreadsheets.values.get({ spreadsheetId, range: `'${tabName}'!A:A`, valueRenderOption: 'FORMATTED_VALUE' });
   const values = colARes.data.values || [];
   const target = _seqKey(key);
   const rowIndex = values.findIndex((r, i) => i > 0 && _seqKey(r[0]) === target);
   if (rowIndex === -1) { const e = new Error('Entry not found'); e.notFound = true; throw e; }
-  await sheets.spreadsheets.batchUpdate({
-    spreadsheetId,
-    requestBody: { requests: [{ deleteDimension: { range: { sheetId: tab.properties.sheetId, dimension: 'ROWS', startIndex: rowIndex, endIndex: rowIndex + 1 } } }] },
-  });
+  return rowIndex;
 }
 
-// Finds the row in a log tab whose column-A value matches `key` and returns
-// its full row (FORMATTED_VALUE) plus its 0-indexed sheet row number — used
-// by Edit to reload a past entry's stored header/items, and to overwrite that
-// same row in place afterward instead of appending a new one.
-async function _findLogRowByKey(spreadsheetId, tabName, key, lastCol) {
+// Sets a single Status cell (0-indexed rowIndex from _findRowIndexByKey,
+// converted to a 1-indexed sheet row) for the PO/PR/GRN "Cancel" list
+// actions — never deletes or clears anything else in the row.
+async function _setLogRowStatus(spreadsheetId, tabName, key, statusColLetter, status) {
   const { google } = require('googleapis');
   const auth = getGoogleAuth();
   const sheets = google.sheets({ version: 'v4', auth });
-  const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `'${tabName}'!A2:${lastCol}1000`, valueRenderOption: 'FORMATTED_VALUE' });
-  const values = res.data.values || [];
-  const target = _seqKey(key);
-  const idx = values.findIndex(r => _seqKey(r[0]) === target);
-  if (idx === -1) return null;
-  return { row: values[idx], sheetRowNumber: idx + 2 }; // +2: skip header row, convert to 1-indexed sheet row
+  const rowIndex = await _findRowIndexByKey(spreadsheetId, tabName, key);
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `'${tabName}'!${statusColLetter}${rowIndex + 1}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[status]] },
+  });
 }
 
 async function _poSheetMeta() {
@@ -2744,17 +2738,20 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     // "Form JSON" is appended at the end so existing rows' column positions
     // stay valid — same discipline as "PR No" above. It's a full snapshot of
     // every field the create form needs (not just what has its own log
-    // column) so the PO List "Edit" action can fully reload a past PO: the
-    // live template tab only ever reflects the most recent submission for
-    // that format, so anything not captured here is unrecoverable once a
-    // later PO overwrites it.
-    await ensureLogTab(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, ['PO No', 'Format', 'Date', 'Party', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'PR No', 'Form JSON']);
+    // column) — the only other place a past PO's items are recoverable from,
+    // since the live template tab only ever reflects the most recent
+    // submission for that format.
+    // "Status" is likewise appended at the end — defaults to "Active"; the PO
+    // List "Cancel" action flips it to "Cancelled" in place, never deleting
+    // the row (see PUT /api/po-creation/cancel below).
+    await ensureLogTab(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, ['PO No', 'Format', 'Date', 'Party', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'PR No', 'Form JSON', 'Status']);
     await appendLogRow(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, [
       // Leading "'" forces the ISO date to stay literal text instead of being
       // reparsed into a locale-formatted date — the PO List page's date-range
       // filter compares these as plain "YYYY-MM-DD" strings.
       poNoFormatted, tab, "'" + date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(), prNo || '',
       JSON.stringify({ format: tab, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary }),
+      'Active',
     ]);
 
     return res.json({ success: true, poNumber: poNoFormatted, totalAmount, pdfLink });
@@ -2769,13 +2766,14 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).filter(r => r[0]).map(r => {
       let form = null;
       try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
       return {
         poNo: r[0] || '', format: r[1] || '', date: r[2] || '', party: r[3] || '', department: r[4] || '',
         total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', createdAt: r[8] || '', prNo: r[9] || '', form,
+        status: r[11] || 'Active',
       };
     }).reverse();
     return res.json(rows.slice(0, 200));
@@ -2786,15 +2784,15 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
   }
 });
 
-// DELETE /api/po-creation?poNo=... — removes that PO's row from "ERP PO Log"
-// (its own PO number is freed up for reuse). Does not touch the archived PDF
-// in Drive — that stays as a record even after the entry is removed from the
-// list.
-app.delete('/api/po-creation', requireAuth, async (req, res) => {
+// PUT /api/po-creation/cancel?poNo=... — marks that PO's row Cancelled in
+// "ERP PO Log" (column L) instead of deleting it: the row stays for history/
+// audit, but drops out of GRN Creation's PO picker. The archived PDF in
+// Drive and the PO's own number are both untouched/not freed for reuse.
+app.put('/api/po-creation/cancel', requireAuth, async (req, res) => {
   try {
     const poNo = req.query.poNo;
     if (!poNo) return res.status(400).json({ error: 'poNo is required' });
-    await _deleteLogRowByKey(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, poNo);
+    await _setLogRowStatus(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, poNo, 'L', 'Cancelled');
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });
@@ -2802,7 +2800,7 @@ app.delete('/api/po-creation', requireAuth, async (req, res) => {
 // GET /api/po-creation/pending-prs — PRs (from the separate "PR July 2026"
 // sheet's own ERP PR Log) that haven't been used on any PO yet, for the P.R.
 // NO field's suggestion dropdown. "Pending" = its PR No doesn't appear in the
-// PR No column POs have already logged against.
+// PR No column POs have already logged against, and it isn't Cancelled.
 app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
   try {
     const auth = getGoogleAuth();
@@ -2812,7 +2810,7 @@ app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
 
     let prRows = [];
     try {
-      const prRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      const prRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
       prRows = prRes.data.values || [];
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
@@ -2827,7 +2825,7 @@ app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
     }
 
     const pending = prRows
-      .filter(r => r[0] && !usedPrNos.has(_normalizePrNo(r[0])))
+      .filter(r => r[0] && (r[11] || 'Active') !== 'Cancelled' && !usedPrNos.has(_normalizePrNo(r[0])))
       .map(r => {
         let items = [];
         try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
@@ -3091,14 +3089,19 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     // "Form JSON" is appended at the end (not inserted mid-row) so existing
     // logged rows' column positions stay valid — same discipline as PO Log's
     // "PR No" column. It's a full snapshot of every field the create form
-    // needs, used by both PO Creation's P.R. NO picker (item detail only) and
-    // PR Summary's own "Edit" action (the whole form): the live template tab
-    // only ever reflects the MOST RECENT submission for that format, so
-    // anything not captured here is unrecoverable once a later PR overwrites it.
-    await ensureLogTab(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, ['PR No', 'Format', 'Date', 'Vendor/Party', 'Requested By', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Form JSON']);
+    // needs, used by PO Creation's P.R. NO picker (item detail only): the
+    // live template tab only ever reflects the MOST RECENT submission for
+    // that format, so anything not captured here is unrecoverable once a
+    // later PR overwrites it.
+    // "Status" is likewise appended at the end — defaults to "Active"; PR
+    // Summary's "Cancel" action flips it to "Cancelled" in place (see PUT
+    // /api/pr-creation/cancel below), which also excludes it from PO
+    // Creation's pending-PR picker.
+    await ensureLogTab(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, ['PR No', 'Format', 'Date', 'Vendor/Party', 'Requested By', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Form JSON', 'Status']);
     await appendLogRow(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, [
       prNoFormatted, tab, dateRequested || '', party, requestedBy, departmentOut, totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
       JSON.stringify({ format: req.body.format, requestedBy, vendorName, partyName, personWhoRaisedPr, orderNo, department, termsOfPayment, estimatedDelDate, dateRequested, items: cleanItems }),
+      'Active',
     ]);
 
     return res.json({ success: true, prNumber: prNoFormatted, totalAmount, department: departmentOut, pdfLink });
@@ -3113,13 +3116,14 @@ app.get('/api/pr-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).filter(r => r[0]).map(r => {
       let form = null;
       try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
       return {
         prNo: r[0] || '', format: r[1] || '', date: r[2] || '', party: r[3] || '', requestedBy: r[4] || '',
         department: r[5] || '', total: r[6] || '', pdfLink: r[7] || '', createdBy: r[8] || '', createdAt: r[9] || '', form,
+        status: r[11] || 'Active',
       };
     }).reverse();
     return res.json(rows.slice(0, 200));
@@ -3130,14 +3134,15 @@ app.get('/api/pr-creation/list', requireAuth, async (req, res) => {
   }
 });
 
-// DELETE /api/pr-creation?prNo=... — removes that PR's row from "ERP PR Log"
-// (its own PR number is freed up for reuse). Does not touch the archived PDF
-// in Drive.
-app.delete('/api/pr-creation', requireAuth, async (req, res) => {
+// PUT /api/pr-creation/cancel?prNo=... — marks that PR's row Cancelled in
+// "ERP PR Log" (column L) instead of deleting it: the row stays for history/
+// audit, but drops out of PO Creation's pending-PR picker. The archived PDF
+// in Drive and the PR's own number are both untouched/not freed for reuse.
+app.put('/api/pr-creation/cancel', requireAuth, async (req, res) => {
   try {
     const prNo = req.query.prNo;
     if (!prNo) return res.status(400).json({ error: 'prNo is required' });
-    await _deleteLogRowByKey(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, prNo);
+    await _setLogRowStatus(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, prNo, 'L', 'Cancelled');
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });
@@ -3153,12 +3158,24 @@ const GRN_CREATION_LOG_TAB = 'ERP GRN Log';
 const GRN_TEMPLATE_TAB = 'GRN';
 
 // Cell refs reverse-engineered from the live template (formula render + merge
-// inspection, 2026-07-29). Columns C:H on each item row are an ARRAYFORMULA
+// inspection, 2026-07-29; re-verified 2026-08-01 after Approved/Rejected Qty
+// columns were added). Columns C:H on each item row are an ARRAYFORMULA
 // spill anchored at C6:H6 (VLOOKUP against item_code by Item No.) — never
 // write to them, they populate automatically once Item No. (B) is written.
-// Column L per row is a REAL per-row formula (=I*K), unlike PO's spill-driven
-// amount columns — clearing it would delete the formula for good, so the
-// clear step below only ever touches B (item no.) and I:K (qty/uom/rate).
+//
+// The user inserted 2 real columns at J/K in the live sheet (not appended
+// after the formula) to hold Approved/Rejected Qty — Google Sheets shifted
+// every column from J onward one row-height at a time across the WHOLE
+// sheet (not just the item rows), and auto-updated every formula reference
+// to match. Verified live: old J(UOM)/K(Rate)/L(=I*K totals formula) are now
+// L/M/N — confirmed by the per-row total formula reading "=I26*M26" and the
+// summary block's "=SUM(N7:N26)" / "=SUM(N27:N30)". The header row's Date
+// cell (old L4) shifted the same way to N4, and CGST/SGST/Round Off/Total
+// (old L28:L31) shifted to N28:N31. Column N is that real per-row/summary
+// formula chain — never write to it, clearing it would delete the formula
+// for good. The clear step below only ever touches B (item no.) and I:M
+// (received qty/approved qty/rejected qty/uom/rate), which are now
+// conveniently contiguous.
 //
 // The sheet's own "vendor details" / "item_code" tabs are IMPORTRANGE
 // pull-throughs of PR_SHEET_ID's "Vendor Name" tab and the PO sheet's
@@ -3170,13 +3187,17 @@ const GRN_TEMPLATE_TAB = 'GRN';
 // _loadPoItemCatalog('PurchaseOrder') cache since it's the exact same range.
 const GRN_HEADER_CELLS = {
   grNo: 'B4', madeBy: 'C4', prNo: 'D4', vendorName: 'E4', poNo: 'F4',
-  billNo: 'G4', billRecvDate: 'H4', deptHead: 'I4', date: 'L4',
+  billNo: 'G4', billRecvDate: 'H4', deptHead: 'I4', date: 'N4',
 };
-const GRN_ITEMS = { firstRow: 7, lastRow: 26, itemNoCol: 'B', qtyCol: 'I', uomCol: 'J', rateCol: 'K' };
-const GRN_SUMMARY_CELLS = { cgst: 'L28', sgst: 'L29', roundOff: 'L30' };
+// Column I keeps its original meaning of "how many units this row is about"
+// but is now Received Qty specifically, now that Approved (J) and Rejected
+// (K) are tracked separately — see the column-shift comment above for why
+// UOM/Rate ended up at L/M instead of staying at J/K.
+const GRN_ITEMS = { firstRow: 7, lastRow: 26, itemNoCol: 'B', qtyCol: 'I', approvedQtyCol: 'J', rejectedQtyCol: 'K', uomCol: 'L', rateCol: 'M' };
+const GRN_SUMMARY_CELLS = { cgst: 'N28', sgst: 'N29', roundOff: 'N30' };
 const GRN_COMMENTS_CELL = 'B28';
-const GRN_SUBTOTAL_CELL = 'L27';
-const GRN_TOTAL_CELL = 'L31';
+const GRN_SUBTOTAL_CELL = 'N27';
+const GRN_TOTAL_CELL = 'N31';
 
 async function _grnSheetMeta() {
   const auth = getGoogleAuth();
@@ -3223,42 +3244,39 @@ app.get('/api/grn-creation/masters', requireAuth, async (req, res) => {
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/grn-creation/pr-list — every PR logged in PR Creation's own "ERP PR
-// Log" (a GRN can reference any PR regardless of whether it's already gone
-// through a PO, unlike PO Creation's "pending" filter), for the PR No.
-// field's suggestion dropdown; includes each PR's items for auto-fill, plus
-// the PO No. it was turned into (if any) by cross-referencing "ERP PO Log"'s
-// own PR No column — a PR doesn't carry its resulting PO number itself.
-app.get('/api/grn-creation/pr-list', requireAuth, async (req, res) => {
+// GET /api/grn-creation/po-list — POs (from PO Creation's own "ERP PO Log")
+// that haven't been used on any GRN yet, for the PO No. field's suggestion
+// dropdown. "Pending" = its PO No doesn't appear in the PO No column GRNs
+// have already logged against, and it isn't Cancelled — same one-PO-per-GRN
+// discipline as PO Creation's own pending-PR filter. Each PO already carries
+// its own PR No (logged when the PO was created), so GRN gets that for free
+// instead of needing its own PR lookup.
+app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
   try {
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    let prRows = [];
+    let poRows = [];
     try {
-      const prRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
-      prRows = prRes.data.values || [];
+      const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      poRows = poRes.data.values || [];
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
     }
-    const poByPrNo = new Map();
+    let usedPoNos = new Set();
     try {
-      const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
-      for (const r of (poRes.data.values || [])) {
-        const prKey = _normalizePrNo(r[9]);
-        if (prKey && r[0]) poByPrNo.set(prKey, _padSeqNo('PO', parseInt(String(r[0]).replace(/^[A-Za-z]+/, ''), 10)) || r[0]);
-      }
+      const grnRes = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!F2:F1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      usedPoNos = new Set((grnRes.data.values || []).map(r => _seqKey(r[0])).filter(Boolean));
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
     }
-    const list = prRows
-      .filter(r => r[0])
+    const list = poRows
+      .filter(r => r[0] && (r[11] || 'Active') !== 'Cancelled' && !usedPoNos.has(_seqKey(r[0])))
       .map(r => {
         let items = [];
         try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
-        const prNo = _normalizePrNo(r[0]);
-        return { prNo, party: r[3] || '', department: r[5] || '', poNo: poByPrNo.get(prNo) || '', items };
+        return { poNo: r[0] || '', format: r[1] || '', party: r[3] || '', department: r[4] || '', prNo: r[9] || '', vendorName: r[3] || '', items };
       })
       .reverse();
     return res.json(list.slice(0, 200));
@@ -3304,6 +3322,10 @@ app.post('/api/grn-creation', requireAuth, async (req, res) => {
       spreadsheetId: GRN_CREATION_SHEET_ID,
       requestBody: { ranges: [
         `'${tab}'!${GRN_ITEMS.itemNoCol}${GRN_ITEMS.firstRow}:${GRN_ITEMS.itemNoCol}${GRN_ITEMS.lastRow}`,
+        // I:M is one contiguous block (received/approved/rejected qty, uom,
+        // rate) now that Approved/Rejected sit between qty and uom/rate —
+        // see the GRN_ITEMS comment above. N (the totals formula) is never
+        // touched.
         `'${tab}'!${GRN_ITEMS.qtyCol}${GRN_ITEMS.firstRow}:${GRN_ITEMS.rateCol}${GRN_ITEMS.lastRow}`,
       ] },
     });
@@ -3333,9 +3355,11 @@ app.post('/api/grn-creation', requireAuth, async (req, res) => {
       const row = GRN_ITEMS.firstRow + i;
       if (row > GRN_ITEMS.lastRow) return; // beyond the template's own capacity — drop silently
       put(`${GRN_ITEMS.itemNoCol}${row}`, it.itemNo);
-      put(`${GRN_ITEMS.qtyCol}${row}`, it.qty);
+      put(`${GRN_ITEMS.qtyCol}${row}`, it.receivedQty);
       put(`${GRN_ITEMS.uomCol}${row}`, it.uom);
       put(`${GRN_ITEMS.rateCol}${row}`, it.rate);
+      put(`${GRN_ITEMS.approvedQtyCol}${row}`, it.approvedQty);
+      put(`${GRN_ITEMS.rejectedQtyCol}${row}`, it.rejectedQty);
     });
 
     if (data.length) {
@@ -3375,16 +3399,19 @@ app.post('/api/grn-creation', requireAuth, async (req, res) => {
     // 5) Log this GRN so the ERP can list it — same pattern as "ERP PO Log".
     const sessUser = req.session?.user;
     // "Form JSON" is appended at the end so existing rows' column positions
-    // stay valid — same discipline as PO/PR Log. Lets GRN List's "Edit"
-    // action fully reload a past GRN: the live template tab only ever
-    // reflects the most recent submission, so anything not captured here is
-    // unrecoverable once a later GRN overwrites it.
-    await ensureLogTab(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, ['GR No', 'Date', 'Made By', 'PR No', 'Vendor Name', 'PO No', 'Bill No', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Form JSON']);
+    // stay valid — same discipline as PO/PR Log. It's the only other place a
+    // past GRN's items are recoverable from, since the live template tab
+    // only ever reflects the most recent submission.
+    // "Status" is likewise appended at the end — defaults to "Active"; GRN
+    // List's "Cancel" action flips it to "Cancelled" in place (see PUT
+    // /api/grn-creation/cancel below).
+    await ensureLogTab(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, ['GR No', 'Date', 'Made By', 'PR No', 'Vendor Name', 'PO No', 'Bill No', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Form JSON', 'Status']);
     await appendLogRow(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, [
       // Leading "'" forces the ISO date to stay literal text instead of being
       // reparsed into a locale-formatted date — same convention as ERP PO Log.
       nextGrNo, "'" + date, madeBy, prNo || '', vendorName, poNo || '', billNo || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
       JSON.stringify({ date, madeBy, prNo, vendorName, poNo, billNo, billRecvDate, deptHead, comments, cgst, sgst, roundOff, items: cleanItems }),
+      'Active',
     ]);
 
     return res.json({ success: true, grNumber: nextGrNo, subtotal, totalAmount, pdfLink });
@@ -3399,13 +3426,14 @@ app.get('/api/grn-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:M1000`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).filter(r => r[0]).map(r => {
       let form = null;
       try { form = JSON.parse(r[11] || 'null'); } catch { form = null; }
       return {
         grNo: r[0] || '', date: r[1] || '', madeBy: r[2] || '', prNo: r[3] || '', vendorName: r[4] || '',
         poNo: r[5] || '', billNo: r[6] || '', total: r[7] || '', pdfLink: r[8] || '', createdBy: r[9] || '', createdAt: r[10] || '', form,
+        status: r[12] || 'Active',
       };
     }).reverse();
     return res.json(rows.slice(0, 200));
@@ -3416,14 +3444,15 @@ app.get('/api/grn-creation/list', requireAuth, async (req, res) => {
   }
 });
 
-// DELETE /api/grn-creation?grNo=... — removes that GRN's row from "ERP GRN
-// Log" (its own GR number is freed up for reuse). Does not touch the
-// archived PDF in Drive.
-app.delete('/api/grn-creation', requireAuth, async (req, res) => {
+// PUT /api/grn-creation/cancel?grNo=... — marks that GRN's row Cancelled in
+// "ERP GRN Log" (column M) instead of deleting it: the row stays for
+// history/audit. The archived PDF in Drive and the GRN's own number are both
+// untouched/not freed for reuse.
+app.put('/api/grn-creation/cancel', requireAuth, async (req, res) => {
   try {
     const grNo = req.query.grNo;
     if (!grNo) return res.status(400).json({ error: 'grNo is required' });
-    await _deleteLogRowByKey(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, grNo);
+    await _setLogRowStatus(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, grNo, 'M', 'Cancelled');
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });

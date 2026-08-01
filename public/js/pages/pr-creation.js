@@ -135,12 +135,6 @@ window.Pages['pr-creation'] = (() => {
   let _nextPrNumber = null;
   let _lastDepartment = '';
 
-  // Editing an existing PR (from PR Summary's "Edit" action) — submitting
-  // saves a fresh PR/PDF as usual, then deletes this old entry so the
-  // corrected one takes its place; not a true in-place edit (number changes).
-  let _editingPrNo = null;
-  let _pendingFormToApplyPr = null;
-
   // PR Summary (in-page tab) state — read-only history from the ERP PR Log tab.
   let _sumRows = [];
   let _sumLoaded = false;
@@ -423,31 +417,21 @@ window.Pages['pr-creation'] = (() => {
     if (!body.items.length) { Utils.showToast('Add at least one item', 'error'); return; }
 
     const btn = document.getElementById('pcr-submit-btn');
-    const wasEditingPrNo = _editingPrNo;
     btn.disabled = true; btn.textContent = 'Creating…';
     try {
       const result = await Utils.apiFetch('/api/pr-creation', { method: 'POST', body: JSON.stringify(body) });
-      if (wasEditingPrNo) {
-        try { await Utils.apiFetch('/api/pr-creation?prNo=' + encodeURIComponent(wasEditingPrNo), { method: 'DELETE' }); } catch {}
-      }
-      _editingPrNo = null;
       _lastDepartment = result.department || '';
       await _loadMasters();
       renderPage();
       _showPrCreatedModal(result.prNumber, result.pdfLink);
     } catch (err) {
       Utils.showToast(err.message || 'Failed to create PR', 'error');
-      btn.disabled = false; btn.textContent = wasEditingPrNo ? 'Save as New Purchase Requisition' : 'Create Purchase Requisition';
+      btn.disabled = false; btn.textContent = 'Create Purchase Requisition';
     }
   }
 
   function _createViewHtml() {
-    const editingBanner = '<div id="pcr-editing-banner" style="display:' + (_editingPrNo ? 'flex' : 'none') + ';align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;font-size:12.5px;color:#1d4ed8;">'
-        + '<span>Editing PR #' + esc(_editingPrNo || '') + ' — submitting saves a new PR and removes this old entry.</span>'
-        + '<button type="button" id="pcr-cancel-edit" style="border:none;background:transparent;color:#1d4ed8;font-weight:700;cursor:pointer;font-size:12.5px;">Cancel</button>'
-      + '</div>';
     return '<form id="pcr-form" style="display:flex;flex-direction:column;gap:16px;">'
-      + editingBanner
       + _headerFieldsHtml()
       + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
       + _itemsTableHtml()
@@ -458,37 +442,8 @@ window.Pages['pr-creation'] = (() => {
         + '<span style="font-size:12.5px;font-weight:700;color:#64748b;">Estimated Total</span>'
         + '<span id="pcr-grand-total" style="font-size:17px;font-weight:800;color:#0f172a;">₹0.00</span>'
       + '</div>'
-      + '<button type="submit" id="pcr-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">' + (_editingPrNo ? 'Save as New Purchase Requisition' : 'Create Purchase Requisition') + '</button>'
+      + '<button type="submit" id="pcr-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Purchase Requisition</button>'
     + '</form>';
-  }
-
-  // Reloads a past PR's own stored Form JSON verbatim — used by PR Summary's
-  // "Edit" action, after _openPrForEdit has already made sure _format
-  // matches form.format.
-  function _fillPrFormFromStoredForm(form) {
-    const setVal = (id, val) => { const el = document.getElementById(id); if (el && val !== undefined && val !== null && val !== '') el.value = val; };
-    HEADER_FIELDS[_format].forEach(f => setVal('pcr-' + f.key, form[f.key]));
-    setVal('pcr-party', form.vendorName || form.partyName || '');
-    if (DEPARTMENT_MODE[_format] === 'manual') setVal('pcr-department', form.department);
-
-    const tbody = document.getElementById('pcr-items-tbody');
-    if (tbody && Array.isArray(form.items) && form.items.length) {
-      tbody.innerHTML = '';
-      form.items.forEach(it => {
-        tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
-        const row = tbody.lastElementChild;
-        _bindItemRow(row);
-        const codeInput = row.querySelector('.pcr-item-code');
-        if (codeInput) codeInput.value = it.itemCode || '';
-        Object.entries(it).forEach(([field, val]) => {
-          if (field === 'itemCode') return;
-          const fieldInput = row.querySelector('[data-field="' + field + '"]');
-          if (fieldInput) fieldInput.value = val;
-        });
-        _recomputeRow(row);
-      });
-      _recomputeGrandTotal();
-    }
   }
 
   function _bindCreateView() {
@@ -502,25 +457,6 @@ window.Pages['pr-creation'] = (() => {
     form.addEventListener('submit', _createSubmit);
     form.addEventListener('input', _onFormInput);
     if (!_mastersLoaded) _loadMasters();
-
-    if (_pendingFormToApplyPr) {
-      const f = _pendingFormToApplyPr;
-      _pendingFormToApplyPr = null;
-      _fillPrFormFromStoredForm(f);
-    }
-    const cancelBtn = document.getElementById('pcr-cancel-edit');
-    if (cancelBtn) cancelBtn.addEventListener('click', () => { _editingPrNo = null; renderPage(); });
-  }
-
-  // Reopens a past PR in the Create view, prefilled from its stored Form
-  // JSON — submitting creates a fresh PR number and, on success, removes the
-  // old entry being edited so PR Summary shows the corrected version instead.
-  function _openPrForEdit(r) {
-    _editingPrNo = r.prNo;
-    _view = 'create';
-    _format = FORMATS.includes(r.form.format) ? r.form.format : _format;
-    _pendingFormToApplyPr = r.form;
-    renderPage();
   }
 
   /* ── PR Summary (in-page tab) — read-only history from the ERP PR Log tab,
@@ -595,8 +531,9 @@ window.Pages['pr-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
-          + (r.form ? '<button type="button" class="pcr-edit-btn" data-pr="' + esc(r.prNo) + '" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Edit</button>' : '')
-          + '<button type="button" class="pcr-delete-btn" data-pr="' + esc(r.prNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Delete</button>'
+          + (r.status === 'Cancelled'
+            ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
+            : '<button type="button" class="pcr-cancel-btn" data-pr="' + esc(r.prNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
         + '</td>'
       + '</tr>').join('');
   }
@@ -606,22 +543,16 @@ window.Pages['pr-creation'] = (() => {
     if (!body || body.dataset.actionsBound) return;
     body.dataset.actionsBound = '1';
     body.addEventListener('click', async (e) => {
-      const editBtn = e.target.closest('.pcr-edit-btn');
-      if (editBtn) {
-        const r = _sumRows.find(x => String(x.prNo) === editBtn.dataset.pr);
-        if (r && r.form) _openPrForEdit(r);
-        return;
-      }
-      const delBtn = e.target.closest('.pcr-delete-btn');
-      if (delBtn) {
-        const ok = await Utils.showConfirm('PR #' + delBtn.dataset.pr + ' will be permanently removed from the list (its archived PDF in Drive is untouched).', { title: 'Delete PR', confirmText: 'Delete', danger: true });
+      const cancelBtn = e.target.closest('.pcr-cancel-btn');
+      if (cancelBtn) {
+        const ok = await Utils.showConfirm('PR #' + cancelBtn.dataset.pr + ' will be marked Cancelled and excluded from future PO creation. This can\'t be undone.', { title: 'Cancel PR', confirmText: 'Cancel PR', danger: true });
         if (!ok) return;
         try {
-          await Utils.apiFetch('/api/pr-creation?prNo=' + encodeURIComponent(delBtn.dataset.pr), { method: 'DELETE' });
-          Utils.showToast('PR #' + delBtn.dataset.pr + ' deleted', 'success');
+          await Utils.apiFetch('/api/pr-creation/cancel?prNo=' + encodeURIComponent(cancelBtn.dataset.pr), { method: 'PUT' });
+          Utils.showToast('PR #' + cancelBtn.dataset.pr + ' cancelled', 'success');
           await _sumLoad();
         } catch (err) {
-          Utils.showToast(err.message || 'Failed to delete', 'error');
+          Utils.showToast(err.message || 'Failed to cancel', 'error');
         }
       }
     });
@@ -928,11 +859,11 @@ window.Pages['pr-creation'] = (() => {
       + bodyHtml
     + '</div>';
 
-    document.querySelector('.pcr-form-tab')?.addEventListener('click', () => { _view = 'form'; _editingPrNo = null; renderPage(); });
+    document.querySelector('.pcr-form-tab')?.addEventListener('click', () => { _view = 'form'; renderPage(); });
     document.querySelectorAll('.pcr-format-tab').forEach(btn => {
-      btn.addEventListener('click', () => { _view = 'create'; _format = btn.dataset.format; _editingPrNo = null; renderPage(); });
+      btn.addEventListener('click', () => { _view = 'create'; _format = btn.dataset.format; renderPage(); });
     });
-    document.querySelector('.pcr-summary-tab')?.addEventListener('click', () => { _view = 'list'; _editingPrNo = null; renderPage(); });
+    document.querySelector('.pcr-summary-tab')?.addEventListener('click', () => { _view = 'list'; renderPage(); });
 
     if (_view === 'form') { _bindFormView(); return; }
     if (_view === 'list') { _sumBindFilterBar(); _sumBindRowActions(); _sumLoad(); return; }

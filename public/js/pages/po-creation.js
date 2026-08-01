@@ -102,6 +102,17 @@ window.Pages['po-creation'] = (() => {
     'purchase_requisition(ALU)': it => ({ itemCode: it.itemCode || '', hsnCode: '', uom: it.uom || '', qty: it.qtyRequired || '', unitPrice: it.rate || '', gst: it.tax || '' }),
   };
 
+  // Item fields each PO format's PR_ITEM_MAPPERS above never fills from the
+  // PR (hardcoded to '' — there's no PR-side source for them) — these are
+  // the only item fields that stay editable once a PR has been applied to
+  // the form; every other mapped field came from the PR and must lock.
+  const PO_ONLY_ITEM_FIELDS = {
+    PurchaseOrder: ['hsnCode'],
+    'ENR PO': ['customerCodeRef', 'barcode', 'taxPercent'],
+    'Diamond PO': [],
+  };
+  const READONLY_FIELD_STYLE = 'background:#f8fafc;color:#64748b;cursor:not-allowed;';
+
   /* ── state ──────────────────────────────────────────────────── */
   let _view = 'create'; // 'create' | 'list'
   let _format = 'PurchaseOrder';
@@ -122,12 +133,6 @@ window.Pages['po-creation'] = (() => {
   let _polFParty = '';
   let _polFFrom = '';
   let _polFTo = '';
-
-  // Editing an existing PO (from PO List's "Edit" action) — submitting saves
-  // a fresh PO/PDF as usual, then deletes this old entry so the corrected
-  // one takes its place; not a true in-place edit (the number changes).
-  let _editingPoNo = null;
-  let _pendingFormToApply = null;
 
   function _today() { return new Date().toISOString().slice(0, 10); }
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -241,22 +246,30 @@ window.Pages['po-creation'] = (() => {
     }
   }
 
+  // Once a pending PR is actually applied, the Basic Detail + Item List
+  // fields it supplied become non-editable — only fields the PR has no
+  // analog for (PO_ONLY_ITEM_FIELDS, plus everything outside Party/
+  // Department/Items) stay editable. A manually-created PO (no PR ever
+  // applied) is completely unaffected.
   function _fillPrIntoForm(pr) {
     const prInput = document.getElementById('poc-pr-no');
     if (prInput) prInput.value = pr.prNo;
     const partyInput = document.getElementById('poc-party');
-    if (partyInput && pr.party) partyInput.value = pr.party;
+    if (partyInput && pr.party) { partyInput.value = pr.party; partyInput.readOnly = true; partyInput.style.cssText += READONLY_FIELD_STYLE; }
     const deptSel = document.getElementById('poc-department');
     if (deptSel && pr.department) {
       if (!deptSel.querySelector('option[value="' + CSS.escape(pr.department) + '"]')) {
         deptSel.insertAdjacentHTML('beforeend', '<option value="' + esc(pr.department) + '">' + esc(pr.department) + '</option>');
       }
       deptSel.value = pr.department;
+      deptSel.disabled = true;
+      deptSel.style.cssText += READONLY_FIELD_STYLE;
     }
 
     const mapper = PR_ITEM_MAPPERS[pr.prTabName];
     const tbody = document.getElementById('poc-items-tbody');
     if (!mapper || !tbody || !Array.isArray(pr.items) || !pr.items.length) return;
+    const poOnlyFields = PO_ONLY_ITEM_FIELDS[_format] || [];
     tbody.innerHTML = '';
     pr.items.forEach(it => {
       tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
@@ -264,60 +277,16 @@ window.Pages['po-creation'] = (() => {
       _bindItemRow(row);
       const mapped = mapper(it);
       const codeInput = row.querySelector('.poc-item-code');
-      if (codeInput) codeInput.value = mapped.itemCode || '';
+      if (codeInput) { codeInput.value = mapped.itemCode || ''; codeInput.readOnly = true; codeInput.style.cssText += READONLY_FIELD_STYLE; }
       Object.entries(mapped).forEach(([field, val]) => {
         if (field === 'itemCode') return;
         const fieldInput = row.querySelector('[data-field="' + field + '"]');
-        if (fieldInput) fieldInput.value = val;
+        if (!fieldInput) return;
+        fieldInput.value = val;
+        if (!poOnlyFields.includes(field)) { fieldInput.readOnly = true; fieldInput.style.cssText += READONLY_FIELD_STYLE; }
       });
       _recomputeRow(row);
     });
-    _recomputeGrandTotal();
-  }
-
-  // Reloads a past PO's own stored Form JSON verbatim (own field names, no
-  // cross-format mapping needed) — used by PO List's "Edit" action, after
-  // _openPoForEdit has already made sure _format matches form.format.
-  function _fillFormFromStoredForm(form) {
-    const setVal = (id, val) => { const el = document.getElementById(id); if (el && val !== undefined && val !== null && val !== '') el.value = val; };
-    setVal('poc-pr-no', form.prNo);
-    setVal('poc-party', form.party);
-    setVal('poc-delivery-schedule', form.deliverySchedule);
-    setVal('poc-po-validity', form.poValidity);
-    setVal('poc-payment-terms', form.paymentTerms);
-    setVal('poc-po-made-by', form.poMadeBy);
-    const deptSel = document.getElementById('poc-department');
-    if (deptSel && form.department) {
-      if (!deptSel.querySelector('option[value="' + CSS.escape(form.department) + '"]')) {
-        deptSel.insertAdjacentHTML('beforeend', '<option value="' + esc(form.department) + '">' + esc(form.department) + '</option>');
-      }
-      deptSel.value = form.department;
-    }
-    const shipToSel = document.getElementById('poc-ship-to');
-    if (shipToSel && form.shipTo) shipToSel.value = form.shipTo;
-
-    Object.entries(form.summary || {}).forEach(([field, val]) => {
-      const el = document.querySelector('.poc-summary-field[data-field="' + field + '"]');
-      if (el) el.value = val;
-    });
-
-    const tbody = document.getElementById('poc-items-tbody');
-    if (tbody && Array.isArray(form.items) && form.items.length) {
-      tbody.innerHTML = '';
-      form.items.forEach(it => {
-        tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
-        const row = tbody.lastElementChild;
-        _bindItemRow(row);
-        const codeInput = row.querySelector('.poc-item-code');
-        if (codeInput) codeInput.value = it.itemCode || '';
-        Object.entries(it).forEach(([field, val]) => {
-          if (field === 'itemCode') return;
-          const fieldInput = row.querySelector('[data-field="' + field + '"]');
-          if (fieldInput) fieldInput.value = val;
-        });
-        _recomputeRow(row);
-      });
-    }
     _recomputeGrandTotal();
   }
 
@@ -572,8 +541,9 @@ window.Pages['po-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
-          + (r.form ? '<button type="button" class="poc-edit-btn" data-po="' + esc(r.poNo) + '" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Edit</button>' : '')
-          + '<button type="button" class="poc-delete-btn" data-po="' + esc(r.poNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Delete</button>'
+          + (r.status === 'Cancelled'
+            ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
+            : '<button type="button" class="poc-cancel-btn" data-po="' + esc(r.poNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
         + '</td>'
       + '</tr>').join('');
   }
@@ -583,37 +553,19 @@ window.Pages['po-creation'] = (() => {
     if (!body || body.dataset.actionsBound) return;
     body.dataset.actionsBound = '1';
     body.addEventListener('click', async (e) => {
-      const editBtn = e.target.closest('.poc-edit-btn');
-      if (editBtn) {
-        const r = _polRows.find(x => String(x.poNo) === editBtn.dataset.po);
-        if (r && r.form) _openPoForEdit(r);
-        return;
-      }
-      const delBtn = e.target.closest('.poc-delete-btn');
-      if (delBtn) {
-        const ok = await Utils.showConfirm('PO #' + delBtn.dataset.po + ' will be permanently removed from the list (its archived PDF in Drive is untouched).', { title: 'Delete PO', confirmText: 'Delete', danger: true });
+      const cancelBtn = e.target.closest('.poc-cancel-btn');
+      if (cancelBtn) {
+        const ok = await Utils.showConfirm('PO #' + cancelBtn.dataset.po + ' will be marked Cancelled and excluded from future GRN creation. This can\'t be undone.', { title: 'Cancel PO', confirmText: 'Cancel PO', danger: true });
         if (!ok) return;
         try {
-          await Utils.apiFetch('/api/po-creation?poNo=' + encodeURIComponent(delBtn.dataset.po), { method: 'DELETE' });
-          Utils.showToast('PO #' + delBtn.dataset.po + ' deleted', 'success');
+          await Utils.apiFetch('/api/po-creation/cancel?poNo=' + encodeURIComponent(cancelBtn.dataset.po), { method: 'PUT' });
+          Utils.showToast('PO #' + cancelBtn.dataset.po + ' cancelled', 'success');
           await _polLoad();
         } catch (err) {
-          Utils.showToast(err.message || 'Failed to delete', 'error');
+          Utils.showToast(err.message || 'Failed to cancel', 'error');
         }
       }
     });
-  }
-
-  // Reopens a past PO in the Create view, prefilled from its stored Form
-  // JSON (header + items + charges) — submitting creates a fresh PO number
-  // and, on success, removes the old entry being edited so the list shows
-  // the corrected version in its place.
-  function _openPoForEdit(r) {
-    _editingPoNo = r.poNo;
-    _view = 'create';
-    _format = FORMATS.includes(r.form.format) ? r.form.format : _format;
-    _pendingFormToApply = r.form;
-    renderPage();
   }
 
   function _polFilterBarHtml() {
@@ -787,23 +739,18 @@ window.Pages['po-creation'] = (() => {
     if (!items.length) { Utils.showToast('Add at least one item', 'error'); return; }
 
     const btn = document.getElementById('poc-submit-btn');
-    const wasEditingPoNo = _editingPoNo;
     btn.disabled = true; btn.textContent = 'Creating…';
     try {
       const result = await Utils.apiFetch('/api/po-creation', {
         method: 'POST',
         body: JSON.stringify({ format: _format, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary }),
       });
-      if (wasEditingPoNo) {
-        try { await Utils.apiFetch('/api/po-creation?poNo=' + encodeURIComponent(wasEditingPoNo), { method: 'DELETE' }); } catch {}
-      }
-      _editingPoNo = null;
       await _loadMasters();
       renderPage();
       _showPoCreatedModal(result.poNumber, result.pdfLink);
     } catch (err) {
       Utils.showToast(err.message || 'Failed to create PO', 'error');
-      btn.disabled = false; btn.textContent = wasEditingPoNo ? 'Save as New Purchase Order' : 'Create Purchase Order';
+      btn.disabled = false; btn.textContent = 'Create Purchase Order';
     }
   }
 
@@ -813,14 +760,9 @@ window.Pages['po-creation'] = (() => {
     if (!el) return;
 
     const isList = _view === 'list';
-    const editingBanner = '<div id="poc-editing-banner" style="display:' + (_editingPoNo ? 'flex' : 'none') + ';align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;font-size:12.5px;color:#1d4ed8;">'
-        + '<span>Editing PO #' + esc(_editingPoNo || '') + ' — submitting saves a new PO and removes this old entry.</span>'
-        + '<button type="button" id="poc-cancel-edit" style="border:none;background:transparent;color:#1d4ed8;font-weight:700;cursor:pointer;font-size:12.5px;">Cancel</button>'
-      + '</div>';
     const bodyHtml = isList
       ? _polViewHtml()
       : '<form id="poc-form" style="display:flex;flex-direction:column;gap:16px;">'
-        + editingBanner
         + _headerFieldsHtml()
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
         + _itemsTableHtml()
@@ -833,7 +775,7 @@ window.Pages['po-creation'] = (() => {
           + '<span style="font-size:12.5px;font-weight:700;color:#64748b;">Estimated Total</span>'
           + '<span id="poc-grand-total" style="font-size:17px;font-weight:800;color:#0f172a;">₹0.00</span>'
         + '</div>'
-        + '<button type="submit" id="poc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">' + (_editingPoNo ? 'Save as New Purchase Order' : 'Create Purchase Order') + '</button>'
+        + '<button type="submit" id="poc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Purchase Order</button>'
       + '</form>';
 
     el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '1080px') + ';margin:0 auto;padding:4px 0 40px;">'
@@ -846,10 +788,10 @@ window.Pages['po-creation'] = (() => {
     + '</div>';
 
     document.querySelectorAll('.poc-format-tab').forEach(btn => {
-      btn.addEventListener('click', () => { _view = 'create'; _format = btn.dataset.format; _editingPoNo = null; renderPage(); });
+      btn.addEventListener('click', () => { _view = 'create'; _format = btn.dataset.format; renderPage(); });
     });
     const listTab = document.querySelector('.poc-list-tab');
-    if (listTab) listTab.addEventListener('click', () => { _view = 'list'; _editingPoNo = null; renderPage(); });
+    if (listTab) listTab.addEventListener('click', () => { _view = 'list'; renderPage(); });
 
     if (isList) {
       _polBindFilterBar();
@@ -879,13 +821,6 @@ window.Pages['po-creation'] = (() => {
       _pendingPrToApply = null;
       _fillPrIntoForm(pr);
     }
-    if (_pendingFormToApply) {
-      const form = _pendingFormToApply;
-      _pendingFormToApply = null;
-      _fillFormFromStoredForm(form);
-    }
-    const cancelEditBtn = document.getElementById('poc-cancel-edit');
-    if (cancelEditBtn) cancelEditBtn.addEventListener('click', () => { _editingPoNo = null; renderPage(); });
   }
 
   return {
