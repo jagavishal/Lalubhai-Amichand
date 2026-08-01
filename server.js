@@ -2627,14 +2627,24 @@ function _sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 // borrows the docs.google.com export URL with an OAuth bearer token instead
 // of a browser session cookie. Shared by PO Creation and GRN Creation (any
 // spreadsheet the same service account can read).
-async function _exportSheetTabPdf(spreadsheetId, sourceSheetId) {
+// colRange (optional): { c1, c2 } 0-indexed, c2 exclusive — restricts which
+// columns the export treats as printable. Without it, Sheets exports the
+// tab's FULL grid width (gridProperties.columnCount), and fitw=true then
+// scales the whole thing to fit an A4 page — if the tab's grid is far wider
+// than its visible template (GRN's is 34 cols wide, template only uses
+// A:N/14), the real content gets shrunk to a fraction of its size to make
+// room for columns of empty space nobody can see. Pass colRange to pin the
+// export to just the template's actual columns instead.
+async function _exportSheetTabPdf(spreadsheetId, sourceSheetId, colRange) {
   const auth = getGoogleAuth();
   const client = await auth.getClient();
   const { token } = await client.getAccessToken();
+  const rangeParams = colRange ? `&c1=${colRange.c1}&c2=${colRange.c2}` : '';
   const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export`
     + `?format=pdf&gid=${sourceSheetId}&size=A4&portrait=true&fitw=true`
     + `&gridlines=false&printtitle=false&sheetnames=false`
-    + `&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3`;
+    + `&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3`
+    + rangeParams;
   const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
   if (!resp.ok) throw new Error('PDF export failed: HTTP ' + resp.status);
   const buf = Buffer.from(await resp.arrayBuffer());
@@ -3399,7 +3409,9 @@ app.post('/api/grn-creation', requireAuth, async (req, res) => {
     // must never block the GRN itself from being created.
     let pdfLink = null;
     try {
-      const pdfBuffer = await _exportSheetTabPdf(GRN_CREATION_SHEET_ID, sourceSheetId);
+      // Columns A:N (0-13) — the GRN tab's grid is 34 columns wide but the
+      // template only uses the first 14; see _exportSheetTabPdf's comment.
+      const pdfBuffer = await _exportSheetTabPdf(GRN_CREATION_SHEET_ID, sourceSheetId, { c1: 0, c2: 14 });
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `GR ${nextGrNo}.pdf`, GRN_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[grn-creation] PDF export failed:', e.message); }
 
