@@ -80,11 +80,19 @@ window.Pages['pr-creation'] = (() => {
     ],
   };
 
-  // Read-only, live-computed preview columns — the sheet recomputes these
-  // itself; never sent to the server. ALU has none: its "rate" column already
-  // is the row total per the sheet's own SUM formula, not qty×rate.
+  // Read-only, live-computed preview columns — a UI-only estimate, never sent
+  // to the server. ALU has none: its "rate" column already is the row total
+  // per the sheet's own SUM formula, not qty×rate.
+  //
+  // ITEM_CODE's preview is tax-inclusive (qty × price × (1 + tax%)) by
+  // request, but the live sheet's own per-row formula (=E*I, verified
+  // 2026-08-04) and its SUM total do NOT multiply in tax — so this preview
+  // will read higher than the actual totalAmount that gets saved/logged/
+  // printed for this PR. Known, accepted tradeoff — not a bug to "fix" by
+  // matching the sheet; that would need editing the live per-row formula,
+  // which was explicitly declined.
   const ITEM_COMPUTED = {
-    ITEM_CODE: [{ key: 'amount', label: 'Total (INR)', compute: v => _num(v.qtyRequired) * _num(v.lastUnitPrice) }],
+    ITEM_CODE: [{ key: 'amount', label: 'Total (INR)', compute: v => { const base = _num(v.qtyRequired) * _num(v.lastUnitPrice); return base + base * _num(v.tax) / 100; } }],
     PACKING_STICKER: [{ key: 'total', label: 'Total Amount (INR)', compute: v => _num(v.stickerQty) * _num(v.rate) }],
     PACKING_BOX: [{ key: 'total', label: 'Total (INR)', compute: v => _num(v.boxQty) * _num(v.boxRate) + _num(v.plateQty) * _num(v.plateRate) }],
     ALU: [],
@@ -268,7 +276,7 @@ window.Pages['pr-creation'] = (() => {
     document.querySelectorAll('#pcr-items-tbody .pcr-item-row').forEach(row => {
       const vals = {};
       row.querySelectorAll('.pcr-item-field').forEach(inp => { vals[inp.dataset.field] = inp.value; });
-      if (_format === 'ITEM_CODE') total += _num(vals.qtyRequired) * _num(vals.lastUnitPrice);
+      if (_format === 'ITEM_CODE') { const base = _num(vals.qtyRequired) * _num(vals.lastUnitPrice); total += base + base * _num(vals.tax) / 100; }
       else if (_format === 'PACKING_STICKER') total += _num(vals.stickerQty) * _num(vals.rate);
       else if (_format === 'PACKING_BOX') total += _num(vals.boxQty) * _num(vals.boxRate) + _num(vals.plateQty) * _num(vals.plateRate);
       else if (_format === 'ALU') total += _num(vals.rate); // sheet sums the Rate column directly, not qty×rate

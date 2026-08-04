@@ -43,7 +43,7 @@ window.Pages['client-master'] = (() => {
   /* ── Helpers ────────────────────────────────────────────────── */
   function _blankForm() {
     return {
-      name:'', mobile:'', email:'', state:'', district:'', address:'', pin:'',
+      name:'', contactPerson:'', mobile:'', email:'', state:'', district:'', address:'', pin:'',
       bankName:'', accountHolder:'', accountNo:'', ifscCode:'', branchName:'',
       status:'active', division:'',
     };
@@ -116,7 +116,7 @@ window.Pages['client-master'] = (() => {
   function _openEdit(c) {
     _editing = c.id;
     _form = {
-      name: c.name||'', mobile: c.mobile||c.contact_number||'', email: c.email||'',
+      name: c.name||'', contactPerson: c.contactPerson||'', mobile: c.mobile||c.contact_number||'', email: c.email||'',
       state: c.state||'', district: c.district||'', address: c.address||'', pin: c.pin||'',
       bankName: c.bank_name||'', accountHolder: c.account_holder||'',
       accountNo: c.account_no||'', ifscCode: c.ifsc_code||'', branchName: c.branch_name||'',
@@ -155,6 +155,7 @@ window.Pages['client-master'] = (() => {
           + '</div>'
           + '<div style="display:grid;gap:12px;">'
             + _fld('cm-name', 'Name *', _form.name, 'text', 'Vendor / Company name', 40)
+            + _fld('cm-contactPerson', 'Contact Person Name', _form.contactPerson, 'text', 'Person to contact at the vendor', 100)
             + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-mobile','Mobile No.',_form.mobile,'tel','10-digit mobile') + _fld('cm-email','Email',_form.email,'email','vendor@email.com', 100) + '</div>'
             + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">' + _fld('cm-state','State',_form.state,'text','e.g. Rajasthan') + _fld('cm-district','District',_form.district,'text','e.g. Jaipur') + '</div>'
             + '<div style="display:grid;grid-template-columns:1fr 120px;gap:12px;">' + _fld('cm-address','Address',_form.address,'text','Street / Area') + _fld('cm-pin','Pin Code',_form.pin,'text','6-digit PIN') + '</div>'
@@ -194,6 +195,7 @@ window.Pages['client-master'] = (() => {
     document.getElementById('cm-modal-cancel').addEventListener('click', _closeModal);
     document.getElementById('cm-modal-save').addEventListener('click', () => {
       _form.name          = document.getElementById('cm-name').value.trim();
+      _form.contactPerson = document.getElementById('cm-contactPerson').value.trim();
       _form.mobile        = document.getElementById('cm-mobile').value.trim();
       _form.email         = document.getElementById('cm-email').value.trim();
       _form.state         = document.getElementById('cm-state').value.trim();

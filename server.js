@@ -1937,7 +1937,7 @@ app.patch('/api/leaves', requireAuth, requireAdmin, async (req, res) => {
 app.get('/api/clients', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    const rows = await q(`SELECT id, name, mobile, contact_number, email, state, district, address, pin, status, bank_name, account_holder, account_no, ifsc_code, branch_name, division, created_at AS createdAt FROM clients ORDER BY created_at DESC`);
+    const rows = await q(`SELECT id, name, contact_person AS contactPerson, mobile, contact_number, email, state, district, address, pin, status, bank_name, account_holder, account_no, ifsc_code, branch_name, division, created_at AS createdAt FROM clients ORDER BY created_at DESC`);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -1950,9 +1950,9 @@ app.post('/api/clients', requireAuth, async (req, res) => {
     const c = await q('SELECT COUNT(*) AS cnt FROM clients');
     const id = 'VN'+(Number(c[0].cnt)+1).toString().padStart(4,'0');
     await pool.query(
-      `INSERT INTO clients (id,name,mobile,email,state,district,address,pin,status,bank_name,account_holder,account_no,ifsc_code,branch_name,division)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-      [id, b.name.trim(), b.mobile||'', b.email||'', b.state||'', b.district||'', b.address||'', b.pin||'',
+      `INSERT INTO clients (id,name,contact_person,mobile,email,state,district,address,pin,status,bank_name,account_holder,account_no,ifsc_code,branch_name,division)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+      [id, b.name.trim(), b.contactPerson||'', b.mobile||'', b.email||'', b.state||'', b.district||'', b.address||'', b.pin||'',
        b.status||'active', b.bankName||'', b.accountHolder||'', b.accountNo||'', b.ifscCode||'', b.branchName||'', b.division||'']
     );
     return res.status(201).json({ success:true, id });
@@ -1965,13 +1965,13 @@ app.patch('/api/clients', requireAuth, async (req, res) => {
     const b = req.body;
     if (!b.id) return res.status(400).json({ error:'id required' });
     await pool.query(
-      `UPDATE clients SET name=COALESCE($1,name), mobile=COALESCE($2,mobile), email=COALESCE($3,email),
-       state=COALESCE($4,state), district=COALESCE($5,district), address=COALESCE($6,address), pin=COALESCE($7,pin),
-       status=COALESCE($8,status), bank_name=COALESCE($9,bank_name), account_holder=COALESCE($10,account_holder),
-       account_no=COALESCE($11,account_no), ifsc_code=COALESCE($12,ifsc_code), branch_name=COALESCE($13,branch_name),
-       division=COALESCE($14,division)
-       WHERE id=$15`,
-      [b.name??null, b.mobile??null, b.email??null, b.state??null, b.district??null, b.address??null, b.pin??null,
+      `UPDATE clients SET name=COALESCE($1,name), contact_person=COALESCE($2,contact_person), mobile=COALESCE($3,mobile), email=COALESCE($4,email),
+       state=COALESCE($5,state), district=COALESCE($6,district), address=COALESCE($7,address), pin=COALESCE($8,pin),
+       status=COALESCE($9,status), bank_name=COALESCE($10,bank_name), account_holder=COALESCE($11,account_holder),
+       account_no=COALESCE($12,account_no), ifsc_code=COALESCE($13,ifsc_code), branch_name=COALESCE($14,branch_name),
+       division=COALESCE($15,division)
+       WHERE id=$16`,
+      [b.name??null, b.contactPerson??null, b.mobile??null, b.email??null, b.state??null, b.district??null, b.address??null, b.pin??null,
        b.status??null, b.bankName??null, b.accountHolder??null, b.accountNo??null, b.ifscCode??null, b.branchName??null, b.division??null, b.id]
     );
     return res.json({ success:true });

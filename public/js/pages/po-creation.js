@@ -357,6 +357,21 @@ window.Pages['po-creation'] = (() => {
       previewSize.textContent = opt.dataset.size || '—';
       dd.style.display = 'none';
     });
+    // Typing (or a PR/PO prefill) an exact, valid code and tabbing/clicking
+    // away — without ever opening the suggestion dropdown — used to leave
+    // Description/Size stuck on the placeholder "—". Resolve it on blur too,
+    // not just on an explicit dropdown click.
+    input.addEventListener('blur', async () => {
+      const q = input.value.trim();
+      if (!q) return;
+      try {
+        const res = await fetch('/api/po-creation/items?format=' + encodeURIComponent(_format) + '&q=' + encodeURIComponent(q));
+        if (!res.ok) return;
+        const matches = await res.json();
+        const exact = matches.find(m => m.code.toLowerCase() === q.toLowerCase());
+        if (exact) { previewDesc.textContent = exact.description || '—'; previewSize.textContent = exact.size || '—'; }
+      } catch {}
+    });
     window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
   }
