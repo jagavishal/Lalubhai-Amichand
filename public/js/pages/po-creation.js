@@ -278,6 +278,7 @@ window.Pages['po-creation'] = (() => {
       const mapped = mapper(it);
       const codeInput = row.querySelector('.poc-item-code');
       if (codeInput) { codeInput.value = mapped.itemCode || ''; codeInput.readOnly = true; codeInput.style.cssText += READONLY_FIELD_STYLE; }
+      _resolveItemPreview(row, mapped.itemCode);
       Object.entries(mapped).forEach(([field, val]) => {
         if (field === 'itemCode') return;
         const fieldInput = row.querySelector('[data-field="' + field + '"]');
@@ -322,6 +323,25 @@ window.Pages['po-creation'] = (() => {
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
   }
 
+  // Looks up an exact item code and fills that row's Description/Size preview
+  // cells — shared by the item-code input's blur handler (manual typing) and
+  // _fillPrIntoForm (programmatic prefill from a picked PR), since setting
+  // .value in JS doesn't fire the input events the dropdown/blur flow relies on.
+  async function _resolveItemPreview(row, code) {
+    const q = String(code || '').trim();
+    if (!q) return;
+    const previewDesc = row.querySelector('.poc-item-desc');
+    const previewSize = row.querySelector('.poc-item-size');
+    if (!previewDesc || !previewSize) return;
+    try {
+      const res = await fetch('/api/po-creation/items?format=' + encodeURIComponent(_format) + '&q=' + encodeURIComponent(q));
+      if (!res.ok) return;
+      const matches = await res.json();
+      const exact = matches.find(m => m.code.toLowerCase() === q.toLowerCase());
+      if (exact) { previewDesc.textContent = exact.description || '—'; previewSize.textContent = exact.size || '—'; }
+    } catch {}
+  }
+
   /* ── Item-code typeahead per row — fixed-position dropdown so it isn't
      clipped by the item table's horizontal scroll ───────────────────────── */
   let _itemSearchTimer = null;
@@ -357,21 +377,11 @@ window.Pages['po-creation'] = (() => {
       previewSize.textContent = opt.dataset.size || '—';
       dd.style.display = 'none';
     });
-    // Typing (or a PR/PO prefill) an exact, valid code and tabbing/clicking
-    // away — without ever opening the suggestion dropdown — used to leave
-    // Description/Size stuck on the placeholder "—". Resolve it on blur too,
-    // not just on an explicit dropdown click.
-    input.addEventListener('blur', async () => {
-      const q = input.value.trim();
-      if (!q) return;
-      try {
-        const res = await fetch('/api/po-creation/items?format=' + encodeURIComponent(_format) + '&q=' + encodeURIComponent(q));
-        if (!res.ok) return;
-        const matches = await res.json();
-        const exact = matches.find(m => m.code.toLowerCase() === q.toLowerCase());
-        if (exact) { previewDesc.textContent = exact.description || '—'; previewSize.textContent = exact.size || '—'; }
-      } catch {}
-    });
+    // Typing an exact, valid code and tabbing/clicking away — without ever
+    // opening the suggestion dropdown — used to leave Description/Size stuck
+    // on the placeholder "—". Resolve it on blur too, not just on an
+    // explicit dropdown click.
+    input.addEventListener('blur', () => _resolveItemPreview(row, input.value));
     window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
   }

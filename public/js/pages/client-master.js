@@ -30,9 +30,10 @@ window.Pages['client-master'] = (() => {
   let _tab     = 'vendors';
 
   // Payment grid state
-  let _pmRows     = [];
-  let _pmSaving   = false;
-  let _pmSaved    = false;
+  let _pmRows      = [];
+  let _pmSaving    = false;
+  let _pmSaved     = false;
+  let _pmExporting = false;
 
   // Payment History state
   let _phRows       = [];
@@ -707,7 +708,7 @@ window.Pages['client-master'] = (() => {
       }
     });
 
-    document.getElementById('pm-excel-btn')?.addEventListener('click', async () => {
+    document.getElementById('pm-excel-btn')?.addEventListener('click', async (e) => {
       const toExport = _pmRows.filter(r => r.checked && r.vendorId && r.amount && parseFloat(r.amount) > 0);
       // Fall back: if nothing checked but rows exist, warn
       if (!toExport.length) {
@@ -716,6 +717,18 @@ window.Pages['client-master'] = (() => {
         Utils.showToast('Please tick the checkboxes for rows you want to export', 'warning');
         return;
       }
+      // Guard against double-clicks firing two overlapping exports: each PATCH
+      // to /api/payment-entries generates its new-entry IDs from a count read
+      // at request start, so two concurrent requests can compute the same ID
+      // and the second one fails with a duplicate-key error — exactly what
+      // "recording the export in Payment History failed" looks like.
+      if (_pmExporting) return;
+      _pmExporting = true;
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.style.opacity = '0.6';
+      btn.style.cursor = 'not-allowed';
+      try {
 
       const today = new Date();
       const dd    = String(today.getDate()).padStart(2,'0');
@@ -836,6 +849,12 @@ window.Pages['client-master'] = (() => {
         }
       } else {
         Utils.showToast('Payment files downloaded (Excel + Text) — ' + rows.length + ' entries exported', 'success');
+      }
+      } finally {
+        _pmExporting = false;
+        btn.disabled = false;
+        btn.style.opacity = '';
+        btn.style.cursor = '';
       }
     });
   }

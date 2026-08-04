@@ -3547,7 +3547,7 @@ app.patch('/api/payment-entries', requireAuth, async (req, res) => {
       }
     }
     return res.json({ success: true, ids });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) { console.error('[payment-entries] PATCH failed:', err.message); return res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/payment-history — exported entries with vendor info
