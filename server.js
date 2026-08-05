@@ -3679,7 +3679,7 @@ app.get('/api/ims/stock-history', requireAuth, async (req, res) => {
     if (category) { params.push(category); clauses.push(`category = $${params.length}`); }
     const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
     const items = await q(
-      `SELECT item_code AS itemCode, description, uom, category, current_stock AS currentStock
+      `SELECT item_code AS itemCode, description, uom, category, current_stock AS currentStock, max_level AS maxLevel
        FROM ims_items ${where} ORDER BY item_code ASC LIMIT 500`, params);
     if (!items.length) return res.json({ dates: [], items: [] });
 
@@ -3717,7 +3717,7 @@ app.get('/api/ims/stock-history', requireAuth, async (req, res) => {
         running -= (dayMap.get(dates[i]) || 0);
         daily[i - 1] = running;
       }
-      return { itemCode: it.itemCode, description: it.description, uom: it.uom, category: it.category, currentStock: it.currentStock, daily };
+      return { itemCode: it.itemCode, description: it.description, uom: it.uom, category: it.category, currentStock: it.currentStock, maxLevel: it.maxLevel, daily };
     });
 
     return res.json({ dates, dayOptions: IMS_STOCK_HISTORY_DAY_OPTIONS, items: result });

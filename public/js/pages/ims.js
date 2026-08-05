@@ -39,6 +39,37 @@ window.Pages['ims'] = (() => {
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
+  // Color coding lifted 1:1 from the reference sheet's own Apps Script
+  // (getColorForStockLevel in the "Calculations" menu): buckets stock as a
+  // % of Max Level into red/yellow/green/purple, same thresholds + hex values.
+  // One deliberate deviation: the sheet divides by Max Level with no zero
+  // guard, so an unset (0/blank) Max Level silently falls through to purple
+  // there. Most items here don't have a Max Level populated yet (the opening-
+  // stock import only carried stock quantities), so mirroring that literally
+  // would paint almost everything purple — instead we show no color until a
+  // real Max Level is set for that item.
+  function _stockLevelColor(stock, maxLevel) {
+    const max = _num(maxLevel);
+    if (max <= 0) return null;
+    const pct = (_num(stock) / max) * 100;
+    if (pct <= 33) return '#ea9999';   // Red
+    if (pct <= 66) return '#ffd966';   // Yellow
+    if (pct <= 100) return '#b6d7a8';  // Green
+    return '#b4a7d6';                  // Purple — over Max Level
+  }
+
+  function _colorLegendHtml() {
+    const items = [
+      ['#ea9999', '≤33% of Max Level'],
+      ['#ffd966', '34–66%'],
+      ['#b6d7a8', '67–100%'],
+      ['#b4a7d6', '>100% (over Max)'],
+    ];
+    return '<div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:-4px 0 14px;font-size:11.5px;color:#64748b;">'
+      + items.map(([c, label]) => '<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:11px;height:11px;border-radius:3px;background:' + c + ';display:inline-block;"></span>' + esc(label) + '</span>').join('')
+    + '</div>';
+  }
+
   /* ── Helpers (styled like PO/GRN Creation, for a consistent look) ─────── */
   function _fieldWrap(label, innerHtml, extra) {
     return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
@@ -130,13 +161,14 @@ window.Pages['ims'] = (() => {
     }
     body.innerHTML = _rows.map(r => {
       const low = _num(r.currentStock) <= _num(r.moq);
+      const stockColor = _stockLevelColor(r.currentStock, r.maxLevel);
       return '<tr style="border-bottom:1px solid #f1f5f9;' + (low ? 'background:#fef2f2;' : '') + '">'
         + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 7px;border-radius:10px;background:#f1f5f9;color:#475569;font-size:10.5px;font-weight:700;">' + esc(r.category || 'Stores') + '</span></td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.description) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.size) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;font-weight:700;">' + esc(r.currentStock)
+        + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;font-weight:700;' + (stockColor ? 'background:' + stockColor + ';' : '') + '">' + esc(r.currentStock)
           + (low ? ' <span style="display:inline-flex;padding:2px 7px;border-radius:10px;background:#fee2e2;color:#dc2626;font-size:10.5px;font-weight:700;margin-left:4px;">LOW STOCK</span>' : '')
         + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.moq) + '</td>'
@@ -190,7 +222,10 @@ window.Pages['ims'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;position:sticky;left:0;background:#fff;">' + esc(r.itemCode) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + esc(r.description) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
-        + (r.daily || []).map(v => '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(v) + '</td>').join('')
+        + (r.daily || []).map(v => {
+            const c = _stockLevelColor(v, r.maxLevel);
+            return '<td style="padding:8px 10px;font-size:12.5px;text-align:right;' + (c ? 'background:' + c + ';' : '') + '">' + esc(v) + '</td>';
+          }).join('')
       + '</tr>';
     }).join('');
   }
@@ -387,6 +422,7 @@ window.Pages['ims'] = (() => {
       + (!isDaywise && _formOpen ? _formHtml(formRow) : '')
       + (isDaywise
         ? _historyToolbarHtml()
+          + _colorLegendHtml()
           + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
             + '<table style="width:100%;border-collapse:collapse;">'
               + '<thead id="ims-history-head"></thead>'
@@ -394,6 +430,7 @@ window.Pages['ims'] = (() => {
             + '</table>'
           + '</div>'
         : _filterBarHtml()
+          + _colorLegendHtml()
           + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
             + '<table style="width:100%;border-collapse:collapse;min-width:1180px;">'
               + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
