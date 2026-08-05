@@ -254,6 +254,15 @@ const SCHEMA = [
   `DROP TABLE IF EXISTS purchase_orders`,
   `DROP TABLE IF EXISTS goods_receipts`,
   `DROP TABLE IF EXISTS packing_items`,
+  // ── Inventory Management (IMS): item master + Inward/Outward ledger.
+  // current_stock is a maintained running total (moved only by the Inward/
+  // Outward routes, never edited directly) rather than a SUM() re-aggregated
+  // on every read — cheap reads for the IMS dashboard table.
+  `CREATE TABLE IF NOT EXISTS ims_items (item_code VARCHAR(32) PRIMARY KEY, description VARCHAR(255) DEFAULT '', size VARCHAR(64) DEFAULT '', uom VARCHAR(16) DEFAULT '', moq DECIMAL(12,2) DEFAULT 0, max_level DECIMAL(12,2) DEFAULT 0, on_order_qty DECIMAL(12,2) DEFAULT 0, vendor_name VARCHAR(255) DEFAULT '', current_stock DECIMAL(12,2) DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS ims_transactions (id VARCHAR(16) PRIMARY KEY, txn_date DATE NOT NULL, direction VARCHAR(3) NOT NULL, item_code VARCHAR(32) NOT NULL, item_name VARCHAR(255) DEFAULT '', quantity DECIMAL(12,2) NOT NULL, uom VARCHAR(16) DEFAULT '', department VARCHAR(64) DEFAULT '', remarks VARCHAR(500) DEFAULT '', status VARCHAR(16) DEFAULT 'Active', created_by VARCHAR(120) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_ims_txn_item ON ims_transactions (item_code)`,
+  `CREATE INDEX idx_ims_txn_date ON ims_transactions (txn_date)`,
+  `CREATE INDEX idx_ims_txn_direction ON ims_transactions (direction)`,
 ];
 
 async function seedIfEmpty() {
@@ -3565,6 +3574,181 @@ app.get('/api/payment-history', requireAuth, async (req, res) => {
     `);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── Inventory Management (IMS): item master + Inward/Outward stock ledger ─────
+// MySQL/Postgres-backed (see ims_items/ims_transactions in SCHEMA) — unlike
+// PR/PO/GRN this has nothing to do with Google Sheets. current_stock on
+// ims_items is a maintained running total, only ever moved by the Inward/
+// Outward create/cancel routes below — PATCH /api/ims/items never touches it.
+
+// GET /api/ims/masters — dropdown data shared by the Inward/Outward forms.
+app.get('/api/ims/masters', requireAuth, async (req, res) => {
+  return res.json({ departments: PO_DEPARTMENTS });
+});
+
+// GET /api/ims/items?q=&lowStock=1 — item master search; backs both the IMS
+// dashboard table and the Inward/Outward item-code typeahead.
+app.get('/api/ims/items', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const search = String(req.query.q || '').trim();
+    const lowStock = req.query.lowStock === '1';
+    const clauses = [];
+    const params = [];
+    if (search) {
+      params.push(`%${search}%`, `%${search}%`);
+      clauses.push(`(item_code LIKE $${params.length - 1} OR description LIKE $${params.length})`);
+    }
+    if (lowStock) clauses.push('current_stock <= moq');
+    const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
+    const rows = await q(
+      `SELECT item_code AS itemCode, description, size, uom, moq, max_level AS maxLevel, on_order_qty AS onOrderQty,
+              vendor_name AS vendorName, current_stock AS currentStock
+       FROM ims_items ${where} ORDER BY item_code ASC LIMIT 500`, params);
+    return res.json(rows);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/ims/items — add a new catalog item.
+app.post('/api/ims/items', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const b = req.body || {};
+    const itemCode = String(b.itemCode || '').trim();
+    if (!itemCode) return res.status(400).json({ error: 'itemCode is required' });
+    const existing = await q('SELECT item_code FROM ims_items WHERE item_code=$1', [itemCode]);
+    if (existing.length) return res.status(409).json({ error: 'Item code already exists' });
+    await pool.query(
+      `INSERT INTO ims_items (item_code, description, size, uom, moq, max_level, on_order_qty, vendor_name, current_stock)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [itemCode, b.description || '', b.size || '', b.uom || '', parseFloat(b.moq) || 0, parseFloat(b.maxLevel) || 0,
+       parseFloat(b.onOrderQty) || 0, b.vendorName || '', parseFloat(b.openingStock) || 0]
+    );
+    return res.status(201).json({ success: true, itemCode });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// PATCH /api/ims/items/:code — edit catalog fields. current_stock is
+// deliberately not settable here — see comment above.
+app.patch('/api/ims/items/:code', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const code = req.params.code;
+    const b = req.body || {};
+    await pool.query(
+      `UPDATE ims_items SET description=COALESCE($1,description), size=COALESCE($2,size), uom=COALESCE($3,uom),
+       moq=COALESCE($4,moq), max_level=COALESCE($5,max_level), on_order_qty=COALESCE($6,on_order_qty),
+       vendor_name=COALESCE($7,vendor_name), updated_at=NOW() WHERE item_code=$8`,
+      [b.description ?? null, b.size ?? null, b.uom ?? null,
+       b.moq === undefined ? null : (parseFloat(b.moq) || 0), b.maxLevel === undefined ? null : (parseFloat(b.maxLevel) || 0),
+       b.onOrderQty === undefined ? null : (parseFloat(b.onOrderQty) || 0), b.vendorName ?? null, code]
+    );
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// Shared create/cancel logic for Inward and Outward — identical apart from
+// `direction`, so both route pairs below just call these.
+async function _imsCreateTxn(direction, body, user) {
+  const itemCode = String(body.itemCode || '').trim();
+  const quantity = parseFloat(body.quantity);
+  if (!itemCode) throw Object.assign(new Error('itemCode is required'), { status: 400 });
+  if (!quantity || quantity <= 0) throw Object.assign(new Error('quantity must be greater than 0'), { status: 400 });
+  const txnDate = body.date || new Date().toISOString().slice(0, 10);
+
+  const existing = await q('SELECT item_code FROM ims_items WHERE item_code=$1', [itemCode]);
+  if (!existing.length) {
+    // Unknown item code — auto-create a minimal catalog stub rather than
+    // blocking the entry; store staff can fill in MOQ/Max Level/Vendor later
+    // from the IMS page. Matches the "never block a real transaction" call.
+    await pool.query(
+      `INSERT INTO ims_items (item_code, description, uom, current_stock) VALUES ($1,$2,$3,0)`,
+      [itemCode, body.description || '', body.uom || '']
+    );
+  }
+
+  const cnt = await q('SELECT COUNT(*) AS c FROM ims_transactions WHERE direction=$1', [direction]);
+  const id = direction + String(Number(cnt[0]?.c || 0) + 1).padStart(6, '0');
+  await pool.query(
+    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, quantity, uom, department, remarks, status, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Active',$10)`,
+    [id, txnDate, direction, itemCode, body.description || '', quantity, body.uom || '', body.department || '', body.remarks || '', user]
+  );
+  const delta = direction === 'IN' ? quantity : -quantity;
+  await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, itemCode]);
+  return id;
+}
+
+async function _imsCancelTxn(id, direction) {
+  const rows = await q('SELECT * FROM ims_transactions WHERE id=$1 AND direction=$2', [id, direction]);
+  if (!rows.length) throw Object.assign(new Error('Not found'), { status: 404 });
+  const row = rows[0];
+  if (row.status === 'Cancelled') return; // already cancelled — no-op, not an error
+  await pool.query(`UPDATE ims_transactions SET status='Cancelled' WHERE id=$1`, [id]);
+  // Reverse the stock impact: an IN added +quantity, so cancelling it removes
+  // that quantity again; an OUT subtracted quantity, so cancelling it gives it
+  // back. Skipping this would let current_stock silently drift from reality.
+  const delta = direction === 'IN' ? -Number(row.quantity) : Number(row.quantity);
+  await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, row.item_code]);
+}
+
+app.get('/api/ims/inward/list', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const rows = await q(
+      `SELECT id, txn_date AS date, item_code AS itemCode, item_name AS itemName, quantity, uom, department, remarks, status, created_by AS createdBy, created_at AS createdAt
+       FROM ims_transactions WHERE direction='IN' ORDER BY created_at DESC LIMIT 1000`);
+    return res.json(rows);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/ims/inward', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const user = req.session?.user?.name || req.session?.user?.email || '';
+    const id = await _imsCreateTxn('IN', req.body || {}, user);
+    return res.status(201).json({ success: true, id });
+  } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
+});
+
+app.put('/api/ims/inward/cancel', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    await _imsCancelTxn(id, 'IN');
+    return res.json({ success: true });
+  } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
+});
+
+app.get('/api/ims/outward/list', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const rows = await q(
+      `SELECT id, txn_date AS date, item_code AS itemCode, item_name AS itemName, quantity, uom, department, remarks, status, created_by AS createdBy, created_at AS createdAt
+       FROM ims_transactions WHERE direction='OUT' ORDER BY created_at DESC LIMIT 1000`);
+    return res.json(rows);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/ims/outward', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const user = req.session?.user?.name || req.session?.user?.email || '';
+    const id = await _imsCreateTxn('OUT', req.body || {}, user);
+    return res.status(201).json({ success: true, id });
+  } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
+});
+
+app.put('/api/ims/outward/cancel', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    await _imsCancelTxn(id, 'OUT');
+    return res.json({ success: true });
+  } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
 });
 
 // ── MIS ───────────────────────────────────────────────────────────────────────
