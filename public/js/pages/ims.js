@@ -24,6 +24,18 @@ window.Pages['ims'] = (() => {
   let _formOpen = false;
   let _editingCode = null; // null = "add new item" mode
 
+  // Day-wise Stock view: a per-item closing-stock matrix, one column per day,
+  // matching the reference sheet's daily layout. Shares the same search/
+  // category filters as the list view above; range defaults to 7 days with
+  // 14/21/30/"3 months" as the other presets.
+  let _viewMode = 'list'; // 'list' | 'daywise'
+  let _historyDays = 7;
+  let _historyDayOptions = [7, 14, 21, 30, 92];
+  let _historyDates = [];
+  let _historyRows = [];
+  let _historyLoaded = false;
+  let _historyLoadError = '';
+
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
@@ -74,6 +86,28 @@ window.Pages['ims'] = (() => {
     } catch (e) { /* keep hardcoded fallback */ }
   }
 
+  async function _loadHistory() {
+    _historyLoaded = false;
+    _historyLoadError = '';
+    _renderHistoryTable();
+    try {
+      const params = new URLSearchParams();
+      params.set('days', String(_historyDays));
+      if (_search) params.set('q', _search);
+      if (_category) params.set('category', _category);
+      const data = await Utils.apiFetch('/api/ims/stock-history?' + params.toString());
+      _historyDates = data?.dates || [];
+      _historyRows = data?.items || [];
+      if (Array.isArray(data?.dayOptions) && data.dayOptions.length) _historyDayOptions = data.dayOptions;
+    } catch (e) {
+      _historyDates = [];
+      _historyRows = [];
+      _historyLoadError = e.message || 'Failed to load stock history';
+    }
+    _historyLoaded = true;
+    _renderHistoryTable();
+  }
+
   function _renderTable() {
     const body = document.getElementById('ims-body');
     const countEl = document.getElementById('ims-count');
@@ -110,6 +144,53 @@ window.Pages['ims'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.onOrderQty) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.vendorName) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;"><button type="button" class="ims-edit-btn" data-code="' + esc(r.itemCode) + '" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Edit</button></td>'
+      + '</tr>';
+    }).join('');
+  }
+
+  function _dateLabel(iso) {
+    // '2026-08-05' -> '05 Aug' — compact enough for ~90 columns side by side.
+    const parts = String(iso).split('-');
+    if (parts.length !== 3) return iso;
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const m = MONTHS[parseInt(parts[1], 10) - 1] || parts[1];
+    return parts[2] + ' ' + m;
+  }
+
+  function _renderHistoryTable() {
+    const head = document.getElementById('ims-history-head');
+    const body = document.getElementById('ims-history-body');
+    const countEl = document.getElementById('ims-count');
+    if (!body || !head) return;
+    const colCount = 3 + _historyDates.length; // Item Code, Description, UOM + one per day
+
+    if (!_historyLoaded) {
+      body.innerHTML = '<tr><td colspan="' + colCount + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      if (countEl) countEl.textContent = '';
+      return;
+    }
+    if (_historyLoadError) {
+      body.innerHTML = '<tr><td colspan="' + colCount + '" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_historyLoadError) + '</td></tr>';
+      if (countEl) countEl.textContent = '';
+      return;
+    }
+    if (countEl) countEl.textContent = _historyRows.length + ' item' + (_historyRows.length === 1 ? '' : 's') + ' · ' + _historyDates.length + ' day' + (_historyDates.length === 1 ? '' : 's');
+
+    head.innerHTML = '<tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+      + ['Item Code', 'Description', 'UOM'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;position:sticky;left:0;background:#f8fafc;">' + esc(h) + '</th>').join('')
+      + _historyDates.map(d => '<th style="padding:8px 10px;text-align:right;font-size:10.5px;color:#94a3b8;white-space:nowrap;">' + esc(_dateLabel(d)) + '</th>').join('')
+    + '</tr>';
+
+    if (!_historyRows.length) {
+      body.innerHTML = '<tr><td colspan="' + colCount + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">No items found</td></tr>';
+      return;
+    }
+    body.innerHTML = _historyRows.map(r => {
+      return '<tr style="border-bottom:1px solid #f1f5f9;">'
+        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;position:sticky;left:0;background:#fff;">' + esc(r.itemCode) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + esc(r.description) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
+        + (r.daily || []).map(v => '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(v) + '</td>').join('')
       + '</tr>';
     }).join('');
   }
@@ -155,6 +236,38 @@ window.Pages['ims'] = (() => {
     document.getElementById('ims-lowstock').addEventListener('change', (e) => { _lowStockOnly = e.target.checked; _load(); });
     document.getElementById('ims-add-btn').addEventListener('click', () => _openForm(null));
     document.getElementById('ims-refresh').addEventListener('click', _load);
+  }
+
+  /* ── Day-wise Stock toolbar (search/category shared, range replaces low-stock) ── */
+  function _dayOptionLabel(n) { return n >= 60 ? '3 Months' : n + ' Days'; }
+
+  function _historyToolbarHtml() {
+    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+      + '<input type="text" id="ims-h-search" placeholder="Search item code / description…" value="' + esc(_search) + '" style="' + _inputStyle + 'min-width:220px;width:auto;flex:1;" />'
+      + '<select id="ims-h-category" style="' + _inputStyle + 'width:auto;">' + _categoryOptionsHtml(_category) + '</select>'
+      + '<div style="display:flex;gap:4px;background:#f1f5f9;padding:3px;border-radius:8px;">'
+        + _historyDayOptions.map(n => '<button type="button" class="ims-h-range" data-days="' + n + '" style="padding:6px 12px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;'
+          + (n === _historyDays ? 'background:var(--color-primary);color:var(--color-primary-text);' : 'background:transparent;color:#475569;') + '">' + _dayOptionLabel(n) + '</button>').join('')
+      + '</div>'
+      + '<button type="button" id="ims-h-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
+    + '</div>';
+  }
+
+  function _bindHistoryToolbar() {
+    document.getElementById('ims-h-search').addEventListener('input', (e) => {
+      _search = e.target.value;
+      clearTimeout(_searchTimer);
+      _searchTimer = setTimeout(_loadHistory, 300);
+    });
+    document.getElementById('ims-h-category').addEventListener('change', (e) => { _category = e.target.value; _loadHistory(); });
+    document.getElementById('ims-h-refresh').addEventListener('click', _loadHistory);
+    document.querySelectorAll('.ims-h-range').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _historyDays = parseInt(btn.dataset.days, 10);
+        renderPage(); // re-render so the active-range highlight moves too
+        _loadHistory();
+      });
+    });
   }
 
   /* ── Add/Edit form (inline panel, toggled open) ────────────────────── */
@@ -232,31 +345,73 @@ window.Pages['ims'] = (() => {
     }
   }
 
+  /* ── View-mode toggle (Item List vs Day-wise Stock) ─────────────────── */
+  function _viewToggleHtml() {
+    function tab(mode, label) {
+      const active = _viewMode === mode;
+      return '<button type="button" class="ims-view-tab" data-mode="' + mode + '" style="padding:7px 14px;border-radius:7px;border:none;cursor:pointer;font-size:12.5px;font-weight:700;'
+        + (active ? 'background:var(--color-primary);color:var(--color-primary-text);' : 'background:transparent;color:#64748b;') + '">' + label + '</button>';
+    }
+    return '<div style="display:flex;gap:4px;background:#f1f5f9;padding:3px;border-radius:9px;width:fit-content;margin-bottom:14px;">'
+      + tab('list', 'Item List') + tab('daywise', 'Day-wise Stock')
+    + '</div>';
+  }
+
+  function _bindViewToggle() {
+    document.querySelectorAll('.ims-view-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.mode === _viewMode) return;
+        _viewMode = btn.dataset.mode;
+        _formOpen = false; _editingCode = null;
+        renderPage();
+      });
+    });
+  }
+
   /* ── Render ─────────────────────────────────────────────────────────── */
   function renderPage(formRow) {
     const el = document.getElementById('main-content');
     if (!el) return;
+    const isDaywise = _viewMode === 'daywise';
 
     el.innerHTML = '<div style="max-width:1300px;margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">IMS — Item Master</h1>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Live stock levels and reorder catalog, kept up to date by Inward/Outward entries.</p>'
       + '</div>'
+      + _viewToggleHtml()
       + '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:2px;flex-wrap:wrap;">'
         + '<span></span>'
         + '<span id="ims-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
       + '</div>'
-      + (_formOpen ? _formHtml(formRow) : '')
-      + _filterBarHtml()
-      + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:1180px;">'
-          + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['Item Code', 'Category', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order', 'Vendor', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
-          + '</tr></thead>'
-          + '<tbody id="ims-body"><tr><td colspan="11" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
-        + '</table>'
-      + '</div>'
+      + (!isDaywise && _formOpen ? _formHtml(formRow) : '')
+      + (isDaywise
+        ? _historyToolbarHtml()
+          + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+            + '<table style="width:100%;border-collapse:collapse;">'
+              + '<thead id="ims-history-head"></thead>'
+              + '<tbody id="ims-history-body"><tr><td style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+            + '</table>'
+          + '</div>'
+        : _filterBarHtml()
+          + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+            + '<table style="width:100%;border-collapse:collapse;min-width:1180px;">'
+              + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+                + ['Item Code', 'Category', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order', 'Vendor', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+              + '</tr></thead>'
+              + '<tbody id="ims-body"><tr><td colspan="11" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+            + '</table>'
+          + '</div>')
     + '</div>';
+
+    _bindViewToggle();
+
+    if (isDaywise) {
+      _bindHistoryToolbar();
+      _renderHistoryTable();
+      if (!_historyLoaded) _loadHistory();
+      return;
+    }
 
     _bindFilterBar();
     _bindRowActions();

@@ -3623,6 +3623,107 @@ app.get('/api/ims/items', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+// Day-wise range presets the front end offers — capped at 92 so the query
+// below (and the resulting table) never has to render more than ~3 months.
+const IMS_STOCK_HISTORY_DAY_OPTIONS = [7, 14, 21, 30, 92];
+
+// "Today" in India time regardless of which timezone the server itself runs
+// in (same reasoning as _timestampForSheet above) — the day-wise columns must
+// line up with the business's calendar day, not Hostinger's container clock.
+function _todayIsoIST() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
+// Pure calendar-date subtraction via Date.UTC (no local-timezone conversion
+// involved at any point), so this is safe independent of server timezone.
+function _isoDateMinusDays(isoDate, n) {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - n);
+  return dt.toISOString().slice(0, 10);
+}
+// mysql2 returns DATE columns as a Date object built from the stored
+// calendar fields in the connection's local timezone — reading it back with
+// getFullYear/getMonth/getDate (not toISOString, which round-trips through
+// UTC) is what keeps the day from shifting depending on server timezone.
+function _isoDateOnly(v) {
+  if (!v) return null;
+  if (v instanceof Date) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
+  if (typeof v === 'string') return v.slice(0, 10);
+  return null;
+}
+
+// GET /api/ims/stock-history?days=7&q=&category= — closing stock per item for
+// each of the last N days (default 7; see IMS_STOCK_HISTORY_DAY_OPTIONS for the
+// front-end's 7/14/21/30/"3 months" toggle), matching the day-by-day matrix on
+// the reference Google Sheet. There's no daily-snapshot table — current_stock
+// is the only stored balance — so each day is reconstructed by walking
+// backward from today's current_stock and undoing one day of net movement at
+// a time. Only status='Active' transactions count: a Cancelled entry's delta
+// was already reversed out of current_stock when it was cancelled, so
+// re-subtracting it here would double-count it.
+app.get('/api/ims/stock-history', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    let days = parseInt(req.query.days, 10);
+    if (!Number.isFinite(days) || days <= 0) days = 7;
+    days = Math.min(days, 92);
+    const search = String(req.query.q || '').trim();
+    const category = String(req.query.category || '').trim();
+
+    const clauses = [];
+    const params = [];
+    if (search) {
+      params.push(`%${search}%`, `%${search}%`);
+      clauses.push(`(item_code LIKE $${params.length - 1} OR description LIKE $${params.length})`);
+    }
+    if (category) { params.push(category); clauses.push(`category = $${params.length}`); }
+    const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
+    const items = await q(
+      `SELECT item_code AS itemCode, description, uom, category, current_stock AS currentStock
+       FROM ims_items ${where} ORDER BY item_code ASC LIMIT 500`, params);
+    if (!items.length) return res.json({ dates: [], items: [] });
+
+    // Oldest → newest, ending today (matches the sheet's left-to-right date order).
+    const todayIso = _todayIsoIST();
+    const dates = [];
+    for (let i = days - 1; i >= 0; i--) dates.push(_isoDateMinusDays(todayIso, i));
+
+    const codes = items.map(it => it.itemCode);
+    const codePlaceholders = codes.map((_, i) => `$${params.length + i + 2}`).join(',');
+    const txnRows = await q(
+      `SELECT item_code AS itemCode, txn_date AS txnDate, direction, SUM(quantity) AS qty
+       FROM ims_transactions
+       WHERE status='Active' AND txn_date >= $${params.length + 1} AND item_code IN (${codePlaceholders})
+       GROUP BY item_code, txn_date, direction`,
+      [...params, dates[0], ...codes]
+    );
+
+    // net.get(itemCode).get(isoDate) = that item's (IN total - OUT total) for that day.
+    const net = new Map();
+    for (const r of txnRows) {
+      if (!net.has(r.itemCode)) net.set(r.itemCode, new Map());
+      const dayMap = net.get(r.itemCode);
+      const dateKey = _isoDateOnly(r.txnDate);
+      const signed = (r.direction === 'IN' ? 1 : -1) * Number(r.qty || 0);
+      dayMap.set(dateKey, (dayMap.get(dateKey) || 0) + signed);
+    }
+
+    const result = items.map(it => {
+      const dayMap = net.get(it.itemCode) || new Map();
+      const daily = new Array(dates.length);
+      let running = Number(it.currentStock) || 0;
+      daily[dates.length - 1] = running; // today = current_stock, exactly
+      for (let i = dates.length - 1; i >= 1; i--) {
+        running -= (dayMap.get(dates[i]) || 0);
+        daily[i - 1] = running;
+      }
+      return { itemCode: it.itemCode, description: it.description, uom: it.uom, category: it.category, currentStock: it.currentStock, daily };
+    });
+
+    return res.json({ dates, dayOptions: IMS_STOCK_HISTORY_DAY_OPTIONS, items: result });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 // POST /api/ims/items — add a new catalog item.
 app.post('/api/ims/items', requireAuth, async (req, res) => {
   try {
