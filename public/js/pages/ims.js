@@ -5,8 +5,10 @@ window.Pages = window.Pages || {};
 // Inward/Outward, see inward.js/outward.js and /api/ims/* in server.js — a
 // plain MySQL table, not Google-Sheets-backed like PR/PO/GRN). Rows at or
 // below their Minimum Order Qty are flagged Low Stock. Add/Edit here only
-// ever touches catalog fields (description/size/uom/moq/maxLevel/onOrderQty/
-// vendorName) — current stock only moves via Inward/Outward transactions.
+// ever touches catalog fields (category/description/size/uom/moq/maxLevel/
+// onOrderQty/vendorName) — current stock only moves via Inward/Outward
+// transactions. category ("Stores" vs "ALU") separates the two real-world
+// stock books this table holds and drives the filter dropdown below.
 window.Pages['ims'] = (() => {
   /* ── state ──────────────────────────────────────────────────── */
   let _rows = [];
@@ -15,6 +17,9 @@ window.Pages['ims'] = (() => {
   let _search = '';
   let _lowStockOnly = false;
   let _searchTimer = null;
+  let _category = ''; // '' = All
+  let _categories = ['Stores', 'ALU']; // overwritten from /api/ims/masters once loaded
+  let _mastersLoaded = false;
 
   let _formOpen = false;
   let _editingCode = null; // null = "add new item" mode
@@ -34,6 +39,10 @@ window.Pages['ims'] = (() => {
     opts = opts || {};
     return _fieldWrap(label, '<input type="' + (opts.type || 'text') + '" id="' + id + '" value="' + esc(opts.value || '') + '" placeholder="' + esc(opts.placeholder || '') + '" ' + (opts.disabled ? 'disabled style="' + _inputStyle + 'background:#f1f5f9;color:#94a3b8;"' : 'style="' + _inputStyle + '"') + ' />');
   }
+  function _selectField(id, label, options, selected) {
+    const opts = options.map(o => '<option value="' + esc(o) + '"' + (o === selected ? ' selected' : '') + '>' + esc(o) + '</option>').join('');
+    return _fieldWrap(label, '<select id="' + id + '" style="' + _inputStyle + '">' + opts + '</select>');
+  }
 
   /* ── Load ───────────────────────────────────────────────────────────── */
   async function _load() {
@@ -44,6 +53,7 @@ window.Pages['ims'] = (() => {
       const params = new URLSearchParams();
       if (_search) params.set('q', _search);
       if (_lowStockOnly) params.set('lowStock', '1');
+      if (_category) params.set('category', _category);
       _rows = await Utils.apiFetch('/api/ims/items?' + params.toString()) || [];
     } catch (e) {
       _rows = [];
@@ -53,30 +63,42 @@ window.Pages['ims'] = (() => {
     _renderTable();
   }
 
+  // Pulls the real category list once (falls back to the hardcoded default
+  // above if this fails, so the filter still works before the API responds).
+  async function _loadMasters() {
+    if (_mastersLoaded) return;
+    try {
+      const data = await Utils.apiFetch('/api/ims/masters');
+      if (Array.isArray(data?.categories) && data.categories.length) _categories = data.categories;
+      _mastersLoaded = true;
+    } catch (e) { /* keep hardcoded fallback */ }
+  }
+
   function _renderTable() {
     const body = document.getElementById('ims-body');
     const countEl = document.getElementById('ims-count');
     if (!body) return;
 
     if (!_loaded) {
-      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      body.innerHTML = '<tr><td colspan="11" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_loadError) {
-      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_loadError) + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="11" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_loadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (countEl) countEl.textContent = _rows.length + ' item' + (_rows.length === 1 ? '' : 's');
     if (!_rows.length) {
-      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">No items found</td></tr>';
+      body.innerHTML = '<tr><td colspan="11" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">No items found</td></tr>';
       return;
     }
     body.innerHTML = _rows.map(r => {
       const low = _num(r.currentStock) <= _num(r.moq);
       return '<tr style="border-bottom:1px solid #f1f5f9;' + (low ? 'background:#fef2f2;' : '') + '">'
         + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 7px;border-radius:10px;background:#f1f5f9;color:#475569;font-size:10.5px;font-weight:700;">' + esc(r.category || 'Stores') + '</span></td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.description) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.size) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
@@ -106,9 +128,15 @@ window.Pages['ims'] = (() => {
   }
 
   /* ── Filter bar ─────────────────────────────────────────────────────── */
+  function _categoryOptionsHtml(selected) {
+    return '<option value="">All categories</option>'
+      + _categories.map(c => '<option value="' + esc(c) + '"' + (c === selected ? ' selected' : '') + '>' + esc(c) + '</option>').join('');
+  }
+
   function _filterBarHtml() {
     return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
       + '<input type="text" id="ims-search" placeholder="Search item code / description…" value="' + esc(_search) + '" style="' + _inputStyle + 'min-width:220px;width:auto;flex:1;" />'
+      + '<select id="ims-category" style="' + _inputStyle + 'width:auto;">' + _categoryOptionsHtml(_category) + '</select>'
       + '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#475569;cursor:pointer;">'
         + '<input type="checkbox" id="ims-lowstock" ' + (_lowStockOnly ? 'checked' : '') + ' /> Low stock only'
       + '</label>'
@@ -123,6 +151,7 @@ window.Pages['ims'] = (() => {
       clearTimeout(_searchTimer);
       _searchTimer = setTimeout(_load, 300);
     });
+    document.getElementById('ims-category').addEventListener('change', (e) => { _category = e.target.value; _load(); });
     document.getElementById('ims-lowstock').addEventListener('change', (e) => { _lowStockOnly = e.target.checked; _load(); });
     document.getElementById('ims-add-btn').addEventListener('click', () => _openForm(null));
     document.getElementById('ims-refresh').addEventListener('click', _load);
@@ -148,6 +177,7 @@ window.Pages['ims'] = (() => {
       + '<form id="ims-item-form" style="display:flex;flex-direction:column;gap:14px;">'
         + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">'
           + _textField('ims-f-code', 'Item Code', { value: isEdit ? row.itemCode : '', disabled: isEdit })
+          + _selectField('ims-f-category', 'Category', _categories, isEdit ? (row.category || 'Stores') : 'Stores')
           + _textField('ims-f-desc', 'Description', { value: isEdit ? row.description : '' })
           + _textField('ims-f-size', 'Size', { value: isEdit ? row.size : '' })
           + _textField('ims-f-uom', 'UOM', { value: isEdit ? row.uom : '' })
@@ -169,6 +199,7 @@ window.Pages['ims'] = (() => {
     e.preventDefault();
     const isEdit = !!row;
     const body = {
+      category: document.getElementById('ims-f-category').value,
       description: document.getElementById('ims-f-desc').value.trim(),
       size: document.getElementById('ims-f-size').value.trim(),
       uom: document.getElementById('ims-f-uom').value.trim(),
@@ -218,11 +249,11 @@ window.Pages['ims'] = (() => {
       + (_formOpen ? _formHtml(formRow) : '')
       + _filterBarHtml()
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:1080px;">'
+        + '<table style="width:100%;border-collapse:collapse;min-width:1180px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['Item Code', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order', 'Vendor', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + ['Item Code', 'Category', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order', 'Vendor', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
-          + '<tbody id="ims-body"><tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '<tbody id="ims-body"><tr><td colspan="11" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
       + '</div>'
     + '</div>';
@@ -237,6 +268,7 @@ window.Pages['ims'] = (() => {
 
     _renderTable();
     if (!_loaded) _load(); // only the very first render needs a fetch — filter/refresh/save actions trigger their own
+    _loadMasters(); // fire-and-forget; hardcoded fallback already covers Stores/ALU so no re-render needed today
   }
 
   return {

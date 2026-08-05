@@ -259,11 +259,21 @@ const SCHEMA = [
   // Outward routes, never edited directly) rather than a SUM() re-aggregated
   // on every read — cheap reads for the IMS dashboard table.
   `CREATE TABLE IF NOT EXISTS ims_items (item_code VARCHAR(32) PRIMARY KEY, description VARCHAR(255) DEFAULT '', size VARCHAR(64) DEFAULT '', uom VARCHAR(16) DEFAULT '', moq DECIMAL(12,2) DEFAULT 0, max_level DECIMAL(12,2) DEFAULT 0, on_order_qty DECIMAL(12,2) DEFAULT 0, vendor_name VARCHAR(255) DEFAULT '', current_stock DECIMAL(12,2) DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  // category separates the two real-world stock books this table now holds —
+  // "Stores" (consumables/PPE/welding etc., SKU-coded) and "ALU" (aluminum
+  // circle/sheet/coil raw material, ALC-/ALS- coded) — so the IMS page can
+  // filter to one book instead of showing both mixed together.
+  `ALTER TABLE ims_items ADD COLUMN IF NOT EXISTS category VARCHAR(32) NOT NULL DEFAULT 'Stores'`,
+  `CREATE INDEX idx_ims_items_category ON ims_items (category)`,
   `CREATE TABLE IF NOT EXISTS ims_transactions (id VARCHAR(16) PRIMARY KEY, txn_date DATE NOT NULL, direction VARCHAR(3) NOT NULL, item_code VARCHAR(32) NOT NULL, item_name VARCHAR(255) DEFAULT '', quantity DECIMAL(12,2) NOT NULL, uom VARCHAR(16) DEFAULT '', department VARCHAR(64) DEFAULT '', remarks VARCHAR(500) DEFAULT '', status VARCHAR(16) DEFAULT 'Active', created_by VARCHAR(120) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_ims_txn_item ON ims_transactions (item_code)`,
   `CREATE INDEX idx_ims_txn_date ON ims_transactions (txn_date)`,
   `CREATE INDEX idx_ims_txn_direction ON ims_transactions (direction)`,
 ];
+
+// Canonical IMS category list — shown in the filter dropdown even before any
+// item in that category exists yet (e.g. "ALU" before the catalog is imported).
+const IMS_CATEGORIES = ['Stores', 'ALU'];
 
 async function seedIfEmpty() {
   const adminEmail = process.env.ADMIN_EMAIL || 'Admin@lal.com';
@@ -3584,16 +3594,18 @@ app.get('/api/payment-history', requireAuth, async (req, res) => {
 
 // GET /api/ims/masters — dropdown data shared by the Inward/Outward forms.
 app.get('/api/ims/masters', requireAuth, async (req, res) => {
-  return res.json({ departments: PO_DEPARTMENTS });
+  return res.json({ departments: PO_DEPARTMENTS, categories: IMS_CATEGORIES });
 });
 
-// GET /api/ims/items?q=&lowStock=1 — item master search; backs both the IMS
-// dashboard table and the Inward/Outward item-code typeahead.
+// GET /api/ims/items?q=&lowStock=1&category=Stores — item master search; backs
+// both the IMS dashboard table and the Inward/Outward item-code typeahead.
+// category is omitted/'' for "All".
 app.get('/api/ims/items', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
     const search = String(req.query.q || '').trim();
     const lowStock = req.query.lowStock === '1';
+    const category = String(req.query.category || '').trim();
     const clauses = [];
     const params = [];
     if (search) {
@@ -3601,10 +3613,11 @@ app.get('/api/ims/items', requireAuth, async (req, res) => {
       clauses.push(`(item_code LIKE $${params.length - 1} OR description LIKE $${params.length})`);
     }
     if (lowStock) clauses.push('current_stock <= moq');
+    if (category) { params.push(category); clauses.push(`category = $${params.length}`); }
     const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
     const rows = await q(
       `SELECT item_code AS itemCode, description, size, uom, moq, max_level AS maxLevel, on_order_qty AS onOrderQty,
-              vendor_name AS vendorName, current_stock AS currentStock
+              vendor_name AS vendorName, current_stock AS currentStock, category
        FROM ims_items ${where} ORDER BY item_code ASC LIMIT 500`, params);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error: err.message }); }
@@ -3619,11 +3632,12 @@ app.post('/api/ims/items', requireAuth, async (req, res) => {
     if (!itemCode) return res.status(400).json({ error: 'itemCode is required' });
     const existing = await q('SELECT item_code FROM ims_items WHERE item_code=$1', [itemCode]);
     if (existing.length) return res.status(409).json({ error: 'Item code already exists' });
+    const category = IMS_CATEGORIES.includes(b.category) ? b.category : 'Stores';
     await pool.query(
-      `INSERT INTO ims_items (item_code, description, size, uom, moq, max_level, on_order_qty, vendor_name, current_stock)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      `INSERT INTO ims_items (item_code, description, size, uom, moq, max_level, on_order_qty, vendor_name, current_stock, category)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [itemCode, b.description || '', b.size || '', b.uom || '', parseFloat(b.moq) || 0, parseFloat(b.maxLevel) || 0,
-       parseFloat(b.onOrderQty) || 0, b.vendorName || '', parseFloat(b.openingStock) || 0]
+       parseFloat(b.onOrderQty) || 0, b.vendorName || '', parseFloat(b.openingStock) || 0, category]
     );
     return res.status(201).json({ success: true, itemCode });
   } catch (err) { return res.status(500).json({ error: err.message }); }
@@ -3636,13 +3650,14 @@ app.patch('/api/ims/items/:code', requireAuth, async (req, res) => {
     await ensureSchema();
     const code = req.params.code;
     const b = req.body || {};
+    const category = b.category === undefined ? null : (IMS_CATEGORIES.includes(b.category) ? b.category : null);
     await pool.query(
       `UPDATE ims_items SET description=COALESCE($1,description), size=COALESCE($2,size), uom=COALESCE($3,uom),
        moq=COALESCE($4,moq), max_level=COALESCE($5,max_level), on_order_qty=COALESCE($6,on_order_qty),
-       vendor_name=COALESCE($7,vendor_name), updated_at=NOW() WHERE item_code=$8`,
+       vendor_name=COALESCE($7,vendor_name), category=COALESCE($8,category), updated_at=NOW() WHERE item_code=$9`,
       [b.description ?? null, b.size ?? null, b.uom ?? null,
        b.moq === undefined ? null : (parseFloat(b.moq) || 0), b.maxLevel === undefined ? null : (parseFloat(b.maxLevel) || 0),
-       b.onOrderQty === undefined ? null : (parseFloat(b.onOrderQty) || 0), b.vendorName ?? null, code]
+       b.onOrderQty === undefined ? null : (parseFloat(b.onOrderQty) || 0), b.vendorName ?? null, category, code]
     );
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ error: err.message }); }
