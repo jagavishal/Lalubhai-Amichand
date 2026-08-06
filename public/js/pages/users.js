@@ -46,6 +46,7 @@ window.Pages.users = (() => {
     { key: 'pr-creation',   label: 'PR Creation' },
     { key: 'po-creation',   label: 'PO Creation' },
     { key: 'grn-creation',  label: 'GRN Creation' },
+    { key: 'proforma-invoice', label: 'Proforma Invoice' },
     { key: 'inward',        label: 'Inward' },
     { key: 'outward',       label: 'Outward' },
     { key: 'ims',           label: 'IMS' },
@@ -71,6 +72,9 @@ window.Pages.users = (() => {
     ],
     'client-master': [
       { key: 'add', label: 'Add Vendor' },
+    ],
+    'proforma-invoice': [
+      { key: 'set_price', label: 'Add/Edit Price' },
     ],
   };
 

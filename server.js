@@ -495,10 +495,18 @@ function computeDashboard(store, filter='all', doerFilter='') {
   let total=0, completed=0, pending=0, revised=0, upcoming=0;
   const items=[];
   const now=new Date(); now.setHours(0,0,0,0);
-  const df = doerFilter ? doerFilter.trim().toLowerCase() : '';
+  // doerFilter is either '' (no filter — everyone), a single name (string, matched
+  // case-insensitively), or a Set of lowercased names (team-scope match — used for
+  // an HOD's "All (My Team)" view, see /api/dashboard below).
+  const teamSet = doerFilter instanceof Set ? doerFilter : null;
+  const df = (!teamSet && doerFilter) ? doerFilter.trim().toLowerCase() : '';
+  const matchesDoer = name => {
+    const n = (name || '').trim().toLowerCase();
+    return teamSet ? teamSet.has(n) : (!df || n === df);
+  };
   if (filter==='all'||filter==='delegation') {
     (store.delegations||[]).forEach(d => {
-      if (df && (d.doer||'').trim().toLowerCase() !== df) return;
+      if (!matchesDoer(d.doer)) return;
       total++;
       const due = new Date(d.dueDate||d.due_date); due.setHours(0,0,0,0);
       if (d.status==='done') {
@@ -516,7 +524,7 @@ function computeDashboard(store, filter='all', doerFilter='') {
   if (filter==='all'||filter==='checklist') {
     const doneIds = new Set(store.completedMasterIds || []);
     (store.masters||[]).forEach(m => {
-      if (df && (m.assignedTo||'').trim().toLowerCase() !== df) return;
+      if (!matchesDoer(m.assignedTo)) return;
       total++;
       const dateStr = m.startDate || now.toISOString();
       if (doneIds.has(m.id)) {
@@ -716,6 +724,42 @@ function isHODUser(user) {
   return rolesArr.includes('HOD') && !isTrueAdminUser(user);
 }
 
+// req.session.user never carries `permissions` itself (only /api/auth/session
+// fetches it fresh, see below) — so any route-level feature gate needs its
+// own fresh lookup, scoped to just the one column rather than pulling in
+// readStore()'s full app-state read.
+async function getUserPermissions(userId) {
+  if (!userId) return null;
+  try {
+    if (USE_DB) {
+      const rows = await q('SELECT permissions FROM users WHERE id = $1', [userId]);
+      const raw = rows[0]?.permissions;
+      return raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
+    }
+    const store = await readStoreJson();
+    const su = (store.users || []).find(u => u.id === userId);
+    return su?.permissions || null;
+  } catch { return null; }
+}
+
+// Server-side mirror of the frontend's hasFeature()/_hasFeature() pattern
+// (e.g. all-tasks.js, client-master.js) — a page-level feature is blocked by
+// default the moment a user has ANY saved `permissions.features` object
+// (defaultPermissionsFor() gives every new non-admin user `features: {}`)
+// unless that specific page+feature was explicitly checked from the Users →
+// Access tab. Admin/HOD always pass. Must be kept in sync with the frontend
+// version — this is the one place a feature gate is actually enforced
+// server-side rather than just hidden in the UI (PO/PR/GRN never needed
+// this: every action there is open to any authenticated user).
+async function userCanUseFeature(user, page, feat) {
+  if (isAdminUser(user)) return true;
+  const perms = await getUserPermissions(user?.id);
+  if (!perms || !perms.features) return true;
+  const pageFeats = perms.features[page];
+  if (!pageFeats) return false;
+  return pageFeats.includes(feat);
+}
+
 function checkSecret(req) {
   const secret = req.query.secret;
   return secret && secret === process.env.DEVELOPER_SECRET;
@@ -831,26 +875,56 @@ app.get('/api/auth/session', async (req, res) => {
 app.get('/api/dashboard', requireAuth, async (req, res) => {
   const store = await readStore();
   const user = req.session.user;
-  const roles = Array.isArray(user.roles) ? user.roles : String(user.roles||'').split(',').map(r=>r.trim());
-  const isAdminUser = roles.includes('Admin') || roles.includes('HOD');
-  // Non-admins only ever see their own tasks — ignore any doer they pass in,
-  // admins can filter by any doer (or leave it blank to see everyone's).
-  const doer = isAdminUser ? (req.query.doer || '') : (user.name || '');
-  const result = computeDashboard(store, 'all', doer);
+  const trueAdmin = isTrueAdminUser(user);
+  const hod = isHODUser(user);
+
+  // Who computeDashboard()/FMS should scope to:
+  // - True Admin: no ?doer (or ?doer=All) → everyone company-wide; ?doer=<name> → just that person.
+  // - HOD: no ?doer → just themselves (personal default, like a plain user);
+  //   ?doer=All → their whole department team; ?doer=<name> → one teammate.
+  //   Never the whole company.
+  // - Everyone else: always just themselves, regardless of any ?doer passed in.
+  let doerFilter = user.name || '';
+  let fmsUserId = user.id, fmsUserName = user.name, fmsIsAdmin = false, fmsTeamSet = null;
+
+  if (trueAdmin) {
+    const doer = req.query.doer || '';
+    if (doer && doer !== 'All') {
+      doerFilter = doer;
+      const target = (store.users || []).find(u => (u.name || '').trim().toLowerCase() === doer.trim().toLowerCase());
+      fmsUserId = target ? target.id : null;
+      fmsUserName = doer;
+    } else {
+      doerFilter = '';
+      fmsIsAdmin = true;
+    }
+  } else if (hod) {
+    const doer = req.query.doer || '';
+    if (doer === 'All') {
+      fmsTeamSet = new Set((store.users || []).filter(u => (u.department || '') === (user.department || '')).map(u => (u.name || '').trim().toLowerCase()));
+      doerFilter = fmsTeamSet;
+    } else if (doer) {
+      doerFilter = doer;
+      const target = (store.users || []).find(u => (u.name || '').trim().toLowerCase() === doer.trim().toLowerCase());
+      fmsUserId = target ? target.id : null;
+      fmsUserName = doer;
+    }
+    // else: falls through to the personal default set above.
+  }
+
+  const result = computeDashboard(store, 'all', doerFilter);
 
   if (FMS_ENABLED) {
     try {
-      // Mirror the same doer-scoping computeDashboard just applied above: an admin
-      // viewing "everyone" sees every pending FMS step, but an admin drilled into one
-      // specific employee's dashboard (?doer=) should see only that employee's steps too.
-      let fmsUserId = user.id, fmsUserName = user.name, fmsIsAdmin = isAdminUser;
-      if (isAdminUser && doer) {
-        const target = (store.users || []).find(u => (u.name || '').trim().toLowerCase() === doer.trim().toLowerCase());
-        fmsUserId = target ? target.id : null;
-        fmsUserName = doer;
-        fmsIsAdmin = false;
+      let fmsTasks;
+      if (fmsTeamSet) {
+        // getMyFmsPendingRows() has no notion of "team" — pull everything and
+        // post-filter to the HOD's department, mirroring the Set-scoping above.
+        const all = await fmsSheet.getMyFmsPendingRows({ userId: null, userName: null, isAdmin: true });
+        fmsTasks = all.filter(t => fmsTeamSet.has((t.doer || '').trim().toLowerCase()));
+      } else {
+        fmsTasks = (fmsIsAdmin || fmsUserId) ? await fmsSheet.getMyFmsPendingRows({ userId: fmsUserId, userName: fmsUserName, isAdmin: fmsIsAdmin }) : [];
       }
-      const fmsTasks = (fmsIsAdmin || fmsUserId) ? await fmsSheet.getMyFmsPendingRows({ userId: fmsUserId, userName: fmsUserName, isAdmin: fmsIsAdmin }) : [];
       result.total += fmsTasks.length;
       result.pending += fmsTasks.length;
       result.pendingTasks = result.pendingTasks.concat(fmsTasks)
@@ -2564,6 +2638,23 @@ async function _setLogRowStatus(spreadsheetId, tabName, key, statusColLetter, st
   });
 }
 
+// Generalizes _setLogRowStatus from "write one column" to "write several
+// columns of the same found row in one batch" — needed by Proforma
+// Invoice's "Add Price" step, which updates Total/PDF Link/Form JSON/Priced
+// By/Priced At/Status on the SAME row rather than appending a new one (the
+// one genuine in-place multi-column edit in this codebase's log-tab
+// pattern — everything else only ever flips a single Status cell).
+async function _updateLogRowCells(spreadsheetId, tabName, key, cellMap) {
+  const { google } = require('googleapis');
+  const auth = getGoogleAuth();
+  const sheets = google.sheets({ version: 'v4', auth });
+  const rowIndex = await _findRowIndexByKey(spreadsheetId, tabName, key);
+  const data = Object.entries(cellMap).map(([col, value]) => ({ range: `'${tabName}'!${col}${rowIndex + 1}`, values: [[value]] }));
+  if (data.length) {
+    await sheets.spreadsheets.values.batchUpdate({ spreadsheetId, requestBody: { valueInputOption: 'USER_ENTERED', data } });
+  }
+}
+
 async function _poSheetMeta() {
   const auth = getGoogleAuth();
   const { google } = require('googleapis');
@@ -3491,6 +3582,268 @@ app.put('/api/grn-creation/cancel', requireAuth, async (req, res) => {
     const grNo = req.query.grNo;
     if (!grNo) return res.status(400).json({ error: 'grNo is required' });
     await _setLogRowStatus(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, grNo, 'M', 'Cancelled');
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
+});
+
+// ── Proforma Invoice (PI) Creation — a brand-new, dedicated Google Sheet
+// ("ERP - Proforma Invoice", created by scripts/create-pi-sheet.js) with the
+// same "sheet IS the database" shape PO/PR/GRN use, but with one deliberate
+// difference: this is a genuine TWO-STAGE record. A regular User creates the
+// PI (buyer + items + qty — no price at all, not even accepted server-side).
+// Later, whoever is granted the 'set_price' feature for this page (Admin/HOD
+// always; a specific User only if explicitly granted via Users → Access tab)
+// opens the SAME PI and fills in Rate/GST/Freight — this re-fills the
+// template tab, regenerates the PDF, and updates the SAME log row in place
+// (see _updateLogRowCells) rather than appending a new one. PO/PR/GRN never
+// needed a true in-place edit — only a Status flip (Cancel) — so this is new.
+const PI_CREATION_SHEET_ID = '1jWRILcYuJZh6EyxvOYz_Ol0z9X2X79RcDiKFV8x76XA';
+const PI_CREATION_LOG_TAB = 'ERP PI Log';
+const PI_TEMPLATE_TAB = 'Proforma Invoice';
+const PI_PDF_DRIVE_FOLDER_ID = '1i693XlvXIlS8Ep1p4NJhkxolTCNE47qs';
+
+// Cell map matches the template scripts/create-pi-sheet.js actually built —
+// designed fresh (no pre-existing sheet to reverse-engineer), so unlike PO's
+// map this one is authoritative by construction, not inference. Amount (H)
+// and the Subtotal/GST Amount/Total cells are real per-row/summary formulas
+// — never written to directly, same discipline as PO_FORMAT_CONFIG.
+const PI_HEADER_CELLS = { piNo: 'B3', date: 'E3', buyerName: 'B4', buyerAddress: 'B5', buyerGstin: 'B6', paymentTerms: 'E6', validity: 'B7', piMadeBy: 'E7' };
+// clearCols stops at G, NOT H: column H holds a real per-row formula
+// (=IF(E="","",E*G)) typed into each row individually at sheet-creation time
+// (scripts/create-pi-sheet.js), not a spill from the header — clearing over
+// it wipes it out for good (same caveat as PO's Diamond PO format; see that
+// tab's own clearCols comment above). Confirmed restored on the live sheet.
+const PI_ITEMS = { firstRow: 10, lastRow: 39, clearCols: ['A', 'G'], srNoCol: 'A', fields: { itemCode: 'B', description: 'C', hsnCode: 'D', qty: 'E', uom: 'F', rate: 'G' } };
+const PI_SUMMARY_CELLS = { gstPercent: 'H42', freight: 'H44' };
+const PI_TOTAL_CELL = 'H45';
+
+async function _piSheetMeta() {
+  const auth = getGoogleAuth();
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: PI_CREATION_SHEET_ID });
+  const tpl = meta.data.sheets.find(s => s.properties.title === PI_TEMPLATE_TAB);
+  let maxPiNo = 0;
+  try {
+    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    for (const row of (logRes.data.values || [])) {
+      const n = parseInt(String(row[0] ?? '').replace(/^[A-Za-z]+/, ''), 10);
+      if (!isNaN(n)) maxPiNo = Math.max(maxPiNo, n);
+    }
+  } catch (e) {
+    if (!/unable to parse range/i.test(e.message || '')) console.error('[proforma-invoice] log read for numbering failed:', e.message);
+  }
+  return { nextPiNo: maxPiNo + 1, templateSheetId: tpl ? tpl.properties.sheetId : 0 };
+}
+
+// Fills the (single, shared) template tab with the given header/items/
+// summary — used identically by create (rate left blank) and price-add
+// (rate filled in), always as a FULL rewrite of the current item list, never
+// a partial patch, since the tab only ever reflects the most recent write.
+async function _fillPiTemplate(sheets, form) {
+  const tab = PI_TEMPLATE_TAB;
+  const items = form.items || [];
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId: PI_CREATION_SHEET_ID,
+    range: `'${tab}'!${PI_ITEMS.clearCols[0]}${PI_ITEMS.firstRow}:${PI_ITEMS.clearCols[1]}${PI_ITEMS.lastRow}`,
+  });
+  const data = [];
+  const put = (a1, value) => { if (value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
+  put(PI_HEADER_CELLS.piNo, form.piNo);
+  put(PI_HEADER_CELLS.date, form.date);
+  put(PI_HEADER_CELLS.buyerName, form.buyerName);
+  put(PI_HEADER_CELLS.buyerAddress, form.buyerAddress);
+  put(PI_HEADER_CELLS.buyerGstin, form.buyerGstin);
+  put(PI_HEADER_CELLS.paymentTerms, form.paymentTerms);
+  put(PI_HEADER_CELLS.validity, form.validity);
+  put(PI_HEADER_CELLS.piMadeBy, form.piMadeBy);
+  // Always written, even 0 — feeds the sheet's own Total formula, must never
+  // carry a previous PI's numbers into this one.
+  data.push({ range: `'${tab}'!${PI_SUMMARY_CELLS.gstPercent}`, values: [[parseFloat(form.gstPercent) || 0]] });
+  data.push({ range: `'${tab}'!${PI_SUMMARY_CELLS.freight}`, values: [[parseFloat(form.freight) || 0]] });
+  items.forEach((it, i) => {
+    const row = PI_ITEMS.firstRow + i;
+    if (row > PI_ITEMS.lastRow) return; // beyond template capacity — drop silently
+    put(`${PI_ITEMS.srNoCol}${row}`, i + 1);
+    Object.entries(PI_ITEMS.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
+  });
+  if (data.length) {
+    await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
+  }
+}
+
+// Shared post-write step for both create and price-add: wait for the
+// sheet's formulas to settle, read back the computed Total, export + upload
+// the PDF. Never lets a Drive/export hiccup block the actual data write.
+async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId) {
+  await _sleep(2000);
+  let totalAmount = null;
+  try {
+    const totalRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_TEMPLATE_TAB}'!${PI_TOTAL_CELL}`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    totalAmount = totalRes.data.values?.[0]?.[0] ?? null;
+  } catch (e) { console.error('[proforma-invoice] total read-back failed:', e.message); }
+  let pdfLink = null;
+  try {
+    const pdfBuffer = await _exportSheetTabPdf(PI_CREATION_SHEET_ID, templateSheetId, { c1: 0, c2: 8 });
+    pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${piNoFormatted} - Proforma Invoice.pdf`, PI_PDF_DRIVE_FOLDER_ID);
+  } catch (e) { console.error('[proforma-invoice] PDF export failed:', e.message); }
+  return { totalAmount, pdfLink };
+}
+
+// GET /api/proforma-invoice/masters — next PI number + a lightweight
+// recent-buyers typeahead (no dedicated Buyer/Customer master exists in this
+// app — only a Vendor Master — so this is scraped straight off the log).
+app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const [meta, buyerRes] = await Promise.all([
+      _piSheetMeta(),
+      sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!C2:C`, valueRenderOption: 'FORMATTED_VALUE' }).catch(() => ({ data: {} })),
+    ]);
+    const recentBuyers = [...new Set((buyerRes.data.values || []).map(r => (r[0] || '').trim()).filter(Boolean))].slice(-50).reverse();
+    return res.json({ nextPiNumber: _padSeqNo('PI', meta.nextPiNo), recentBuyers });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/proforma-invoice/items?q=... — item-code typeahead, sourced from
+// PO Creation's existing ITEM_CODES catalog (same reuse GRN Creation already
+// does — no separate PI-specific catalog to maintain).
+app.get('/api/proforma-invoice/items', requireAuth, async (req, res) => {
+  try {
+    const query = String(req.query.q || '').trim().toLowerCase();
+    const rows = await _loadPoItemCatalog('PurchaseOrder');
+    const matches = (query ? rows.filter(r => r.code.toLowerCase().includes(query) || r.description.toLowerCase().includes(query)) : rows).slice(0, 50);
+    return res.json(matches);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/proforma-invoice — User stage. No rate/price field is ever read
+// from the body here, by design: pricing is a separate, permission-gated
+// step (PUT /price below).
+app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
+  try {
+    const { date, buyerName, buyerAddress, buyerGstin, paymentTerms, validity, items } = req.body;
+    if (!date || !buyerName) return res.status(400).json({ error: 'Date and Buyer Name are required' });
+    const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemCode || '').trim());
+    if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const { nextPiNo, templateSheetId } = await _piSheetMeta();
+    const piNoFormatted = _padSeqNo('PI', nextPiNo);
+    const piMadeBy = req.session.user.name || '';
+
+    await _fillPiTemplate(sheets, {
+      piNo: piNoFormatted, date, buyerName, buyerAddress, buyerGstin, paymentTerms, validity, piMadeBy,
+      items: cleanItems, gstPercent: 0, freight: 0,
+    });
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNoFormatted, templateSheetId);
+
+    await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, ['PI No', 'Date', 'Buyer', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Priced By', 'Priced At', 'Form JSON', 'Status']);
+    await appendLogRow(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, [
+      piNoFormatted, "'" + date, buyerName, totalAmount ?? '', pdfLink || '', req.session.user.name || '', _timestampForSheet(), '', '',
+      JSON.stringify({ date, buyerName, buyerAddress, buyerGstin, paymentTerms, validity, piMadeBy, items: cleanItems, gstPercent: 0, freight: 0 }),
+      'Draft',
+    ]);
+
+    return res.json({ success: true, piNumber: piNoFormatted, pdfLink });
+  } catch (e) { console.error('[proforma-invoice] create failed:', e.message); return res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/proforma-invoice/list — recent PIs, newest first, capped at 200 —
+// same shape as PO/PR/GRN's own /list routes. `canSetPrice` is computed
+// server-side (per current user + Draft-only) so the frontend never has to
+// re-derive the permission logic itself.
+app.get('/api/proforma-invoice/list', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const canSetPrice = await userCanUseFeature(req.session.user, 'proforma-invoice', 'set_price');
+    const rows = (result.data.values || []).map(r => {
+      let form = null;
+      try { form = r[9] ? JSON.parse(r[9]) : null; } catch {}
+      const status = r[10] || 'Draft';
+      return {
+        piNo: r[0] || '', date: r[1] || '', buyer: r[2] || '', total: r[3] || '', pdfLink: r[4] || '',
+        createdBy: r[5] || '', createdAt: r[6] || '', pricedBy: r[7] || '', pricedAt: r[8] || '',
+        form, status, canSetPrice: canSetPrice && status === 'Draft',
+      };
+    }).reverse().slice(0, 200);
+    return res.json(rows);
+  } catch (e) {
+    if (/unable to parse range/i.test(e.message || '')) return res.json([]);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/proforma-invoice/price?piNo=... — Admin (or a User explicitly
+// granted the 'set_price' feature via Users → Access tab) stage. Loads the
+// PI's own stored Form JSON for buyer/item/qty details (the template tab may
+// belong to a different, newer PI by now), merges in rate/GST/freight, does
+// a full re-fill + re-export, then updates the SAME log row in place.
+app.put('/api/proforma-invoice/price', requireAuth, async (req, res) => {
+  try {
+    const piNo = req.query.piNo;
+    if (!piNo) return res.status(400).json({ error: 'piNo is required' });
+    const allowed = await userCanUseFeature(req.session.user, 'proforma-invoice', 'set_price');
+    if (!allowed) return res.status(403).json({ error: 'You do not have permission to add price to a Proforma Invoice' });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const rowIndex = await _findRowIndexByKey(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo);
+    const rowRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A${rowIndex + 1}:K${rowIndex + 1}`, valueRenderOption: 'FORMATTED_VALUE' });
+    const rowVals = rowRes.data.values?.[0] || [];
+    if ((rowVals[10] || 'Draft') === 'Cancelled') return res.status(400).json({ error: 'This Proforma Invoice has been cancelled' });
+    let existingForm = {};
+    try { existingForm = rowVals[9] ? JSON.parse(rowVals[9]) : {}; } catch {}
+
+    const rateByCode = {};
+    (Array.isArray(req.body?.items) ? req.body.items : []).forEach(it => { if (it && it.code != null) rateByCode[String(it.code).trim()] = it.rate; });
+    const mergedItems = (existingForm.items || []).map(it => ({ ...it, rate: rateByCode[String(it.itemCode || '').trim()] ?? it.rate }));
+    const gstPercent = parseFloat(req.body?.gstPercent) || 0;
+    const freight = parseFloat(req.body?.freight) || 0;
+
+    const { templateSheetId } = await _piSheetMeta();
+    await _fillPiTemplate(sheets, {
+      piNo, date: existingForm.date, buyerName: existingForm.buyerName, buyerAddress: existingForm.buyerAddress,
+      buyerGstin: existingForm.buyerGstin, paymentTerms: existingForm.paymentTerms, validity: existingForm.validity,
+      piMadeBy: existingForm.piMadeBy, items: mergedItems, gstPercent, freight,
+    });
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNo, templateSheetId);
+
+    const mergedForm = { ...existingForm, items: mergedItems, gstPercent, freight };
+    await _updateLogRowCells(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo, {
+      D: totalAmount ?? '', E: pdfLink || rowVals[4] || '', H: req.session.user.name || '', I: _timestampForSheet(),
+      J: JSON.stringify(mergedForm), K: 'Priced',
+    });
+
+    return res.json({ success: true, piNo, totalAmount, pdfLink });
+  } catch (e) {
+    console.error('[proforma-invoice] price update failed:', e.message);
+    return res.status(e.notFound ? 404 : 500).json({ error: e.message });
+  }
+});
+
+// PUT /api/proforma-invoice/cancel?piNo=... — same Cancel-in-place pattern
+// as PO/PR/GRN: flips Status only, never deletes the row or touches the
+// archived PDF. Available at any status (Draft or Priced), same precedent.
+app.put('/api/proforma-invoice/cancel', requireAuth, async (req, res) => {
+  try {
+    const piNo = req.query.piNo;
+    if (!piNo) return res.status(400).json({ error: 'piNo is required' });
+    await _setLogRowStatus(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo, 'K', 'Cancelled');
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });
