@@ -3688,14 +3688,23 @@ app.get('/api/ims/stock-history', requireAuth, async (req, res) => {
     const dates = [];
     for (let i = days - 1; i >= 0; i--) dates.push(_isoDateMinusDays(todayIso, i));
 
+    // Self-contained placeholder numbering starting at $1 -- this query doesn't
+    // reference the outer `params` (search/category, already applied to the
+    // ims_items query above) at all, so continuing to number from params.length
+    // left $1..$params.length unused in the text. pgToMysql's $N->? replace only
+    // sees the placeholders that actually appear, so the resulting param COUNT
+    // (params.length + 1 + codes.length passed in) didn't match the ? COUNT in
+    // the text (1 + codes.length) whenever a search/category filter was active
+    // -- MySQL then rejected the mismatched bind count with "Incorrect arguments
+    // to mysqld_stmt_execute".
     const codes = items.map(it => it.itemCode);
-    const codePlaceholders = codes.map((_, i) => `$${params.length + i + 2}`).join(',');
+    const codePlaceholders = codes.map((_, i) => `$${i + 2}`).join(',');
     const txnRows = await q(
       `SELECT item_code AS itemCode, txn_date AS txnDate, direction, SUM(quantity) AS qty
        FROM ims_transactions
-       WHERE status='Active' AND txn_date >= $${params.length + 1} AND item_code IN (${codePlaceholders})
+       WHERE status='Active' AND txn_date >= $1 AND item_code IN (${codePlaceholders})
        GROUP BY item_code, txn_date, direction`,
-      [...params, dates[0], ...codes]
+      [dates[0], ...codes]
     );
 
     // net.get(itemCode).get(isoDate) = that item's (IN total - OUT total) for that day.
