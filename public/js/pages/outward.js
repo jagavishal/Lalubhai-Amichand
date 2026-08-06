@@ -3,17 +3,23 @@ window.Pages = window.Pages || {};
 // ── Outward (IMS) ───────────────────────────────────────────────────────────
 // Logs stock ISSUED out of the Store to a consuming department, against the
 // shared MySQL item catalog (see /api/ims/* in server.js — same plain-MySQL
-// pattern as Inward, not Google-Sheets-backed). One entry = one item
-// movement. If the quantity would take current stock negative the app warns
-// but still allows it — store staff must never be blocked from logging a
-// real issuance over a paperwork mismatch (confirmed decision). Cancelling
-// an entry reverses its effect on that item's current_stock server-side.
+// pattern as Inward, not Google-Sheets-backed). One SUBMIT = one batch
+// (shared Date/Category/Department/Remarks) of multiple item rows, mirroring
+// how the store team actually issues stock (several SKUs go out together).
+// Each row still becomes its own ims_transactions entry server-side
+// (sequential POSTs, not one atomic batch insert) so partial success/failure
+// per item stays visible and cancellable individually from Outward List.
+// If a row's quantity would take that item's current stock negative the app
+// warns but still allows it — store staff must never be blocked from logging
+// a real issuance over a paperwork mismatch (confirmed decision).
+// Cancelling an entry reverses its effect on that item's current_stock.
 window.Pages['outward'] = (() => {
   /* ── state ──────────────────────────────────────────────────── */
   let _view = 'create'; // 'create' | 'list'
   let _departments = [];
+  let _categories = ['Stores', 'ALU']; // overwritten from /api/ims/masters once loaded
   let _mastersLoaded = false;
-  let _selectedStock = null; // current_stock of the last item picked from the typeahead, for the short-stock warning
+  let _category = 'Stores'; // scopes the item-code dropdown + "+ New Item" modal to one catalog at a time
 
   // List (in-page tab) state.
   let _rows = [];
@@ -26,6 +32,12 @@ window.Pages['outward'] = (() => {
   function _today() { return new Date().toISOString().slice(0, 10); }
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
+
+  // Canonical UOM list, seeded from what's actually in use across the real
+  // Stores/ALU catalogs (Kg/Ltr/PCS/PKT/FOOT/c.m etc.) plus a few common
+  // general-purpose units — "Other…" always covers anything not listed here
+  // rather than hard-blocking entry for a genuinely new unit.
+  const UOM_OPTIONS = ['Kg', 'KGS', 'Ltr', 'PCS', 'PKT', 'FOOT', 'c.m', 'Nos', 'Mtr', 'Box', 'Set', 'Roll', 'Bag'];
 
   /* ── Helpers (styled like PO/GRN Creation, for a consistent look) ─────── */
   function _fieldWrap(label, innerHtml, extra) {
@@ -40,41 +52,72 @@ window.Pages['outward'] = (() => {
     return _fieldWrap(label, '<input type="' + (opts.type || 'text') + '" id="' + id + '" value="' + esc(opts.value || '') + '" placeholder="' + esc(opts.placeholder || '') + '" style="' + _inputStyle + '" />');
   }
 
-  /* ── Masters (departments) ─────────────────────────────────────────── */
+  // UOM select + conditional "Other…" free-text fallback, used both in the
+  // item rows and the "+ New Item" modal (cls prefixes the two element classes).
+  function _uomFieldHtml(cls) {
+    const opts = UOM_OPTIONS.map(u => '<option value="' + esc(u) + '">' + esc(u) + '</option>').join('');
+    return '<select class="' + cls + '-select" style="' + _inputStyle + '"><option value="">Select…</option>' + opts + '<option value="__other__">Other…</option></select>'
+      + '<input type="text" class="' + cls + '-other" placeholder="Enter UOM" style="display:none;margin-top:6px;' + _inputStyle + '" />';
+  }
+  function _bindUomField(root, cls) {
+    const sel = root.querySelector('.' + cls + '-select');
+    const other = root.querySelector('.' + cls + '-other');
+    if (!sel || !other) return;
+    sel.addEventListener('change', () => {
+      if (sel.value === '__other__') { other.style.display = 'block'; other.focus(); }
+      else { other.style.display = 'none'; other.value = ''; }
+    });
+  }
+  function _getUomValue(root, cls) {
+    const sel = root.querySelector('.' + cls + '-select');
+    const other = root.querySelector('.' + cls + '-other');
+    return sel.value === '__other__' ? other.value.trim() : sel.value;
+  }
+  // Auto-selects a matching option when an item is picked from the typeahead
+  // (case-insensitive, e.g. catalog "kg" -> option "Kg"); falls back to
+  // "Other…" with the raw value pre-filled if it isn't one of the presets.
+  function _setUomValue(root, cls, value) {
+    const sel = root.querySelector('.' + cls + '-select');
+    const other = root.querySelector('.' + cls + '-other');
+    const match = UOM_OPTIONS.find(u => u.toLowerCase() === String(value || '').toLowerCase());
+    if (match) { sel.value = match; other.style.display = 'none'; other.value = ''; }
+    else if (value) { sel.value = '__other__'; other.style.display = 'block'; other.value = value; }
+    else { sel.value = ''; other.style.display = 'none'; other.value = ''; }
+  }
+
+  /* ── Masters (departments / categories) ────────────────────────────── */
   async function _loadMasters() {
     try {
       const data = await Utils.apiFetch('/api/ims/masters');
       _departments = (data && data.departments) || [];
+      if (Array.isArray(data?.categories) && data.categories.length) _categories = data.categories;
       _mastersLoaded = true;
       const sel = document.getElementById('outw-department');
       if (sel) sel.innerHTML = '<option value="">Select…</option>' + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
+      const catSel = document.getElementById('outw-category');
+      if (catSel) catSel.innerHTML = _categories.map(c => '<option value="' + esc(c) + '"' + (c === _category ? ' selected' : '') + '>' + esc(c) + '</option>').join('');
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load departments', 'error');
     }
   }
 
-  /* ── Item-code typeahead — matches an existing catalog item and previews
-     its Description/UOM/current stock; typing an unrecognised code is still
-     allowed (the server auto-creates a catalog stub for it) ─────────────── */
+  /* ── Item-code typeahead per row — scoped to the selected Category, shows
+     a browsable list immediately on focus (not just once you start typing),
+     and matches an existing catalog item to preview/prefill Description/UOM/
+     current stock (stashed on the row for the short-stock warning at
+     submit). Typing an unrecognised code is still allowed — the server
+     auto-creates a catalog stub for it in whichever Category is selected. ── */
   let _itemSearchTimer = null;
-  function _bindItemCodeInput() {
-    const input = document.getElementById('outw-item-code');
-    const dd = document.getElementById('outw-item-dd');
-    const descInput = document.getElementById('outw-description');
-    const uomInput = document.getElementById('outw-uom');
-    const stockHint = document.getElementById('outw-stock-hint');
-    if (!input || !dd) return;
+  function _bindItemCodeInput(input) {
+    const row = input.closest('.outw-item-row');
+    const dd = row.querySelector('.outw-row-dd');
+    const descInput = row.querySelector('.outw-row-desc');
     const runSearch = () => {
       clearTimeout(_itemSearchTimer);
       _itemSearchTimer = setTimeout(async () => {
         const query = input.value.trim();
-        _selectedStock = null;
-        if (stockHint) stockHint.textContent = '';
-        // Empty query still fetches (unfiltered, first 500 by item_code) instead of
-        // bailing out -- otherwise clicking into an empty field showed nothing at
-        // all, since the dropdown only ever populated once you'd typed a character.
         try {
-          const url = '/api/ims/items' + (query ? '?q=' + encodeURIComponent(query) : '');
+          const url = '/api/ims/items?category=' + encodeURIComponent(_category) + (query ? '&q=' + encodeURIComponent(query) : '');
           const matches = await Utils.apiFetch(url) || [];
           if (!matches.length) { dd.style.display = 'none'; return; }
           dd.innerHTML = matches.slice(0, 30).map(m => '<div class="outw-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.itemCode) + '" data-desc="' + esc(m.description) + '" data-uom="' + esc(m.uom) + '" data-stock="' + esc(m.currentStock) + '">'
@@ -85,19 +128,141 @@ window.Pages['outward'] = (() => {
         } catch {}
       }, 220);
     };
-    input.addEventListener('input', runSearch);
+    input.addEventListener('input', () => { delete input.dataset.stock; runSearch(); });
     input.addEventListener('focus', runSearch);
     dd.addEventListener('mousedown', (e) => {
       const opt = e.target.closest('.outw-item-opt');
       if (!opt) return;
       input.value = opt.dataset.code;
       if (descInput) descInput.value = opt.dataset.desc || '';
-      if (uomInput) uomInput.value = opt.dataset.uom || '';
-      _selectedStock = _num(opt.dataset.stock);
-      if (stockHint) stockHint.textContent = 'Current stock: ' + opt.dataset.stock;
+      _setUomValue(row, 'row-uom', opt.dataset.uom || '');
+      input.dataset.stock = opt.dataset.stock;
       dd.style.display = 'none';
     });
+    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+  }
+
+  /* ── Item rows (multi-entry) ────────────────────────────────────────── */
+  function _itemRowHtml() {
+    return '<tr class="outw-item-row" style="border-bottom:1px solid #f1f5f9;">'
+      + '<td style="padding:6px;min-width:170px;position:relative;">'
+        + '<input type="text" class="outw-row-code" autocomplete="off" placeholder="Click or type an item code…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
+        + '<div class="outw-row-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
+      + '</td>'
+      + '<td style="padding:6px;min-width:170px;"><input type="text" class="outw-row-desc" placeholder="Description" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + '<td style="padding:6px;min-width:130px;">' + _uomFieldHtml('row-uom') + '</td>'
+      + '<td style="padding:6px;min-width:100px;"><input type="text" inputmode="decimal" class="outw-row-qty" placeholder="Qty" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" /></td>'
+      + '<td style="padding:6px;text-align:center;"><button type="button" class="outw-row-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
+    + '</tr>';
+  }
+
+  function _itemsTableHtml() {
+    return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+      + '<table style="width:100%;border-collapse:collapse;min-width:780px;">'
+        + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+          + ['Item Code', 'Description', 'UOM', 'Quantity', ''].map(h => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+        + '</tr></thead>'
+        + '<tbody id="outw-items-tbody">' + _itemRowHtml() + '</tbody>'
+      + '</table>'
+    + '</div>';
+  }
+
+  function _bindItemRow(rowEl) {
+    _bindItemCodeInput(rowEl.querySelector('.outw-row-code'));
+    _bindUomField(rowEl, 'row-uom');
+    const removeBtn = rowEl.querySelector('.outw-row-remove');
+    removeBtn.addEventListener('click', () => {
+      const tbody = document.getElementById('outw-items-tbody');
+      if (tbody.querySelectorAll('.outw-item-row').length <= 1) { Utils.showToast('At least one item row is required', 'warning'); return; }
+      rowEl.remove();
+    });
+  }
+
+  function _bindAllItemRows() {
+    document.querySelectorAll('#outw-items-tbody .outw-item-row').forEach(_bindItemRow);
+  }
+
+  function _collectItemRows() {
+    return Array.from(document.querySelectorAll('#outw-items-tbody .outw-item-row')).map(row => {
+      const codeInput = row.querySelector('.outw-row-code');
+      return {
+        itemCode: codeInput.value.trim(),
+        description: row.querySelector('.outw-row-desc').value.trim(),
+        uom: _getUomValue(row, 'row-uom'),
+        quantity: row.querySelector('.outw-row-qty').value.trim(),
+        stock: codeInput.dataset.stock, // only set when picked from the dropdown; undefined for a freehand-typed code
+      };
+    }).filter(it => it.itemCode);
+  }
+
+  /* ── "+ New Item" modal — adds a brand-new catalog item to whichever
+     Category is currently selected on the form, so store staff don't have to
+     leave Outward to go create it on the IMS page first. ────────────────── */
+  function _openNewItemModal() {
+    const existing = document.getElementById('outw-newitem-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'outw-newitem-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10000;display:grid;place-items:center;padding:16px;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
+    overlay.innerHTML = '<div style="background:#fff;border-radius:18px;width:100%;max-width:440px;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.2);animation:pop-in 200ms cubic-bezier(.16,1,.3,1);">'
+      + '<div style="padding:22px 24px 4px;">'
+        + '<div style="font-size:15px;font-weight:700;color:#0f172a;">New ' + esc(_category) + ' Item</div>'
+        + '<div style="font-size:12px;color:#64748b;margin:2px 0 14px;">Adds a new item to the ' + esc(_category) + ' catalog with 0 opening stock.</div>'
+      + '</div>'
+      + '<form id="outw-ni-form" style="padding:0 24px 22px;display:flex;flex-direction:column;gap:12px;">'
+        + _textField('outw-ni-code', 'Item Code')
+        + _textField('outw-ni-desc', 'Description')
+        + _textField('outw-ni-size', 'Size')
+        + _fieldWrap('UOM', _uomFieldHtml('ni-uom'))
+        + _textField('outw-ni-moq', 'MOQ (Min Order Qty)')
+        + _textField('outw-ni-maxlevel', 'Max Level')
+        + _textField('outw-ni-vendor', 'Vendor Name')
+        + '<div style="display:flex;gap:10px;margin-top:4px;">'
+          + '<button type="submit" id="outw-ni-submit" style="padding:9px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">Add Item</button>'
+          + '<button type="button" id="outw-ni-cancel" style="padding:9px 22px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
+        + '</div>'
+      + '</form>'
+    + '</div>';
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    document.getElementById('outw-ni-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', function escHandler(e) {
+      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', escHandler); }
+    });
+    _bindUomField(overlay, 'ni-uom');
+
+    document.getElementById('outw-ni-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const itemCode = document.getElementById('outw-ni-code').value.trim();
+      if (!itemCode) { Utils.showToast('Item Code is required', 'error'); return; }
+      const btn = document.getElementById('outw-ni-submit');
+      btn.disabled = true; btn.textContent = 'Adding…';
+      try {
+        await Utils.apiFetch('/api/ims/items', {
+          method: 'POST',
+          body: JSON.stringify({
+            itemCode,
+            description: document.getElementById('outw-ni-desc').value.trim(),
+            size: document.getElementById('outw-ni-size').value.trim(),
+            uom: _getUomValue(overlay, 'ni-uom'),
+            moq: document.getElementById('outw-ni-moq').value.trim(),
+            maxLevel: document.getElementById('outw-ni-maxlevel').value.trim(),
+            vendorName: document.getElementById('outw-ni-vendor').value.trim(),
+            openingStock: '0',
+            category: _category,
+          }),
+        });
+        Utils.showToast('"' + itemCode + '" added to ' + _category, 'success');
+        close();
+      } catch (err) {
+        Utils.showToast(err.message || 'Failed to add item', 'error');
+        btn.disabled = false; btn.textContent = 'Add Item';
+      }
+    });
   }
 
   /* ── List (in-page tab) ────────────────────────────────────────────── */
@@ -240,22 +405,26 @@ window.Pages['outward'] = (() => {
   }
 
   /* ── Create form ────────────────────────────────────────────────────── */
+  function _categorySelectHtml() {
+    return _fieldWrap('Category', '<select id="outw-category" style="' + _inputStyle + '">'
+      + _categories.map(c => '<option value="' + esc(c) + '"' + (c === _category ? ' selected' : '') + '>' + esc(c) + '</option>').join('')
+    + '</select>');
+  }
+
   function _formHtml() {
     return '<form id="outw-form" style="display:flex;flex-direction:column;gap:16px;">'
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
         + _textField('outw-date', 'Date', { type: 'date', value: _today() })
-        + '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;position:relative;">'
-          + '<div style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">Item Code</div>'
-          + '<input type="text" id="outw-item-code" autocomplete="off" placeholder="Type an item code…" style="' + _inputStyle + '" />'
-          + '<div id="outw-stock-hint" style="font-size:11px;color:#94a3b8;margin-top:4px;"></div>'
-          + '<div id="outw-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
-        + '</div>'
-        + _textField('outw-description', 'Description', { placeholder: 'Auto-fills on match, or type for a new item' })
-        + _textField('outw-uom', 'UOM')
-        + _textField('outw-quantity', 'Quantity', { type: 'text' })
+        + _categorySelectHtml()
         + _fieldWrap('Issued To (Department)', '<select id="outw-department" style="' + _inputStyle + '"><option value="">Select…</option></select>')
       + '</div>'
-      + _fieldWrap('Remarks', '<textarea id="outw-remarks" rows="2" style="' + _inputStyle + 'resize:vertical;"></textarea>')
+      + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
+      + _itemsTableHtml()
+      + '<div style="display:flex;gap:8px;">'
+        + '<button type="button" id="outw-add-row" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item Row</button>'
+        + '<button type="button" id="outw-new-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ New Item…</button>'
+      + '</div>'
+      + _fieldWrap('Remarks (applies to this whole batch)', '<textarea id="outw-remarks" rows="2" style="' + _inputStyle + 'resize:vertical;"></textarea>')
       + '<button type="submit" id="outw-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Log Outward</button>'
     + '</form>';
   }
@@ -263,40 +432,53 @@ window.Pages['outward'] = (() => {
   async function _submit(e) {
     e.preventDefault();
     const date = document.getElementById('outw-date').value;
-    const itemCode = document.getElementById('outw-item-code').value.trim();
-    const description = document.getElementById('outw-description').value.trim();
-    const uom = document.getElementById('outw-uom').value.trim();
-    const quantity = document.getElementById('outw-quantity').value.trim();
     const department = document.getElementById('outw-department').value;
     const remarks = document.getElementById('outw-remarks').value.trim();
+    const items = _collectItemRows();
 
     if (!date) { Utils.showToast('Date is required', 'error'); return; }
-    if (!itemCode) { Utils.showToast('Item Code is required', 'error'); return; }
-    if (!_num(quantity) || _num(quantity) <= 0) { Utils.showToast('Quantity must be greater than 0', 'error'); return; }
+    if (!items.length) { Utils.showToast('Add at least one item', 'error'); return; }
+    const badQty = items.find(it => !_num(it.quantity) || _num(it.quantity) <= 0);
+    if (badQty) { Utils.showToast('"' + badQty.itemCode + '" needs a Quantity greater than 0', 'error'); return; }
 
     // Warn but allow — never block a real issuance over a paperwork mismatch;
     // the server itself never hard-blocks this either (see _imsCreateTxn).
-    if (_selectedStock !== null && _num(quantity) > _selectedStock) {
-      const ok = await Utils.showConfirm(
-        'Only ' + _selectedStock + ' in stock for ' + itemCode + ' — issuing ' + quantity + ' will take it negative. Continue anyway?',
-        { title: 'Stock is short', confirmText: 'Issue Anyway', danger: true }
-      );
+    // Combined into one confirm covering every short row in the batch.
+    const shortRows = items.filter(it => it.stock !== undefined && _num(it.quantity) > _num(it.stock));
+    if (shortRows.length) {
+      const lines = shortRows.map(it => it.itemCode + ' (' + it.stock + ' in stock, issuing ' + it.quantity + ')').join('; ');
+      const ok = await Utils.showConfirm('Short on stock for: ' + lines + '. Continue anyway?', { title: 'Stock is short', confirmText: 'Issue Anyway', danger: true });
       if (!ok) return;
     }
 
     const btn = document.getElementById('outw-submit-btn');
     btn.disabled = true; btn.textContent = 'Saving…';
-    try {
-      const result = await Utils.apiFetch('/api/ims/outward', {
-        method: 'POST',
-        body: JSON.stringify({ date, itemCode, description, uom, quantity, department, remarks }),
-      });
-      Utils.showToast('Outward #' + result.id + ' logged', 'success');
-      renderPage();
-    } catch (err) {
-      Utils.showToast(err.message || 'Failed to log Outward entry', 'error');
-      btn.disabled = false; btn.textContent = 'Log Outward';
+
+    // Sequential POSTs to the existing single-item endpoint (not one atomic
+    // batch insert) -- each row succeeds/fails independently, same as if it
+    // had been logged one at a time, and each still shows up individually
+    // (and cancellably) in the Outward List tab.
+    let okCount = 0;
+    const failed = [];
+    for (const it of items) {
+      try {
+        await Utils.apiFetch('/api/ims/outward', {
+          method: 'POST',
+          body: JSON.stringify({ date, itemCode: it.itemCode, description: it.description, uom: it.uom, quantity: it.quantity, department, remarks, category: _category }),
+        });
+        okCount++;
+      } catch (err) {
+        failed.push(it.itemCode + ' (' + (err.message || 'failed') + ')');
+      }
     }
+
+    if (failed.length) {
+      Utils.showToast(okCount + ' of ' + items.length + ' items logged. Failed: ' + failed.join(', '), okCount ? 'warning' : 'error');
+    } else {
+      Utils.showToast(okCount + ' item' + (okCount === 1 ? '' : 's') + ' logged', 'success');
+    }
+    if (okCount > 0) { renderPage(); return; } // reset back to one empty row on at least partial success
+    btn.disabled = false; btn.textContent = 'Log Outward';
   }
 
   /* ── Render ─────────────────────────────────────────────────────────── */
@@ -304,14 +486,13 @@ window.Pages['outward'] = (() => {
     const el = document.getElementById('main-content');
     if (!el) return;
 
-    _selectedStock = null;
     const isList = _view === 'list';
     const bodyHtml = isList ? _listViewHtml() : _formHtml();
 
-    el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '900px') + ';margin:0 auto;padding:4px 0 40px;">'
+    el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '980px') + ';margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Outward</h1>'
-        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Log stock issued out of the Store to a department — updates that item\'s current stock on the IMS dashboard.</p>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Log stock issued out of the Store to a department — updates each item\'s current stock on the IMS dashboard.</p>'
       + '</div>'
       + _tabsHtml()
       + bodyHtml
@@ -327,7 +508,13 @@ window.Pages['outward'] = (() => {
       return;
     }
 
-    _bindItemCodeInput();
+    document.getElementById('outw-category').addEventListener('change', (e) => { _category = e.target.value; });
+    document.getElementById('outw-add-row').addEventListener('click', () => {
+      document.getElementById('outw-items-tbody').insertAdjacentHTML('beforeend', _itemRowHtml());
+      _bindItemRow(document.getElementById('outw-items-tbody').lastElementChild);
+    });
+    document.getElementById('outw-new-item').addEventListener('click', _openNewItemModal);
+    _bindAllItemRows();
     document.getElementById('outw-form').addEventListener('submit', _submit);
     if (!_mastersLoaded) _loadMasters();
   }

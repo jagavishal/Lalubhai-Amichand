@@ -3787,9 +3787,13 @@ async function _imsCreateTxn(direction, body, user) {
     // Unknown item code — auto-create a minimal catalog stub rather than
     // blocking the entry; store staff can fill in MOQ/Max Level/Vendor later
     // from the IMS page. Matches the "never block a real transaction" call.
+    // category comes from whichever catalog (Stores/ALU) was selected on the
+    // Inward/Outward form -- without this every auto-created stub silently
+    // fell back to the schema default ('Stores'), even when logged as ALU.
+    const category = IMS_CATEGORIES.includes(body.category) ? body.category : 'Stores';
     await pool.query(
-      `INSERT INTO ims_items (item_code, description, uom, current_stock) VALUES ($1,$2,$3,0)`,
-      [itemCode, body.description || '', body.uom || '']
+      `INSERT INTO ims_items (item_code, description, uom, current_stock, category) VALUES ($1,$2,$3,0,$4)`,
+      [itemCode, body.description || '', body.uom || '', category]
     );
   }
 

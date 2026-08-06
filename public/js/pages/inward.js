@@ -4,14 +4,20 @@ window.Pages = window.Pages || {};
 // Logs stock RECEIVED into the Store against the shared MySQL item catalog
 // (see /api/ims/* in server.js — this is NOT Google-Sheets-backed like PR/PO/
 // GRN, it's the same plain-MySQL pattern as Client Master / Payment Entries).
-// One entry = one item movement, mirroring the store team's existing manual
-// "IMS (Stores) - In_Out" sheet (one row per SKU per date). Cancelling an
-// entry here reverses its effect on that item's current_stock server-side.
+// One SUBMIT = one batch (shared Date/Category/Department/Remarks) of
+// multiple item rows, mirroring how the store team actually logs a delivery
+// (several SKUs arrive together on one date). Each row still becomes its own
+// ims_transactions entry server-side (sequential POSTs, not a single atomic
+// batch insert) so partial success/failure per item is still visible and
+// cancellable individually from the Inward List tab below.
+// Cancelling an entry there reverses its effect on that item's current_stock.
 window.Pages['inward'] = (() => {
   /* ── state ──────────────────────────────────────────────────── */
   let _view = 'create'; // 'create' | 'list'
   let _departments = [];
+  let _categories = ['Stores', 'ALU']; // overwritten from /api/ims/masters once loaded
   let _mastersLoaded = false;
+  let _category = 'Stores'; // scopes the item-code dropdown + "+ New Item" modal to one catalog at a time
 
   // List (in-page tab) state.
   let _rows = [];
@@ -24,6 +30,12 @@ window.Pages['inward'] = (() => {
   function _today() { return new Date().toISOString().slice(0, 10); }
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
+
+  // Canonical UOM list, seeded from what's actually in use across the real
+  // Stores/ALU catalogs (Kg/Ltr/PCS/PKT/FOOT/c.m etc.) plus a few common
+  // general-purpose units — "Other…" always covers anything not listed here
+  // rather than hard-blocking entry for a genuinely new unit.
+  const UOM_OPTIONS = ['Kg', 'KGS', 'Ltr', 'PCS', 'PKT', 'FOOT', 'c.m', 'Nos', 'Mtr', 'Box', 'Set', 'Roll', 'Bag'];
 
   /* ── Helpers (styled like PO/GRN Creation, for a consistent look) ─────── */
   function _fieldWrap(label, innerHtml, extra) {
@@ -38,38 +50,71 @@ window.Pages['inward'] = (() => {
     return _fieldWrap(label, '<input type="' + (opts.type || 'text') + '" id="' + id + '" value="' + esc(opts.value || '') + '" placeholder="' + esc(opts.placeholder || '') + '" style="' + _inputStyle + '" />');
   }
 
-  /* ── Masters (departments) ─────────────────────────────────────────── */
+  // UOM select + conditional "Other…" free-text fallback, used both in the
+  // item rows and the "+ New Item" modal (cls prefixes the two element classes).
+  function _uomFieldHtml(cls) {
+    const opts = UOM_OPTIONS.map(u => '<option value="' + esc(u) + '">' + esc(u) + '</option>').join('');
+    return '<select class="' + cls + '-select" style="' + _inputStyle + '"><option value="">Select…</option>' + opts + '<option value="__other__">Other…</option></select>'
+      + '<input type="text" class="' + cls + '-other" placeholder="Enter UOM" style="display:none;margin-top:6px;' + _inputStyle + '" />';
+  }
+  function _bindUomField(root, cls) {
+    const sel = root.querySelector('.' + cls + '-select');
+    const other = root.querySelector('.' + cls + '-other');
+    if (!sel || !other) return;
+    sel.addEventListener('change', () => {
+      if (sel.value === '__other__') { other.style.display = 'block'; other.focus(); }
+      else { other.style.display = 'none'; other.value = ''; }
+    });
+  }
+  function _getUomValue(root, cls) {
+    const sel = root.querySelector('.' + cls + '-select');
+    const other = root.querySelector('.' + cls + '-other');
+    return sel.value === '__other__' ? other.value.trim() : sel.value;
+  }
+  // Auto-selects a matching option when an item is picked from the typeahead
+  // (case-insensitive, e.g. catalog "kg" -> option "Kg"); falls back to
+  // "Other…" with the raw value pre-filled if it isn't one of the presets.
+  function _setUomValue(root, cls, value) {
+    const sel = root.querySelector('.' + cls + '-select');
+    const other = root.querySelector('.' + cls + '-other');
+    const match = UOM_OPTIONS.find(u => u.toLowerCase() === String(value || '').toLowerCase());
+    if (match) { sel.value = match; other.style.display = 'none'; other.value = ''; }
+    else if (value) { sel.value = '__other__'; other.style.display = 'block'; other.value = value; }
+    else { sel.value = ''; other.style.display = 'none'; other.value = ''; }
+  }
+
+  /* ── Masters (departments / categories) ────────────────────────────── */
   async function _loadMasters() {
     try {
       const data = await Utils.apiFetch('/api/ims/masters');
       _departments = (data && data.departments) || [];
+      if (Array.isArray(data?.categories) && data.categories.length) _categories = data.categories;
       _mastersLoaded = true;
       const sel = document.getElementById('inw-department');
       if (sel) sel.innerHTML = '<option value="">Select…</option>' + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
+      const catSel = document.getElementById('inw-category');
+      if (catSel) catSel.innerHTML = _categories.map(c => '<option value="' + esc(c) + '"' + (c === _category ? ' selected' : '') + '>' + esc(c) + '</option>').join('');
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load departments', 'error');
     }
   }
 
-  /* ── Item-code typeahead — matches an existing catalog item and previews
-     its Description/UOM; typing an unrecognised code is still allowed (the
-     server auto-creates a catalog stub for it) ─────────────────────────── */
+  /* ── Item-code typeahead per row — scoped to the selected Category, shows
+     a browsable list immediately on focus (not just once you start typing),
+     and matches an existing catalog item to preview/prefill Description+UOM.
+     Typing an unrecognised code is still allowed — the server auto-creates a
+     catalog stub for it in whichever Category is selected. ────────────────── */
   let _itemSearchTimer = null;
-  function _bindItemCodeInput() {
-    const input = document.getElementById('inw-item-code');
-    const dd = document.getElementById('inw-item-dd');
-    const descInput = document.getElementById('inw-description');
-    const uomInput = document.getElementById('inw-uom');
-    if (!input || !dd) return;
+  function _bindItemCodeInput(input) {
+    const row = input.closest('.inw-item-row');
+    const dd = row.querySelector('.inw-row-dd');
+    const descInput = row.querySelector('.inw-row-desc');
     const runSearch = () => {
       clearTimeout(_itemSearchTimer);
       _itemSearchTimer = setTimeout(async () => {
         const query = input.value.trim();
-        // Empty query still fetches (unfiltered, first 500 by item_code) instead of
-        // bailing out -- otherwise clicking into an empty field showed nothing at
-        // all, since the dropdown only ever populated once you'd typed a character.
         try {
-          const url = '/api/ims/items' + (query ? '?q=' + encodeURIComponent(query) : '');
+          const url = '/api/ims/items?category=' + encodeURIComponent(_category) + (query ? '&q=' + encodeURIComponent(query) : '');
           const matches = await Utils.apiFetch(url) || [];
           if (!matches.length) { dd.style.display = 'none'; return; }
           dd.innerHTML = matches.slice(0, 30).map(m => '<div class="inw-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.itemCode) + '" data-desc="' + esc(m.description) + '" data-uom="' + esc(m.uom) + '">'
@@ -87,10 +132,129 @@ window.Pages['inward'] = (() => {
       if (!opt) return;
       input.value = opt.dataset.code;
       if (descInput) descInput.value = opt.dataset.desc || '';
-      if (uomInput) uomInput.value = opt.dataset.uom || '';
+      _setUomValue(row, 'row-uom', opt.dataset.uom || '');
       dd.style.display = 'none';
     });
+    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+  }
+
+  /* ── Item rows (multi-entry) ────────────────────────────────────────── */
+  function _itemRowHtml() {
+    return '<tr class="inw-item-row" style="border-bottom:1px solid #f1f5f9;">'
+      + '<td style="padding:6px;min-width:170px;position:relative;">'
+        + '<input type="text" class="inw-row-code" autocomplete="off" placeholder="Click or type an item code…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
+        + '<div class="inw-row-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
+      + '</td>'
+      + '<td style="padding:6px;min-width:170px;"><input type="text" class="inw-row-desc" placeholder="Description" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + '<td style="padding:6px;min-width:130px;">' + _uomFieldHtml('row-uom') + '</td>'
+      + '<td style="padding:6px;min-width:100px;"><input type="text" inputmode="decimal" class="inw-row-qty" placeholder="Qty" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" /></td>'
+      + '<td style="padding:6px;text-align:center;"><button type="button" class="inw-row-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
+    + '</tr>';
+  }
+
+  function _itemsTableHtml() {
+    return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+      + '<table style="width:100%;border-collapse:collapse;min-width:780px;">'
+        + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+          + ['Item Code', 'Description', 'UOM', 'Quantity', ''].map(h => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+        + '</tr></thead>'
+        + '<tbody id="inw-items-tbody">' + _itemRowHtml() + '</tbody>'
+      + '</table>'
+    + '</div>';
+  }
+
+  function _bindItemRow(rowEl) {
+    _bindItemCodeInput(rowEl.querySelector('.inw-row-code'));
+    _bindUomField(rowEl, 'row-uom');
+    const removeBtn = rowEl.querySelector('.inw-row-remove');
+    removeBtn.addEventListener('click', () => {
+      const tbody = document.getElementById('inw-items-tbody');
+      if (tbody.querySelectorAll('.inw-item-row').length <= 1) { Utils.showToast('At least one item row is required', 'warning'); return; }
+      rowEl.remove();
+    });
+  }
+
+  function _bindAllItemRows() {
+    document.querySelectorAll('#inw-items-tbody .inw-item-row').forEach(_bindItemRow);
+  }
+
+  function _collectItemRows() {
+    return Array.from(document.querySelectorAll('#inw-items-tbody .inw-item-row')).map(row => ({
+      itemCode: row.querySelector('.inw-row-code').value.trim(),
+      description: row.querySelector('.inw-row-desc').value.trim(),
+      uom: _getUomValue(row, 'row-uom'),
+      quantity: row.querySelector('.inw-row-qty').value.trim(),
+    })).filter(it => it.itemCode);
+  }
+
+  /* ── "+ New Item" modal — adds a brand-new catalog item to whichever
+     Category is currently selected on the form, so store staff don't have to
+     leave Inward to go create it on the IMS page first. ────────────────── */
+  function _openNewItemModal() {
+    const existing = document.getElementById('inw-newitem-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'inw-newitem-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10000;display:grid;place-items:center;padding:16px;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
+    overlay.innerHTML = '<div style="background:#fff;border-radius:18px;width:100%;max-width:440px;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.2);animation:pop-in 200ms cubic-bezier(.16,1,.3,1);">'
+      + '<div style="padding:22px 24px 4px;">'
+        + '<div style="font-size:15px;font-weight:700;color:#0f172a;">New ' + esc(_category) + ' Item</div>'
+        + '<div style="font-size:12px;color:#64748b;margin:2px 0 14px;">Adds a new item to the ' + esc(_category) + ' catalog with 0 opening stock.</div>'
+      + '</div>'
+      + '<form id="inw-ni-form" style="padding:0 24px 22px;display:flex;flex-direction:column;gap:12px;">'
+        + _textField('inw-ni-code', 'Item Code')
+        + _textField('inw-ni-desc', 'Description')
+        + _textField('inw-ni-size', 'Size')
+        + _fieldWrap('UOM', _uomFieldHtml('ni-uom'))
+        + _textField('inw-ni-moq', 'MOQ (Min Order Qty)')
+        + _textField('inw-ni-maxlevel', 'Max Level')
+        + _textField('inw-ni-vendor', 'Vendor Name')
+        + '<div style="display:flex;gap:10px;margin-top:4px;">'
+          + '<button type="submit" id="inw-ni-submit" style="padding:9px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">Add Item</button>'
+          + '<button type="button" id="inw-ni-cancel" style="padding:9px 22px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
+        + '</div>'
+      + '</form>'
+    + '</div>';
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    document.getElementById('inw-ni-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', function escHandler(e) {
+      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', escHandler); }
+    });
+    _bindUomField(overlay, 'ni-uom');
+
+    document.getElementById('inw-ni-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const itemCode = document.getElementById('inw-ni-code').value.trim();
+      if (!itemCode) { Utils.showToast('Item Code is required', 'error'); return; }
+      const btn = document.getElementById('inw-ni-submit');
+      btn.disabled = true; btn.textContent = 'Adding…';
+      try {
+        await Utils.apiFetch('/api/ims/items', {
+          method: 'POST',
+          body: JSON.stringify({
+            itemCode,
+            description: document.getElementById('inw-ni-desc').value.trim(),
+            size: document.getElementById('inw-ni-size').value.trim(),
+            uom: _getUomValue(overlay, 'ni-uom'),
+            moq: document.getElementById('inw-ni-moq').value.trim(),
+            maxLevel: document.getElementById('inw-ni-maxlevel').value.trim(),
+            vendorName: document.getElementById('inw-ni-vendor').value.trim(),
+            openingStock: '0',
+            category: _category,
+          }),
+        });
+        Utils.showToast('"' + itemCode + '" added to ' + _category, 'success');
+        close();
+      } catch (err) {
+        Utils.showToast(err.message || 'Failed to add item', 'error');
+        btn.disabled = false; btn.textContent = 'Add Item';
+      }
+    });
   }
 
   /* ── List (in-page tab) ────────────────────────────────────────────── */
@@ -233,21 +397,26 @@ window.Pages['inward'] = (() => {
   }
 
   /* ── Create form ────────────────────────────────────────────────────── */
+  function _categorySelectHtml() {
+    return _fieldWrap('Category', '<select id="inw-category" style="' + _inputStyle + '">'
+      + _categories.map(c => '<option value="' + esc(c) + '"' + (c === _category ? ' selected' : '') + '>' + esc(c) + '</option>').join('')
+    + '</select>');
+  }
+
   function _formHtml() {
     return '<form id="inw-form" style="display:flex;flex-direction:column;gap:16px;">'
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
         + _textField('inw-date', 'Date', { type: 'date', value: _today() })
-        + '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;position:relative;">'
-          + '<div style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">Item Code</div>'
-          + '<input type="text" id="inw-item-code" autocomplete="off" placeholder="Type an item code…" style="' + _inputStyle + '" />'
-          + '<div id="inw-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
-        + '</div>'
-        + _textField('inw-description', 'Description', { placeholder: 'Auto-fills on match, or type for a new item' })
-        + _textField('inw-uom', 'UOM')
-        + _textField('inw-quantity', 'Quantity', { type: 'text' })
+        + _categorySelectHtml()
         + _fieldWrap('Department', '<select id="inw-department" style="' + _inputStyle + '"><option value="">Select…</option></select>')
       + '</div>'
-      + _fieldWrap('Remarks', '<textarea id="inw-remarks" rows="2" style="' + _inputStyle + 'resize:vertical;"></textarea>')
+      + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
+      + _itemsTableHtml()
+      + '<div style="display:flex;gap:8px;">'
+        + '<button type="button" id="inw-add-row" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item Row</button>'
+        + '<button type="button" id="inw-new-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ New Item…</button>'
+      + '</div>'
+      + _fieldWrap('Remarks (applies to this whole batch)', '<textarea id="inw-remarks" rows="2" style="' + _inputStyle + 'resize:vertical;"></textarea>')
       + '<button type="submit" id="inw-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Log Inward</button>'
     + '</form>';
   }
@@ -255,30 +424,43 @@ window.Pages['inward'] = (() => {
   async function _submit(e) {
     e.preventDefault();
     const date = document.getElementById('inw-date').value;
-    const itemCode = document.getElementById('inw-item-code').value.trim();
-    const description = document.getElementById('inw-description').value.trim();
-    const uom = document.getElementById('inw-uom').value.trim();
-    const quantity = document.getElementById('inw-quantity').value.trim();
     const department = document.getElementById('inw-department').value;
     const remarks = document.getElementById('inw-remarks').value.trim();
+    const items = _collectItemRows();
 
     if (!date) { Utils.showToast('Date is required', 'error'); return; }
-    if (!itemCode) { Utils.showToast('Item Code is required', 'error'); return; }
-    if (!_num(quantity) || _num(quantity) <= 0) { Utils.showToast('Quantity must be greater than 0', 'error'); return; }
+    if (!items.length) { Utils.showToast('Add at least one item', 'error'); return; }
+    const badQty = items.find(it => !_num(it.quantity) || _num(it.quantity) <= 0);
+    if (badQty) { Utils.showToast('"' + badQty.itemCode + '" needs a Quantity greater than 0', 'error'); return; }
 
     const btn = document.getElementById('inw-submit-btn');
     btn.disabled = true; btn.textContent = 'Saving…';
-    try {
-      const result = await Utils.apiFetch('/api/ims/inward', {
-        method: 'POST',
-        body: JSON.stringify({ date, itemCode, description, uom, quantity, department, remarks }),
-      });
-      Utils.showToast('Inward #' + result.id + ' logged', 'success');
-      renderPage();
-    } catch (err) {
-      Utils.showToast(err.message || 'Failed to log Inward entry', 'error');
-      btn.disabled = false; btn.textContent = 'Log Inward';
+
+    // Sequential POSTs to the existing single-item endpoint (not one atomic
+    // batch insert) -- each row succeeds/fails independently, same as if it
+    // had been logged one at a time, and each still shows up individually
+    // (and cancellably) in the Inward List tab.
+    let okCount = 0;
+    const failed = [];
+    for (const it of items) {
+      try {
+        await Utils.apiFetch('/api/ims/inward', {
+          method: 'POST',
+          body: JSON.stringify({ date, itemCode: it.itemCode, description: it.description, uom: it.uom, quantity: it.quantity, department, remarks, category: _category }),
+        });
+        okCount++;
+      } catch (err) {
+        failed.push(it.itemCode + ' (' + (err.message || 'failed') + ')');
+      }
     }
+
+    if (failed.length) {
+      Utils.showToast(okCount + ' of ' + items.length + ' items logged. Failed: ' + failed.join(', '), okCount ? 'warning' : 'error');
+    } else {
+      Utils.showToast(okCount + ' item' + (okCount === 1 ? '' : 's') + ' logged', 'success');
+    }
+    if (okCount > 0) { renderPage(); return; } // reset back to one empty row on at least partial success
+    btn.disabled = false; btn.textContent = 'Log Inward';
   }
 
   /* ── Render ─────────────────────────────────────────────────────────── */
@@ -289,10 +471,10 @@ window.Pages['inward'] = (() => {
     const isList = _view === 'list';
     const bodyHtml = isList ? _listViewHtml() : _formHtml();
 
-    el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '900px') + ';margin:0 auto;padding:4px 0 40px;">'
+    el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '980px') + ';margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Inward</h1>'
-        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Log stock received into the Store — updates that item\'s current stock on the IMS dashboard.</p>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Log stock received into the Store — updates each item\'s current stock on the IMS dashboard.</p>'
       + '</div>'
       + _tabsHtml()
       + bodyHtml
@@ -308,7 +490,13 @@ window.Pages['inward'] = (() => {
       return;
     }
 
-    _bindItemCodeInput();
+    document.getElementById('inw-category').addEventListener('change', (e) => { _category = e.target.value; });
+    document.getElementById('inw-add-row').addEventListener('click', () => {
+      document.getElementById('inw-items-tbody').insertAdjacentHTML('beforeend', _itemRowHtml());
+      _bindItemRow(document.getElementById('inw-items-tbody').lastElementChild);
+    });
+    document.getElementById('inw-new-item').addEventListener('click', _openNewItemModal);
+    _bindAllItemRows();
     document.getElementById('inw-form').addEventListener('submit', _submit);
     if (!_mastersLoaded) _loadMasters();
   }
