@@ -70,9 +70,12 @@ window.Pages['outward'] = (() => {
         const query = input.value.trim();
         _selectedStock = null;
         if (stockHint) stockHint.textContent = '';
-        if (!query) { dd.style.display = 'none'; return; }
+        // Empty query still fetches (unfiltered, first 500 by item_code) instead of
+        // bailing out -- otherwise clicking into an empty field showed nothing at
+        // all, since the dropdown only ever populated once you'd typed a character.
         try {
-          const matches = await Utils.apiFetch('/api/ims/items?q=' + encodeURIComponent(query)) || [];
+          const url = '/api/ims/items' + (query ? '?q=' + encodeURIComponent(query) : '');
+          const matches = await Utils.apiFetch(url) || [];
           if (!matches.length) { dd.style.display = 'none'; return; }
           dd.innerHTML = matches.slice(0, 30).map(m => '<div class="outw-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.itemCode) + '" data-desc="' + esc(m.description) + '" data-uom="' + esc(m.uom) + '" data-stock="' + esc(m.currentStock) + '">'
             + '<b>' + esc(m.itemCode) + '</b> — ' + esc(m.description) + ' <span style="color:#94a3b8;">(stock: ' + esc(m.currentStock) + ')</span></div>').join('');
