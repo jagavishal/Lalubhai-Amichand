@@ -3879,6 +3879,18 @@ app.put('/api/proforma-invoice/cancel', requireAuth, async (req, res) => {
 
 // ── Payment Entries ───────────────────────────────────────────────────────────
 
+// Next 'PE######' id, keyed off the highest numeric suffix ever issued — not
+// COUNT(*). Both POST and PATCH below used to seed their id counter from
+// COUNT(*), but every Save Draft click deletes-then-reinserts drafts, so ids
+// get burned without the row count ever dropping to match. COUNT(*) then
+// drifts below the highest id actually in the table and collides with an
+// existing row ("Duplicate entry 'PE000092' for key 'PRIMARY'"). Same fix as
+// nextDelId() above for delegations.
+async function nextPaymentEntryId() {
+  const rows = await q("SELECT MAX(CAST(SUBSTRING(id,3) AS UNSIGNED)) AS maxnum FROM payment_entries WHERE id REGEXP '^PE[0-9]+'");
+  return (rows.length && rows[0].maxnum) ? parseInt(rows[0].maxnum) || 0 : 0;
+}
+
 // GET /api/payment-entries — return all draft entries
 app.get('/api/payment-entries', requireAuth, async (req, res) => {
   try {
@@ -3898,8 +3910,7 @@ app.post('/api/payment-entries', requireAuth, async (req, res) => {
     // Delete all current drafts then re-insert
     await pool.query(`DELETE FROM payment_entries WHERE status='draft'`);
     let counter = 0;
-    const cnt = await q('SELECT COUNT(*) AS c FROM payment_entries');
-    let base = Number(cnt[0]?.c || 0);
+    let base = await nextPaymentEntryId();
     for (const e of entries) {
       if (!e.vendorId || !e.amount) continue;
       counter++;
@@ -3926,8 +3937,7 @@ app.patch('/api/payment-entries', requireAuth, async (req, res) => {
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
     const label = batchLabel || ('Export ' + new Date().toLocaleDateString('en-IN'));
     const user = req.session?.user?.name || req.session?.user?.email || '';
-    const cnt = await q('SELECT COUNT(*) AS c FROM payment_entries');
-    let base = Number(cnt[0]?.c || 0);
+    let base = await nextPaymentEntryId();
     const ids = [];
     for (const e of entries) {
       if (e.id) {
