@@ -1002,8 +1002,12 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
     } else if (isHOD) {
       // Department subquery keys off the HOD's own id, never a cached session
       // string — see the /api/dashboard comment on why that matters.
-      sqlWhere = `WHERE doer_id IN (SELECT id FROM users WHERE LOWER(TRIM(department))=(SELECT LOWER(TRIM(department)) FROM users WHERE id=$1)) OR doer_id=$1 OR LOWER(doer)=LOWER($2) OR delegated_by=$1`;
-      params.push(userId, userName);
+      // NOTE: this app's MySQL path (pgToMysql()) rewrites every `$N` to a
+      // positional `?` with no dedup — each occurrence needs its OWN param,
+      // even when the value repeats (unlike native Postgres, which can reuse
+      // $1). Never reuse a placeholder number here.
+      sqlWhere = `WHERE doer_id IN (SELECT id FROM users WHERE LOWER(TRIM(department))=(SELECT LOWER(TRIM(department)) FROM users WHERE id=$1)) OR doer_id=$2 OR LOWER(doer)=LOWER($3) OR delegated_by=$4`;
+      params.push(userId, userId, userName, userId);
     } else if (!isAdmin) {
       sqlWhere = `WHERE (doer_id=$1 OR LOWER(doer)=LOWER($2) OR delegated_by=$3)`;
       params.push(userId, userName, userId);
