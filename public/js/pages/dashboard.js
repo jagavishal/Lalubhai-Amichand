@@ -49,6 +49,15 @@ window.Pages.dashboard = (function () {
     return roles.includes('Admin') || roles.includes('HOD');
   }
 
+  // HOD (but not true Admin) — sees their own tasks by default, with an "All (My
+  // Team)" option in the employee picker to see their whole department. Mirrors
+  // isHODUser() in server.js — keep the two in sync.
+  function isHOD(user) {
+    if (!user) return false;
+    const roles = Array.isArray(user.roles) ? user.roles : (user.roles || '').split(',').map(r => r.trim());
+    return roles.includes('HOD') && !roles.includes('Admin');
+  }
+
   function avatarHTML(name) {
     return window.UI.avatar(name || '', { size: 22 });
   }
@@ -141,6 +150,7 @@ window.Pages.dashboard = (function () {
     type:        t => (t.type || '').toLowerCase(),
     description: t => (t.description || '').toLowerCase(),
     doer:        t => (t.doer || '').toLowerCase(),
+    frequency:   t => (t.frequency || '').toLowerCase(),
     priority:    t => PRIORITY_RANK[t.priority] ?? 99,
     date:        t => t.date ? new Date(t.date).getTime() : -Infinity,
   };
@@ -208,6 +218,7 @@ window.Pages.dashboard = (function () {
 
     const user = window.currentUser;
     const admin = isAdmin(user);
+    const hod = isHOD(user);
 
     /* parallel fetches */
     const [dashData, usersData, holidaysData, delegationsData] = await Promise.all([
@@ -226,18 +237,30 @@ window.Pages.dashboard = (function () {
     _state.subTab      = 'All';
     _state.userFilter  = 'All';
 
-    _renderShell(el, admin);
+    _renderShell(el, admin, hod);
     } catch(err) {
       el.innerHTML = `<div style="padding:2rem;color:#dc2626;font-size:14px;">❌ Dashboard error: ${err.message}</div>`;
       console.error('Dashboard render error:', err);
     }
   }
 
-  function _renderShell(el, admin) {
+  function _renderShell(el, admin, hod) {
     const { data, users, holidays } = _state;
     const allDoers = [...new Set((users || []).map(u => u.name))].sort();
+    const me = window.currentUser;
+    const myDept = me?.department || '';
+    // HOD's picker only ever lists their own department's team, never the whole company.
+    const teamUsers = hod ? (users || []).filter(u => (u.department || '') === myDept && u.name !== me?.name) : [];
 
     const perf = admin ? computePerf(_state.delegations, users) : null;
+
+    const empOptionRow = u => {
+      const dept = (u.department||'').length > 16 ? (u.department||'').slice(0,16)+'…' : (u.department||'');
+      return `<div data-emp-val="${u.name}" data-emp-label="${u.name}${u.department ? ' · '+u.department : ''}" class="db-emp-opt" style="padding:8px 14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <span style="font-size:12.5px;font-weight:600;color:#0f172a;">${u.name}</span>
+        ${dept ? `<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">${dept}</span>` : ''}
+      </div>`;
+    };
 
     el.innerHTML = `
       <style>
@@ -282,7 +305,7 @@ window.Pages.dashboard = (function () {
             <button id="db-emp-trigger" style="display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:1.5px solid #e2e8f0;background:#fff;font-size:13px;font-weight:500;color:#374151;cursor:pointer;min-width:200px;justify-content:space-between;">
               <span style="display:flex;align-items:center;gap:7px;">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                <span id="db-emp-label" style="font-weight:600;">All Employees</span>
+                <span id="db-emp-label" style="font-weight:600;">${hod ? 'My Tasks' : 'All Employees'}</span>
               </span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
             </button>
@@ -291,14 +314,14 @@ window.Pages.dashboard = (function () {
                 <input id="db-emp-search" type="text" placeholder="Search employee..." style="width:100%;padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12px;outline:none;box-sizing:border-box;" />
               </div>
               <div id="db-emp-list" style="max-height:260px;overflow-y:auto;padding:4px 0;">
+                ${hod ? `
+                <div data-emp-val="${me?.name||''}" data-emp-label="My Tasks" class="db-emp-opt" style="padding:8px 14px;cursor:pointer;font-size:12.5px;font-weight:700;color:#374151;background:#f0f9ff;">My Tasks</div>
+                <div data-emp-val="All" data-emp-label="All (My Team)" class="db-emp-opt" style="padding:8px 14px;cursor:pointer;font-size:12.5px;font-weight:600;color:#374151;">All (My Team)</div>
+                ${teamUsers.sort((a,b)=>a.name.localeCompare(b.name)).map(empOptionRow).join('')}
+                ` : `
                 <div data-emp-val="All" data-emp-label="All Employees" class="db-emp-opt" style="padding:8px 14px;cursor:pointer;font-size:12.5px;font-weight:600;color:#374151;background:#f0f9ff;">All Employees</div>
-                ${(users || []).sort((a,b)=>a.name.localeCompare(b.name)).map(u => {
-                  const dept = (u.department||'').length > 16 ? (u.department||'').slice(0,16)+'…' : (u.department||'');
-                  return `<div data-emp-val="${u.name}" data-emp-label="${u.name}${u.department ? ' · '+u.department : ''}" class="db-emp-opt" style="padding:8px 14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;">
-                    <span style="font-size:12.5px;font-weight:600;color:#0f172a;">${u.name}</span>
-                    ${dept ? `<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">${dept}</span>` : ''}
-                  </div>`;
-                }).join('')}
+                ${(users || []).sort((a,b)=>a.name.localeCompare(b.name)).map(empOptionRow).join('')}
+                `}
               </div>
             </div>
           </div>` : `<h2 style="font-size:17px;font-weight:700;color:#0f172a;margin:0;">Dashboard</h2>`}
@@ -810,7 +833,7 @@ window.Pages.dashboard = (function () {
 
     if (filtered.length === 0) {
       table.innerHTML = `
-        <tbody><tr><td colspan="6" style="padding:3rem;text-align:center;">
+        <tbody><tr><td colspan="7" style="padding:3rem;text-align:center;">
           <div style="width:44px;height:44px;border-radius:14px;background:#ecfdf5;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
           </div>
@@ -847,7 +870,7 @@ window.Pages.dashboard = (function () {
             <span style="font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;" title="${t.description}">${t.description}</span>
             ${urlLink}
           </div>
-          ${t.type === 'Checklist' && (t.frequency || t.department) ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${[t.frequency ? t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1) : '', t.department].filter(Boolean).join(' · ')}</div>` : ''}
+          ${t.type === 'Checklist' && t.department ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${t.department}</div>` : ''}
           ${t.type === 'FMS' && Array.isArray(t.details) && t.details.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${t.details.map(d => `<span style="font-size:10px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:1px 6px;white-space:nowrap;"><b>${esc(d.header)}:</b> ${esc(d.value) || '—'}</span>`).join('')}</div>` : ''}
           ${transferred}
         </td>
@@ -857,6 +880,7 @@ window.Pages.dashboard = (function () {
             <span style="color:#334155;">${t.doer || '—'}</span>
           </div>
         </td>
+        <td style="${tdStyle}">${t.frequency ? t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1) : '—'}</td>
         <td style="${tdStyle}">${priorityHTML(t.type, t.priority)}</td>
         <td style="${tdStyle}white-space:nowrap;font-size:12px;${dateStyle}">${fmt(t.date)}</td>
         <td style="${tdStyle}">
@@ -876,6 +900,7 @@ window.Pages.dashboard = (function () {
           ${sortTh('type', 'Type')}
           ${sortTh('description', 'Description')}
           ${sortTh('doer', 'Doer')}
+          ${sortTh('frequency', 'Frequency')}
           ${sortTh('priority', 'Priority')}
           ${sortTh('date', 'Date')}
           <th style="${thStyle}">Action</th>
@@ -1182,7 +1207,10 @@ window.Pages.dashboard = (function () {
       });
       /* re-fetch from server with doer filter */
       try {
-        const url = val === 'All' ? '/api/dashboard' : `/api/dashboard?doer=${encodeURIComponent(val)}`;
+        // Always pass ?doer explicitly (even for "All") — the server tells apart a
+        // bare request (role-based default: everyone for Admin, personal for HOD)
+        // from an explicit "All" pick (everyone for Admin, whole team for HOD).
+        const url = `/api/dashboard?doer=${encodeURIComponent(val)}`;
         const newData = await Utils.apiFetch(url);
         if (!newData) throw new Error('No data returned');
         _state.data = newData;

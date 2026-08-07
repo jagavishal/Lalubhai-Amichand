@@ -47,6 +47,7 @@ window.Pages['all-tasks'] = (function () {
     doer:        t => (t.doer || '').toLowerCase(),
     assignee:    t => getUserName(t.delegatedBy).toLowerCase(),
     dueDate:     t => t.dueDate ? new Date(t.dueDate).getTime() : -Infinity,
+    frequency:   t => (t.frequency || '').toLowerCase(),
     remarks:     t => (t.remarks || '').toLowerCase(),
     status:      t => STATUS_RANK[t.status] ?? 99,
   };
@@ -175,6 +176,7 @@ window.Pages['all-tasks'] = (function () {
           status:      doneIds.has(m.id) ? 'done' : 'pending',
           type:        'Checklist',
           priority:    'Low',
+          frequency:   m.frequency || '',
           remarks:     m.remarks || '',
           url:         '',
           createdAt:   m.createdAt || m.created_at || '',
@@ -406,6 +408,7 @@ window.Pages['all-tasks'] = (function () {
         <td class="at-td" style="color:#475569;white-space:nowrap">${esc(t.doer || '—')}</td>
         <td class="at-td" style="color:#64748b;white-space:nowrap">${esc(getUserName(t.delegatedBy))}</td>
         <td class="at-td" style="white-space:nowrap;font-size:12px;${t.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#64748b;'}">${fmt(t.dueDate)}</td>
+        <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${esc(t.frequency ? t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1) : '—')}</td>
         <td class="at-td" style="color:#94a3b8;max-width:160px;font-size:12px">${esc(t.remarks || '—')}</td>
         <td class="at-td">${statusPill(t.status)}</td>
       </tr>`;
@@ -439,6 +442,7 @@ window.Pages['all-tasks'] = (function () {
               ${sortTh('doer', 'Doer')}
               ${sortTh('assignee', 'Assignee')}
               ${sortTh('dueDate', 'Due Date')}
+              ${sortTh('frequency', 'Frequency')}
               ${sortTh('remarks', 'Remarks')}
               ${sortTh('status', 'Status')}
             </tr>
