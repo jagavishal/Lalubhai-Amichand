@@ -911,7 +911,14 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
   } else if (hod) {
     const doer = req.query.doer || '';
     if (doer === 'All') {
-      fmsTeamSet = new Set((store.users || []).filter(u => normDept(u.department) === normDept(user.department)).map(u => (u.name || '').trim().toLowerCase()));
+      // Look up the HOD's OWN department fresh off store.users (keyed by the stable
+      // id) rather than trusting req.session.user.department — the session is a
+      // snapshot from login time (sessions live up to 30 days), so if a department
+      // was assigned/renamed after that login, the cached string silently no
+      // longer matches anyone, including the HOD's own department, and "All (My
+      // Team)" resolves to an empty team instead of erroring.
+      const myFreshDept = (store.users || []).find(u => u.id === user.id)?.department ?? user.department;
+      fmsTeamSet = new Set((store.users || []).filter(u => normDept(u.department) === normDept(myFreshDept)).map(u => (u.name || '').trim().toLowerCase()));
       doerFilter = fmsTeamSet;
     } else if (doer) {
       doerFilter = doer;
@@ -956,7 +963,6 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
     const sessUser = req.session?.user;
     const userId = sessUser?.id;
     const userName = sessUser?.name || '';
-    const userDept = sessUser?.department || '';
     const isAdmin = isAdminUser(sessUser);
     const isHOD = isHODUser(sessUser);
 
@@ -974,8 +980,11 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
       else if (filter === 'approval_required') rows = rows.filter(d => d.approval === 'Approval Required' && d.status === 'pending');
       else if (myRevise === 'true') rows = rows.filter(d => (d.doerId === userId || d.doer === userName) && d.status === 'revise');
       // HOD sees their department's team plus anything they personally own/delegated — not the whole company.
+      // Department is looked up fresh off store.users by id, not off the (possibly
+      // stale, up to 30-day-old) session — see the matching comment in /api/dashboard.
       else if (isHOD) {
-        const teamNames = new Set((store.users || []).filter(u => normDept(u.department) === normDept(userDept)).map(u => (u.name || '').toLowerCase()));
+        const myFreshDept = (store.users || []).find(u => u.id === userId)?.department || '';
+        const teamNames = new Set((store.users || []).filter(u => normDept(u.department) === normDept(myFreshDept)).map(u => (u.name || '').toLowerCase()));
         rows = rows.filter(d => teamNames.has((d.doer || '').toLowerCase()) || d.doerId === userId || d.delegatedBy === userId);
       }
       // Plain users only ever see tasks assigned to them or delegated by them — never the whole company's.
@@ -991,8 +1000,10 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
       sqlWhere = `WHERE (doer_id=$1 OR doer=$2) AND status='revise'`;
       params.push(userId, userName);
     } else if (isHOD) {
-      sqlWhere = `WHERE doer_id IN (SELECT id FROM users WHERE LOWER(TRIM(department))=LOWER(TRIM($1))) OR doer_id=$2 OR LOWER(doer)=LOWER($3) OR delegated_by=$4`;
-      params.push(userDept, userId, userName, userId);
+      // Department subquery keys off the HOD's own id, never a cached session
+      // string — see the /api/dashboard comment on why that matters.
+      sqlWhere = `WHERE doer_id IN (SELECT id FROM users WHERE LOWER(TRIM(department))=(SELECT LOWER(TRIM(department)) FROM users WHERE id=$1)) OR doer_id=$1 OR LOWER(doer)=LOWER($2) OR delegated_by=$1`;
+      params.push(userId, userName);
     } else if (!isAdmin) {
       sqlWhere = `WHERE (doer_id=$1 OR LOWER(doer)=LOWER($2) OR delegated_by=$3)`;
       params.push(userId, userName, userId);
@@ -1417,13 +1428,16 @@ app.get('/api/masters', requireAuth, async (req, res) => {
   const sessUser = req.session?.user;
   const isAdmin = isAdminUser(sessUser);
   const isHOD = isHODUser(sessUser);
+  const userId = sessUser?.id;
   const userName = (sessUser?.name || '').trim().toLowerCase();
-  const userDept = sessUser?.department || '';
   if (!USE_DB) {
     const store = await readStore();
     let rows = store.masters||[];
     if (isHOD) {
-      const teamNames = new Set((store.users || []).filter(u => normDept(u.department) === normDept(userDept)).map(u => (u.name || '').trim().toLowerCase()));
+      // Department looked up fresh off store.users by id — see /api/dashboard's
+      // comment on why a cached session department string isn't trustworthy.
+      const myFreshDept = (store.users || []).find(u => u.id === userId)?.department || '';
+      const teamNames = new Set((store.users || []).filter(u => normDept(u.department) === normDept(myFreshDept)).map(u => (u.name || '').trim().toLowerCase()));
       rows = rows.filter(m => teamNames.has((m.assignedTo||'').trim().toLowerCase()) || (m.assignedTo||'').trim().toLowerCase() === userName);
     } else if (!isAdmin) {
       rows = rows.filter(m => (m.assignedTo||'').trim().toLowerCase() === userName);
@@ -1434,7 +1448,8 @@ app.get('/api/masters', requireAuth, async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM masters ORDER BY created_at DESC');
   let mapped = rows.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) }));
   if (isHOD) {
-    const teamRows = await q('SELECT LOWER(TRIM(name)) AS n FROM users WHERE LOWER(TRIM(department))=LOWER(TRIM($1))', [userDept]);
+    // Department subquery keys off the HOD's own id, never a cached session string.
+    const teamRows = await q('SELECT LOWER(TRIM(name)) AS n FROM users WHERE LOWER(TRIM(department))=(SELECT LOWER(TRIM(department)) FROM users WHERE id=$1)', [userId]);
     const teamNames = new Set(teamRows.map(r => r.n));
     mapped = mapped.filter(m => teamNames.has(m.assignedTo.trim().toLowerCase()) || m.assignedTo.trim().toLowerCase() === userName);
   } else if (!isAdmin) {
