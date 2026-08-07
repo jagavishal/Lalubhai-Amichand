@@ -695,16 +695,26 @@ window.Pages['client-master'] = (() => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ entries }),
         });
-        if (!res.ok) throw new Error('Server error');
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || ('Server error (' + res.status + ')'));
+        }
         _pmSaved = true;
         Utils.showToast('Draft entries saved to server', 'success');
-      } catch { Utils.showToast('Failed to save', 'error'); }
+      } catch (e) { Utils.showToast(e.message || 'Failed to save', 'error'); }
       finally { _pmSaving = false; }
+      // Only flip the button to "✓ Saved" when the save actually succeeded — it
+      // used to be set unconditionally here, so a failed save (caught above and
+      // reported via toast) still left the button falsely claiming success.
       if (saveBtn) {
-        saveBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>✓ Saved';
-        setTimeout(() => {
-          if (saveBtn.textContent.includes('Saved')) saveBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save Draft';
-        }, 2500);
+        if (_pmSaved) {
+          saveBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>✓ Saved';
+          setTimeout(() => {
+            if (saveBtn.textContent.includes('Saved')) saveBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save Draft';
+          }, 2500);
+        } else {
+          saveBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save Draft';
+        }
       }
     });
 
@@ -836,7 +846,10 @@ window.Pages['client-master'] = (() => {
               batchLabel,
             }),
           });
-          if (!patchRes.ok) throw new Error('Failed to record export in history');
+          if (!patchRes.ok) {
+            const body = await patchRes.json().catch(() => ({}));
+            throw new Error(body.error || ('Failed to record export in history (' + patchRes.status + ')'));
+          }
           // Remove exported rows from draft grid
           const exportedSet = new Set(exportedRows);
           _pmRows = _pmRows.filter(r => !exportedSet.has(r));
@@ -844,8 +857,8 @@ window.Pages['client-master'] = (() => {
           _refreshPmTbody();
           _updatePmHeader();
           Utils.showToast('Payment files downloaded (Excel + Text) — ' + rows.length + ' entries exported', 'success');
-        } catch {
-          Utils.showToast('Files downloaded, but recording the export in Payment History failed — please retry Export.', 'error');
+        } catch (e) {
+          Utils.showToast('Files downloaded, but recording the export in Payment History failed: ' + (e.message || 'unknown error') + ' — please retry Export.', 'error');
         }
       } else {
         Utils.showToast('Payment files downloaded (Excel + Text) — ' + rows.length + ' entries exported', 'success');
@@ -863,8 +876,18 @@ window.Pages['client-master'] = (() => {
   async function _phLoad() {
     try {
       const res = await fetch('/api/payment-history');
-      _phRows = res.ok ? (await res.json()) : [];
-    } catch { _phRows = []; }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || ('Failed to load payment history (' + res.status + ')'));
+      }
+      _phRows = await res.json();
+    } catch (e) {
+      // Previously swallowed silently, so a failed fetch (expired session, DB
+      // error, etc.) looked identical to "no history yet" — an empty table
+      // with no clue why. Surface it instead of guessing.
+      _phRows = [];
+      Utils.showToast(e.message || 'Failed to load payment history', 'error');
+    }
   }
 
   function _phBatches() {
