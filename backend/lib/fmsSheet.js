@@ -414,26 +414,34 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
   // task-shaped items mergeable into the app's generic pending-task array.
   async function getMyFmsPendingRows({ userId, userName, isAdmin }) {
     const sheets = await getFmsSheetsForUser(userId, isAdmin);
-    const out = [];
     const todayStr = new Date().toISOString().slice(0, 10);
-    for (const sheet of sheets) {
+
+    // Each sheet needs its own Sheets API round-trip (steps + full data) — run
+    // them concurrently so N configured FMS sheets don't multiply the
+    // Dashboard's load time. Same fix as getFmsSheetsWithStats() above for the
+    // FMS list page — this aggregator was the one call site that still awaited
+    // sheets one at a time inside a for-loop, which is why plain Dashboard
+    // loads (which call this on every request, with no caching) were visibly
+    // slower than every other page once more than one FMS sheet was configured.
+    const perSheet = await Promise.all(sheets.map(async sheet => {
       let steps;
-      try { steps = await getFullSteps(sheet.id); } catch { continue; }
+      try { steps = await getFullSteps(sheet.id); } catch { return []; }
       const relevantSteps = isAdmin ? steps : steps.filter(s => (s.doers || []).some(d => d.user_id === userId));
-      if (!relevantSteps.length) continue;
+      if (!relevantSteps.length) return [];
 
       let sheetData;
       try { sheetData = await fetchSheetData(sheet); } catch (e) {
         console.error('[fms] sheet fetch failed for', sheet.id, e.message);
-        continue;
+        return [];
       }
 
+      const rowsOut = [];
       relevantSteps.forEach(step => {
         const { rows } = computePendingRows(sheetData, step, { userName, isAdmin });
         rows.forEach(r => {
           const dueDate = parsePlanDate(r.planValue);
           const overdue = !!(dueDate && dueDate < todayStr);
-          out.push({
+          rowsOut.push({
             id: `FMS-${sheet.id}-${step.id}-${r.sheetRowNumber}`,
             fmsId: sheet.id, stepId: step.id, rowNumber: r.sheetRowNumber,
             type: 'FMS',
@@ -450,8 +458,10 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
           });
         });
       });
-    }
-    return out;
+      return rowsOut;
+    }));
+
+    return perSheet.flat();
   }
 
   /* ── write-back ──────────────────────────────────────────────────────── */
