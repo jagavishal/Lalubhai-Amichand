@@ -724,6 +724,16 @@ function isHODUser(user) {
   return rolesArr.includes('HOD') && !isTrueAdminUser(user);
 }
 
+// `department` is free text (Users admin has "+ Add new department" alongside a
+// dropdown of existing values), so two team members can end up with the "same"
+// department that differs only in case or stray whitespace (e.g. a CSV import).
+// Every HOD team-scoping comparison MUST go through this — a raw `===` silently
+// drops teammates whose department string doesn't byte-for-byte match the HOD's,
+// which looks exactly like "HOD only sees their own tasks, never the team's".
+function normDept(d) {
+  return (d || '').trim().toLowerCase();
+}
+
 // req.session.user never carries `permissions` itself (only /api/auth/session
 // fetches it fresh, see below) — so any route-level feature gate needs its
 // own fresh lookup, scoped to just the one column rather than pulling in
@@ -901,7 +911,7 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
   } else if (hod) {
     const doer = req.query.doer || '';
     if (doer === 'All') {
-      fmsTeamSet = new Set((store.users || []).filter(u => (u.department || '') === (user.department || '')).map(u => (u.name || '').trim().toLowerCase()));
+      fmsTeamSet = new Set((store.users || []).filter(u => normDept(u.department) === normDept(user.department)).map(u => (u.name || '').trim().toLowerCase()));
       doerFilter = fmsTeamSet;
     } else if (doer) {
       doerFilter = doer;
@@ -965,7 +975,7 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
       else if (myRevise === 'true') rows = rows.filter(d => (d.doerId === userId || d.doer === userName) && d.status === 'revise');
       // HOD sees their department's team plus anything they personally own/delegated — not the whole company.
       else if (isHOD) {
-        const teamNames = new Set((store.users || []).filter(u => (u.department || '') === userDept).map(u => (u.name || '').toLowerCase()));
+        const teamNames = new Set((store.users || []).filter(u => normDept(u.department) === normDept(userDept)).map(u => (u.name || '').toLowerCase()));
         rows = rows.filter(d => teamNames.has((d.doer || '').toLowerCase()) || d.doerId === userId || d.delegatedBy === userId);
       }
       // Plain users only ever see tasks assigned to them or delegated by them — never the whole company's.
@@ -981,7 +991,7 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
       sqlWhere = `WHERE (doer_id=$1 OR doer=$2) AND status='revise'`;
       params.push(userId, userName);
     } else if (isHOD) {
-      sqlWhere = `WHERE doer_id IN (SELECT id FROM users WHERE department=$1) OR doer_id=$2 OR LOWER(doer)=LOWER($3) OR delegated_by=$4`;
+      sqlWhere = `WHERE doer_id IN (SELECT id FROM users WHERE LOWER(TRIM(department))=LOWER(TRIM($1))) OR doer_id=$2 OR LOWER(doer)=LOWER($3) OR delegated_by=$4`;
       params.push(userDept, userId, userName, userId);
     } else if (!isAdmin) {
       sqlWhere = `WHERE (doer_id=$1 OR LOWER(doer)=LOWER($2) OR delegated_by=$3)`;
@@ -1413,7 +1423,7 @@ app.get('/api/masters', requireAuth, async (req, res) => {
     const store = await readStore();
     let rows = store.masters||[];
     if (isHOD) {
-      const teamNames = new Set((store.users || []).filter(u => (u.department || '') === userDept).map(u => (u.name || '').trim().toLowerCase()));
+      const teamNames = new Set((store.users || []).filter(u => normDept(u.department) === normDept(userDept)).map(u => (u.name || '').trim().toLowerCase()));
       rows = rows.filter(m => teamNames.has((m.assignedTo||'').trim().toLowerCase()) || (m.assignedTo||'').trim().toLowerCase() === userName);
     } else if (!isAdmin) {
       rows = rows.filter(m => (m.assignedTo||'').trim().toLowerCase() === userName);
@@ -1424,7 +1434,7 @@ app.get('/api/masters', requireAuth, async (req, res) => {
   const { rows } = await pool.query('SELECT * FROM masters ORDER BY created_at DESC');
   let mapped = rows.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) }));
   if (isHOD) {
-    const teamRows = await q('SELECT LOWER(TRIM(name)) AS n FROM users WHERE department=$1', [userDept]);
+    const teamRows = await q('SELECT LOWER(TRIM(name)) AS n FROM users WHERE LOWER(TRIM(department))=LOWER(TRIM($1))', [userDept]);
     const teamNames = new Set(teamRows.map(r => r.n));
     mapped = mapped.filter(m => teamNames.has(m.assignedTo.trim().toLowerCase()) || m.assignedTo.trim().toLowerCase() === userName);
   } else if (!isAdmin) {
