@@ -1050,7 +1050,7 @@ async function sendChecklistTransferEmail({ assignedTo, taskDesc, prevAssignee }
 async function resolveDelegator(task) {
   const delegatorId = task.delegated_by || task.delegatedBy;
   if (!delegatorId) return null;
-  const uRows = await q('SELECT email, name FROM users WHERE id=$1 OR email=$1 LIMIT 1', [delegatorId]);
+  const uRows = await q('SELECT email, name FROM users WHERE id=$1 OR email=$2 LIMIT 1', [delegatorId, delegatorId]);
   return uRows[0] || null;
 }
 
