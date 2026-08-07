@@ -301,8 +301,18 @@ async function seedIfEmpty() {
 
 async function fixCollations() {
   if (!USE_DB) return;
+  // Every table the app creates needs to be listed here, not just the ones a
+  // query happens to JOIN today — a table left off this list keeps whatever
+  // collation the MySQL server's default happened to be the day it was first
+  // created (e.g. utf8mb4_uca1400_ai_ci on newer MySQL), while everything
+  // below is force-normalized to utf8mb4_unicode_ci. payment_entries was
+  // added after this list and missed it, so LEFT JOIN clients ON c.id =
+  // pe.vendor_id (Payment History) failed with "Illegal mix of collations" —
+  // add new tables here the same day they're added to SCHEMA above.
   const tables = ['users','delegations','masters','clients','checklist_completions','daily_tasks','leaves','user_sessions',
-    'fms_sheets','fms_sheet_steps','fms_step_doers','fms_extra_rows','fms_intake_fields'];
+    'fms_sheets','fms_sheet_steps','fms_step_doers','fms_extra_rows','fms_intake_fields',
+    'holidays','profile','app_config','meetings','dev_backups','help_tickets','announcements',
+    'vendor_submissions','pr_requisitions','payment_entries','ims_items','ims_transactions'];
   // A couple of these tables carry a leftover FOREIGN KEY constraint from an
   // earlier schema iteration (the current schema style is FK-less, app-generated
   // string ids) that blocks ALTER ... CONVERT TO CHARACTER SET on either side of
