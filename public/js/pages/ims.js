@@ -1,24 +1,39 @@
 window.Pages = window.Pages || {};
 
 // ── IMS (Inventory Management System) ──────────────────────────────────────
-// The item-master dashboard: catalog + live current stock (kept in sync by
-// Inward/Outward, see inward.js/outward.js and /api/ims/* in server.js — a
-// plain MySQL table, not Google-Sheets-backed like PR/PO/GRN). Rows at or
+// Single sidebar entry covering all of IMS via 3 top-level tabs: Inward,
+// Outward, Report. Inward/Outward just mount the same standalone modules
+// that used to be separate sidebar pages (see inward.js/outward.js — their
+// render() now accepts {containerId, embedded} for exactly this). Report
+// (this file's own code, below) is the item-master dashboard: catalog + live
+// current stock (kept in sync by Inward/Outward and /api/ims/* in server.js —
+// a plain MySQL table, not Google-Sheets-backed like PR/PO/GRN). Rows at or
 // below their Minimum Order Qty are flagged Low Stock. Add/Edit here only
 // ever touches catalog fields (category/description/size/uom/moq/maxLevel/
 // onOrderQty/vendorName) — current stock only moves via Inward/Outward
-// transactions. category ("Stores" vs "ALU") separates the two real-world
-// stock books this table holds and drives the filter dropdown below.
+// transactions. category ("Stores" vs "ALU" vs "Trading") separates the
+// real-world stock books this table holds and drives the filter dropdown
+// below (Trading additionally carries a Source per transaction — see
+// inward.js/outward.js — since its Inward/Outward history mixes entries
+// typed straight in with ones carried over from the Hindalco job-work sheet).
 window.Pages['ims'] = (() => {
   /* ── state ──────────────────────────────────────────────────── */
   let _rows = [];
   let _loaded = false;
   let _loadError = '';
-  let _search = '';
+  let _search = ''; // still used by the Day-wise Stock toolbar (see below)
   let _lowStockOnly = false;
+  let _negativeOnly = false;
+  // Item List's own filters — separate from _search/_category (which the
+  // Day-wise Stock tab still uses) so item code and item name can be
+  // filtered independently instead of one fuzzy combined box.
+  let _fItemCode = '';
+  let _fItemName = '';
+  let _fMinStock = '';
+  let _fMaxStock = '';
   let _searchTimer = null;
   let _category = ''; // '' = All
-  let _categories = ['Stores', 'ALU']; // overwritten from /api/ims/masters once loaded
+  let _categories = ['Stores', 'ALU', 'Trading']; // overwritten from /api/ims/masters once loaded
   let _mastersLoaded = false;
 
   let _formOpen = false;
@@ -28,7 +43,10 @@ window.Pages['ims'] = (() => {
   // matching the reference sheet's daily layout. Shares the same search/
   // category filters as the list view above; range defaults to 7 days with
   // 14/21/30/"3 months" as the other presets.
-  let _viewMode = 'list'; // 'list' | 'daywise'
+  // Physical Stock Log view: audit trail of every physical-stock count logged
+  // via the "Physical Stock" row action below (see /api/ims/physical-stock/*
+  // in server.js) — mirrors Inward/Outward List's filter+table+cancel shape.
+  let _viewMode = 'list'; // 'list' | 'daywise' | 'physical'
   let _historyDays = 7;
   let _historyDayOptions = [7, 14, 21, 30, 92];
   let _historyDates = [];
@@ -36,8 +54,16 @@ window.Pages['ims'] = (() => {
   let _historyLoaded = false;
   let _historyLoadError = '';
 
+  let _physRows = [];
+  let _physLoaded = false;
+  let _physLoadError = '';
+  let _physFItem = '';
+  let _physFFrom = '';
+  let _physFTo = '';
+
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
+  function _today() { return new Date().toISOString().slice(0, 10); }
 
   /* ── CSV export — quotes any cell with a comma/quote/newline (item
      descriptions and vendor names routinely have commas), unlike a bare
@@ -129,8 +155,12 @@ window.Pages['ims'] = (() => {
     _renderTable();
     try {
       const params = new URLSearchParams();
-      if (_search) params.set('q', _search);
+      if (_fItemCode) params.set('itemCode', _fItemCode);
+      if (_fItemName) params.set('itemName', _fItemName);
       if (_lowStockOnly) params.set('lowStock', '1');
+      if (_negativeOnly) params.set('negativeStock', '1');
+      if (_fMinStock !== '') params.set('minStock', _fMinStock);
+      if (_fMaxStock !== '') params.set('maxStock', _fMaxStock);
       if (_category) params.set('category', _category);
       _rows = await Utils.apiFetch('/api/ims/items?' + params.toString()) || [];
     } catch (e) {
@@ -174,6 +204,20 @@ window.Pages['ims'] = (() => {
     _renderHistoryTable();
   }
 
+  async function _loadPhysical() {
+    _physLoaded = false;
+    _physLoadError = '';
+    _renderPhysicalTable();
+    try {
+      _physRows = await Utils.apiFetch('/api/ims/physical-stock/list') || [];
+    } catch (e) {
+      _physRows = [];
+      _physLoadError = e.message || 'Failed to load physical stock log';
+    }
+    _physLoaded = true;
+    _renderPhysicalTable();
+  }
+
   function _renderTable() {
     const body = document.getElementById('ims-body');
     const countEl = document.getElementById('ims-count');
@@ -195,22 +239,27 @@ window.Pages['ims'] = (() => {
       return;
     }
     body.innerHTML = _rows.map(r => {
-      const low = _num(r.currentStock) <= _num(r.moq);
+      const negative = _num(r.currentStock) < 0;
+      const low = !negative && _num(r.currentStock) <= _num(r.moq);
       const stockColor = _stockLevelColor(r.currentStock, r.maxLevel);
-      return '<tr style="border-bottom:1px solid #f1f5f9;' + (low ? 'background:#fef2f2;' : '') + '">'
+      return '<tr style="border-bottom:1px solid #f1f5f9;' + (negative ? 'background:#fff7ed;' : (low ? 'background:#fef2f2;' : '')) + '">'
         + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 7px;border-radius:10px;background:#f1f5f9;color:#475569;font-size:10.5px;font-weight:700;">' + esc(r.category || 'Stores') + '</span></td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.description) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.size) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;font-weight:700;' + (stockColor ? 'background:' + stockColor + ';' : '') + '">' + esc(r.currentStock)
+          + (negative ? ' <span style="display:inline-flex;padding:2px 7px;border-radius:10px;background:#ffedd5;color:#c2410c;font-size:10.5px;font-weight:700;margin-left:4px;">NEGATIVE STOCK</span>' : '')
           + (low ? ' <span style="display:inline-flex;padding:2px 7px;border-radius:10px;background:#fee2e2;color:#dc2626;font-size:10.5px;font-weight:700;margin-left:4px;">LOW STOCK</span>' : '')
         + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.moq) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.maxLevel) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.onOrderQty) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.vendorName) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;"><button type="button" class="ims-edit-btn" data-code="' + esc(r.itemCode) + '" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Edit</button></td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+          + '<button type="button" class="ims-edit-btn" data-code="' + esc(r.itemCode) + '" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Edit</button>'
+          + '<button type="button" class="ims-phys-btn" data-code="' + esc(r.itemCode) + '" style="border:none;background:transparent;color:#7c3aed;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Physical Stock</button>'
+        + '</td>'
       + '</tr>';
     }).join('');
   }
@@ -274,6 +323,179 @@ window.Pages['ims'] = (() => {
       if (editBtn) {
         const row = _rows.find(r => String(r.itemCode) === editBtn.dataset.code);
         if (row) _openForm(row);
+        return;
+      }
+      const physBtn = e.target.closest('.ims-phys-btn');
+      if (physBtn) {
+        const row = _rows.find(r => String(r.itemCode) === physBtn.dataset.code);
+        if (row) _openPhysicalModal(row);
+      }
+    });
+  }
+
+  /* ── Physical Stock Log (view-mode 'physical') ───────────────────────── */
+  function _filteredPhysicalRows() {
+    return _physRows.filter(r => {
+      if (_physFItem && !((r.itemCode || '') + ' ' + (r.itemName || '')).toLowerCase().includes(_physFItem.toLowerCase())) return false;
+      if (_physFFrom && (r.date || '') < _physFFrom) return false;
+      if (_physFTo && (r.date || '') > _physFTo) return false;
+      return true;
+    });
+  }
+
+  function _renderPhysicalTable() {
+    const body = document.getElementById('ims-phys-body');
+    const countEl = document.getElementById('ims-count');
+    if (!body) return;
+
+    if (!_physLoaded) {
+      body.innerHTML = '<tr><td colspan="7" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      if (countEl) countEl.textContent = '';
+      return;
+    }
+    if (_physLoadError) {
+      body.innerHTML = '<tr><td colspan="7" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_physLoadError) + '</td></tr>';
+      if (countEl) countEl.textContent = '';
+      return;
+    }
+    const rows = _filteredPhysicalRows();
+    if (countEl) countEl.textContent = rows.length + ' of ' + _physRows.length;
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="7" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_physRows.length ? 'No entries match these filters' : 'No physical stock counts logged yet') + '</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(r => {
+      const v = _num(r.variance);
+      const vColor = v === 0 ? '#16a34a' : (v > 0 ? '#2563eb' : '#dc2626');
+      return '<tr style="border-bottom:1px solid #f1f5f9;">'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.itemName) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;font-weight:700;color:' + vColor + ';">' + (v > 0 ? '+' : '') + esc(r.variance) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;color:#64748b;">' + esc(r.remarks) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+          + (r.status === 'Cancelled'
+            ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
+            : '<button type="button" class="ims-phys-cancel-btn" data-id="' + esc(r.id) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
+        + '</td>'
+      + '</tr>';
+    }).join('');
+  }
+
+  function _bindPhysicalRowActions() {
+    const body = document.getElementById('ims-phys-body');
+    if (!body || body.dataset.actionsBound) return;
+    body.dataset.actionsBound = '1';
+    body.addEventListener('click', async (e) => {
+      const cancelBtn = e.target.closest('.ims-phys-cancel-btn');
+      if (cancelBtn) {
+        const ok = await Utils.showConfirm('This physical stock entry will be marked Cancelled and its effect on current stock reversed. This can\'t be undone.', { title: 'Cancel Physical Stock Entry', confirmText: 'Cancel Entry', danger: true });
+        if (!ok) return;
+        try {
+          await Utils.apiFetch('/api/ims/physical-stock/cancel?id=' + encodeURIComponent(cancelBtn.dataset.id), { method: 'PUT' });
+          Utils.showToast('Entry cancelled', 'success');
+          await _loadPhysical();
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to cancel', 'error');
+        }
+      }
+    });
+  }
+
+  function _physicalFilterBarHtml() {
+    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+      + '<input type="text" id="ims-phys-f-item" placeholder="Search item code / name…" value="' + esc(_physFItem) + '" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
+      + '<input type="date" id="ims-phys-f-from" value="' + esc(_physFFrom) + '" style="' + _inputStyle + 'width:auto;" />'
+      + '<span style="color:#94a3b8;font-size:12px;">to</span>'
+      + '<input type="date" id="ims-phys-f-to" value="' + esc(_physFTo) + '" style="' + _inputStyle + 'width:auto;" />'
+      + '<button type="button" id="ims-phys-f-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
+      + '<button type="button" id="ims-phys-f-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
+    + '</div>';
+  }
+
+  function _bindPhysicalFilterBar() {
+    document.getElementById('ims-phys-f-item').addEventListener('input', (e) => { _physFItem = e.target.value; _renderPhysicalTable(); });
+    document.getElementById('ims-phys-f-from').addEventListener('change', (e) => { _physFFrom = e.target.value; _renderPhysicalTable(); });
+    document.getElementById('ims-phys-f-to').addEventListener('change', (e) => { _physFTo = e.target.value; _renderPhysicalTable(); });
+    document.getElementById('ims-phys-f-clear').addEventListener('click', () => {
+      _physFItem = ''; _physFFrom = ''; _physFTo = '';
+      document.getElementById('ims-phys-f-item').value = '';
+      document.getElementById('ims-phys-f-from').value = '';
+      document.getElementById('ims-phys-f-to').value = '';
+      _renderPhysicalTable();
+    });
+    document.getElementById('ims-phys-f-refresh').addEventListener('click', _loadPhysical);
+  }
+
+  /* ── Physical Stock modal — triggered by the "Physical Stock" row action
+     above; computes the variance client-side for a live preview, server does
+     the authoritative computation + ledger entry (see _imsPhysicalStockUpdate
+     in server.js). ─────────────────────────────────────────────────────── */
+  function _openPhysicalModal(row) {
+    const existing = document.getElementById('ims-phys-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'ims-phys-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10000;display:grid;place-items:center;padding:16px;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
+    overlay.innerHTML = '<div style="background:#fff;border-radius:18px;width:100%;max-width:420px;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.2);animation:pop-in 200ms cubic-bezier(.16,1,.3,1);">'
+      + '<div style="padding:22px 24px 4px;">'
+        + '<div style="font-size:15px;font-weight:700;color:#0f172a;">Physical Stock — ' + esc(row.itemCode) + '</div>'
+        + '<div style="font-size:12px;color:#64748b;margin:2px 0 14px;">' + esc(row.description) + '</div>'
+      + '</div>'
+      + '<form id="ims-phys-form" style="padding:0 24px 22px;display:flex;flex-direction:column;gap:12px;">'
+        + _textField('ims-phys-date', 'Date', { type: 'date', value: _today() })
+        + _fieldWrap('System Stock (current)', '<input type="text" value="' + esc(row.currentStock) + '" disabled style="' + _inputStyle + 'background:#f1f5f9;color:#94a3b8;" />')
+        + _textField('ims-phys-count', 'Physical Stock Count')
+        + _fieldWrap('Variance', '<div id="ims-phys-variance" style="font-size:13px;font-weight:700;color:#94a3b8;">Enter a count to see the variance</div>')
+        + _fieldWrap('Remarks', '<textarea id="ims-phys-remarks" rows="2" style="' + _inputStyle + 'resize:vertical;"></textarea>')
+        + '<div style="display:flex;gap:10px;margin-top:4px;">'
+          + '<button type="submit" id="ims-phys-submit" style="padding:9px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">Save Physical Count</button>'
+          + '<button type="button" id="ims-phys-cancel-modal" style="padding:9px 22px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
+        + '</div>'
+      + '</form>'
+    + '</div>';
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    document.getElementById('ims-phys-cancel-modal').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', function escHandler(e) {
+      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', escHandler); }
+    });
+
+    const countInput = document.getElementById('ims-phys-count');
+    const varianceEl = document.getElementById('ims-phys-variance');
+    countInput.addEventListener('input', () => {
+      if (countInput.value.trim() === '') { varianceEl.textContent = 'Enter a count to see the variance'; varianceEl.style.color = '#94a3b8'; return; }
+      const v = Math.round((_num(countInput.value) - _num(row.currentStock)) * 100) / 100;
+      varianceEl.textContent = (v > 0 ? '+' : '') + v + (v === 0 ? ' — matches system' : v > 0 ? ' — excess' : ' — shortage');
+      varianceEl.style.color = v === 0 ? '#16a34a' : (v > 0 ? '#2563eb' : '#dc2626');
+    });
+
+    document.getElementById('ims-phys-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const physicalStock = countInput.value.trim();
+      if (physicalStock === '' || _num(physicalStock) < 0) { Utils.showToast('Enter a valid physical stock count', 'error'); return; }
+      const btn = document.getElementById('ims-phys-submit');
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const result = await Utils.apiFetch('/api/ims/physical-stock', {
+          method: 'POST',
+          body: JSON.stringify({
+            itemCode: row.itemCode,
+            date: document.getElementById('ims-phys-date').value,
+            physicalStock,
+            remarks: document.getElementById('ims-phys-remarks').value.trim(),
+          }),
+        });
+        Utils.showToast('Physical stock logged — variance ' + (result.variance > 0 ? '+' : '') + result.variance, 'success');
+        close();
+        await _load();
+      } catch (err) {
+        Utils.showToast(err.message || 'Failed to log physical stock', 'error');
+        btn.disabled = false; btn.textContent = 'Save Physical Count';
       }
     });
   }
@@ -285,12 +507,22 @@ window.Pages['ims'] = (() => {
   }
 
   function _filterBarHtml() {
-    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
-      + '<input type="text" id="ims-search" placeholder="Search item code / description…" value="' + esc(_search) + '" style="' + _inputStyle + 'min-width:220px;width:auto;flex:1;" />'
+    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;">'
+      + '<input type="text" id="ims-f-code" placeholder="Item Code…" value="' + esc(_fItemCode) + '" style="' + _inputStyle + 'min-width:130px;width:auto;" />'
+      + '<input type="text" id="ims-f-name" placeholder="Item Name…" value="' + esc(_fItemName) + '" style="' + _inputStyle + 'min-width:180px;width:auto;flex:1;" />'
       + '<select id="ims-category" style="' + _inputStyle + 'width:auto;">' + _categoryOptionsHtml(_category) + '</select>'
+      + '<input type="number" id="ims-f-minstock" placeholder="Min Stock" value="' + esc(_fMinStock) + '" style="' + _inputStyle + 'width:110px;" />'
+      + '<span style="color:#94a3b8;font-size:12px;">to</span>'
+      + '<input type="number" id="ims-f-maxstock" placeholder="Max Stock" value="' + esc(_fMaxStock) + '" style="' + _inputStyle + 'width:110px;" />'
+    + '</div>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
       + '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#475569;cursor:pointer;">'
         + '<input type="checkbox" id="ims-lowstock" ' + (_lowStockOnly ? 'checked' : '') + ' /> Low stock only'
       + '</label>'
+      + '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#475569;cursor:pointer;">'
+        + '<input type="checkbox" id="ims-negstock" ' + (_negativeOnly ? 'checked' : '') + ' /> Negative stock only'
+      + '</label>'
+      + '<button type="button" id="ims-f-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear Filters</button>'
       + '<button type="button" id="ims-add-btn" style="padding:8px 14px;border-radius:8px;background:var(--color-primary);border:none;color:var(--color-primary-text);font-size:12.5px;font-weight:700;cursor:pointer;">+ Add Item</button>'
       + '<button type="button" id="ims-export-btn" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">⬇ Download CSV</button>'
       + '<button type="button" id="ims-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
@@ -298,13 +530,34 @@ window.Pages['ims'] = (() => {
   }
 
   function _bindFilterBar() {
-    document.getElementById('ims-search').addEventListener('input', (e) => {
-      _search = e.target.value;
+    document.getElementById('ims-f-code').addEventListener('input', (e) => {
+      _fItemCode = e.target.value;
+      clearTimeout(_searchTimer);
+      _searchTimer = setTimeout(_load, 300);
+    });
+    document.getElementById('ims-f-name').addEventListener('input', (e) => {
+      _fItemName = e.target.value;
       clearTimeout(_searchTimer);
       _searchTimer = setTimeout(_load, 300);
     });
     document.getElementById('ims-category').addEventListener('change', (e) => { _category = e.target.value; _load(); });
+    document.getElementById('ims-f-minstock').addEventListener('input', (e) => {
+      _fMinStock = e.target.value;
+      clearTimeout(_searchTimer);
+      _searchTimer = setTimeout(_load, 400);
+    });
+    document.getElementById('ims-f-maxstock').addEventListener('input', (e) => {
+      _fMaxStock = e.target.value;
+      clearTimeout(_searchTimer);
+      _searchTimer = setTimeout(_load, 400);
+    });
     document.getElementById('ims-lowstock').addEventListener('change', (e) => { _lowStockOnly = e.target.checked; _load(); });
+    document.getElementById('ims-negstock').addEventListener('change', (e) => { _negativeOnly = e.target.checked; _load(); });
+    document.getElementById('ims-f-clear').addEventListener('click', () => {
+      _fItemCode = ''; _fItemName = ''; _fMinStock = ''; _fMaxStock = ''; _lowStockOnly = false; _negativeOnly = false; _category = '';
+      _renderReport(); // rebuilds the inputs themselves back to empty
+      _load(); // filtering is server-side here (unlike Inward/Outward List), so clearing needs a real re-fetch
+    });
     document.getElementById('ims-add-btn').addEventListener('click', () => _openForm(null));
     document.getElementById('ims-export-btn').addEventListener('click', _exportItemsCSV);
     document.getElementById('ims-refresh').addEventListener('click', _load);
@@ -338,7 +591,7 @@ window.Pages['ims'] = (() => {
     document.querySelectorAll('.ims-h-range').forEach(btn => {
       btn.addEventListener('click', () => {
         _historyDays = parseInt(btn.dataset.days, 10);
-        renderPage(); // re-render so the active-range highlight moves too
+        _renderReport(); // re-render so the active-range highlight moves too
         _loadHistory();
       });
     });
@@ -348,13 +601,13 @@ window.Pages['ims'] = (() => {
   function _openForm(row) {
     _editingCode = row ? row.itemCode : null;
     _formOpen = true;
-    renderPage(row);
+    _renderReport(row);
   }
 
   function _closeForm() {
     _formOpen = false;
     _editingCode = null;
-    renderPage();
+    _renderReport();
   }
 
   function _formHtml(row) {
@@ -411,7 +664,7 @@ window.Pages['ims'] = (() => {
       }
       _formOpen = false;
       _editingCode = null;
-      renderPage();
+      _renderReport();
       await _load();
     } catch (err) {
       Utils.showToast(err.message || 'Failed to save item', 'error');
@@ -427,7 +680,7 @@ window.Pages['ims'] = (() => {
         + (active ? 'background:var(--color-primary);color:var(--color-primary-text);' : 'background:transparent;color:#64748b;') + '">' + label + '</button>';
     }
     return '<div style="display:flex;gap:4px;background:#f1f5f9;padding:3px;border-radius:9px;width:fit-content;margin-bottom:14px;">'
-      + tab('list', 'Item List') + tab('daywise', 'Day-wise Stock')
+      + tab('list', 'Item List') + tab('daywise', 'Day-wise Stock') + tab('physical', 'Physical Stock Log')
     + '</div>';
   }
 
@@ -437,48 +690,60 @@ window.Pages['ims'] = (() => {
         if (btn.dataset.mode === _viewMode) return;
         _viewMode = btn.dataset.mode;
         _formOpen = false; _editingCode = null;
-        renderPage();
+        _renderReport();
       });
     });
   }
 
-  /* ── Render ─────────────────────────────────────────────────────────── */
-  function renderPage(formRow) {
-    const el = document.getElementById('main-content');
+  /* ── Report tab body (catalog + day-wise stock) — mounts into #ims-tabbody,
+     the container the top-level tab bar below owns. ─────────────────────── */
+  function _renderReport(formRow) {
+    const el = document.getElementById('ims-tabbody');
     if (!el) return;
     const isDaywise = _viewMode === 'daywise';
+    const isPhysical = _viewMode === 'physical';
+    const isList = !isDaywise && !isPhysical;
 
-    el.innerHTML = '<div style="max-width:1300px;margin:0 auto;padding:4px 0 40px;">'
-      + '<div style="margin-bottom:14px;">'
-        + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">IMS — Item Master</h1>'
-        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Live stock levels and reorder catalog, kept up to date by Inward/Outward entries.</p>'
-      + '</div>'
-      + _viewToggleHtml()
+    let bodyHtml;
+    if (isDaywise) {
+      bodyHtml = _historyToolbarHtml()
+        + _colorLegendHtml()
+        + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+          + '<table style="width:100%;border-collapse:collapse;">'
+            + '<thead id="ims-history-head"></thead>'
+            + '<tbody id="ims-history-body"><tr><td style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '</table>'
+        + '</div>';
+    } else if (isPhysical) {
+      bodyHtml = _physicalFilterBarHtml()
+        + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+          + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
+            + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+              + ['Date', 'Item Code', 'Description', 'Variance', 'Remarks', 'Logged By', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + '</tr></thead>'
+            + '<tbody id="ims-phys-body"><tr><td colspan="7" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '</table>'
+        + '</div>';
+    } else {
+      bodyHtml = _filterBarHtml()
+        + _colorLegendHtml()
+        + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+          + '<table style="width:100%;border-collapse:collapse;min-width:1180px;">'
+            + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+              + ['Item Code', 'Category', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order', 'Vendor', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + '</tr></thead>'
+            + '<tbody id="ims-body"><tr><td colspan="11" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '</table>'
+        + '</div>';
+    }
+
+    el.innerHTML = _viewToggleHtml()
       + '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:2px;flex-wrap:wrap;">'
         + '<span></span>'
         + '<span id="ims-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
       + '</div>'
-      + (!isDaywise && _formOpen ? _formHtml(formRow) : '')
-      + (isDaywise
-        ? _historyToolbarHtml()
-          + _colorLegendHtml()
-          + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-            + '<table style="width:100%;border-collapse:collapse;">'
-              + '<thead id="ims-history-head"></thead>'
-              + '<tbody id="ims-history-body"><tr><td style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
-            + '</table>'
-          + '</div>'
-        : _filterBarHtml()
-          + _colorLegendHtml()
-          + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-            + '<table style="width:100%;border-collapse:collapse;min-width:1180px;">'
-              + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-                + ['Item Code', 'Category', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order', 'Vendor', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
-              + '</tr></thead>'
-              + '<tbody id="ims-body"><tr><td colspan="11" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
-            + '</table>'
-          + '</div>')
-    + '</div>';
+      + (isList && _formOpen ? _formHtml(formRow) : '')
+      + bodyHtml;
 
     _bindViewToggle();
 
@@ -486,6 +751,14 @@ window.Pages['ims'] = (() => {
       _bindHistoryToolbar();
       _renderHistoryTable();
       if (!_historyLoaded) _loadHistory();
+      return;
+    }
+
+    if (isPhysical) {
+      _bindPhysicalFilterBar();
+      _bindPhysicalRowActions();
+      _renderPhysicalTable();
+      if (!_physLoaded) _loadPhysical();
       return;
     }
 
@@ -500,6 +773,50 @@ window.Pages['ims'] = (() => {
     _renderTable();
     if (!_loaded) _load(); // only the very first render needs a fetch — filter/refresh/save actions trigger their own
     _loadMasters(); // fire-and-forget; hardcoded fallback already covers Stores/ALU so no re-render needed today
+  }
+
+  /* ── Top-level tabs: Inward / Outward / Report — one "IMS" sidebar entry
+     now covers all three; Inward/Outward bodies are the same modules that
+     used to be their own standalone pages (see inward.js/outward.js), just
+     mounted into #ims-tabbody instead of #main-content directly. ────────── */
+  let _topTab = 'inward'; // 'inward' | 'outward' | 'report'
+
+  function _topTabsHtml() {
+    const tabs = [['inward', 'Inward'], ['outward', 'Outward'], ['report', 'Report']];
+    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
+      + tabs.map(([key, label]) => '<button type="button" class="ims-top-tab" data-tab="' + key + '" style="'
+        + 'padding:9px 16px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:700;'
+        + 'color:' + (_topTab === key ? 'var(--color-primary)' : '#94a3b8') + ';'
+        + 'border-bottom:2px solid ' + (_topTab === key ? 'var(--color-primary)' : 'transparent') + ';margin-bottom:-1px;'
+        + '">' + esc(label) + '</button>').join('')
+    + '</div>';
+  }
+
+  /* ── Render (master) ───────────────────────────────────────────────── */
+  function renderPage() {
+    const el = document.getElementById('main-content');
+    if (!el) return;
+
+    el.innerHTML = '<div style="max-width:1300px;margin:0 auto;padding:4px 0 40px;">'
+      + '<div style="margin-bottom:14px;">'
+        + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">IMS</h1>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Inventory Management — log stock movement and track the live item catalog.</p>'
+      + '</div>'
+      + _topTabsHtml()
+      + '<div id="ims-tabbody"></div>'
+    + '</div>';
+
+    document.querySelectorAll('.ims-top-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.tab === _topTab) return;
+        _topTab = btn.dataset.tab;
+        renderPage();
+      });
+    });
+
+    if (_topTab === 'inward')  { window.Pages['inward'].render({ containerId: 'ims-tabbody', embedded: true }); return; }
+    if (_topTab === 'outward') { window.Pages['outward'].render({ containerId: 'ims-tabbody', embedded: true }); return; }
+    _renderReport();
   }
 
   return {

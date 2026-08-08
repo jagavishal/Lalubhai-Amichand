@@ -47,9 +47,8 @@ window.Pages.users = (() => {
     { key: 'po-creation',   label: 'PO Creation' },
     { key: 'grn-creation',  label: 'GRN Creation' },
     { key: 'proforma-invoice', label: 'Proforma Invoice' },
-    { key: 'inward',        label: 'Inward' },
-    { key: 'outward',       label: 'Outward' },
-    { key: 'ims',           label: 'IMS' },
+    { key: 'ims',           label: 'IMS' }, // covers Inward/Outward/Report tabs — see sidebar.js's routeAliases
+
     { key: 'meetings',      label: 'Meetings' },
     { key: 'leave-tracker', label: 'Leave Tracker' },
     { key: 'race-tracker',  label: 'Race Tracker' },

@@ -52,8 +52,9 @@ window.Sidebar = {
       { route: 'po-creation',    label: 'PO Creation',    icon: 'pocreation' },
       { route: 'grn-creation',   label: 'GRN Creation',   icon: 'grncreation' },
       { route: 'proforma-invoice', label: 'Proforma Invoice', icon: 'picreation' },
-      { route: 'inward',         label: 'Inward',         icon: 'inward' },
-      { route: 'outward',        label: 'Outward',        icon: 'outward' },
+      // Inward/Outward used to be their own sidebar entries -- they're now
+      // tabs inside the single "IMS" page (see ims.js) so there's one entry
+      // point for all of Inventory Management.
       { route: 'ims',            label: 'IMS',            icon: 'ims' },
     ]},
     { title: 'Administration', items: [
@@ -79,7 +80,12 @@ window.Sidebar = {
   _buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions, featureFlags) {
     if (item.adminOnly && !isAdmin) return '';
     if (item.flag && !(featureFlags || {})[item.flag]) return '';
-    if (!item.alwaysShow && permissions && permissions.pages && !permissions.pages.includes(item.route)) return '';
+    // 'inward'/'outward' used to be their own toggleable pages (see users.js);
+    // they're tabs inside 'ims' now, but a user permissioned before this
+    // merge may still only have one of those old keys saved -- honor it as
+    // access to 'ims' so that grant doesn't silently disappear.
+    const routeAliases = item.route === 'ims' ? ['ims', 'inward', 'outward'] : [item.route];
+    if (!item.alwaysShow && permissions && permissions.pages && !routeAliases.some(r => permissions.pages.includes(r))) return '';
 
     const active = activeRoute === item.route;
     const icon   = this._icons[item.icon] || '';

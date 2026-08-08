@@ -15,7 +15,8 @@ window.Pages['inward'] = (() => {
   /* ── state ──────────────────────────────────────────────────── */
   let _view = 'create'; // 'create' | 'list'
   let _departments = [];
-  let _categories = ['Stores', 'ALU']; // overwritten from /api/ims/masters once loaded
+  let _categories = ['Stores', 'ALU', 'Trading']; // overwritten from /api/ims/masters once loaded
+  let _sources = ['In/Out (Manual)', 'IN/OUT(HINDALCO)']; // overwritten from /api/ims/masters once loaded
   let _mastersLoaded = false;
   let _category = 'Stores'; // scopes the item-code dropdown + "+ New Item" modal to one catalog at a time
 
@@ -89,11 +90,14 @@ window.Pages['inward'] = (() => {
       const data = await Utils.apiFetch('/api/ims/masters');
       _departments = (data && data.departments) || [];
       if (Array.isArray(data?.categories) && data.categories.length) _categories = data.categories;
+      if (Array.isArray(data?.sources) && data.sources.length) _sources = data.sources;
       _mastersLoaded = true;
       const sel = document.getElementById('inw-department');
       if (sel) sel.innerHTML = '<option value="">Select…</option>' + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
       const catSel = document.getElementById('inw-category');
       if (catSel) catSel.innerHTML = _categories.map(c => '<option value="' + esc(c) + '"' + (c === _category ? ' selected' : '') + '>' + esc(c) + '</option>').join('');
+      const srcSel = document.getElementById('inw-source');
+      if (srcSel) srcSel.innerHTML = _sources.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('');
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load departments', 'error');
     }
@@ -287,19 +291,19 @@ window.Pages['inward'] = (() => {
     if (!body) return;
 
     if (!_loaded) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_loadError) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_loadError) + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_loadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     const rows = _filteredRows();
     if (countEl) countEl.textContent = rows.length + ' of ' + _rows.length;
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_rows.length ? 'No entries match these filters' : 'No Inward entries yet') + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_rows.length ? 'No entries match these filters' : 'No Inward entries yet') + '</td></tr>';
       return;
     }
     body.innerHTML = rows.map(r => ''
@@ -310,6 +314,7 @@ window.Pages['inward'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.quantity) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.department) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.source) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;color:#64748b;">' + esc(r.remarks) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           + (r.status === 'Cancelled'
@@ -373,9 +378,9 @@ window.Pages['inward'] = (() => {
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
         + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['Date', 'Item Code', 'Description', 'Quantity', 'UOM', 'Department', 'Remarks', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + ['Date', 'Item Code', 'Description', 'Quantity', 'UOM', 'Department', 'Source', 'Remarks', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
-          + '<tbody id="inwl-body"><tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '<tbody id="inwl-body"><tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
       + '</div>';
   }
@@ -403,12 +408,23 @@ window.Pages['inward'] = (() => {
     + '</select>');
   }
 
+  // Source (In/Out (Manual) vs IN/OUT(HINDALCO)) only applies to the Trading
+  // catalog — every other category keeps behaving exactly as before this field
+  // existed, so the wrapper is hidden (not omitted, so toggling doesn't need a
+  // full re-render) whenever Category isn't "Trading".
+  function _sourceFieldHtml() {
+    return _fieldWrap('Source', '<select id="inw-source" style="' + _inputStyle + '">'
+      + _sources.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('')
+    + '</select>');
+  }
+
   function _formHtml() {
     return '<form id="inw-form" style="display:flex;flex-direction:column;gap:16px;">'
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
         + _textField('inw-date', 'Date', { type: 'date', value: _today() })
         + _categorySelectHtml()
         + _fieldWrap('Department', '<select id="inw-department" style="' + _inputStyle + '"><option value="">Select…</option></select>')
+        + '<div id="inw-source-wrap" style="display:' + (_category === 'Trading' ? 'block' : 'none') + ';">' + _sourceFieldHtml() + '</div>'
       + '</div>'
       + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
       + _itemsTableHtml()
@@ -426,6 +442,8 @@ window.Pages['inward'] = (() => {
     const date = document.getElementById('inw-date').value;
     const department = document.getElementById('inw-department').value;
     const remarks = document.getElementById('inw-remarks').value.trim();
+    const sourceSel = document.getElementById('inw-source');
+    const source = (_category === 'Trading' && sourceSel) ? sourceSel.value : '';
     const items = _collectItemRows();
 
     if (!date) { Utils.showToast('Date is required', 'error'); return; }
@@ -446,7 +464,7 @@ window.Pages['inward'] = (() => {
       try {
         await Utils.apiFetch('/api/ims/inward', {
           method: 'POST',
-          body: JSON.stringify({ date, itemCode: it.itemCode, description: it.description, uom: it.uom, quantity: it.quantity, department, remarks, category: _category }),
+          body: JSON.stringify({ date, itemCode: it.itemCode, description: it.description, uom: it.uom, quantity: it.quantity, department, remarks, category: _category, source }),
         });
         okCount++;
       } catch (err) {
@@ -464,18 +482,26 @@ window.Pages['inward'] = (() => {
   }
 
   /* ── Render ─────────────────────────────────────────────────────────── */
-  function renderPage() {
-    const el = document.getElementById('main-content');
+  // opts.containerId / opts.embedded let the IMS page (see ims.js) mount this
+  // whole module inside its own "Inward" tab instead of #main-content — pass
+  // once from render(opts) and every internal re-render (submit, tab switch,
+  // category change) keeps reusing it via _renderOpts, no threading needed.
+  let _renderOpts = {};
+  function renderPage(opts) {
+    if (opts) _renderOpts = opts;
+    const containerId = _renderOpts.containerId || 'main-content';
+    const embedded = !!_renderOpts.embedded;
+    const el = document.getElementById(containerId);
     if (!el) return;
 
     const isList = _view === 'list';
     const bodyHtml = isList ? _listViewHtml() : _formHtml();
 
     el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '980px') + ';margin:0 auto;padding:4px 0 40px;">'
-      + '<div style="margin-bottom:14px;">'
+      + (embedded ? '' : '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Inward</h1>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Log stock received into the Store — updates each item\'s current stock on the IMS dashboard.</p>'
-      + '</div>'
+      + '</div>')
       + _tabsHtml()
       + bodyHtml
     + '</div>';
@@ -490,7 +516,11 @@ window.Pages['inward'] = (() => {
       return;
     }
 
-    document.getElementById('inw-category').addEventListener('change', (e) => { _category = e.target.value; });
+    document.getElementById('inw-category').addEventListener('change', (e) => {
+      _category = e.target.value;
+      const wrap = document.getElementById('inw-source-wrap');
+      if (wrap) wrap.style.display = _category === 'Trading' ? 'block' : 'none';
+    });
     document.getElementById('inw-add-row').addEventListener('click', () => {
       document.getElementById('inw-items-tbody').insertAdjacentHTML('beforeend', _itemRowHtml());
       _bindItemRow(document.getElementById('inw-items-tbody').lastElementChild);
@@ -502,6 +532,6 @@ window.Pages['inward'] = (() => {
   }
 
   return {
-    render() { renderPage(); },
+    render(opts) { renderPage(opts); },
   };
 })();

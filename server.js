@@ -269,11 +269,26 @@ const SCHEMA = [
   `CREATE INDEX idx_ims_txn_item ON ims_transactions (item_code)`,
   `CREATE INDEX idx_ims_txn_date ON ims_transactions (txn_date)`,
   `CREATE INDEX idx_ims_txn_direction ON ims_transactions (direction)`,
+  // source distinguishes, within the Trading book, entries typed straight into
+  // this app ("In/Out (Manual)") from ones carried over from the Hindalco
+  // job-work ledger ("IN/OUT(HINDALCO)") — see IMS_SOURCES. Blank for
+  // Stores/ALU, which have never needed more than one ledger per category.
+  `ALTER TABLE ims_transactions ADD COLUMN IF NOT EXISTS source VARCHAR(32) NOT NULL DEFAULT ''`,
 ];
 
 // Canonical IMS category list — shown in the filter dropdown even before any
 // item in that category exists yet (e.g. "ALU" before the catalog is imported).
-const IMS_CATEGORIES = ['Stores', 'ALU'];
+// "Trading" holds the TRD-coded aluminum bar/rod/section catalog job-worked
+// with Hindalco (see ims_items_trading_import.sql) — its Inward/Outward
+// entries additionally carry a Source (IMS_SOURCES below).
+const IMS_CATEGORIES = ['Stores', 'ALU', 'Trading'];
+
+// Ledger-source options shown on the Inward/Outward forms only when Category
+// is "Trading" — lets a Trading entry be tagged as typed straight in by store
+// staff vs. carried over from the Hindalco job-work sheet, matching the two
+// source ledgers ("IMS (Trading) - In_Out (Manual)" / "...IN_OUT(HINDALCO)")
+// this data has always lived in.
+const IMS_SOURCES = ['In/Out (Manual)', 'IN/OUT(HINDALCO)'];
 
 async function seedIfEmpty() {
   const adminEmail = process.env.ADMIN_EMAIL || 'Admin@lal.com';
@@ -4024,7 +4039,7 @@ app.get('/api/payment-history', requireAuth, async (req, res) => {
 
 // GET /api/ims/masters — dropdown data shared by the Inward/Outward forms.
 app.get('/api/ims/masters', requireAuth, async (req, res) => {
-  return res.json({ departments: PO_DEPARTMENTS, categories: IMS_CATEGORIES });
+  return res.json({ departments: PO_DEPARTMENTS, categories: IMS_CATEGORIES, sources: IMS_SOURCES });
 });
 
 // GET /api/ims/items?q=&lowStock=1&category=Stores — item master search; backs
@@ -4035,14 +4050,27 @@ app.get('/api/ims/items', requireAuth, async (req, res) => {
     await ensureSchema();
     const search = String(req.query.q || '').trim();
     const lowStock = req.query.lowStock === '1';
+    const negativeStock = req.query.negativeStock === '1';
     const category = String(req.query.category || '').trim();
+    // itemCode/itemName are separate, AND-combined filters used by the IMS
+    // Report tab's advanced filter bar -- distinct from `q` above, which
+    // OR-matches both and is what the Inward/Outward item-code typeahead uses.
+    const itemCode = String(req.query.itemCode || '').trim();
+    const itemName = String(req.query.itemName || '').trim();
+    const minStock = req.query.minStock !== undefined && req.query.minStock !== '' ? parseFloat(req.query.minStock) : null;
+    const maxStock = req.query.maxStock !== undefined && req.query.maxStock !== '' ? parseFloat(req.query.maxStock) : null;
     const clauses = [];
     const params = [];
     if (search) {
       params.push(`%${search}%`, `%${search}%`);
       clauses.push(`(item_code LIKE $${params.length - 1} OR description LIKE $${params.length})`);
     }
+    if (itemCode) { params.push(`%${itemCode}%`); clauses.push(`item_code LIKE $${params.length}`); }
+    if (itemName) { params.push(`%${itemName}%`); clauses.push(`description LIKE $${params.length}`); }
     if (lowStock) clauses.push('current_stock <= moq');
+    if (negativeStock) clauses.push('current_stock < 0');
+    if (Number.isFinite(minStock)) { params.push(minStock); clauses.push(`current_stock >= $${params.length}`); }
+    if (Number.isFinite(maxStock)) { params.push(maxStock); clauses.push(`current_stock <= $${params.length}`); }
     if (category) { params.push(category); clauses.push(`category = $${params.length}`); }
     const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
     const rows = await q(
@@ -4143,7 +4171,10 @@ app.get('/api/ims/stock-history', requireAuth, async (req, res) => {
       if (!net.has(r.itemCode)) net.set(r.itemCode, new Map());
       const dayMap = net.get(r.itemCode);
       const dateKey = _isoDateOnly(r.txnDate);
-      const signed = (r.direction === 'IN' ? 1 : -1) * Number(r.qty || 0);
+      // IN/OUT quantities are always stored positive (direction carries the
+      // sign); ADJ (physical-stock adjustment, see _imsPhysicalStockUpdate)
+      // stores the signed variance directly in quantity, so it's added as-is.
+      const signed = r.direction === 'OUT' ? -Number(r.qty || 0) : Number(r.qty || 0);
       dayMap.set(dateKey, (dayMap.get(dateKey) || 0) + signed);
     }
 
@@ -4229,10 +4260,13 @@ async function _imsCreateTxn(direction, body, user) {
 
   const cnt = await q('SELECT COUNT(*) AS c FROM ims_transactions WHERE direction=$1', [direction]);
   const id = direction + String(Number(cnt[0]?.c || 0) + 1).padStart(6, '0');
+  // source is only meaningful for the Trading category (see IMS_SOURCES) —
+  // Stores/ALU entries just get '', same as before this column existed.
+  const source = IMS_SOURCES.includes(body.source) ? body.source : '';
   await pool.query(
-    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, quantity, uom, department, remarks, status, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Active',$10)`,
-    [id, txnDate, direction, itemCode, body.description || '', quantity, body.uom || '', body.department || '', body.remarks || '', user]
+    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, quantity, uom, department, remarks, status, created_by, source)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Active',$10,$11)`,
+    [id, txnDate, direction, itemCode, body.description || '', quantity, body.uom || '', body.department || '', body.remarks || '', user, source]
   );
   const delta = direction === 'IN' ? quantity : -quantity;
   await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, itemCode]);
@@ -4247,16 +4281,54 @@ async function _imsCancelTxn(id, direction) {
   await pool.query(`UPDATE ims_transactions SET status='Cancelled' WHERE id=$1`, [id]);
   // Reverse the stock impact: an IN added +quantity, so cancelling it removes
   // that quantity again; an OUT subtracted quantity, so cancelling it gives it
-  // back. Skipping this would let current_stock silently drift from reality.
-  const delta = direction === 'IN' ? -Number(row.quantity) : Number(row.quantity);
+  // back. ADJ (physical-stock adjustment) stores its already-signed variance
+  // in quantity and was added exactly like IN, so it reverses the same way.
+  // Skipping this would let current_stock silently drift from reality.
+  const delta = direction === 'OUT' ? Number(row.quantity) : -Number(row.quantity);
   await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, row.item_code]);
+}
+
+// Physical Stock update — reconciles current_stock against what store staff
+// physically counted. Unlike Inward/Outward this doesn't add a fixed unsigned
+// quantity in a known direction: it computes the signed variance itself
+// (physicalStock - system stock) and logs that variance as an 'ADJ' entry in
+// the same ims_transactions ledger (direction fits VARCHAR(3) same as IN/OUT),
+// so Day-wise Stock (see the ADJ handling above) and Cancel both stay correct
+// without a separate table. Always logs, even when variance is 0, so a
+// physical count that confirmed the system was right is still on record.
+async function _imsPhysicalStockUpdate(body, user) {
+  const itemCode = String(body.itemCode || '').trim();
+  const physicalStock = parseFloat(body.physicalStock);
+  if (!itemCode) throw Object.assign(new Error('itemCode is required'), { status: 400 });
+  if (!Number.isFinite(physicalStock) || physicalStock < 0) throw Object.assign(new Error('physicalStock must be a number 0 or greater'), { status: 400 });
+  const txnDate = body.date || new Date().toISOString().slice(0, 10);
+
+  const existing = await q('SELECT * FROM ims_items WHERE item_code=$1', [itemCode]);
+  if (!existing.length) throw Object.assign(new Error('Unknown item code — add it on the IMS page first'), { status: 404 });
+  const item = existing[0];
+  const systemStock = Number(item.current_stock) || 0;
+  const variance = Math.round((physicalStock - systemStock) * 100) / 100;
+
+  const cnt = await q(`SELECT COUNT(*) AS c FROM ims_transactions WHERE direction='ADJ'`);
+  const id = 'ADJ' + String(Number(cnt[0]?.c || 0) + 1).padStart(6, '0');
+  const remarksNote = `Physical count: ${physicalStock} (system was ${systemStock}, variance ${variance > 0 ? '+' : ''}${variance}).`
+    + (body.remarks ? ` ${body.remarks}` : '');
+  await pool.query(
+    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, quantity, uom, department, remarks, status, created_by, source)
+     VALUES ($1,$2,'ADJ',$3,$4,$5,$6,'',$7,'Active',$8,'')`,
+    [id, txnDate, itemCode, item.description || '', variance, item.uom || '', remarksNote, user]
+  );
+  if (variance !== 0) {
+    await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [variance, itemCode]);
+  }
+  return { id, systemStock, physicalStock, variance };
 }
 
 app.get('/api/ims/inward/list', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
     const rows = await q(
-      `SELECT id, txn_date AS date, item_code AS itemCode, item_name AS itemName, quantity, uom, department, remarks, status, created_by AS createdBy, created_at AS createdAt
+      `SELECT id, txn_date AS date, item_code AS itemCode, item_name AS itemName, quantity, uom, department, remarks, status, created_by AS createdBy, created_at AS createdAt, source
        FROM ims_transactions WHERE direction='IN' ORDER BY created_at DESC LIMIT 1000`);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error: err.message }); }
@@ -4285,7 +4357,7 @@ app.get('/api/ims/outward/list', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
     const rows = await q(
-      `SELECT id, txn_date AS date, item_code AS itemCode, item_name AS itemName, quantity, uom, department, remarks, status, created_by AS createdBy, created_at AS createdAt
+      `SELECT id, txn_date AS date, item_code AS itemCode, item_name AS itemName, quantity, uom, department, remarks, status, created_by AS createdBy, created_at AS createdAt, source
        FROM ims_transactions WHERE direction='OUT' ORDER BY created_at DESC LIMIT 1000`);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error: err.message }); }
@@ -4306,6 +4378,37 @@ app.put('/api/ims/outward/cancel', requireAuth, async (req, res) => {
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: 'id is required' });
     await _imsCancelTxn(id, 'OUT');
+    return res.json({ success: true });
+  } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
+});
+
+// GET /api/ims/physical-stock/list — audit log of every physical-stock count
+// logged from the IMS Report tab (see _imsPhysicalStockUpdate above).
+app.get('/api/ims/physical-stock/list', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const rows = await q(
+      `SELECT id, txn_date AS date, item_code AS itemCode, item_name AS itemName, quantity AS variance, remarks, status, created_by AS createdBy, created_at AS createdAt
+       FROM ims_transactions WHERE direction='ADJ' ORDER BY created_at DESC LIMIT 1000`);
+    return res.json(rows);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/ims/physical-stock', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const user = req.session?.user?.name || req.session?.user?.email || '';
+    const result = await _imsPhysicalStockUpdate(req.body || {}, user);
+    return res.status(201).json({ success: true, ...result });
+  } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
+});
+
+app.put('/api/ims/physical-stock/cancel', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    await _imsCancelTxn(id, 'ADJ');
     return res.json({ success: true });
   } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
 });
