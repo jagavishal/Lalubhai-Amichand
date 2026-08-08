@@ -48,6 +48,17 @@ window.Pages['pr-creation'] = (() => {
   // submit; ALU is the only format where it's a manual field.
   const DEPARTMENT_MODE = { ITEM_CODE: 'auto', PACKING_STICKER: 'none', PACKING_BOX: 'none', ALU: 'manual' };
 
+  // Fixed list for ALU's manual Department dropdown — matches the store
+  // team's own PR-tracking categories (the same scheme "PR Form Responses"/
+  // RM_1_res uses for its Department column and per-category product-name
+  // columns), deliberately NOT PO Creation's shop-floor department list,
+  // which is a different, broader set. "Other" reveals a free-text input,
+  // same as that sheet's own "If New Department then Enter Here" column.
+  const PR_DEPARTMENTS = [
+    'Accessory dept', 'Brazing dept', 'CNC dept', 'Consumable', 'Electric dept',
+    'Packing dept', 'Pressing dept', 'Washing dept', 'Welding dept', 'Other',
+  ];
+
   // Manual item columns per format, in on-sheet order — everything else
   // (description, size, totals) is computed by the sheet's own formulas once
   // Item No. is filled in, so those are shown read-only and never sent.
@@ -142,12 +153,6 @@ window.Pages['pr-creation'] = (() => {
   let _vendors = [];
   let _nextPrNumber = null;
   let _lastDepartment = '';
-  // Fallback list — replaced by the live sheet's own Department dropdown
-  // (same master list PO Creation uses) once /api/pr-creation/masters resolves.
-  let _departments = [
-    'Press Shop', 'Accessories', 'Fitting', 'Spinning', 'Milk Jug Fitting', 'Washing', 'Packing',
-    'Tool Room', 'Store', 'Time Keeper', 'Cnc', 'Circles', 'Riveting Department', 'ST STEEL', 'PRESSING', 'ALU CIRCLE',
-  ];
 
   // PR Summary (in-page tab) state — read-only history from the ERP PR Log tab.
   let _sumRows = [];
@@ -186,7 +191,6 @@ window.Pages['pr-creation'] = (() => {
       const data = await Utils.apiFetch('/api/pr-creation/masters');
       if (!data) return;
       _vendors = data.vendors || [];
-      if (Array.isArray(data.departments) && data.departments.length) _departments = data.departments;
       _nextPrNumber = data.nextPrNumber;
       _mastersLoaded = true;
       const el = document.getElementById('pcr-next-no');
@@ -365,6 +369,12 @@ window.Pages['pr-creation'] = (() => {
       if (row) _recomputeRow(row);
       _recomputeGrandTotal();
     }
+    if (e.target.id === 'pcr-department') {
+      const other = document.getElementById('pcr-department-other');
+      const isOther = e.target.value === 'Other';
+      other.style.display = isOther ? 'block' : 'none';
+      if (isOther) other.focus(); else other.value = '';
+    }
   }
 
   /* ── Item rows ──────────────────────────────────────────────────────── */
@@ -428,8 +438,10 @@ window.Pages['pr-creation'] = (() => {
     const common = HEADER_FIELDS[_format].map(f => _textField('pcr-' + f.key, f.label, { type: f.type, value: f.key === 'dateRequested' ? _today() : '' })).join('');
     const deptMode = DEPARTMENT_MODE[_format];
     const dept = deptMode === 'manual'
-      ? _fieldWrap('Department', '<select id="pcr-department" style="' + _inputStyle + 'background:#fff;"><option value="">Select…</option>'
-          + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('') + '</select>')
+      ? _fieldWrap('Department', ''
+          + '<select id="pcr-department" style="' + _inputStyle + 'background:#fff;"><option value="">Select…</option>'
+            + PR_DEPARTMENTS.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('') + '</select>'
+          + '<input type="text" id="pcr-department-other" placeholder="Enter department…" autocomplete="off" style="' + _inputStyle + 'margin-top:8px;display:none;" />')
       : (deptMode === 'auto' ? _readonlyField('pcr-department-preview', 'Department (auto, from first item)', _lastDepartment || 'Filled in after saving') : '');
     return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
       + _readonlyField('pcr-next-no', 'PR NO (auto-assigned)', _nextPrNumber != null ? _nextPrNumber : 'Loading…')
@@ -494,7 +506,10 @@ window.Pages['pr-creation'] = (() => {
     HEADER_FIELDS[_format].forEach(f => { body[f.key] = document.getElementById('pcr-' + f.key).value.trim(); });
     const party = document.getElementById('pcr-party').value.trim();
     if (_format === 'PACKING_STICKER' || _format === 'PACKING_BOX') body.partyName = party; else body.vendorName = party;
-    if (DEPARTMENT_MODE[_format] === 'manual') body.department = document.getElementById('pcr-department').value.trim();
+    if (DEPARTMENT_MODE[_format] === 'manual') {
+      const selected = document.getElementById('pcr-department').value.trim();
+      body.department = selected === 'Other' ? document.getElementById('pcr-department-other').value.trim() : selected;
+    }
 
     if (!body.requestedBy) { Utils.showToast('Requested By is required', 'error'); return; }
     if (!party) { Utils.showToast(PARTY_LABEL[_format] + ' is required', 'error'); return; }
