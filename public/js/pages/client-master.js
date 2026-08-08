@@ -80,6 +80,37 @@ window.Pages['client-master'] = (() => {
     return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  /* ── CSV export — quotes any cell with a comma/quote/newline (addresses and
+     names routinely have commas), unlike a bare join(','). Exports exactly
+     what's on screen, so it respects the current search/status filter. ──── */
+  function _csvCell(v) {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function _downloadCSV(filename, headers, rows) {
+    const csv = [headers, ...rows].map(r => r.map(_csvCell).join(',')).join('\r\n');
+    const link = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })), // BOM so Excel shows non-ASCII correctly
+      download: filename,
+    });
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+  function _exportVendorsCSV() {
+    const rows = _filtered();
+    if (!rows.length) { Utils.showToast('No vendors to export', 'warning'); return; }
+    const headers = ['Vendor ID', 'Name', 'Contact Person', 'Mobile', 'Email', 'State', 'District', 'Address', 'PIN', 'Division', 'Status', 'Bank Name', 'Account Holder', 'Account No', 'IFSC Code', 'Branch Name'];
+    const data = rows.map(c => [
+      c.id, c.name, c.contactPerson || '', c.mobile || c.contact_number || '', c.email || '', c.state || '', c.district || '',
+      c.address || '', c.pin || '', c.division || '', c.status === 'active' ? 'Active' : 'Inactive',
+      c.bank_name || '', c.account_holder || '', c.account_no || '', c.ifsc_code || '', c.branch_name || '',
+    ]);
+    const d = new Date();
+    const stamp = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0');
+    _downloadCSV('Vendors_' + stamp + '.csv', headers, data);
+  }
+
   /* ── API ────────────────────────────────────────────────────── */
   async function _load(skipRender) {
     try {
@@ -307,6 +338,10 @@ window.Pages['client-master'] = (() => {
             + '<option ' + (_status==='Inactive'?'selected':'') + '>Inactive</option>'
           + '</select>'
           + '<span style="font-size:11px;color:#94a3b8;white-space:nowrap;">' + rows.length + ' of ' + _list.length + '</span>'
+          + '<button type="button" id="cm-export-btn" style="display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#374151;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;" onmouseenter="this.style.borderColor=\'var(--color-primary)\';this.style.color=\'var(--color-primary)\'" onmouseleave="this.style.borderColor=\'#e2e8f0\';this.style.color=\'#374151\'">'
+            + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'
+            + 'Download CSV'
+          + '</button>'
         + '</div>'
         + '<div id="cm-table">' + _renderTable() + '</div>'
       + '</div>'
@@ -1225,6 +1260,11 @@ window.Pages['client-master'] = (() => {
       _render();
     });
     document.getElementById('cm-add-btn')?.addEventListener('click', _openAdd);
+    // Bound here (once per full render) rather than in _bindTableButtons, which
+    // re-runs on every search/filter keystroke — this button lives outside the
+    // #cm-table innerHTML that re-render replaces, so re-binding it there would
+    // stack duplicate listeners and fire multiple downloads per click.
+    document.getElementById('cm-export-btn')?.addEventListener('click', _exportVendorsCSV);
 
     _bindTableButtons();
     if (_tab === 'payments') _bindPaymentTabEvents();
