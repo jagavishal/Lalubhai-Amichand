@@ -142,6 +142,12 @@ window.Pages['pr-creation'] = (() => {
   let _vendors = [];
   let _nextPrNumber = null;
   let _lastDepartment = '';
+  // Fallback list — replaced by the live sheet's own Department dropdown
+  // (same master list PO Creation uses) once /api/pr-creation/masters resolves.
+  let _departments = [
+    'Press Shop', 'Accessories', 'Fitting', 'Spinning', 'Milk Jug Fitting', 'Washing', 'Packing',
+    'Tool Room', 'Store', 'Time Keeper', 'Cnc', 'Circles', 'Riveting Department', 'ST STEEL', 'PRESSING', 'ALU CIRCLE',
+  ];
 
   // PR Summary (in-page tab) state — read-only history from the ERP PR Log tab.
   let _sumRows = [];
@@ -180,6 +186,7 @@ window.Pages['pr-creation'] = (() => {
       const data = await Utils.apiFetch('/api/pr-creation/masters');
       if (!data) return;
       _vendors = data.vendors || [];
+      if (Array.isArray(data.departments) && data.departments.length) _departments = data.departments;
       _nextPrNumber = data.nextPrNumber;
       _mastersLoaded = true;
       const el = document.getElementById('pcr-next-no');
@@ -220,6 +227,67 @@ window.Pages['pr-creation'] = (() => {
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
   }
 
+  /* ── "Add new item" modal — for when the picker below comes up empty.
+     Writes straight into the current format's own item-master tab (see
+     POST /api/pr-creation/items in server.js), then fills the row that
+     triggered it exactly as if the new item had been picked from search. ── */
+  function _closeAddItemModal() {
+    document.getElementById('pcr-add-item-modal-overlay')?.remove();
+  }
+
+  function _openAddItemModal(prefillCode, ctx) {
+    _closeAddItemModal();
+    const bodyHTML = ''
+      + '<div style="display:flex;flex-direction:column;gap:12px;">'
+        + _fieldWrap('Item Code', '<input type="text" id="pcr-nai-code" autocomplete="off" value="' + esc(prefillCode || '') + '" style="' + _inputStyle + '" />')
+        + _fieldWrap('Description', '<input type="text" id="pcr-nai-desc" autocomplete="off" style="' + _inputStyle + '" />')
+        + _fieldWrap('Size', '<input type="text" id="pcr-nai-size" autocomplete="off" style="' + _inputStyle + '" />')
+      + '</div>';
+    const footerHTML = ''
+      + '<button type="button" id="pcr-nai-cancel" class="btn-secondary">Cancel</button>'
+      + '<button type="button" id="pcr-nai-save" class="btn-primary">Add Item</button>';
+    document.body.insertAdjacentHTML('beforeend', window.UI.modal({
+      id: 'pcr-add-item-modal-overlay',
+      title: 'Add New Item',
+      subtitle: FORMAT_LABEL[_format] + ' item master',
+      width: 420,
+      closeButtonId: 'pcr-nai-close',
+      hiddenByDefault: false,
+      bodyHTML, footerHTML,
+    }));
+    const overlay = document.getElementById('pcr-add-item-modal-overlay');
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) _closeAddItemModal(); });
+    document.getElementById('pcr-nai-close').addEventListener('click', _closeAddItemModal);
+    document.getElementById('pcr-nai-cancel').addEventListener('click', _closeAddItemModal);
+    document.getElementById('pcr-nai-save').addEventListener('click', () => _submitAddItem(ctx));
+    document.getElementById('pcr-nai-code').focus();
+  }
+
+  async function _submitAddItem(ctx) {
+    const codeInput = document.getElementById('pcr-nai-code');
+    const code = codeInput.value.trim();
+    const description = document.getElementById('pcr-nai-desc').value.trim();
+    const size = document.getElementById('pcr-nai-size').value.trim();
+    if (!code) { Utils.showToast('Item code is required', 'warning'); codeInput.focus(); return; }
+    const saveBtn = document.getElementById('pcr-nai-save');
+    saveBtn.disabled = true; saveBtn.textContent = 'Adding…';
+    try {
+      const result = await Utils.apiFetch('/api/pr-creation/items', {
+        method: 'POST', body: JSON.stringify({ format: _format, code, description, size }),
+      });
+      if (!result) return;
+      ctx.input.value = result.code;
+      ctx.previewDesc.textContent = result.description || '—';
+      ctx.previewSize.textContent = result.size || '—';
+      ctx.dd.style.display = 'none';
+      _closeAddItemModal();
+      Utils.showToast('Item added — you can now use it right away', 'success');
+    } catch (e) {
+      Utils.showToast(e.message || 'Failed to add item', 'error');
+      saveBtn.disabled = false; saveBtn.textContent = 'Add Item';
+    }
+  }
+
   /* ── Item-code typeahead per row — fixed-position dropdown so it isn't
      clipped by the item table's horizontal scroll ───────────────────────── */
   let _itemSearchTimer = null;
@@ -236,9 +304,10 @@ window.Pages['pr-creation'] = (() => {
           const res = await fetch('/api/pr-creation/items?format=' + encodeURIComponent(_format) + '&q=' + encodeURIComponent(q));
           if (!res.ok) return;
           const matches = await res.json();
-          if (!matches.length) { dd.style.display = 'none'; return; }
+          const addNewHtml = '<div class="pcr-item-add-new" style="padding:8px 12px;font-size:12.5px;cursor:pointer;font-weight:700;color:var(--color-primary);'
+            + (matches.length ? 'border-top:1px solid #e2e8f0;' : '') + '">+ Add' + (q ? ' "' + esc(q) + '"' : '') + ' as new item</div>';
           dd.innerHTML = matches.map(m => '<div class="pcr-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.code) + '" data-desc="' + esc(m.description) + '" data-size="' + esc(m.size) + '">'
-            + '<b>' + esc(m.code) + '</b> — ' + esc(m.description) + (m.size ? ' (' + esc(m.size) + ')' : '') + '</div>').join('');
+            + '<b>' + esc(m.code) + '</b> — ' + esc(m.description) + (m.size ? ' (' + esc(m.size) + ')' : '') + '</div>').join('') + addNewHtml;
           const rect = input.getBoundingClientRect();
           dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 260) + 'px';
           dd.style.display = 'block';
@@ -248,6 +317,12 @@ window.Pages['pr-creation'] = (() => {
     input.addEventListener('input', runSearch);
     input.addEventListener('focus', runSearch);
     dd.addEventListener('mousedown', (e) => {
+      const addNew = e.target.closest('.pcr-item-add-new');
+      if (addNew) {
+        dd.style.display = 'none';
+        _openAddItemModal(input.value.trim(), { input, previewDesc, previewSize, dd });
+        return;
+      }
       const opt = e.target.closest('.pcr-item-opt');
       if (!opt) return;
       input.value = opt.dataset.code;
@@ -353,7 +428,8 @@ window.Pages['pr-creation'] = (() => {
     const common = HEADER_FIELDS[_format].map(f => _textField('pcr-' + f.key, f.label, { type: f.type, value: f.key === 'dateRequested' ? _today() : '' })).join('');
     const deptMode = DEPARTMENT_MODE[_format];
     const dept = deptMode === 'manual'
-      ? _textField('pcr-department', 'Department')
+      ? _fieldWrap('Department', '<select id="pcr-department" style="' + _inputStyle + 'background:#fff;"><option value="">Select…</option>'
+          + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('') + '</select>')
       : (deptMode === 'auto' ? _readonlyField('pcr-department-preview', 'Department (auto, from first item)', _lastDepartment || 'Filled in after saving') : '');
     return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
       + _readonlyField('pcr-next-no', 'PR NO (auto-assigned)', _nextPrNumber != null ? _nextPrNumber : 'Loading…')

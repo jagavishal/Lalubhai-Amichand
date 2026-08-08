@@ -1,9 +1,14 @@
 window.Utils = {
 
   /* ── API fetch with timeout ─────────────────────────────────────── */
+  // 45s (not 15s) because several writes (PR/PO/GRN/Proforma creation) chain
+  // multiple sequential Google Sheets + Drive API calls plus a deliberate
+  // recalculation pause server-side — comfortably over 15s on a slow day,
+  // which was surfacing as a false "Request timed out" even though the
+  // server-side write had actually gone through.
   async apiFetch(url, opts = {}) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
+    const timer = setTimeout(() => controller.abort(), 45000);
     try {
       const res = await fetch(url, {
         headers: { 'Content-Type': 'application/json' },
@@ -12,8 +17,19 @@ window.Utils = {
       });
       clearTimeout(timer);
       if (res.status === 401) { window.location.hash = '#login'; return null; }
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error');
+      // A proxy/hosting-layer error (Hostinger, or Node itself crashing mid-
+      // request) doesn't return JSON — it returns an HTML or plain-text error
+      // page. Calling res.json() directly on that throws a raw browser
+      // "Unexpected token '<'... is not valid JSON" SyntaxError, which used
+      // to surface to users completely unexplained. Parse as text first so a
+      // non-JSON body becomes a normal, readable error instead of a crash.
+      const raw = await res.text();
+      let data = null;
+      if (raw) {
+        try { data = JSON.parse(raw); }
+        catch { throw new Error(res.ok ? 'Server returned an unexpected response — please try again' : `Server error (HTTP ${res.status}) — please try again`); }
+      }
+      if (!res.ok) throw new Error(data?.error || 'Error');
       return data;
     } catch (e) {
       clearTimeout(timer);

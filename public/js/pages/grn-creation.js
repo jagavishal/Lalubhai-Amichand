@@ -231,25 +231,46 @@ window.Pages['grn-creation'] = (() => {
     row.querySelector('.grnc-item-total').textContent = _fmtMoney(approvedQty * rate);
   }
 
-  function _recomputeGrandTotal() {
-    const el = document.getElementById('grnc-grand-total');
-    if (!el) return;
+  function _computeSubtotal() {
     let subtotal = 0;
     document.querySelectorAll('#grnc-items-tbody .grnc-item-row').forEach(row => {
       subtotal += _num(row.querySelector('[data-field="approvedQty"]').value) * _num(row.querySelector('[data-field="rate"]').value);
     });
+    return subtotal;
+  }
+
+  function _recomputeGrandTotal() {
+    const el = document.getElementById('grnc-grand-total');
+    if (!el) return;
     const cgst = _num(document.getElementById('grnc-cgst').value);
     const sgst = _num(document.getElementById('grnc-sgst').value);
     const roundOff = _num(document.getElementById('grnc-round-off').value);
-    el.textContent = '₹' + _fmtMoney(subtotal + cgst + sgst + roundOff);
+    el.textContent = '₹' + _fmtMoney(_computeSubtotal() + cgst + sgst + roundOff);
+  }
+
+  // Auto-fills CGST/SGST as an even split of the chosen GST % on the current
+  // item Subtotal (e.g. 18% -> 9% CGST + 9% SGST) — the live GRN sheet only
+  // has cells for CGST/SGST amounts (no IGST cell exists in that template),
+  // so this only ever covers the intra-state case; an inter-state GRN still
+  // needs its rupee amount(s) entered by hand. "Manual" (blank) leaves both
+  // fields exactly as typed — this never runs unless a % is actually chosen,
+  // and either field stays freely editable afterward either way.
+  function _applyGstPercent() {
+    const pct = _num(document.getElementById('grnc-gst-percent').value);
+    if (!pct) return;
+    const half = (_computeSubtotal() * pct / 2 / 100).toFixed(2);
+    document.getElementById('grnc-cgst').value = half;
+    document.getElementById('grnc-sgst').value = half;
   }
 
   function _onFormInput(e) {
     if (e.target.matches('.grnc-item-field')) {
       const row = e.target.closest('.grnc-item-row');
       if (row) _recomputeRow(row);
+      _applyGstPercent(); // keep CGST/SGST following Subtotal whenever a % is selected
     }
-    if (e.target.matches('.grnc-item-field, .grnc-summary-field')) _recomputeGrandTotal();
+    if (e.target.id === 'grnc-gst-percent') _applyGstPercent();
+    if (e.target.matches('.grnc-item-field, .grnc-summary-field') || e.target.id === 'grnc-gst-percent') _recomputeGrandTotal();
   }
 
   /* ── Item rows ──────────────────────────────────────────────────────── */
@@ -525,10 +546,15 @@ window.Pages['grn-creation'] = (() => {
         + _fieldWrap('Extra Comments / Reason for GRN Delay', '<textarea id="grnc-comments" rows="2" style="' + _inputStyle + 'resize:vertical;"></textarea>')
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Charges</div>'
         + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">'
+          + _fieldWrap('GST % (auto-fills CGST + SGST)', '<select id="grnc-gst-percent" style="' + _inputStyle + 'background:#fff;">'
+              + [['', 'Manual — enter below myself'], ['0', '0%'], ['5', '5% (2.5 + 2.5)'], ['12', '12% (6 + 6)'], ['18', '18% (9 + 9)'], ['28', '28% (14 + 14)']]
+                .map(([v, label]) => '<option value="' + v + '">' + esc(label) + '</option>').join('')
+            + '</select>', 'grid-column:1 / -1;max-width:280px;')
           + _fieldWrap('CGST', '<input type="text" inputmode="decimal" id="grnc-cgst" class="grnc-summary-field" style="' + _inputStyle + '" placeholder="0" />')
           + _fieldWrap('SGST', '<input type="text" inputmode="decimal" id="grnc-sgst" class="grnc-summary-field" style="' + _inputStyle + '" placeholder="0" />')
           + _fieldWrap('Round Off', '<input type="text" inputmode="decimal" id="grnc-round-off" class="grnc-summary-field" style="' + _inputStyle + '" placeholder="0" />')
         + '</div>'
+        + '<div style="font-size:11.5px;color:#94a3b8;margin:-10px 2px 0;">Inter-state vendor (IGST)? The live GRN sheet doesn\'t have an IGST cell yet — enter the full amount in CGST or SGST and adjust manually, or ask to have an IGST row added to the sheet.</div>'
         + '<div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
           + '<span style="font-size:12.5px;font-weight:700;color:#64748b;">Estimated Total</span>'
           + '<span id="grnc-grand-total" style="font-size:17px;font-weight:800;color:#0f172a;">₹0.00</span>'

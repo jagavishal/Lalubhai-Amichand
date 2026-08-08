@@ -39,6 +39,41 @@ window.Pages['ims'] = (() => {
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
+  /* ── CSV export — quotes any cell with a comma/quote/newline (item
+     descriptions and vendor names routinely have commas), unlike a bare
+     join(','). Exports exactly what's on screen, so it respects whatever
+     search/category/low-stock filters are currently applied. ───────────── */
+  function _csvCell(v) {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function _downloadCSV(filename, headers, rows) {
+    const csv = [headers, ...rows].map(r => r.map(_csvCell).join(',')).join('\r\n');
+    const link = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })), // BOM so Excel shows ₹/non-ASCII correctly
+      download: filename,
+    });
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+  function _exportItemsCSV() {
+    if (!_rows.length) { Utils.showToast('No items to export', 'warning'); return; }
+    const headers = ['Item Code', 'Category', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order Qty', 'Vendor Name'];
+    const rows = _rows.map(r => [r.itemCode, r.category || 'Stores', r.description, r.size, r.uom, r.currentStock, r.moq, r.maxLevel, r.onOrderQty, r.vendorName]);
+    _downloadCSV('IMS_Items_' + _todayStamp() + '.csv', headers, rows);
+  }
+  function _exportHistoryCSV() {
+    if (!_historyRows.length) { Utils.showToast('No items to export', 'warning'); return; }
+    const headers = ['Item Code', 'Description', 'UOM', ..._historyDates.map(_dateLabel)];
+    const rows = _historyRows.map(r => [r.itemCode, r.description, r.uom, ...(r.daily || [])]);
+    _downloadCSV('IMS_DayWiseStock_' + _todayStamp() + '.csv', headers, rows);
+  }
+  function _todayStamp() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
   // Color coding lifted 1:1 from the reference sheet's own Apps Script
   // (getColorForStockLevel in the "Calculations" menu): buckets stock as a
   // % of Max Level into red/yellow/green/purple, same thresholds + hex values.
@@ -257,6 +292,7 @@ window.Pages['ims'] = (() => {
         + '<input type="checkbox" id="ims-lowstock" ' + (_lowStockOnly ? 'checked' : '') + ' /> Low stock only'
       + '</label>'
       + '<button type="button" id="ims-add-btn" style="padding:8px 14px;border-radius:8px;background:var(--color-primary);border:none;color:var(--color-primary-text);font-size:12.5px;font-weight:700;cursor:pointer;">+ Add Item</button>'
+      + '<button type="button" id="ims-export-btn" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">⬇ Download CSV</button>'
       + '<button type="button" id="ims-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
     + '</div>';
   }
@@ -270,6 +306,7 @@ window.Pages['ims'] = (() => {
     document.getElementById('ims-category').addEventListener('change', (e) => { _category = e.target.value; _load(); });
     document.getElementById('ims-lowstock').addEventListener('change', (e) => { _lowStockOnly = e.target.checked; _load(); });
     document.getElementById('ims-add-btn').addEventListener('click', () => _openForm(null));
+    document.getElementById('ims-export-btn').addEventListener('click', _exportItemsCSV);
     document.getElementById('ims-refresh').addEventListener('click', _load);
   }
 
@@ -284,6 +321,7 @@ window.Pages['ims'] = (() => {
         + _historyDayOptions.map(n => '<button type="button" class="ims-h-range" data-days="' + n + '" style="padding:6px 12px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;'
           + (n === _historyDays ? 'background:var(--color-primary);color:var(--color-primary-text);' : 'background:transparent;color:#475569;') + '">' + _dayOptionLabel(n) + '</button>').join('')
       + '</div>'
+      + '<button type="button" id="ims-h-export" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">⬇ Download CSV</button>'
       + '<button type="button" id="ims-h-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
     + '</div>';
   }
@@ -295,6 +333,7 @@ window.Pages['ims'] = (() => {
       _searchTimer = setTimeout(_loadHistory, 300);
     });
     document.getElementById('ims-h-category').addEventListener('change', (e) => { _category = e.target.value; _loadHistory(); });
+    document.getElementById('ims-h-export').addEventListener('click', _exportHistoryCSV);
     document.getElementById('ims-h-refresh').addEventListener('click', _loadHistory);
     document.querySelectorAll('.ims-h-range').forEach(btn => {
       btn.addEventListener('click', () => {

@@ -2461,80 +2461,14 @@ async function safeUploadPdfToDrive(buffer, filename, folderId) {
   }
 }
 
-async function syncPrToSheet(id) {
-  if (!getGoogleAuth()) return;
-  try {
-    const pr = await fetchPrForPdf(id);
-    if (!pr) return;
-    const buffer = await buildPrPdfBuffer(pr);
-    const pdfLink = await safeUploadPdfToDrive(buffer, id + '.pdf');
-    const total = (pr.items || []).reduce((s, it) => s + (parseFloat(it.quantity) || 0) * (parseFloat(it.estimatedRate) || 0), 0);
-    const header = ['PR ID', 'Type', 'Date', 'Requested By', 'Department', 'Vendor', 'Items Summary', 'Est. Total', 'Status', 'PDF Link'];
-    await ensureLogTab(PR_SHEET_ID, LOG_TAB_NAME, header);
-    await appendLogRow(PR_SHEET_ID, LOG_TAB_NAME, [
-      pr.id, PR_TYPE_LABEL[pr.prType] || pr.prType, pr.prDate, pr.requestedBy || '', pr.department || '',
-      pr.vendorName || '', _itemsSummary(pr.items), total.toFixed(2), pr.status || '', pdfLink || '',
-    ]);
-    console.log('[google-sync] PR sync: row appended for', pr.id);
-  } catch (e) { console.error('[google-sync] PR sync failed:', e.message); }
-}
-
-// Separate from syncPrToSheet above — this appends into the store team's own
-// pre-existing FMS (Stores) tracking spreadsheet, which already has PR rows
-// entered by hand and many product-specific columns we don't own. Only ever
-// append into the known-existing "Monitoring" tab; never create/re-header it.
-async function syncPrToMonitoringSheet(id) {
-  if (!getGoogleAuth()) return;
-  try {
-    const pr = await fetchPrForPdf(id);
-    if (!pr) { console.error('[google-sync] PR monitoring sync: PR not found for id', id); return; }
-    const timestamp = _timestampForSheet();
-    await appendLogRow(PR_MONITORING_SHEET_ID, MONITORING_TAB_NAME, [timestamp, pr.id, pr.requestedBy || '', pr.vendorName || '']);
-    console.log('[google-sync] PR monitoring sync: row appended for', pr.id, 'to', PR_MONITORING_SHEET_ID);
-  } catch (e) { console.error('[google-sync] PR monitoring sync failed:', e.message); }
-}
-
-async function syncPoToSheet(id) {
-  if (!getGoogleAuth()) return;
-  try {
-    const po = await fetchPoForPdf(id);
-    if (!po) return;
-    const buffer = await buildPoPdfBuffer(po);
-    const pdfLink = await safeUploadPdfToDrive(buffer, id + '.pdf');
-    const subtotal = (po.items || []).reduce((s, it) => s + (parseFloat(it.quantity) || 0) * (parseFloat(it.rate) || 0), 0);
-    const gst = (po.items || []).reduce((s, it) => s + (parseFloat(it.quantity) || 0) * (parseFloat(it.rate) || 0) * (parseFloat(it.gstPercent) || 0) / 100, 0);
-    const freight = parseFloat(po.freightCharges) || 0, packing = parseFloat(po.packingCharges) || 0, discount = parseFloat(po.discount) || 0;
-    const total = subtotal + gst + freight + packing - discount;
-    const header = ['PO ID', 'Type', 'Date', 'PR No', 'Created By', 'Department', 'Vendor', 'Items Summary', 'Subtotal', 'GST', 'Freight', 'Packing', 'Discount', 'Total', 'Approval Status', 'PDF Link'];
-    await ensureLogTab(PO_MONITORING_SHEET_ID, MONITORING_TAB_NAME, header);
-    await appendLogRow(PO_MONITORING_SHEET_ID, MONITORING_TAB_NAME, [
-      po.id, PO_TYPE_LABEL[po.poType] || po.poType, po.poDate, po.prId || '', po.createdBy || '', po.department || '',
-      po.vendorName || '', _itemsSummary(po.items), subtotal.toFixed(2), gst.toFixed(2), freight.toFixed(2), packing.toFixed(2), discount.toFixed(2), total.toFixed(2),
-      po.approvalStatus || '', pdfLink || '',
-    ]);
-    console.log('[google-sync] PO sync: row appended for', po.id);
-  } catch (e) { console.error('[google-sync] PO sync failed:', e.message); }
-}
-
-async function syncGrnToSheet(id) {
-  if (!getGoogleAuth()) return;
-  try {
-    const gr = await fetchGrForPdf(id);
-    if (!gr) return;
-    const buffer = await buildGrnPdfBuffer(gr);
-    const pdfLink = await safeUploadPdfToDrive(buffer, id + '.pdf');
-    const subtotal = (gr.items || []).reduce((s, it) => s + (parseFloat(it.quantity) || 0) * (parseFloat(it.rate) || 0), 0);
-    const cgst = parseFloat(gr.cgst) || 0, sgst = parseFloat(gr.sgst) || 0, roundOff = parseFloat(gr.roundOff) || 0;
-    const total = subtotal + cgst + sgst + roundOff;
-    const header = ['GR No', 'Date', 'Made By', 'PR No', 'PO No', 'Bill No', 'Bill Recv Date', 'Dept Head', 'Vendor', 'Items Summary', 'Subtotal', 'CGST', 'SGST', 'Round Off', 'Total', 'PDF Link'];
-    await ensureLogTab(GRN_SHEET_ID, LOG_TAB_NAME, header);
-    await appendLogRow(GRN_SHEET_ID, LOG_TAB_NAME, [
-      gr.id, gr.grDate, gr.madeBy || '', gr.prId || '', gr.poId || '', gr.billNo || '', gr.billRecvDate || '', gr.deptHead || '',
-      gr.vendorName || '', _itemsSummary(gr.items), subtotal.toFixed(2), cgst.toFixed(2), sgst.toFixed(2), roundOff.toFixed(2), total.toFixed(2), pdfLink || '',
-    ]);
-    console.log('[google-sync] GRN sync: row appended for', gr.id);
-  } catch (e) { console.error('[google-sync] GRN sync failed:', e.message); }
-}
+// (The old syncPrToSheet/syncPrToMonitoringSheet/syncPoToSheet/syncGrnToSheet
+// functions that used to live here were dead code from a pre-Google-Sheets-
+// native implementation — none were ever called, and they depended on
+// fetchPrForPdf/buildPrPdfBuffer/etc. helpers that no longer exist in this
+// file. Removed; the one live behavior worth keeping — logging each new PR
+// into the FMS (Stores) monitoring sheet — is now inlined directly in
+// POST /api/pr-creation, right after the PR is actually created, using data
+// already on hand instead of re-fetching it.)
 
 // ── PO Creation (fills the store team's live "PO July 2026" Google Sheet directly —
 // that sheet IS the database here, nothing is mirrored locally). Each of the 3
@@ -2567,6 +2501,13 @@ const PO_FORMAT_CONFIG = {
     header: { poNo: 'J7', date: 'J6', prNo: 'J8', department: 'J9', party: 'A13', shipTo: 'G13', deliverySchedule: 'A16', poValidity: 'C16', paymentTerms: 'G16', poMadeBy: 'J16' },
     items: { firstRow: 18, lastRow: 58, clearCols: ['A', 'J'], fields: { itemCode: 'A', hsnCode: 'D', uom: 'E', qty: 'F', unitPrice: 'G', gst: 'H' } },
     summary: { fields: { freightCharges: 'I61', packingCharges: 'I62', discount: 'I63' }, totalCell: 'I64' },
+    // These 3 sit in cells the live template has always reserved for them
+    // (label already printed, value cell left blank) but the ERP never wrote
+    // to before — only PurchaseOrder's template has this clean a layout;
+    // ENR PO/Diamond PO bake their own "YES / NO" placeholder into the label
+    // cell itself with no separate value cell, so there's nowhere safe to
+    // write those two without overwriting the label text.
+    extra: { termsAndConditionsRows: ['A60', 'A61', 'A62', 'A63', 'A64'], comments: 'B66', testCertificateRequired: 'B67' },
   },
   'ENR PO': {
     tabName: 'ENR PO',
@@ -2808,7 +2749,7 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
   try {
     const cfg = PO_FORMAT_CONFIG[req.body?.format];
     if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
-    const { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary } = req.body;
+    const { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
     if (!date || !party || !poMadeBy) return res.status(400).json({ error: 'Date, ' + cfg.partyLabel + ' and PO Made By are required' });
     const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemCode || '').trim());
     if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
@@ -2850,6 +2791,17 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     Object.entries(cfg.summary.fields).forEach(([field, a1]) => {
       data.push({ range: `'${tab}'!${a1}`, values: [[parseFloat(summary?.[field]) || 0]] });
     });
+
+    // Terms & Conditions / Comments / Test Certificate Required (Purchase-
+    // Order format only, see PO_FORMAT_CONFIG.extra above) — always written,
+    // blank or not, same discipline as the summary fields above: these cells
+    // must never keep showing a previous PO's leftover text.
+    if (cfg.extra?.termsAndConditionsRows) {
+      const lines = String(termsAndConditions || '').split('\n').map(s => s.trim());
+      cfg.extra.termsAndConditionsRows.forEach((a1, i) => data.push({ range: `'${tab}'!${a1}`, values: [[lines[i] || '']] }));
+    }
+    if (cfg.extra?.comments) data.push({ range: `'${tab}'!${cfg.extra.comments}`, values: [[comments || '']] });
+    if (cfg.extra?.testCertificateRequired) data.push({ range: `'${tab}'!${cfg.extra.testCertificateRequired}`, values: [[testCertificateRequired || '']] });
 
     cleanItems.forEach((it, i) => {
       const row = cfg.items.firstRow + i;
@@ -2909,7 +2861,7 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
       // reparsed into a locale-formatted date — the PO List page's date-range
       // filter compares these as plain "YYYY-MM-DD" strings.
       poNoFormatted, tab, "'" + date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(), prNo || '',
-      JSON.stringify({ format: tab, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary }),
+      JSON.stringify({ format: tab, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary, termsAndConditions, comments, testCertificateRequired }),
       'Active',
     ]);
 
@@ -3138,7 +3090,18 @@ app.get('/api/pr-creation/masters', requireAuth, async (req, res) => {
       _prSheetMeta(),
     ]);
     const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    return res.json({ vendors, nextPrNumber: _padSeqNo('PR', meta.nextPrNo) });
+    // Department dropdown (ALU format only — the other 3 derive it by formula)
+    // — reuses PO Creation's own Department master list (a different, separate
+    // spreadsheet) so both forms always offer the same set. Non-critical: falls
+    // back to the same hardcoded list PO Creation itself falls back to if this
+    // cross-spreadsheet read ever fails, rather than breaking PR masters entirely.
+    let departments = PO_DEPARTMENTS;
+    try {
+      const deptRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!N3:N31`, valueRenderOption: 'FORMATTED_VALUE' });
+      const fetched = (deptRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+      if (fetched.length) departments = fetched;
+    } catch (e) { console.error('[pr-creation] department list read failed, using fallback:', e.message); }
+    return res.json({ vendors, departments, nextPrNumber: _padSeqNo('PR', meta.nextPrNo) });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -3153,6 +3116,46 @@ app.get('/api/pr-creation/items', requireAuth, async (req, res) => {
     const matches = (q ? rows.filter(r => r.code.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)) : rows).slice(0, 50);
     return res.json(matches);
   } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/pr-creation/items — for when the item picker comes up empty:
+// appends a brand-new row to that format's own item-master tab (col A: code,
+// B: description, C: size). Plenty of headroom in every format's
+// PR_ITEM_CATALOG_RANGE (900-2000+ rows) below the real data, so this can
+// never collide with the template/summary areas of the sheet. The in-memory
+// catalog cache is invalidated so the new item is searchable immediately.
+app.post('/api/pr-creation/items', requireAuth, async (req, res) => {
+  try {
+    const format = req.body?.format;
+    if (!PR_ITEM_CATALOG_RANGE[format]) return res.status(400).json({ error: 'Unknown format' });
+    const code = String(req.body?.code || '').trim();
+    const description = String(req.body?.description || '').trim();
+    const size = String(req.body?.size || '').trim();
+    if (!code) return res.status(400).json({ error: 'Item code is required' });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+
+    const rows = await _loadPrItemCatalog(format);
+    if (rows.some(r => r.code.trim().toLowerCase() === code.toLowerCase())) {
+      return res.status(409).json({ error: `Item code "${code}" already exists — search for it instead` });
+    }
+
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const cat = PR_ITEM_CATALOG_RANGE[format];
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: PR_CREATION_SHEET_ID,
+      range: `'${cat.tab}'!A:C`,
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: { values: [[code, description, size]] },
+    });
+
+    delete _prItemCatalogCache[format]; // next search re-reads the sheet and sees this row
+    console.log('[pr-creation] new item added:', code, '->', cat.tab);
+    return res.json({ success: true, code, description, size });
+  } catch (e) { console.error('[pr-creation] add item failed:', e.message); return res.status(500).json({ error: e.message }); }
 });
 
 // POST /api/pr-creation — fills the live template tab for the chosen format,
@@ -3262,6 +3265,16 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
       JSON.stringify({ format: req.body.format, requestedBy, vendorName, partyName, personWhoRaisedPr, orderNo, department, termsOfPayment, estimatedDelDate, dateRequested, items: cleanItems }),
       'Active',
     ]);
+
+    // 6) Also drop a row into the store team's own FMS (Stores) tracking
+    // spreadsheet — a separate, pre-existing sheet they already track PRs in
+    // by hand (see PR_MONITORING_SHEET_ID above). Best-effort and last: a
+    // failure here must never undo/block the PR itself, which is already
+    // fully created at this point.
+    try {
+      await appendLogRow(PR_MONITORING_SHEET_ID, MONITORING_TAB_NAME, [_timestampForSheet(), prNoFormatted, requestedBy, party]);
+      console.log('[pr-creation] FMS monitoring sync: row appended for', prNoFormatted);
+    } catch (e) { console.error('[pr-creation] FMS monitoring sync failed:', e.message); }
 
     return res.json({ success: true, prNumber: prNoFormatted, totalAmount, department: departmentOut, pdfLink });
   } catch (e) { console.error('[pr-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }

@@ -102,14 +102,16 @@ window.Pages['po-creation'] = (() => {
     'purchase_requisition(ALU)': it => ({ itemCode: it.itemCode || '', hsnCode: '', uom: it.uom || '', qty: it.qtyRequired || '', unitPrice: it.rate || '', gst: it.tax || '' }),
   };
 
-  // Item fields each PO format's PR_ITEM_MAPPERS above never fills from the
-  // PR (hardcoded to '' — there's no PR-side source for them) — these are
-  // the only item fields that stay editable once a PR has been applied to
-  // the form; every other mapped field came from the PR and must lock.
+  // Item fields that stay editable once a PR has been applied to the form —
+  // either because PR_ITEM_MAPPERS never fills them from the PR (hardcoded
+  // to '' — there's no PR-side source for them), or because price genuinely
+  // needs to move at PO time (a vendor's actual quoted price at PO stage
+  // routinely differs from the PR's own estimate). Every other mapped field
+  // still locks, since it came straight from the approved PR.
   const PO_ONLY_ITEM_FIELDS = {
-    PurchaseOrder: ['hsnCode'],
-    'ENR PO': ['customerCodeRef', 'barcode', 'taxPercent'],
-    'Diamond PO': [],
+    PurchaseOrder: ['hsnCode', 'unitPrice'],
+    'ENR PO': ['customerCodeRef', 'barcode', 'taxPercent', 'rate'],
+    'Diamond PO': ['boxRate', 'plateRate'],
   };
   const READONLY_FIELD_STYLE = 'background:#f8fafc;color:#64748b;cursor:not-allowed;';
 
@@ -153,6 +155,13 @@ window.Pages['po-creation'] = (() => {
   }
   function _readonlyField(id, label, value) {
     return _fieldWrap(label, '<div id="' + id + '" style="padding:8px 10px;border:1.5px dashed #e2e8f0;border-radius:8px;font-size:13px;color:#64748b;background:#f8fafc;">' + esc(value) + '</div>');
+  }
+  function _textareaField(id, label, opts) {
+    opts = opts || {};
+    return _fieldWrap(label, '<textarea id="' + id + '" rows="' + (opts.rows || 3) + '" placeholder="' + esc(opts.placeholder || '') + '" style="' + _inputStyle + 'resize:vertical;font-family:inherit;">' + esc(opts.value || '') + '</textarea>');
+  }
+  function _selectField(id, label, options) {
+    return _fieldWrap(label, '<select id="' + id + '" style="' + _inputStyle + 'background:#fff;">' + options.map(o => '<option value="' + esc(o) + '">' + (o || 'Select…') + '</option>').join('') + '</select>');
   }
 
   /* ── Masters (vendors / ship-to / departments / next PO number) ───────── */
@@ -675,6 +684,21 @@ window.Pages['po-creation'] = (() => {
     return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">' + common + shipTo + terms + '</div>';
   }
 
+  /* ── Additional Details — Terms & Conditions / Comments / Test Certificate
+     (PurchaseOrder format only: the live template has a clean, dedicated,
+     always-blank cell for each of these three; ENR PO/Diamond PO bake their
+     own "YES / NO" placeholder into the label itself with nowhere separate
+     to write, so they don't get this section). ─────────────────────────── */
+  function _extraFieldsHtml() {
+    if (_format !== 'PurchaseOrder') return '';
+    return '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Additional Details</div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
+        + _textareaField('poc-terms', 'Terms and Conditions', { rows: 4, placeholder: 'One line per row (up to 5 lines)…' })
+        + _textField('poc-comments', 'Any Comments')
+        + _selectField('poc-test-cert', 'Test Certificate Required', ['', 'Yes', 'No'])
+      + '</div>';
+  }
+
   /* ── Format tabs (+ the PO List tab, alongside the 3 create formats) ──── */
   function _tabTab(label, active, extraAttrs) {
     return '<button type="button" ' + extraAttrs + ' style="'
@@ -757,6 +781,9 @@ window.Pages['po-creation'] = (() => {
     const poMadeBy = document.getElementById('poc-po-made-by').value.trim();
     const items = _collectItems();
     const summary = _collectSummary();
+    const termsAndConditions = _format === 'PurchaseOrder' ? document.getElementById('poc-terms').value : '';
+    const comments = _format === 'PurchaseOrder' ? document.getElementById('poc-comments').value.trim() : '';
+    const testCertificateRequired = _format === 'PurchaseOrder' ? document.getElementById('poc-test-cert').value : '';
 
     if (!date) { Utils.showToast('Date is required', 'error'); return; }
     if (!party) { Utils.showToast(PARTY_LABEL[_format] + ' is required', 'error'); return; }
@@ -768,7 +795,7 @@ window.Pages['po-creation'] = (() => {
     try {
       const result = await Utils.apiFetch('/api/po-creation', {
         method: 'POST',
-        body: JSON.stringify({ format: _format, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary }),
+        body: JSON.stringify({ format: _format, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired }),
       });
       await _loadMasters();
       renderPage();
@@ -796,6 +823,7 @@ window.Pages['po-creation'] = (() => {
         + '</div>'
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Charges</div>'
         + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">' + _summaryFieldsHtml() + '</div>'
+        + _extraFieldsHtml()
         + '<div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
           + '<span style="font-size:12.5px;font-weight:700;color:#64748b;">Estimated Total</span>'
           + '<span id="poc-grand-total" style="font-size:17px;font-weight:800;color:#0f172a;">₹0.00</span>'
