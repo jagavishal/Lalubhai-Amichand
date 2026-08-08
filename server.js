@@ -2723,7 +2723,11 @@ app.get('/api/po-creation/items', requireAuth, async (req, res) => {
     if (!PO_ITEM_CATALOG_RANGE[format]) return res.status(400).json({ error: 'Unknown format' });
     const q = String(req.query.q || '').trim().toLowerCase();
     const rows = await _loadPoItemCatalog(format);
-    const matches = (q ? rows.filter(r => r.code.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)) : rows).slice(0, 50);
+    // No cap — used to silently slice(0, 50)/slice(0, 500), which hid real
+    // catalog rows from a blank/focus search (see po-creation.js's runSearch,
+    // fired on focus too) once a format held more items than that. The whole
+    // point of this endpoint is "everything in the sheet", so return it all.
+    const matches = q ? rows.filter(r => r.code.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)) : rows;
     return res.json(matches);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -3132,7 +3136,8 @@ app.get('/api/pr-creation/items', requireAuth, async (req, res) => {
     if (!PR_ITEM_CATALOG_RANGE[format]) return res.status(400).json({ error: 'Unknown format' });
     const q = String(req.query.q || '').trim().toLowerCase();
     const rows = await _loadPrItemCatalog(format);
-    const matches = (q ? rows.filter(r => r.code.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)) : rows).slice(0, 50);
+    // No cap — see the matching comment on /api/po-creation/items above.
+    const matches = q ? rows.filter(r => r.code.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)) : rows;
     return res.json(matches);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -3500,7 +3505,8 @@ app.get('/api/grn-creation/items', requireAuth, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim().toLowerCase();
     const rows = await _loadPoItemCatalog('PurchaseOrder');
-    const matches = (q ? rows.filter(r => r.code.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)) : rows).slice(0, 50);
+    // No cap — see the matching comment on /api/po-creation/items above.
+    const matches = q ? rows.filter(r => r.code.toLowerCase().includes(q) || r.description.toLowerCase().includes(q)) : rows;
     return res.json(matches);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -3797,7 +3803,8 @@ app.get('/api/proforma-invoice/items', requireAuth, async (req, res) => {
   try {
     const query = String(req.query.q || '').trim().toLowerCase();
     const rows = await _loadPoItemCatalog('PurchaseOrder');
-    const matches = (query ? rows.filter(r => r.code.toLowerCase().includes(query) || r.description.toLowerCase().includes(query)) : rows).slice(0, 50);
+    // No cap — see the matching comment on /api/po-creation/items above.
+    const matches = query ? rows.filter(r => r.code.toLowerCase().includes(query) || r.description.toLowerCase().includes(query)) : rows;
     return res.json(matches);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -4073,10 +4080,13 @@ app.get('/api/ims/items', requireAuth, async (req, res) => {
     if (Number.isFinite(maxStock)) { params.push(maxStock); clauses.push(`current_stock <= $${params.length}`); }
     if (category) { params.push(category); clauses.push(`category = $${params.length}`); }
     const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
+    // No LIMIT — the ALU catalog alone now runs to ~1257 rows, well past the
+    // old 500 cap that used to silently drop the tail end of the Report tab's
+    // item list and the Inward/Outward item-code typeahead's search results.
     const rows = await q(
       `SELECT item_code AS itemCode, description, size, uom, moq, max_level AS maxLevel, on_order_qty AS onOrderQty,
               vendor_name AS vendorName, current_stock AS currentStock, category
-       FROM ims_items ${where} ORDER BY item_code ASC LIMIT 500`, params);
+       FROM ims_items ${where} ORDER BY item_code ASC`, params);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
@@ -4136,9 +4146,10 @@ app.get('/api/ims/stock-history', requireAuth, async (req, res) => {
     }
     if (category) { params.push(category); clauses.push(`category = $${params.length}`); }
     const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
+    // No LIMIT — see the matching comment on /api/ims/items above.
     const items = await q(
       `SELECT item_code AS itemCode, description, uom, category, current_stock AS currentStock, max_level AS maxLevel
-       FROM ims_items ${where} ORDER BY item_code ASC LIMIT 500`, params);
+       FROM ims_items ${where} ORDER BY item_code ASC`, params);
     if (!items.length) return res.json({ dates: [], items: [] });
 
     // Oldest → newest, ending today (matches the sheet's left-to-right date order).
