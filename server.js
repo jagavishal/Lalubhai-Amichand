@@ -3101,18 +3101,11 @@ app.get('/api/pr-creation/masters', requireAuth, async (req, res) => {
       _prSheetMeta(),
     ]);
     const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    // Department dropdown (ALU format only — the other 3 derive it by formula)
-    // — reuses PO Creation's own Department master list (a different, separate
-    // spreadsheet) so both forms always offer the same set. Non-critical: falls
-    // back to the same hardcoded list PO Creation itself falls back to if this
-    // cross-spreadsheet read ever fails, rather than breaking PR masters entirely.
-    let departments = PO_DEPARTMENTS;
-    try {
-      const deptRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!N3:N31`, valueRenderOption: 'FORMATTED_VALUE' });
-      const fetched = (deptRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-      if (fetched.length) departments = fetched;
-    } catch (e) { console.error('[pr-creation] department list read failed, using fallback:', e.message); }
-    return res.json({ vendors, departments, nextPrNumber: _padSeqNo('PR', meta.nextPrNo) });
+    // ALU's Department dropdown is a fixed list on the client (PR_DEPARTMENTS
+    // in pr-creation.js) — it matches "PR Form Responses"/RM_1_res's own
+    // category scheme, not PO Creation's shop-floor department list, so
+    // there's nothing live to fetch here.
+    return res.json({ vendors, nextPrNumber: _padSeqNo('PR', meta.nextPrNo) });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -3237,15 +3230,22 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     await _sleep(2000);
 
     // 3) Read back the sheet's own computed Total (single source of truth), and —
-    // for the 3 auto-derived formats — the formula-derived Department, for the log.
+    // for formats with a formula-derived Department cell (departmentCell) and
+    // no explicit user selection — the formula's own guess, for the log.
+    // department (the dropdown the user picked, see PR_DEPARTMENTS in
+    // pr-creation.js) always wins when present: it's never written into the
+    // sheet itself (cfg.header.department is undefined for these formats, so
+    // the put() call above already no-ops — the live formula cell is never
+    // touched), it just overrides what our own records show instead of
+    // whatever the formula happened to derive from the first item.
     let totalAmount = null, departmentOut = department || '';
     try {
       const deptCell = cfg.header.department ? null : cfg.departmentCell;
       const ranges = [`'${tab}'!${cfg.summary.totalCell}`];
-      if (deptCell) ranges.push(`'${tab}'!${deptCell}`);
+      if (deptCell && !department) ranges.push(`'${tab}'!${deptCell}`);
       const readRes = await sheets.spreadsheets.values.batchGet({ spreadsheetId: PR_CREATION_SHEET_ID, ranges, valueRenderOption: 'UNFORMATTED_VALUE' });
       totalAmount = readRes.data.valueRanges?.[0]?.values?.[0]?.[0] ?? null;
-      if (deptCell) departmentOut = readRes.data.valueRanges?.[1]?.values?.[0]?.[0] ?? '';
+      if (deptCell && !department) departmentOut = readRes.data.valueRanges?.[1]?.values?.[0]?.[0] ?? '';
     } catch (e) { console.error('[pr-creation] total/department read-back failed:', e.message); }
 
     // 4) Export this fill as a PDF and save it to Drive — a Drive hiccup must

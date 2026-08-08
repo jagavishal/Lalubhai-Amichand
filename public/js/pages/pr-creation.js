@@ -43,10 +43,15 @@ window.Pages['pr-creation'] = (() => {
     ],
   };
 
-  // Department: a live formula on every format except ALU (derived from the
-  // first item's own category) — shown read-only there, populated after
-  // submit; ALU is the only format where it's a manual field.
-  const DEPARTMENT_MODE = { ITEM_CODE: 'auto', PACKING_STICKER: 'none', PACKING_BOX: 'none', ALU: 'manual' };
+  // Department: ITEM_CODE and ALU both show the manual dropdown below — the
+  // live template's own Department cell is still a formula on ITEM_CODE
+  // (derived from the first item's category, D4) and is NEVER written to
+  // (would destroy the formula), so this selection only ever feeds our own
+  // records (ERP PR Log + the FMS sync) instead, overriding what would
+  // otherwise be read back from that formula — see the department read-back
+  // in POST /api/pr-creation. PACKING_STICKER/PACKING_BOX have no department
+  // concept on their template at all.
+  const DEPARTMENT_MODE = { ITEM_CODE: 'manual', PACKING_STICKER: 'none', PACKING_BOX: 'none', ALU: 'manual' };
 
   // Fixed list for ALU's manual Department dropdown — matches the store
   // team's own PR-tracking categories (the same scheme "PR Form Responses"/
@@ -152,7 +157,6 @@ window.Pages['pr-creation'] = (() => {
   let _mastersLoaded = false;
   let _vendors = [];
   let _nextPrNumber = null;
-  let _lastDepartment = '';
 
   // PR Summary (in-page tab) state — read-only history from the ERP PR Log tab.
   let _sumRows = [];
@@ -442,7 +446,7 @@ window.Pages['pr-creation'] = (() => {
           + '<select id="pcr-department" style="' + _inputStyle + 'background:#fff;"><option value="">Select…</option>'
             + PR_DEPARTMENTS.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('') + '</select>'
           + '<input type="text" id="pcr-department-other" placeholder="Enter department…" autocomplete="off" style="' + _inputStyle + 'margin-top:8px;display:none;" />')
-      : (deptMode === 'auto' ? _readonlyField('pcr-department-preview', 'Department (auto, from first item)', _lastDepartment || 'Filled in after saving') : '');
+      : '';
     return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
       + _readonlyField('pcr-next-no', 'PR NO (auto-assigned)', _nextPrNumber != null ? _nextPrNumber : 'Loading…')
       + _partyField()
@@ -519,7 +523,6 @@ window.Pages['pr-creation'] = (() => {
     btn.disabled = true; btn.textContent = 'Creating…';
     try {
       const result = await Utils.apiFetch('/api/pr-creation', { method: 'POST', body: JSON.stringify(body) });
-      _lastDepartment = result.department || '';
       await _loadMasters();
       renderPage();
       _showPrCreatedModal(result.prNumber, result.pdfLink);
