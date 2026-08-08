@@ -2140,10 +2140,21 @@ const LOG_TAB_NAME = 'Web App Log';
 // PO log replaced the old per-PO-spreadsheet "Web App Log" tab with this shared
 // monitoring spreadsheet so PO activity shows up alongside other ops tracking.
 const PO_MONITORING_SHEET_ID = '19wbm97_bYYsVDCpgOzGHZlriYc81McuPSKpqumf96MI';
-const MONITORING_TAB_NAME = 'Monitoring';
-// PR creation also logs into the existing FMS (Stores) tracking spreadsheet —
-// a separate, pre-existing sheet the store team already tracks PRs in by hand.
-const PR_MONITORING_SHEET_ID = '1AX0lB5eyUgh5RHbAv1D5mllTQyV8B9SadnPsltfLang';
+// PR creation also logs into "PR Form Responses" — the spreadsheet the store
+// team's own Google Form (filled by hand by Sagar/whoever raises the PR) has
+// always submitted into, tab "RM_1_res". NOT the "FMS (Stores)" spreadsheet's
+// "Monitoring" tab — that was this constant's first home and IS still a real,
+// separately-shared sheet, but confirmed (2026-08-08, by the user checking
+// their own live view) to not be where the store team actually looks for new
+// PRs day to day; verified writes there were landing correctly but going
+// unseen. Column layout here (see the write below) is trilingual (Guj/Hindi/
+// Eng) and has 6 category-specific "Product Name" columns (Accessory/
+// Brazing/CNC/Consumable/Electric/Packing) that the Form's dropdown logic
+// fills selectively per submission — we don't have a reliable item->category
+// mapping to fill those from here, so only Timestamp/PR No/Name/Vendor/
+// Department are written; the rest are left blank rather than guessed.
+const PR_MONITORING_SHEET_ID = '1CHOh_MRtlI6Bpw1ztmKthZ7vkgVVNn9xdV48DGU87kY';
+const PR_MONITORING_TAB_NAME = 'RM_1_res';
 
 // Hosting-panel env-var editors routinely mangle a multi-line PEM key pasted
 // from a .env file: surrounding quotes get included literally, CRLF sneaks
@@ -3266,15 +3277,19 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
       'Active',
     ]);
 
-    // 6) Also drop a row into the store team's own FMS (Stores) tracking
-    // spreadsheet — a separate, pre-existing sheet they already track PRs in
-    // by hand (see PR_MONITORING_SHEET_ID above). Best-effort and last: a
-    // failure here must never undo/block the PR itself, which is already
-    // fully created at this point.
+    // 6) Also drop a row into "PR Form Responses" (RM_1_res) — see
+    // PR_MONITORING_SHEET_ID above for why this, not "FMS (Stores)". Column
+    // order matches that sheet's own header row exactly: Timestamp, PR No,
+    // Name, Vendor, If New Vendor, Department, If New Department, then 6
+    // category "Product Name" columns left blank (see constant comment).
+    // Best-effort and last: a failure here must never undo/block the PR
+    // itself, which is already fully created at this point.
     try {
-      await appendLogRow(PR_MONITORING_SHEET_ID, MONITORING_TAB_NAME, [_timestampForSheet(), prNoFormatted, requestedBy, party]);
-      console.log('[pr-creation] FMS monitoring sync: row appended for', prNoFormatted);
-    } catch (e) { console.error('[pr-creation] FMS monitoring sync failed:', e.message); }
+      await appendLogRow(PR_MONITORING_SHEET_ID, PR_MONITORING_TAB_NAME, [
+        _timestampForSheet(), prNoFormatted, requestedBy, party, '', departmentOut, '',
+      ]);
+      console.log('[pr-creation] PR Form Responses sync: row appended for', prNoFormatted);
+    } catch (e) { console.error('[pr-creation] PR Form Responses sync failed:', e.message); }
 
     return res.json({ success: true, prNumber: prNoFormatted, totalAmount, department: departmentOut, pdfLink });
   } catch (e) { console.error('[pr-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
