@@ -30,7 +30,14 @@ window.Sidebar = {
     announcements:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>',
     inward:       '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>',
     outward:      '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>',
+    // One icon per IMS book, so the four entries stay tellable apart when the
+    // sidebar is collapsed to icons only: box (Stores), layers (Alu & SS
+    // sheet/coil stock), bolt-and-nut (Accessories), handshake-ish arrows
+    // (Trading job-work).
     ims:          '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4a2 2 0 0 0 1-1.73Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>',
+    imsalu:       '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 12.09-9.17 4.16a2 2 0 0 1-1.66 0L2 12.09"/><path d="m22 16.92-9.17 4.17a2 2 0 0 1-1.66 0L2 16.92"/></svg>',
+    imsaccess:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M19.1 4.9l-2.2 2.2M7.1 16.9l-2.2 2.2"/></svg>',
+    imstrading:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h13l-3-3"/><path d="M21 16H8l3 3"/></svg>',
   },
 
   // Nav sections — matches SECTIONS in Sidebar.jsx
@@ -52,10 +59,13 @@ window.Sidebar = {
       { route: 'po-creation',    label: 'PO Creation',    icon: 'pocreation' },
       { route: 'grn-creation',   label: 'GRN Creation',   icon: 'grncreation' },
       { route: 'proforma-invoice', label: 'Proforma Invoice', icon: 'picreation' },
-      // Inward/Outward used to be their own sidebar entries -- they're now
-      // tabs inside the single "IMS" page (see ims.js) so there's one entry
-      // point for all of Inventory Management.
-      { route: 'ims',            label: 'IMS',            icon: 'ims' },
+      // One entry per IMS stock book -- each route is its own page with its
+      // own Inward/Outward/Report tabs, hard-scoped to that book's category
+      // (see IMS_BOOKS in ims.js; routes must match it exactly).
+      { route: 'ims-stores',      label: 'IMS Stores',      icon: 'ims' },
+      { route: 'ims-alu',         label: 'IMS Alu & SS',    icon: 'imsalu' },
+      { route: 'ims-accessories', label: 'IMS Accessories', icon: 'imsaccess' },
+      { route: 'ims-trading',     label: 'IMS Trading',     icon: 'imstrading' },
     ]},
     { title: 'Administration', items: [
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
@@ -80,11 +90,14 @@ window.Sidebar = {
   _buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions, featureFlags) {
     if (item.adminOnly && !isAdmin) return '';
     if (item.flag && !(featureFlags || {})[item.flag]) return '';
-    // 'inward'/'outward' used to be their own toggleable pages (see users.js);
-    // they're tabs inside 'ims' now, but a user permissioned before this
-    // merge may still only have one of those old keys saved -- honor it as
-    // access to 'ims' so that grant doesn't silently disappear.
-    const routeAliases = item.route === 'ims' ? ['ims', 'inward', 'outward'] : [item.route];
+    // 'inward'/'outward' were their own toggleable pages once, and 'ims' was
+    // the single combined page before the per-book split (see users.js). A
+    // user permissioned before either change only has those old keys saved,
+    // so honor any of them as access to every IMS book rather than letting
+    // the grant silently disappear.
+    const routeAliases = item.route.startsWith('ims')
+      ? [item.route, 'ims', 'inward', 'outward']
+      : [item.route];
     if (!item.alwaysShow && permissions && permissions.pages && !routeAliases.some(r => permissions.pages.includes(r))) return '';
 
     const active = activeRoute === item.route;
@@ -158,7 +171,16 @@ window.Sidebar = {
     return `
       <style>
         #sidebar { transition: width 0.22s cubic-bezier(0.4,0,0.2,1); }
-        #sidebar:hover { width: 228px !important; }
+        #sidebar:hover { width: var(--sidebar-w-expanded, 228px) !important; }
+        /* The rail is position:fixed, so widening it alone would just lay it
+           over the page. Push #shell-body (its next sibling) by the same
+           amount so the content stays fully visible instead of being covered.
+           The mobile rules use !important and win, which is right — the rail
+           is display:none there. */
+        #sidebar:hover ~ #shell-body {
+          margin-left: var(--sidebar-w-expanded, 228px);
+          width: calc(100vw - var(--sidebar-w-expanded, 228px));
+        }
         #sidebar:hover .sb-label    { opacity: 1 !important; }
         #sidebar:hover .sb-brand-name { opacity: 1 !important; }
         #sidebar:hover .sb-user-info  { opacity: 1 !important; }
@@ -285,7 +307,7 @@ window.Sidebar = {
     // Apply sidebar shell styles
     el.style.cssText = `
       position:fixed;left:0;top:0;
-      height:100vh;width:52px;
+      height:100vh;width:var(--sidebar-w, 52px);
       background:var(--sidebar-bg);
       border-right:1px solid var(--sidebar-border);
       box-shadow:1px 0 0 rgba(255,255,255,0.04);

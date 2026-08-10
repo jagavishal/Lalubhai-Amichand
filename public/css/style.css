@@ -120,6 +120,11 @@
   --sidebar-accent:        #6BB0F5;
   --sidebar-accent-bar:    #DF0419;
   --sidebar-active-bg:     rgba(59,138,224,.18);
+  /* Rail widths. The rail is position:fixed, so #shell-body has to be offset by
+     these by hand — keeping both widths here is what stops the expanded rail
+     from covering the page content on hover. */
+  --sidebar-w:             52px;
+  --sidebar-w-expanded:    228px;
 }
 
 /* ── Dark mode ────────────────────────────────────────────────────── */
@@ -631,6 +636,40 @@ select.input { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg
   justify-content: flex-end;
   gap: 8px;
   flex-shrink: 0;
+}
+
+/* ── Popup close (×) ─────────────────────────────────────────────── */
+
+/* The X spins a quarter turn on hover/keyboard-focus.
+   Two deliberate choices here:
+   - the transform is on the <svg>, not the button, so it can't fight a close
+     button that positions itself with its own transform, and
+   - matching `> svg` means the text "Close" buttons that share the same
+     `…-close` id convention (mis-modal-close2, poc-success-close,
+     pcr-success-close) are skipped — only actual crosses rotate.
+   Add .modal-close to any new close button that doesn't follow the id
+   convention. */
+button[id$="-close"] > svg,
+button[aria-label="Close"] > svg,
+.modal-close > svg {
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+button[id$="-close"]:hover > svg,
+button[id$="-close"]:focus-visible > svg,
+button[aria-label="Close"]:hover > svg,
+button[aria-label="Close"]:focus-visible > svg,
+.modal-close:hover > svg,
+.modal-close:focus-visible > svg {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button[id$="-close"] > svg,
+  button[aria-label="Close"] > svg,
+  .modal-close > svg { transition: none; }
+  button[id$="-close"]:hover > svg,
+  button[aria-label="Close"]:hover > svg,
+  .modal-close:hover > svg { transform: none; }
 }
 
 /* ── Toast notification ──────────────────────────────────────────── */

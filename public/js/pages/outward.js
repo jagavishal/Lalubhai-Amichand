@@ -510,8 +510,13 @@ window.Pages['outward'] = (() => {
     const containerId = _renderOpts.containerId || 'main-content';
     const embedded = !!_renderOpts.embedded;
     if (_renderOpts.category && _renderOpts.category !== _category) {
-      // Switched book — the loaded list and its filters belonged to the old one.
+      // Switched book. This module is a singleton shared by every IMS book
+      // page, so all of its state still describes the previous book: the
+      // loaded rows, the list filters, and _view — without that last reset,
+      // leaving Stores on the "Outward List" tab would drop you straight into
+      // Alu & SS's list instead of its Log Outward form.
       _category = _renderOpts.category;
+      _view = 'create';
       _rows = []; _loaded = false; _loadError = '';
       _fItem = ''; _fFrom = ''; _fTo = '';
     }

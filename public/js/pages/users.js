@@ -47,7 +47,14 @@ window.Pages.users = (() => {
     { key: 'po-creation',   label: 'PO Creation' },
     { key: 'grn-creation',  label: 'GRN Creation' },
     { key: 'proforma-invoice', label: 'Proforma Invoice' },
-    { key: 'ims',           label: 'IMS' }, // covers Inward/Outward/Report tabs — see sidebar.js's routeAliases
+    // One key per IMS stock book; each covers that book's Inward/Outward/
+    // Report tabs. The retired 'ims' key (and the older 'inward'/'outward'
+    // ones) still grant access to all four — see sidebar.js's routeAliases —
+    // so existing users keep working until they're re-permissioned here.
+    { key: 'ims-stores',      label: 'IMS Stores' },
+    { key: 'ims-alu',         label: 'IMS Alu & SS' },
+    { key: 'ims-accessories', label: 'IMS Accessories' },
+    { key: 'ims-trading',     label: 'IMS Trading' },
 
     { key: 'meetings',      label: 'Meetings' },
     { key: 'leave-tracker', label: 'Leave Tracker' },

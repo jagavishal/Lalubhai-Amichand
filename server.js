@@ -282,19 +282,20 @@ const SCHEMA = [
 // Inward/Outward entries additionally carry a Source (IMS_SOURCES below).
 const IMS_CATEGORIES = ['Stores', 'ALU', 'Accessories', 'Trading'];
 
-// The books the IMS page actually shows as its top-level tabs, in order —
-// each one is a self-contained IMS (its own Inward form, Outward form and
-// Report), so a category is picked by choosing a tab rather than from a
-// dropdown inside the forms. `label` is display-only: the ALU tab reads
-// "IMS Alu & SS" because stainless-steel items live in that same book, while
-// the stored category value stays 'ALU' (no migration of the ~1257 existing
-// ALU rows). "Trading" is deliberately NOT a tab right now — its 548 TRD
-// items stay untouched in the DB and it stays a valid category above, so
-// adding a 4th entry here is all it takes to bring that book back on screen.
+// The stock books the UI exposes, in sidebar order — each one is a
+// self-contained IMS with its own page, route and Inward/Outward/Report tabs,
+// so a category is picked by navigating rather than from a dropdown inside the
+// forms. Mirrors IMS_BOOKS in public/js/pages/ims.js; `route` must match the
+// entries in sidebar.js and the permission keys in users.js.
+//
+// `label` is display-only: the ALU book reads "IMS Alu & SS" because
+// stainless-steel items live in that same book, while its stored category
+// value stays 'ALU' (so the ~1257 existing ALU rows needed no migration).
 const IMS_CATEGORY_TABS = [
-  { key: 'Stores',      label: 'IMS Stores' },
-  { key: 'ALU',         label: 'IMS Alu & SS' },
-  { key: 'Accessories', label: 'IMS Accessories' },
+  { key: 'Stores',      route: 'ims-stores',      label: 'IMS Stores' },
+  { key: 'ALU',         route: 'ims-alu',         label: 'IMS Alu & SS' },
+  { key: 'Accessories', route: 'ims-accessories', label: 'IMS Accessories' },
+  { key: 'Trading',     route: 'ims-trading',     label: 'IMS Trading' },
 ];
 
 // Ledger-source options shown on the Inward/Outward forms only when Category
