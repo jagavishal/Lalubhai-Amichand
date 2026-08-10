@@ -203,6 +203,41 @@ window.Utils = {
       + ' ' + date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
   },
 
+  /* ── Photo helpers ──────────────────────────────────────────────── */
+  // The avatar stored in the DB is a 512px square crop. This returns the
+  // UNCROPPED original as a data URL so the server can archive it on Drive.
+  // Anything over ~4MB is downscaled to 1600px first — a raw phone photo
+  // base64-encodes ~33% larger and would push the request past the server's
+  // 10mb JSON limit.
+  readOriginalImage(file, maxBytes = 4 * 1024 * 1024, maxEdge = 1600) {
+    return new Promise((resolve) => {
+      if (!file) return resolve(null);
+      if (file.size <= maxBytes) {
+        // Small enough — ship the untouched bytes, no re-encode, no quality loss.
+        const reader = new FileReader();
+        reader.onload  = () => resolve(reader.result || null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(file);
+        return;
+      }
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const scale  = Math.min(1, maxEdge / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width  = Math.round(img.width  * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/jpeg', 0.9));
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    });
+  },
+
   /* ── Legacy (kept for backward compat) ─────────────────────────── */
   confirm(msg) { return window.confirm(msg); },
 };

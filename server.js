@@ -1895,6 +1895,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
     if (body.picture) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,id]);
+      safeUploadUserPhotoToDrive(body.pictureOriginal || body.picture, { userId: id, userName: body.name.trim() });
     }
     const result = await q('SELECT * FROM users WHERE id = $1', [id]);
     syncUsers_gs().catch(()=>{});
@@ -1933,6 +1934,8 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
     if (body.picture!==undefined) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,body.id]);
+      // Only on a real upload — clearing the photo shouldn't archive anything.
+      if (body.picture) safeUploadUserPhotoToDrive(body.pictureOriginal || body.picture, { userId: body.id, userName: body.name || '' });
     }
     if (body.permissions!==undefined) {
       const permStr = body.permissions === null ? null : JSON.stringify(body.permissions);
@@ -2498,6 +2501,84 @@ async function safeUploadPdfToDrive(buffer, filename, folderId) {
     return await uploadPdfToDrive(buffer, filename, folderId);
   } catch (e) {
     console.error('[google-sync] Drive upload failed:', e.message);
+    return null;
+  }
+}
+
+// ── User photos → Drive ───────────────────────────────────────────────
+// The DB keeps a 512px square crop (that's what the UI renders); the
+// untouched original is archived here so there's a full-resolution copy on
+// record. Same Shared Drive as the PR/PO/GRN PDFs — a service account has no
+// storage quota of its own, so a plain "My Drive" folder rejects the upload
+// no matter what permissions it has.
+const PHOTO_SHARED_DRIVE_ID   = '0AO3U0bKj4seJUk9PVA';
+const PHOTO_DRIVE_FOLDER_NAME = 'User Photos';
+let _photoFolderId = null;
+
+async function ensureUserPhotoFolder(drive) {
+  if (_photoFolderId) return _photoFolderId;
+  const override = process.env.USER_PHOTO_DRIVE_FOLDER_ID?.trim();
+  if (override) { _photoFolderId = override; return _photoFolderId; }
+  const found = await drive.files.list({
+    q: `name = '${PHOTO_DRIVE_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    corpora: 'drive', driveId: PHOTO_SHARED_DRIVE_ID,
+    includeItemsFromAllDrives: true, supportsAllDrives: true,
+    fields: 'files(id,name)', pageSize: 1,
+  });
+  if (found.data.files?.length) { _photoFolderId = found.data.files[0].id; return _photoFolderId; }
+  const created = await drive.files.create({
+    requestBody: { name: PHOTO_DRIVE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder', parents: [PHOTO_SHARED_DRIVE_ID] },
+    fields: 'id', supportsAllDrives: true,
+  });
+  _photoFolderId = created.data.id;
+  console.log('[user-photo] created Drive folder', PHOTO_DRIVE_FOLDER_NAME, _photoFolderId);
+  return _photoFolderId;
+}
+
+function _parseImageDataUrl(dataUrl) {
+  const m = /^data:(image\/[\w.+-]+);base64,(.+)$/s.exec(dataUrl || '');
+  if (!m) return null;
+  return { mimeType: m[1], buffer: Buffer.from(m[2], 'base64') };
+}
+
+const _PHOTO_EXT_BY_MIME = {
+  'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png',
+  'image/webp': 'webp', 'image/gif': 'gif', 'image/heic': 'heic', 'image/heif': 'heif',
+};
+
+async function uploadUserPhotoToDrive(dataUrl, { userId, userName }) {
+  const parsed = _parseImageDataUrl(dataUrl);
+  if (!parsed) return null;
+  const { google } = require('googleapis');
+  const auth = getGoogleAuth();
+  if (!auth) return null;
+  const drive    = google.drive({ version: 'v3', auth });
+  const folderId = await ensureUserPhotoFolder(drive);
+  const ext      = _PHOTO_EXT_BY_MIME[parsed.mimeType] || 'jpg';
+  const stamp    = _timestampForSheet().replace(/[/:]/g, '-');
+  const safeName = String(userName || 'user').replace(/[\\/:*?"<>|]/g, ' ').trim() || 'user';
+  const file = await drive.files.create({
+    requestBody: { name: `${userId || 'U'} - ${safeName} - ${stamp}.${ext}`, parents: [folderId] },
+    media: { mimeType: parsed.mimeType, body: Readable.from(parsed.buffer) },
+    fields: 'id,webViewLink',
+    supportsAllDrives: true,
+  });
+  await drive.permissions.create({
+    fileId: file.data.id, requestBody: { role: 'reader', type: 'anyone' }, supportsAllDrives: true,
+  }).catch(e => console.error('[user-photo] share failed:', e.message));
+  return file.data.webViewLink;
+}
+
+// Drive is its own failure domain: the photo is already saved in the DB by the
+// time this runs, so a Drive outage must never turn a successful profile save
+// into an error for the user. Callers fire this without awaiting.
+async function safeUploadUserPhotoToDrive(dataUrl, meta) {
+  try {
+    const link = await uploadUserPhotoToDrive(dataUrl, meta);
+    if (link) console.log(`[user-photo] archived ${meta.userId} → ${link}`);
+    return link;
+  } catch (e) {
+    console.error('[user-photo] Drive upload failed:', e.message);
     return null;
   }
 }
@@ -4611,7 +4692,11 @@ app.patch('/api/profile', requireAuth, async (req, res) => {
     const body = req.body;
     try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
     await pool.query(`UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), phone=COALESCE($3,phone) WHERE id=$4`, [body.name??null,body.email??null,body.phone??null,id]);
-    if (body.picture!==undefined) await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,id]);
+    if (body.picture!==undefined) {
+      await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,id]);
+      // Only on a real upload — clearing the photo shouldn't archive anything.
+      if (body.picture) safeUploadUserPhotoToDrive(body.pictureOriginal || body.picture, { userId: id, userName: body.name || req.session.user.name || '' });
+    }
     if (body.notificationEmail!==undefined) {
       await pool.query(`INSERT INTO profile (user_id,notification_email) VALUES ($1,$2) ON CONFLICT (user_id) DO UPDATE SET notification_email=$3`, [id,body.notificationEmail||'',body.notificationEmail||'']);
     }

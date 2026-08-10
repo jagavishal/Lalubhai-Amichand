@@ -305,6 +305,8 @@ window.Pages.profile = {
   _handleFileChange(e) {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Archive copy for Drive — read alongside the crop, not instead of it.
+    const originalPromise = window.Utils.readOriginalImage(file);
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
@@ -323,14 +325,14 @@ window.Pages.profile = {
       const b64 = canvas.toDataURL('image/jpeg', 0.9);
       this._picture = b64;
       this._updateAvatarDOM();
-      this._savePicture(b64);
+      originalPromise.then(original => this._savePicture(b64, original, file.name));
       URL.revokeObjectURL(url);
     };
     img.src = url;
     e.target.value = '';
   },
 
-  async _savePicture(b64) {
+  async _savePicture(b64, original = null, filename = '') {
     this._picSaving = true;
     const btn = document.getElementById('profile-change-photo-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
@@ -338,7 +340,8 @@ window.Pages.profile = {
       await fetch('/api/profile', {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ picture: b64 }),
+        // pictureOriginal is archived to Drive server-side; only `picture` is stored in the DB.
+        body:    JSON.stringify({ picture: b64, pictureOriginal: original, pictureFilename: filename }),
       });
     } catch { /* ignore */ }
     this._picSaving = false;

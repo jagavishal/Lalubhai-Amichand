@@ -21,8 +21,10 @@ window.Pages.users = (() => {
   let _modalOpen      = false;
   let _editingUser    = null;   // null = add, object = edit
   let _form           = {};
-  let _picture        = null;
-  let _pictureChanged = false;
+  let _picture         = null;   // 512px square crop — what gets stored in the DB
+  let _pictureOriginalP = null;  // Promise of the uncropped original — archived to Drive only
+  let _pictureName     = '';
+  let _pictureChanged  = false;
   let _saving         = false;
 
   // bulk CSV inside add modal
@@ -238,7 +240,12 @@ window.Pages.users = (() => {
     renderModal();
 
     const payload = { ..._form };
-    if (_pictureChanged) payload.picture = _picture;
+    if (_pictureChanged) {
+      payload.picture = _picture;
+      // Uncropped original — archived to Drive server-side, not stored in the DB.
+      payload.pictureOriginal = _picture ? await _pictureOriginalP : null;
+      payload.pictureFilename = _pictureName;
+    }
 
     try {
       const result = await Utils.apiFetch('/api/users', {
@@ -254,6 +261,8 @@ window.Pages.users = (() => {
       _modalOpen      = false;
       _saving         = false;
       _picture        = null;
+      _pictureOriginalP = null;
+      _pictureName     = '';
       _pictureChanged = false;
       await loadData();
       renderPage();
@@ -356,9 +365,13 @@ window.Pages.users = (() => {
     }
   }
 
-  /* ── photo helper (canvas crop to 200×200) ──────────────────────────── */
+  /* ── photo helper (canvas crop for the DB + original kept for Drive) ─── */
   function handlePhotoFile(file) {
     if (!file) return;
+    _pictureName = file.name || '';
+    // Held as a promise, not a resolved value — Save can be clicked before the
+    // read finishes, and awaiting it there is what keeps the two in step.
+    _pictureOriginalP = window.Utils.readOriginalImage(file);
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
@@ -1012,6 +1025,8 @@ window.Pages.users = (() => {
     _bulkFile       = null;
     _bulkMsg        = '';
     _picture        = null;
+    _pictureOriginalP = null;
+    _pictureName    = '';
     _pictureChanged = false;
     renderModal();
   }
