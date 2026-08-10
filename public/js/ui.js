@@ -118,11 +118,13 @@ window.UI = (function () {
     const cap = _lbEl.querySelector('.ui-lightbox-caption');
     img.style.width = '';
     img.onload = () => {
-      // Stored avatars are small (200×200) — upscale so "full image" actually
-      // fills the viewport instead of rendering as a thumbnail on a black sheet.
+      // Stored avatars are square and modest (512px) — scale up so the preview
+      // fills the viewport instead of sitting there as a thumbnail. Capped at
+      // 1.6x natural so older 200px photos don't turn to mush.
       const target = Math.min(560, window.innerWidth * 0.9, window.innerHeight * 0.8);
-      if (img.naturalWidth && img.naturalWidth < target) {
-        img.style.width = Math.round(target) + 'px';
+      const nat    = img.naturalWidth;
+      if (nat && nat < target) {
+        img.style.width = Math.round(Math.min(target, nat * 1.6)) + 'px';
       }
     };
     img.src = src;

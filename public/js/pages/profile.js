@@ -308,16 +308,19 @@ window.Pages.profile = {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
-      const size   = 200;
+      // 512 (not 200) so the lightbox preview stays sharp — it renders the
+      // photo at ~560px. Never upscale a smaller source.
+      const size   = Math.min(512, img.width, img.height) || 512;
       const canvas = document.createElement('canvas');
       canvas.width  = size;
       canvas.height = size;
       const ctx   = canvas.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
       const scale = Math.max(size / img.width, size / img.height);
       const w     = img.width  * scale;
       const h     = img.height * scale;
       ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
-      const b64 = canvas.toDataURL('image/jpeg', 0.75);
+      const b64 = canvas.toDataURL('image/jpeg', 0.9);
       this._picture = b64;
       this._updateAvatarDOM();
       this._savePicture(b64);
