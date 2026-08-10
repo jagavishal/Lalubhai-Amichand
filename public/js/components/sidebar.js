@@ -93,11 +93,11 @@ window.Sidebar = {
       ? `<span style="position:absolute;top:-5px;right:-5px;box-shadow:0 0 0 2px var(--sidebar-bg);border-radius:9999px;line-height:0;">${window.UI.badge(pendingCount, { variant: 'primary' })}</span>`
       : '';
 
-    const activeBg   = active ? 'var(--color-primary-light)' : 'transparent';
+    const activeBg   = active ? 'var(--sidebar-active-bg)' : 'transparent';
     const activeBar  = active
-      ? `<span style="position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:0 2px 2px 0;background:var(--color-primary);"></span>`
+      ? `<span style="position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:0 2px 2px 0;background:var(--sidebar-accent-bar);"></span>`
       : '';
-    const iconColor  = active ? 'var(--color-primary)' : 'var(--sidebar-icon-muted)';
+    const iconColor  = active ? 'var(--sidebar-accent)' : 'var(--sidebar-icon-muted)';
     const textColor  = active ? 'var(--sidebar-text)' : 'var(--sidebar-text-muted)';
     const fontWeight = active ? '600' : '500';
 
@@ -170,7 +170,7 @@ window.Sidebar = {
       <div style="height:52px;padding:0 10px;display:flex;align-items:center;gap:10px;flex-shrink:0;border-bottom:1px solid var(--sidebar-border);">
         <img src="/logo.png" alt="Logo" width="30" height="30" style="flex-shrink:0;border-radius:7px;object-fit:contain;background:#fff;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
         <svg width="30" height="30" viewBox="0 0 28 28" fill="none" style="flex-shrink:0;display:none;">
-          <rect width="28" height="28" rx="7" fill="#EEBC2E"/>
+          <rect width="28" height="28" rx="7" fill="#DF0419"/>
           <path d="M7 20V10l7-4 7 4v10" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
           <path d="M11 20v-5h6v5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -226,17 +226,17 @@ window.Sidebar = {
     const activeRoute = (window.location.hash || '').replace('#', '') || 'dashboard';
     document.querySelectorAll('#sidebar [data-route]').forEach(el => {
       const isActive = el.dataset.route === activeRoute;
-      el.style.background   = isActive ? 'var(--color-primary-light)' : 'transparent';
+      el.style.background   = isActive ? 'var(--sidebar-active-bg)' : 'transparent';
       el.style.fontWeight   = isActive ? '600' : '500';
       el.style.color        = isActive ? 'var(--sidebar-text)' : 'var(--sidebar-text-muted)';
       el.dataset.active     = isActive ? '1' : '';
       const iconSpan = el.querySelector('span');
-      if (iconSpan) iconSpan.style.color = isActive ? 'var(--color-primary)' : 'var(--sidebar-icon-muted)';
+      if (iconSpan) iconSpan.style.color = isActive ? 'var(--sidebar-accent)' : 'var(--sidebar-icon-muted)';
       let bar = el.querySelector('.sb-active-bar');
       if (isActive && !bar) {
         bar = document.createElement('span');
         bar.className = 'sb-active-bar';
-        bar.style.cssText = 'position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:0 2px 2px 0;background:var(--color-primary);';
+        bar.style.cssText = 'position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:0 2px 2px 0;background:var(--sidebar-accent-bar);';
         el.prepend(bar);
       } else if (!isActive && bar) {
         bar.remove();

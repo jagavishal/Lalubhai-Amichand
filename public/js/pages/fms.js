@@ -279,7 +279,7 @@ window.Pages.fms = (() => {
 
   /* ── list view ─────────────────────────────────────────────────────── */
   function renderMiniStat(label, value, tone) {
-    const colors = { primary: '#5e6ad2', amber: '#d97706', slate: '#475569' }[tone] || '#475569';
+    const colors = { primary: '#0150AA', amber: '#d97706', slate: '#475569' }[tone] || '#475569';
     return `<div style="text-align:center;"><div style="font-size:18px;font-weight:800;color:${colors};">${esc(value)}</div><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#94a3b8;font-weight:600;margin-top:1px;">${esc(label)}</div></div>`;
   }
 

@@ -404,8 +404,8 @@ window.Pages['client-master'] = (() => {
       // Narration
       + '<td style="' + cellS + 'min-width:150px;padding:4px 5px;">'
         + '<input class="pm-narr-inp" data-ri="' + i + '" type="text" maxlength="20" placeholder="Bill no / narration…" value="' + esc(row.narration) + '" '
-          + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (row.narration?'#6366f1':'#e9ecef') + ';border-radius:7px;font-size:12px;color:#374151;outline:none;background:' + (row.narration?'#f5f5ff':'#fff') + ';transition:border-color .15s;" '
-          + 'onfocus="this.style.borderColor=\'#6366f1\';this.style.background=\'#f5f5ff\'" onblur="this.style.borderColor=\'' + (row.narration?'#6366f1':'#e9ecef') + '\';this.style.background=\'' + (row.narration?'#f5f5ff':'#fff') + '\'" />'
+          + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (row.narration?'#0150AA':'#e9ecef') + ';border-radius:7px;font-size:12px;color:#374151;outline:none;background:' + (row.narration?'#EEF4FB':'#fff') + ';transition:border-color .15s;" '
+          + 'onfocus="this.style.borderColor=\'#0150AA\';this.style.background=\'#EEF4FB\'" onblur="this.style.borderColor=\'' + (row.narration?'#0150AA':'#e9ecef') + '\';this.style.background=\'' + (row.narration?'#EEF4FB':'#fff') + '\'" />'
       + '</td>'
       // Auto-filled cells
       + '<td style="' + cellS + 'min-width:110px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.division||'—') + '</span></td>'
@@ -633,7 +633,7 @@ window.Pages['client-master'] = (() => {
         _pmRows[ri].vendorSearch = v.name;
         inp.value             = v.name;
         inp.style.fontWeight  = '600';
-        inp.style.borderColor = '#EEBC2E';
+        inp.style.borderColor = 'var(--color-primary)';
         inp.style.background  = 'var(--color-primary-light)';
         ddEl.style.display    = 'none';
         // Fill auto cells in this row
@@ -967,7 +967,7 @@ window.Pages['client-master'] = (() => {
       + statCard('Total Payments', _phRows.length, 'all time', 'var(--color-primary)')
       + statCard('Total Amount', _phAmt(allAmt), 'all time', '#1e293b')
       + statCard('This Month', thisM.length + ' entries', _phAmt(mAmt), '#059669')
-      + statCard('Unique Vendors', vendors, 'paid to', '#6366f1')
+      + statCard('Unique Vendors', vendors, 'paid to', '#0150AA')
       + '</div>';
 
     // Vendor top list

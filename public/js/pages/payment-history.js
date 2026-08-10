@@ -120,7 +120,7 @@ window.Pages['payment-history'] = {
         ${statCard('Total Payments', stats.total, 'all time entries', 'var(--color-primary)')}
         ${statCard('Total Amount', this._fmtAmt(stats.allAmt), 'all time', '#1e293b')}
         ${statCard('This Month', stats.mCount + ' entries', this._fmtAmt(stats.mAmt), '#059669')}
-        ${statCard('Unique Vendors', stats.vendors, 'paid to', '#6366f1')}
+        ${statCard('Unique Vendors', stats.vendors, 'paid to', '#0150AA')}
       </div>`;
 
     /* ── monthly trend table ── */

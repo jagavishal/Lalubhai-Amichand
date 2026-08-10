@@ -7,8 +7,7 @@ window.UI = (function () {
     { bg: 'background:linear-gradient(135deg,#f43f5e,#db2777)', text: '#fff' },
     { bg: 'background:linear-gradient(135deg,#f59e0b,#ea580c)', text: '#fff' },
     { bg: 'background:linear-gradient(135deg,#10b981,#0d9488)', text: '#fff' },
-    // Gold is a high-luminance hue — needs dark text to stay readable/AA-contrast, unlike the others above.
-    { bg: 'background:linear-gradient(135deg,#EEBC2E,#F3CB5E)', text: '#09090B' },
+    { bg: 'background:linear-gradient(135deg,#0A63C9,#0150AA)', text: '#fff' },
     { bg: 'background:linear-gradient(135deg,#8b5cf6,#7c3aed)', text: '#fff' },
   ];
 

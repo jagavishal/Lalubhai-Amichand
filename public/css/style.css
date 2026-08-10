@@ -6,21 +6,29 @@
 /* ── CSS Custom Properties ───────────────────────────────────────── */
 
 :root {
-  /* Primary — fixed brand accent (gold), no longer switchable */
-  --color-primary:        #EEBC2E;
-  --color-primary-dark:   #C39A26;
-  --color-primary-light:  rgba(238,188,46,.12);
-  --color-primary-ring:   rgba(238,188,46,.20);
-  /* Gold is a high-luminance hue — white text on it fails WCAG AA contrast.
-     Anything using --color-primary/--color-primary-dark as a solid background
-     must pair it with this dark text color, not white. */
-  --color-primary-text:   #09090B;
-  /* The reverse case: brand-colored TEXT/icon-stroke/link sitting directly on
-     a white or pale surface. The bright base gold measures ~1.8:1 there too —
-     use this darker, text-safe gold (~5.2:1 on white) instead. */
-  --color-primary-strong: #8E6B0B;
-  --shadow-glow:          0 10px 32px rgba(238,188,46,.333);
-  --app-bg:               #f4f6f9;
+  /* Primary — corporate blue sampled from the Lallubhai Amichand logo wordmark. */
+  --color-primary:        #0150AA;
+  --color-primary-dark:   #013D82;
+  --color-primary-light:  rgba(1,80,170,.10);
+  --color-primary-ring:   rgba(1,80,170,.22);
+  /* Brand blue measures ~7.7:1 against white, so white text sits safely on a
+     solid --color-primary/--color-primary-dark fill. */
+  --color-primary-text:   #ffffff;
+  /* Brand-colored TEXT/icon-stroke/link on a white or pale surface — the base
+     blue already clears AA there, so this is the same hue (no lightened variant
+     that would drop below contrast). */
+  --color-primary-strong: #0150AA;
+  --shadow-glow:          0 10px 32px rgba(1,80,170,.30);
+  --app-bg:               #f2f5f9;
+
+  /* Accent — the red of the logo mark. Used for brand emphasis (logo tiles,
+     highlight rules, hero gradients), NOT for destructive actions — those keep
+     using the --color-danger scale so red buttons stay unambiguous. */
+  --color-accent:         #DF0419;
+  --color-accent-dark:    #B30314;
+  --color-accent-light:   rgba(223,4,25,.10);
+  --color-accent-ring:    rgba(223,4,25,.22);
+  --color-accent-text:    #ffffff;
 
   --color-brand:          var(--color-primary);
   --color-brand-ring:     var(--color-primary-ring);
@@ -97,33 +105,51 @@
   --radius-xl:  16px;
   --radius-2xl: 20px;
 
-  /* Sidebar rail — intentionally always dark, regardless of light/dark app mode */
-  --sidebar-bg:            #101013;
-  --sidebar-border:        #1c1c22;
-  --sidebar-text:          #e4e4e7;
-  --sidebar-text-muted:    #a1a1aa;
-  --sidebar-icon-muted:    #71717a;
-  --sidebar-section-label: #3f3f46;
-  --sidebar-signout-muted: #52525b;
+  /* Sidebar rail — intentionally always dark, regardless of light/dark app mode.
+     Tinted toward the brand blue so the rail reads as part of the logo palette. */
+  --sidebar-bg:            #06162B;
+  --sidebar-border:        #0E2748;
+  --sidebar-text:          #e6edf6;
+  --sidebar-text-muted:    #93a7c1;
+  --sidebar-icon-muted:    #6d84a2;
+  --sidebar-section-label: #3d5878;
+  --sidebar-signout-muted: #4C6489;
+  /* The rail is always dark, so it can't reuse --color-primary (the base brand
+     blue is near-invisible on navy). These are the rail's own brand tones:
+     a lifted blue for active icons/labels and the logo red for the active bar. */
+  --sidebar-accent:        #6BB0F5;
+  --sidebar-accent-bar:    #DF0419;
+  --sidebar-active-bg:     rgba(59,138,224,.18);
 }
 
 /* ── Dark mode ────────────────────────────────────────────────────── */
 
 html[data-theme="dark"] {
-  --app-bg:      #101215;
-  --surface:     #17191d;
-  --surface-alt: #1c1f24;
+  --app-bg:      #0C1219;
+  --surface:     #141A22;
+  --surface-alt: #1A222C;
 
   --text-primary:   #e5e7eb;
   --text-secondary: #9ca3af;
   --text-muted:     #6b7280;
 
-  --border-light:  #23262b;
-  --border-base:   #2b2e34;
-  --border-strong: #3a3e46;
+  --border-light:  #1F2833;
+  --border-base:   #27313E;
+  --border-strong: #364454;
 
-  --color-primary-light: rgba(238,188,46,.18);
-  --color-primary-ring:  rgba(238,188,46,.30);
+  /* The base brand blue is too dark to carry white text on a dark surface —
+     lift it a step here, and use a much lighter tint for brand-colored text. */
+  --color-primary:        #0A63C9;
+  --color-primary-dark:   #0850A6;
+  --color-primary-strong: #6BB0F5;
+  --color-primary-light: rgba(59,138,224,.18);
+  --color-primary-ring:  rgba(59,138,224,.32);
+  --shadow-glow:         0 10px 32px rgba(10,99,201,.38);
+
+  --color-accent:        #E8202F;
+  --color-accent-dark:   #C20D1C;
+  --color-accent-light:  rgba(232,32,47,.18);
+  --color-accent-ring:   rgba(232,32,47,.32);
 
   --color-success-bg: rgba(5,150,105,.15);  --color-success-text: #34d399;
   --color-warning-bg: rgba(217,119,6,.15);  --color-warning-text: #fbbf24;
@@ -501,7 +527,8 @@ select.input { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg
 .pill-warning { background: var(--color-warning-bg); color: var(--color-warning-text); }
 .pill-danger  { background: var(--color-danger-bg);  color: var(--color-danger-text); }
 .pill-info    { background: var(--color-info-bg);    color: var(--color-info-text); }
-.pill-brand   { background: var(--color-primary-light); color: var(--color-primary-dark); }
+.pill-brand   { background: var(--color-primary-light); color: var(--color-primary-strong); }
+.pill-accent  { background: var(--color-accent-light);  color: var(--color-accent); }
 .pill-purple  { background: var(--color-purple-bg); color: var(--color-purple-text); }
 .pill-sm      { padding: 2px 8px; font-size: var(--text-2xs); }
 
@@ -570,7 +597,7 @@ select.input { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg
 .modal-header-icon {
   width: 36px; height: 36px; border-radius: var(--radius-md);
   display: flex; align-items: center; justify-content: center;
-  background: var(--color-primary-light); color: var(--color-primary-dark);
+  background: var(--color-primary-light); color: var(--color-primary-strong);
   flex-shrink: 0;
 }
 
@@ -670,11 +697,14 @@ select.input { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg
   width: 3px;
   border-radius: 0 2px 2px 0;
 }
-.stat-card.red::before    { background: #ef4444; }
+.stat-card.red::before    { background: var(--color-accent); }
 .stat-card.amber::before  { background: #f59e0b; }
 .stat-card.green::before  { background: #10b981; }
 .stat-card.purple::before { background: #8b5cf6; }
-.stat-card.indigo::before { background: #5e6ad2; }
+/* 'indigo' is the dashboard's brand-toned accent — point it at the logo blue. */
+.stat-card.indigo::before { background: var(--color-primary); }
+.stat-card.brand::before  { background: var(--color-primary); }
+.stat-card.accent::before { background: var(--color-accent); }
 
 /* ── Empty state ─────────────────────────────────────────────────── */
 

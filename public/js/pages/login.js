@@ -13,8 +13,8 @@ window.Pages.login = {
           66%       { transform: translateY(-6px) rotate(2deg); }
         }
         @keyframes loginPulse {
-          0%, 100% { box-shadow: 0 8px 32px rgba(238,188,46,0.25); }
-          50%       { box-shadow: 0 16px 48px rgba(238,188,46,0.45); }
+          0%, 100% { box-shadow: 0 8px 32px rgba(1,80,170,0.25); }
+          50%       { box-shadow: 0 16px 48px rgba(1,80,170,0.45); }
         }
         @keyframes loginFadeSlide {
           from { opacity: 0; transform: translateY(18px); }
@@ -36,7 +36,7 @@ window.Pages.login = {
         }
         #login-page .login-submit:hover:not(:disabled) {
           opacity: 0.9;
-          box-shadow: 0 6px 28px rgba(238,188,46,0.45) !important;
+          box-shadow: 0 6px 28px rgba(1,80,170,0.45) !important;
         }
         #login-page .login-spinner {
           animation: loginSpin 0.7s linear infinite;
@@ -51,7 +51,7 @@ window.Pages.login = {
         justify-content: center;
         padding: 1.5rem;
         box-sizing: border-box;
-        background: radial-gradient(ellipse at 25% 60%, #F5C97A 0%, #FDEBC8 35%, #FDF6ED 65%, #FFFBF5 100%);
+        background: radial-gradient(ellipse at 25% 60%, #9FC4EC 0%, #D3E3F6 35%, #EDF3FB 65%, #FAFCFF 100%);
       ">
         <div class="login-card" style="width: 100%; max-width: 23rem;">
 
@@ -71,10 +71,10 @@ window.Pages.login = {
               <div style="display:flex;justify-content:center;margin-bottom:14px;">
                 <div style="animation: loginFloat 3.5s ease-in-out infinite;">
                   <img src="/logo.png" alt="Logo"
-                    style="width:72px;height:72px;border-radius:18px;object-fit:contain;box-shadow:0 8px 32px rgba(238,188,46,0.3);"
+                    style="width:72px;height:72px;border-radius:18px;object-fit:contain;background:#fff;box-shadow:0 8px 32px rgba(1,80,170,0.28);"
                     onerror="this.style.display='none';document.getElementById('login-fallback-icon').style.display='flex';"
                   />
-                  <div id="login-fallback-icon" style="display:none;width:72px;height:72px;border-radius:18px;background:linear-gradient(135deg,#EEBC2E,#F3CB5E);align-items:center;justify-content:center;box-shadow:0 8px 32px rgba(238,188,46,0.3);">
+                  <div id="login-fallback-icon" style="display:none;width:72px;height:72px;border-radius:18px;background:linear-gradient(135deg,#DF0419,#B30314);align-items:center;justify-content:center;box-shadow:0 8px 32px rgba(223,4,25,0.3);">
                     <svg width="40" height="40" viewBox="0 0 28 28" fill="none">
                       <path d="M7 20V10l7-4 7 4v10" stroke="rgba(255,255,255,0.8)" stroke-width="1.8" stroke-linejoin="round"/>
                       <path d="M11 20v-5h6v5" stroke="rgba(255,255,255,0.8)" stroke-width="1.8" stroke-linejoin="round"/>

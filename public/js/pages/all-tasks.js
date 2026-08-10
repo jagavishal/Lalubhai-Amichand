@@ -378,7 +378,7 @@ window.Pages['all-tasks'] = (function () {
       : '';
 
     const urlLink = t.url
-      ? `<a href="${esc(t.url)}" target="_blank" rel="noopener noreferrer" style="flex-shrink:0;color:#6366f1;margin-top:2px">
+      ? `<a href="${esc(t.url)}" target="_blank" rel="noopener noreferrer" style="flex-shrink:0;color:#0150AA;margin-top:2px">
            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
          </a>`
       : '';
@@ -1109,15 +1109,15 @@ window.Pages['all-tasks'] = (function () {
 
       listEl.innerHTML = `
         <div style="padding:8px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #f1f5f9;background:#f8fafc">
-          <input type="checkbox" id="att-all-chk" checked style="width:16px;height:16px;cursor:pointer;accent-color:#6366f1" />
+          <input type="checkbox" id="att-all-chk" checked style="width:16px;height:16px;cursor:pointer;accent-color:#0150AA" />
           <span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.05em">
             Select All (${tasks.length} tasks)
           </span>
-          <span id="att-sel-count" style="margin-left:auto;font-size:12px;font-weight:700;color:#6366f1">${tasks.length} selected</span>
+          <span id="att-sel-count" style="margin-left:auto;font-size:12px;font-weight:700;color:#0150AA">${tasks.length} selected</span>
         </div>
         ${tasks.map(t => `
           <label style="display:flex;align-items:flex-start;gap:12px;padding:10px 16px;border-bottom:1px solid #f8fafc;cursor:pointer" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
-            <input type="checkbox" class="att-task-chk" data-id="${esc(t.id)}" checked style="width:16px;height:16px;margin-top:2px;flex-shrink:0;cursor:pointer;accent-color:#6366f1" />
+            <input type="checkbox" class="att-task-chk" data-id="${esc(t.id)}" checked style="width:16px;height:16px;margin-top:2px;flex-shrink:0;cursor:pointer;accent-color:#0150AA" />
             <div style="flex:1;min-width:0">
               <div style="font-size:12.5px;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}</div>
               <div style="display:flex;align-items:center;gap:8px;margin-top:2px">
@@ -1203,15 +1203,15 @@ window.Pages['all-tasks'] = (function () {
       ? '<div style="padding:32px;text-align:center;font-size:13px;color:#94a3b8">No pending tasks to transfer</div>'
       : `
         <div style="padding:8px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #f1f5f9;background:#f8fafc">
-          <input type="checkbox" id="atmt-all-chk" checked style="width:16px;height:16px;cursor:pointer;accent-color:#6366f1" />
+          <input type="checkbox" id="atmt-all-chk" checked style="width:16px;height:16px;cursor:pointer;accent-color:#0150AA" />
           <span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.05em">
             Select All (${myTasks.length})
           </span>
-          <span id="atmt-sel-count" style="margin-left:auto;font-size:12px;font-weight:700;color:#6366f1">${myTasks.length} selected</span>
+          <span id="atmt-sel-count" style="margin-left:auto;font-size:12px;font-weight:700;color:#0150AA">${myTasks.length} selected</span>
         </div>
         ${myTasks.map(t => `
           <label style="display:flex;align-items:flex-start;gap:12px;padding:10px 16px;border-bottom:1px solid #f8fafc;cursor:pointer" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
-            <input type="checkbox" class="atmt-task-chk" data-id="${esc(t.id)}" checked style="width:16px;height:16px;margin-top:2px;flex-shrink:0;cursor:pointer;accent-color:#6366f1" />
+            <input type="checkbox" class="atmt-task-chk" data-id="${esc(t.id)}" checked style="width:16px;height:16px;margin-top:2px;flex-shrink:0;cursor:pointer;accent-color:#0150AA" />
             <div style="flex:1;min-width:0">
               <div style="font-size:12.5px;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.description)}</div>
               <div style="display:flex;align-items:center;gap:8px;margin-top:2px">

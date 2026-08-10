@@ -602,13 +602,13 @@ window.Pages.users = (() => {
       const featHtml = feats.map(f => {
         const fc = (_permData.features[p.key] || []).includes(f.key);
         return `<label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;color:#64748b;">
-          <input type="checkbox" class="pi-feat" data-page="${esc(p.key)}" data-feat="${esc(f.key)}" ${fc ? 'checked' : ''} style="accent-color:#6366f1;" />
+          <input type="checkbox" class="pi-feat" data-page="${esc(p.key)}" data-feat="${esc(f.key)}" ${fc ? 'checked' : ''} style="accent-color:#0150AA;" />
           ${esc(f.label)}
         </label>`;
       }).join('');
       return `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9;">
         <label style="display:flex;align-items:center;gap:6px;min-width:130px;cursor:pointer;font-size:13px;font-weight:600;color:#1e293b;">
-          <input type="checkbox" class="pi-page" data-page="${esc(p.key)}" ${checked ? 'checked' : ''} style="width:14px;height:14px;accent-color:#6366f1;" />
+          <input type="checkbox" class="pi-page" data-page="${esc(p.key)}" ${checked ? 'checked' : ''} style="width:14px;height:14px;accent-color:#0150AA;" />
           ${esc(p.label)}
         </label>
         ${feats.length ? `<div style="display:flex;flex-wrap:wrap;gap:10px;padding-top:1px;">${featHtml}</div>` : ''}
@@ -682,7 +682,7 @@ window.Pages.users = (() => {
         }
         return `<td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;text-align:center;">
           <input type="checkbox" class="acc-chk" data-uid="${esc(u.id)}" data-page="${esc(p.key)}" ${checked ? 'checked' : ''}
-            style="width:16px;height:16px;accent-color:#5e6ad2;cursor:pointer;" />
+            style="width:16px;height:16px;accent-color:#0150AA;cursor:pointer;" />
         </td>`;
       }).join('');
 

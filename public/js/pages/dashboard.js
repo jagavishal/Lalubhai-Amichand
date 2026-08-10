@@ -99,7 +99,7 @@ window.Pages.dashboard = (function () {
     const colors = {
       emerald: { bar: 'linear-gradient(90deg,#34d399,#059669)', icon: 'linear-gradient(135deg,#34d399,#059669)', text: '#065f46' },
       red:     { bar: 'linear-gradient(90deg,#f87171,#dc2626)', icon: 'linear-gradient(135deg,#f87171,#dc2626)', text: '#991b1b' },
-      blue:    { bar: 'linear-gradient(90deg,#EEBC2E,#F3CB5E)', icon: 'linear-gradient(135deg,#C39A26,#8E6B0B)', text: '#8E6B0B' },
+      blue:    { bar: 'linear-gradient(90deg,#0150AA,#3B8AE0)', icon: 'linear-gradient(135deg,#0A63C9,#013D82)', text: '#0150AA' },
     };
     const c = colors[tone] || colors.blue;
     const max = Math.max(...items.map(i => i[valueKey] || 0), 1);
@@ -269,7 +269,7 @@ window.Pages.dashboard = (function () {
         .db-stat-card { border: 2px solid transparent; transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
         .db-stat-card[data-filter]:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.08); }
         .db-stat-card[data-filter]:active { transform: translateY(0); }
-        .db-stat-card[data-filter].active { border-color: var(--color-primary); box-shadow: 0 4px 14px rgba(238,188,46,.16); }
+        .db-stat-card[data-filter].active { border-color: var(--color-primary); box-shadow: 0 4px 14px rgba(1,80,170,.18); }
         .db-th-sort:hover { color: var(--color-primary) !important; }
         /* Mobile responsive */
         @media (max-width: 767px) {

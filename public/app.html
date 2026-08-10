@@ -11,7 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <link rel="stylesheet" href="/css/style.css?v=8" />
+  <link rel="stylesheet" href="/css/style.css?v=9" />
   <!-- Apply saved light/dark mode before first paint to prevent FOUC -->
   <script>
     (function(){
@@ -31,8 +31,8 @@
       left: 0; top: 0;
       height: 100vh;
       width: 52px;
-      background: #101013;
-      border-right: 1px solid #1c1c22;
+      background: var(--sidebar-bg, #06162B);
+      border-right: 1px solid var(--sidebar-border, #0E2748);
       box-shadow: 1px 0 0 rgba(255,255,255,0.04);
       display: flex;
       flex-direction: column;
@@ -64,7 +64,7 @@
       align-items: center;
       gap: 10px;
       flex-shrink: 0;
-      border-bottom: 1px solid #1c1c1f;
+      border-bottom: 1px solid var(--sidebar-border, #0E2748);
     }
 
     /* Nav link */
@@ -77,16 +77,16 @@
       border-radius: 7px;
       font-size: 12.5px;
       font-weight: 500;
-      color: #a1a1aa;
+      color: var(--sidebar-text-muted, #93a7c1);
       text-decoration: none;
       position: relative;
       transition: background 140ms, color 140ms;
       cursor: pointer;
     }
-    .sb-link:hover { background: rgba(255,255,255,0.06); color: #e4e4e7; }
+    .sb-link:hover { background: rgba(255,255,255,0.07); color: var(--sidebar-text, #e6edf6); }
     .sb-link.active {
-      background: rgba(94,106,210,0.14);
-      color: #e4e4e7;
+      background: var(--sidebar-active-bg, rgba(59,138,224,0.18));
+      color: var(--sidebar-text, #e6edf6);
       font-weight: 600;
     }
     .sb-link .sb-active-bar {
@@ -95,11 +95,11 @@
       left: 0; top: 5px; bottom: 5px;
       width: 2px;
       border-radius: 0 2px 2px 0;
-      background: #5e6ad2;
+      background: var(--sidebar-accent-bar, #DF0419);
     }
     .sb-link.active .sb-active-bar { display: block; }
     .sb-link svg { flex-shrink: 0; }
-    .sb-link.active svg { color: #818cf8; }
+    .sb-link.active svg { color: var(--sidebar-accent, #6BB0F5); }
 
     /* Pending badge */
     .sb-badge {
@@ -108,8 +108,8 @@
       min-width: 14px; height: 14px;
       padding: 0 3px;
       border-radius: 9999px;
-      background: var(--color-primary);
-      box-shadow: 0 0 0 2px #09090b;
+      background: var(--color-accent);
+      box-shadow: 0 0 0 2px var(--sidebar-bg, #06162B);
       font-size: 9px;
       font-weight: 700;
       color: #fff;
@@ -129,7 +129,7 @@
       padding: 4px 0;
     }
     #sb-nav::-webkit-scrollbar { width: 3px; }
-    #sb-nav::-webkit-scrollbar-thumb { background: #27272a; border-radius: 2px; }
+    #sb-nav::-webkit-scrollbar-thumb { background: #1B3A5C; border-radius: 2px; }
 
     .sb-section { margin-bottom: 6px; }
     .sb-section-label {
@@ -138,7 +138,7 @@
       font-weight: 700;
       letter-spacing: 0.09em;
       text-transform: uppercase;
-      color: #3f3f46;
+      color: var(--sidebar-section-label, #3d5878);
       opacity: 0;
       transition: opacity 220ms;
       white-space: nowrap;
@@ -151,7 +151,7 @@
     #sb-user {
       padding: 8px 8px 12px;
       flex-shrink: 0;
-      border-top: 1px solid #1c1c22;
+      border-top: 1px solid var(--sidebar-border, #0E2748);
     }
     #sb-user-inner {
       display: flex;
@@ -163,7 +163,7 @@
     #sb-avatar {
       width: 32px; height: 32px;
       border-radius: 50%;
-      background: linear-gradient(135deg, #f59e0b, #ec4899);
+      background: linear-gradient(135deg, #0A63C9, #013D82);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -173,11 +173,11 @@
       flex-shrink: 0;
     }
     #sb-user-text { min-width: 0; flex: 1; }
-    .sb-user-name { font-size: 12px; font-weight: 500; color: #e4e4e7; overflow: hidden; text-overflow: ellipsis; }
-    .sb-user-role { font-size: 10px; color: #52525b; overflow: hidden; text-overflow: ellipsis; }
+    .sb-user-name { font-size: 12px; font-weight: 500; color: var(--sidebar-text, #e6edf6); overflow: hidden; text-overflow: ellipsis; }
+    .sb-user-role { font-size: 10px; color: var(--sidebar-signout-muted, #4C6489); overflow: hidden; text-overflow: ellipsis; }
     #sb-signout-btn {
       background: none; border: none; cursor: pointer;
-      color: #3f3f46; padding: 4px; border-radius: 6px;
+      color: var(--sidebar-section-label, #3d5878); padding: 4px; border-radius: 6px;
       display: flex; align-items: center; justify-content: center;
       transition: color 150ms, background 150ms;
     }
@@ -236,7 +236,7 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .login-card { animation: fadeSlide 0.5s cubic-bezier(0.16,1,0.3,1) both; }
     .login-input { transition: border-color 0.15s, box-shadow 0.15s; outline: none; }
-    .login-input:focus { border-color: #EEBC2E !important; box-shadow: 0 0 0 3px rgba(238,188,46,0.20); }
+    .login-input:focus { border-color: #0150AA !important; box-shadow: 0 0 0 3px rgba(1,80,170,0.22); }
 
     /* ── Utility: page hidden by default ────────────────────────── */
     .page { display: none; }
@@ -248,8 +248,8 @@
       position: fixed;
       bottom: 0; left: 0; right: 0;
       height: 62px;
-      background: #fff;
-      border-top: 1.5px solid #e2e8f0;
+      background: var(--surface, #fff);
+      border-top: 1.5px solid var(--border-base, #e2e8f0);
       z-index: 50;
       align-items: center;
       justify-content: space-around;
@@ -262,7 +262,7 @@
       align-items: center;
       justify-content: center;
       gap: 3px;
-      color: #94a3b8;
+      color: var(--text-muted, #94a3b8);
       font-size: 9px;
       font-weight: 600;
       cursor: pointer;
@@ -280,9 +280,9 @@
       top: 2px; right: 4px;
       min-width: 14px; height: 14px;
       border-radius: 9999px;
-      background: var(--color-primary);
+      background: var(--color-accent);
       font-size: 9px; font-weight: 700;
-      color: #fff;
+      color: var(--color-accent-text);
       display: flex; align-items: center; justify-content: center;
       padding: 0 3px;
     }
@@ -291,7 +291,7 @@
     @media (max-width: 767px) {
       #sidebar        { display: none !important; }
       #topbar         { display: none !important; }
-      #shell-body     { margin-left: 0 !important; width: 100vw !important; background: #f4f6f9; }
+      #shell-body     { margin-left: 0 !important; width: 100vw !important; background: var(--app-bg); }
       #main-content   { padding: 12px 12px 74px !important; }
       #bottom-nav     { display: flex !important; }
     }
@@ -309,25 +309,25 @@
     align-items: center;
     justify-content: center;
     padding: 1.5rem;
-    background: radial-gradient(ellipse at 25% 60%, #F5C97A 0%, #FDEBC8 35%, #FDF6ED 65%, #FFFBF5 100%);
+    background: radial-gradient(ellipse at 25% 60%, #9FC4EC 0%, #D3E3F6 35%, #EDF3FB 65%, #FAFCFF 100%);
   ">
     <div class="login-card" style="width: 100%; max-width: 23rem;">
       <div style="
         background: #FFFFFF;
         border-radius: 1.5rem;
         padding: 2.25rem 2rem;
-        box-shadow: 0 8px 40px rgba(180,120,50,0.12), 0 2px 8px rgba(0,0,0,0.06);
+        box-shadow: 0 8px 40px rgba(1,80,170,0.14), 0 2px 8px rgba(0,0,0,0.06);
       ">
         <!-- Header -->
         <div style="text-align: center; margin-bottom: 1.75rem;">
           <div style="
             font-size: 10px; font-weight: 700; letter-spacing: 0.26em;
-            text-transform: uppercase; color: #8E6B0B; margin-bottom: 4px;
+            text-transform: uppercase; color: #0150AA; margin-bottom: 4px;
           ">Task Manager</div>
           <div style="display: flex; justify-content: center; gap: 4px; margin-bottom: 1.25rem;">
-            <span style="width:5px;height:5px;border-radius:50%;background:#FBE9AE;display:inline-block;"></span>
-            <span style="width:5px;height:5px;border-radius:50%;background:#EEBC2E;display:inline-block;"></span>
-            <span style="width:5px;height:5px;border-radius:50%;background:#FBE9AE;display:inline-block;"></span>
+            <span style="width:5px;height:5px;border-radius:50%;background:#B9D3EE;display:inline-block;"></span>
+            <span style="width:5px;height:5px;border-radius:50%;background:#DF0419;display:inline-block;"></span>
+            <span style="width:5px;height:5px;border-radius:50%;background:#B9D3EE;display:inline-block;"></span>
           </div>
           <h1 style="font-size:1.35rem;font-weight:700;color:#1e293b;margin:0 0 4px;">Welcome back 👋</h1>
           <p style="font-size:12.5px;color:#94a3b8;margin:0;">Sign in to your account</p>
@@ -410,10 +410,10 @@
           <!-- Submit -->
           <button type="submit" id="login-btn" style="
             width:100%;padding:12px;
-            background:linear-gradient(135deg,#EEBC2E 0%,#F3CB5E 100%);
-            color:#09090B;font-weight:700;font-size:14px;
+            background:linear-gradient(135deg,#0150AA 0%,#0A63C9 100%);
+            color:#FFFFFF;font-weight:700;font-size:14px;
             border:none;border-radius:10px;cursor:pointer;
-            box-shadow:0 4px 20px rgba(238,188,46,0.35);
+            box-shadow:0 4px 20px rgba(1,80,170,0.35);
             transition:all 0.15s;letter-spacing:0.02em;
             display:flex;align-items:center;justify-content:center;gap:8px;
             margin-top:4px;
@@ -433,7 +433,7 @@
         <div style="text-align:center;margin-top:1.5rem;">
           <div style="width:100%;height:1px;background:linear-gradient(90deg,transparent,#E2E8F0,transparent);margin-bottom:1rem;"></div>
           <p style="font-size:11px;color:#94a3b8;margin:0;">
-            <span style="color:#8E6B0B;font-weight:600;letter-spacing:0.05em;">Lallubhai Amichand Task Manager</span>
+            <span style="color:#0150AA;font-weight:600;letter-spacing:0.05em;">Lallubhai Amichand Task Manager</span>
             <span style="margin:0 6px;color:#cbd5e1;">·</span>
             <span style="color:#94a3b8;">Grow Your Business</span>
           </p>
@@ -456,12 +456,12 @@
     <div id="sb-brand">
       <!-- Icon mark always visible -->
       <svg width="28" height="28" viewBox="0 0 28 28" fill="none" style="flex-shrink:0;">
-        <rect width="28" height="28" rx="7" fill="#EEBC2E"/>
+        <rect width="28" height="28" rx="7" fill="#DF0419"/>
         <path d="M7 20V10l7-4 7 4v10" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
         <path d="M11 20v-5h6v5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <div class="sb-label leading-tight min-w-0">
-        <div style="font-size:13px;font-weight:600;letter-spacing:-0.01em;color:#f4f4f5;">Lallubhai Amichand</div>
+        <div style="font-size:13px;font-weight:600;letter-spacing:-0.01em;color:#eef4fb;">Lallubhai Amichand</div>
       </div>
     </div>
 

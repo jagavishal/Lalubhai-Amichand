@@ -63,7 +63,7 @@ window.Pages.announcements = (() => {
             <h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Announcements</h1>
             <p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Company-wide notices and updates</p>
           </div>
-          ${admin ? '<button id="ann-new-btn" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;background:linear-gradient(135deg,#5e6ad2,#4f5ab8);color:#fff;border:none;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>New Announcement</button>' : ''}
+          ${admin ? '<button id="ann-new-btn" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;background:linear-gradient(135deg,#0150AA,#013D82);color:#fff;border:none;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>New Announcement</button>' : ''}
         </div>
         <div style="display:flex;flex-direction:column;gap:12px;">${cards}</div>
       </div>`;
@@ -108,7 +108,7 @@ window.Pages.announcements = (() => {
           </div>
           <div style="padding:16px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;">
             <button id="ann-cancel" class="btn-secondary">Cancel</button>
-            <button id="ann-post" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;background:linear-gradient(135deg,#5e6ad2,#4f5ab8);color:#fff;border:none;cursor:pointer;">Post Announcement</button>
+            <button id="ann-post" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;background:linear-gradient(135deg,#0150AA,#013D82);color:#fff;border:none;cursor:pointer;">Post Announcement</button>
           </div>
         </div>
       </div>`;
