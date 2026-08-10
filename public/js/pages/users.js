@@ -112,7 +112,7 @@ window.Pages.users = (() => {
   function avatarHtml(name, picture, size = 9) {
     const ini = (name || 'U').split(' ').filter(Boolean).slice(0, 2).map(n => n[0]).join('').toUpperCase() || 'U';
     if (picture) {
-      return `<img src="${esc(picture)}" alt="${esc(name)}" class="w-${size} h-${size} rounded-full object-cover" />`;
+      return `<img src="${esc(picture)}" alt="${esc(name)}" data-zoom title="Click to view full image" class="w-${size} h-${size} rounded-full object-cover" />`;
     }
     return `<div class="w-${size} h-${size} rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-white grid place-items-center text-[11px] font-bold">${esc(ini)}</div>`;
   }
@@ -734,7 +734,7 @@ window.Pages.users = (() => {
     const curRoles = normalizeRoles(_form.roles);
 
     const photoHtml = _picture
-      ? `<img src="${esc(_picture)}" alt="" class="w-14 h-14 rounded-xl object-cover ring-2 ring-slate-100 shadow-sm" />`
+      ? `<img src="${esc(_picture)}" alt="${esc(_form.name || '')}" data-zoom title="Click to view full image" class="w-14 h-14 rounded-xl object-cover ring-2 ring-slate-100 shadow-sm" />`
       : window.UI.avatar(_form.name || 'U', { variant: 'brand', size: 56, shape: 'square' });
 
     const removePhotoBtn = _picture

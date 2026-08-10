@@ -77,7 +77,7 @@ window.Pages.profile = {
     const dept     = me.department || '—';
 
     const avatarHtml = this._picture
-      ? `<img src="${this._esc(this._picture)}" alt="Profile" class="w-24 h-24 rounded-2xl object-cover shadow-elevated ring-4 ring-white" id="profile-avatar-img" />`
+      ? `<img src="${this._esc(this._picture)}" alt="Profile" data-zoom title="Click to view full image" class="w-24 h-24 rounded-2xl object-cover shadow-elevated ring-4 ring-white" id="profile-avatar-img" />`
       : `<div class="w-24 h-24 rounded-2xl bg-gradient-to-br from-amber-400 to-pink-500 grid place-items-center text-white text-2xl font-bold shadow-elevated ring-4 ring-white" id="profile-avatar-initials">${this._esc(initials)}</div>`;
 
     root.innerHTML = `
@@ -289,7 +289,7 @@ window.Pages.profile = {
     const wrap = document.getElementById('profile-avatar-wrap');
     if (!wrap) return;
     if (this._picture) {
-      wrap.innerHTML = `<img src="${this._esc(this._picture)}" alt="Profile" class="w-24 h-24 rounded-2xl object-cover shadow-elevated ring-4 ring-white" id="profile-avatar-img" />`;
+      wrap.innerHTML = `<img src="${this._esc(this._picture)}" alt="Profile" data-zoom title="Click to view full image" class="w-24 h-24 rounded-2xl object-cover shadow-elevated ring-4 ring-white" id="profile-avatar-img" />`;
     } else {
       const initials = this._initials(this._form.name);
       wrap.innerHTML = `<div class="w-24 h-24 rounded-2xl bg-gradient-to-br from-amber-400 to-pink-500 grid place-items-center text-white text-2xl font-bold shadow-elevated ring-4 ring-white" id="profile-avatar-initials">${this._esc(initials)}</div>`;

@@ -88,6 +88,71 @@ window.UI = (function () {
       </div>`;
   }
 
+  /* ── Lightbox (click a photo → full-size preview) ────────────────── */
+  // Any <img data-zoom> anywhere in the app opens here. The delegated click
+  // runs in the capture phase so a zoomable photo sitting inside a clickable
+  // row/card doesn't also trigger that row's handler.
+  let _lbEl = null;
+
+  function _buildLightbox() {
+    const el = document.createElement('div');
+    el.id = 'ui-lightbox';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.innerHTML = `
+      <button type="button" class="ui-lightbox-close" aria-label="Close">${X_ICON}</button>
+      <img class="ui-lightbox-img" alt="" />
+      <div class="ui-lightbox-caption"></div>`;
+    el.addEventListener('click', e => {
+      // Backdrop / close button closes; clicking the image itself does not.
+      if (!e.target.closest('.ui-lightbox-img')) hideLightbox();
+    });
+    document.body.appendChild(el);
+    return el;
+  }
+
+  function lightbox(src, alt = '') {
+    if (!src) return;
+    if (!_lbEl || !document.body.contains(_lbEl)) _lbEl = _buildLightbox();
+    const img = _lbEl.querySelector('.ui-lightbox-img');
+    const cap = _lbEl.querySelector('.ui-lightbox-caption');
+    img.style.width = '';
+    img.onload = () => {
+      // Stored avatars are small (200×200) — upscale so "full image" actually
+      // fills the viewport instead of rendering as a thumbnail on a black sheet.
+      const target = Math.min(560, window.innerWidth * 0.9, window.innerHeight * 0.8);
+      if (img.naturalWidth && img.naturalWidth < target) {
+        img.style.width = Math.round(target) + 'px';
+      }
+    };
+    img.src = src;
+    img.alt = alt || '';
+    cap.textContent = alt || '';
+    cap.style.display = alt ? '' : 'none';
+    _lbEl.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    _lbEl.querySelector('.ui-lightbox-close')?.focus();
+  }
+
+  function hideLightbox() {
+    if (!_lbEl) return;
+    _lbEl.classList.remove('open');
+    _lbEl.querySelector('.ui-lightbox-img').removeAttribute('src');
+    document.body.style.overflow = '';
+  }
+
+  document.addEventListener('click', e => {
+    const img = e.target instanceof Element ? e.target.closest('img[data-zoom]') : null;
+    if (!img || !img.getAttribute('src')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    lightbox(img.getAttribute('src'), img.dataset.zoomCaption || img.getAttribute('alt') || '');
+  }, true);
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && _lbEl?.classList.contains('open')) hideLightbox();
+  });
+
   /* ── Empty state ─────────────────────────────────────────────────── */
   const DEFAULT_INBOX_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z"/></svg>';
 
@@ -102,5 +167,5 @@ window.UI = (function () {
       </div>`;
   }
 
-  return { avatar, pill, badge, modal, showModal, hideModal, statTile, emptyState };
+  return { avatar, pill, badge, modal, showModal, hideModal, statTile, emptyState, lightbox, hideLightbox };
 })();
