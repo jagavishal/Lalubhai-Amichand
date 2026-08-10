@@ -1,21 +1,31 @@
 window.Pages = window.Pages || {};
 
 // ── IMS (Inventory Management System) ──────────────────────────────────────
-// Single sidebar entry covering all of IMS via 3 top-level tabs: Inward,
-// Outward, Report. Inward/Outward just mount the same standalone modules
-// that used to be separate sidebar pages (see inward.js/outward.js — their
-// render() now accepts {containerId, embedded} for exactly this). Report
-// (this file's own code, below) is the item-master dashboard: catalog + live
-// current stock (kept in sync by Inward/Outward and /api/ims/* in server.js —
-// a plain MySQL table, not Google-Sheets-backed like PR/PO/GRN). Rows at or
-// below their Minimum Order Qty are flagged Low Stock. Add/Edit here only
-// ever touches catalog fields (category/description/size/uom/moq/maxLevel/
-// onOrderQty/vendorName) — current stock only moves via Inward/Outward
-// transactions. category ("Stores" vs "ALU" vs "Trading") separates the
-// real-world stock books this table holds and drives the filter dropdown
-// below (Trading additionally carries a Source per transaction — see
-// inward.js/outward.js — since its Inward/Outward history mixes entries
-// typed straight in with ones carried over from the Hindalco job-work sheet).
+// Single sidebar entry holding one separate IMS per stock book. The outer tab
+// row picks the book — IMS Stores / IMS Alu & SS / IMS Accessories (see
+// IMS_CATEGORY_TABS in server.js; the ALU book is labelled "Alu & SS" because
+// stainless-steel items live in it too, but its stored category value is still
+// plain 'ALU'). Inside each book the inner tabs are the same three as before:
+// Inward, Outward, Report — every one of them hard-scoped to that book, so
+// there is no Category dropdown anywhere in the forms or filter bars any more.
+// Picking the tab IS picking the category.
+//
+// Inward/Outward just mount the standalone modules that used to be separate
+// sidebar pages (see inward.js/outward.js — their render() takes
+// {containerId, embedded, category} for exactly this). Report (this file's own
+// code, below) is the item-master dashboard: catalog + live current stock
+// (kept in sync by Inward/Outward and /api/ims/* in server.js — a plain SQL
+// table, not Google-Sheets-backed like PR/PO/GRN). Rows at or below their
+// Minimum Order Qty are flagged Low Stock. Add/Edit here only ever touches
+// catalog fields (description/size/uom/moq/maxLevel/onOrderQty/vendorName) —
+// current stock only moves via Inward/Outward transactions, and the category
+// comes from the active tab rather than being chosen on the form.
+//
+// The "Trading" book (TRD/Hindalco job-work) has no tab at the moment — its
+// data is untouched in the DB and 'Trading' is still a valid category
+// server-side; adding it back is a one-line change to IMS_CATEGORY_TABS.
+// Trading is also the only book that carries a per-transaction Source (see
+// inward.js/outward.js).
 window.Pages['ims'] = (() => {
   /* ── state ──────────────────────────────────────────────────── */
   let _rows = [];
@@ -24,16 +34,24 @@ window.Pages['ims'] = (() => {
   let _search = ''; // still used by the Day-wise Stock toolbar (see below)
   let _lowStockOnly = false;
   let _negativeOnly = false;
-  // Item List's own filters — separate from _search/_category (which the
-  // Day-wise Stock tab still uses) so item code and item name can be
-  // filtered independently instead of one fuzzy combined box.
+  // Item List's own filters — separate from _search (which the Day-wise Stock
+  // tab still uses) so item code and item name can be filtered independently
+  // instead of one fuzzy combined box.
   let _fItemCode = '';
   let _fItemName = '';
   let _fMinStock = '';
   let _fMaxStock = '';
   let _searchTimer = null;
-  let _category = ''; // '' = All
-  let _categories = ['Stores', 'ALU', 'Trading']; // overwritten from /api/ims/masters once loaded
+  // The active book. Every fetch on this page is scoped to it and it is never
+  // blank — "all books at once" isn't a view this page offers any more.
+  // Overwritten from /api/ims/masters (categoryTabs) once loaded; the list
+  // here is the fallback so the tab row renders before that responds.
+  let _bookTabs = [
+    { key: 'Stores', label: 'IMS Stores' },
+    { key: 'ALU', label: 'IMS Alu & SS' },
+    { key: 'Accessories', label: 'IMS Accessories' },
+  ];
+  let _book = 'Stores';
   let _mastersLoaded = false;
 
   let _formOpen = false;
@@ -64,6 +82,13 @@ window.Pages['ims'] = (() => {
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
   function _today() { return new Date().toISOString().slice(0, 10); }
+  // Display name of the active book ("IMS Alu & SS"), vs _book which is the
+  // stored category value ('ALU') everything is actually queried by.
+  function _bookLabel() { return (_bookTabs.find(t => t.key === _book) || {}).label || _book; }
+  // Same thing without the "IMS " prefix, for use mid-sentence.
+  function _bookName() { return _bookLabel().replace(/^IMS\s+/i, ''); }
+  // Safe for a filename: "Alu & SS" -> "Alu_SS".
+  function _bookSlug() { return _bookName().replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, ''); }
 
   /* ── CSV export — quotes any cell with a comma/quote/newline (item
      descriptions and vendor names routinely have commas), unlike a bare
@@ -86,14 +111,14 @@ window.Pages['ims'] = (() => {
   function _exportItemsCSV() {
     if (!_rows.length) { Utils.showToast('No items to export', 'warning'); return; }
     const headers = ['Item Code', 'Category', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order Qty', 'Vendor Name'];
-    const rows = _rows.map(r => [r.itemCode, r.category || 'Stores', r.description, r.size, r.uom, r.currentStock, r.moq, r.maxLevel, r.onOrderQty, r.vendorName]);
-    _downloadCSV('IMS_Items_' + _todayStamp() + '.csv', headers, rows);
+    const rows = _rows.map(r => [r.itemCode, r.category || _book, r.description, r.size, r.uom, r.currentStock, r.moq, r.maxLevel, r.onOrderQty, r.vendorName]);
+    _downloadCSV('IMS_' + _bookSlug() + '_Items_' + _todayStamp() + '.csv', headers, rows);
   }
   function _exportHistoryCSV() {
     if (!_historyRows.length) { Utils.showToast('No items to export', 'warning'); return; }
     const headers = ['Item Code', 'Description', 'UOM', ..._historyDates.map(_dateLabel)];
     const rows = _historyRows.map(r => [r.itemCode, r.description, r.uom, ...(r.daily || [])]);
-    _downloadCSV('IMS_DayWiseStock_' + _todayStamp() + '.csv', headers, rows);
+    _downloadCSV('IMS_' + _bookSlug() + '_DayWiseStock_' + _todayStamp() + '.csv', headers, rows);
   }
   function _todayStamp() {
     const d = new Date();
@@ -143,11 +168,6 @@ window.Pages['ims'] = (() => {
     opts = opts || {};
     return _fieldWrap(label, '<input type="' + (opts.type || 'text') + '" id="' + id + '" value="' + esc(opts.value || '') + '" placeholder="' + esc(opts.placeholder || '') + '" ' + (opts.disabled ? 'disabled style="' + _inputStyle + 'background:#f1f5f9;color:#94a3b8;"' : 'style="' + _inputStyle + '"') + ' />');
   }
-  function _selectField(id, label, options, selected) {
-    const opts = options.map(o => '<option value="' + esc(o) + '"' + (o === selected ? ' selected' : '') + '>' + esc(o) + '</option>').join('');
-    return _fieldWrap(label, '<select id="' + id + '" style="' + _inputStyle + '">' + opts + '</select>');
-  }
-
   /* ── Load ───────────────────────────────────────────────────────────── */
   async function _load() {
     _loaded = false;
@@ -161,7 +181,7 @@ window.Pages['ims'] = (() => {
       if (_negativeOnly) params.set('negativeStock', '1');
       if (_fMinStock !== '') params.set('minStock', _fMinStock);
       if (_fMaxStock !== '') params.set('maxStock', _fMaxStock);
-      if (_category) params.set('category', _category);
+      params.set('category', _book);
       _rows = await Utils.apiFetch('/api/ims/items?' + params.toString()) || [];
     } catch (e) {
       _rows = [];
@@ -171,14 +191,22 @@ window.Pages['ims'] = (() => {
     _renderTable();
   }
 
-  // Pulls the real category list once (falls back to the hardcoded default
-  // above if this fails, so the filter still works before the API responds).
+  // Pulls the real book list once (falls back to the hardcoded default above
+  // if this fails, so the tabs still work before the API responds). Re-renders
+  // only if the server's list actually differs from the fallback, so the
+  // common case costs nothing.
   async function _loadMasters() {
     if (_mastersLoaded) return;
     try {
       const data = await Utils.apiFetch('/api/ims/masters');
-      if (Array.isArray(data?.categories) && data.categories.length) _categories = data.categories;
+      const tabs = Array.isArray(data?.categoryTabs) ? data.categoryTabs.filter(t => t && t.key) : [];
       _mastersLoaded = true;
+      if (!tabs.length) return;
+      const changed = JSON.stringify(tabs.map(t => [t.key, t.label])) !== JSON.stringify(_bookTabs.map(t => [t.key, t.label]));
+      if (!changed) return;
+      _bookTabs = tabs;
+      if (!_bookTabs.some(t => t.key === _book)) _book = _bookTabs[0].key;
+      renderPage();
     } catch (e) { /* keep hardcoded fallback */ }
   }
 
@@ -190,7 +218,7 @@ window.Pages['ims'] = (() => {
       const params = new URLSearchParams();
       params.set('days', String(_historyDays));
       if (_search) params.set('q', _search);
-      if (_category) params.set('category', _category);
+      params.set('category', _book);
       const data = await Utils.apiFetch('/api/ims/stock-history?' + params.toString());
       _historyDates = data?.dates || [];
       _historyRows = data?.items || [];
@@ -209,7 +237,7 @@ window.Pages['ims'] = (() => {
     _physLoadError = '';
     _renderPhysicalTable();
     try {
-      _physRows = await Utils.apiFetch('/api/ims/physical-stock/list') || [];
+      _physRows = await Utils.apiFetch('/api/ims/physical-stock/list?category=' + encodeURIComponent(_book)) || [];
     } catch (e) {
       _physRows = [];
       _physLoadError = e.message || 'Failed to load physical stock log';
@@ -224,18 +252,18 @@ window.Pages['ims'] = (() => {
     if (!body) return;
 
     if (!_loaded) {
-      body.innerHTML = '<tr><td colspan="11" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_loadError) {
-      body.innerHTML = '<tr><td colspan="11" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_loadError) + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_loadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (countEl) countEl.textContent = _rows.length + ' item' + (_rows.length === 1 ? '' : 's');
     if (!_rows.length) {
-      body.innerHTML = '<tr><td colspan="11" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">No items found</td></tr>';
+      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">No items found</td></tr>';
       return;
     }
     body.innerHTML = _rows.map(r => {
@@ -244,7 +272,6 @@ window.Pages['ims'] = (() => {
       const stockColor = _stockLevelColor(r.currentStock, r.maxLevel);
       return '<tr style="border-bottom:1px solid #f1f5f9;' + (negative ? 'background:#fff7ed;' : (low ? 'background:#fef2f2;' : '')) + '">'
         + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 7px;border-radius:10px;background:#f1f5f9;color:#475569;font-size:10.5px;font-weight:700;">' + esc(r.category || 'Stores') + '</span></td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.description) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.size) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
@@ -500,17 +527,12 @@ window.Pages['ims'] = (() => {
     });
   }
 
-  /* ── Filter bar ─────────────────────────────────────────────────────── */
-  function _categoryOptionsHtml(selected) {
-    return '<option value="">All categories</option>'
-      + _categories.map(c => '<option value="' + esc(c) + '"' + (c === selected ? ' selected' : '') + '>' + esc(c) + '</option>').join('');
-  }
-
+  /* ── Filter bar — no category control: the active book tab already fixes
+     it (see _book). ───────────────────────────────────────────────────── */
   function _filterBarHtml() {
     return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;">'
       + '<input type="text" id="ims-f-code" placeholder="Item Code…" value="' + esc(_fItemCode) + '" style="' + _inputStyle + 'min-width:130px;width:auto;" />'
       + '<input type="text" id="ims-f-name" placeholder="Item Name…" value="' + esc(_fItemName) + '" style="' + _inputStyle + 'min-width:180px;width:auto;flex:1;" />'
-      + '<select id="ims-category" style="' + _inputStyle + 'width:auto;">' + _categoryOptionsHtml(_category) + '</select>'
       + '<input type="number" id="ims-f-minstock" placeholder="Min Stock" value="' + esc(_fMinStock) + '" style="' + _inputStyle + 'width:110px;" />'
       + '<span style="color:#94a3b8;font-size:12px;">to</span>'
       + '<input type="number" id="ims-f-maxstock" placeholder="Max Stock" value="' + esc(_fMaxStock) + '" style="' + _inputStyle + 'width:110px;" />'
@@ -523,7 +545,7 @@ window.Pages['ims'] = (() => {
         + '<input type="checkbox" id="ims-negstock" ' + (_negativeOnly ? 'checked' : '') + ' /> Negative stock only'
       + '</label>'
       + '<button type="button" id="ims-f-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear Filters</button>'
-      + '<button type="button" id="ims-add-btn" style="padding:8px 14px;border-radius:8px;background:var(--color-primary);border:none;color:var(--color-primary-text);font-size:12.5px;font-weight:700;cursor:pointer;">+ Add Item</button>'
+      + '<button type="button" id="ims-add-btn" style="padding:8px 14px;border-radius:8px;background:var(--color-primary);border:none;color:var(--color-primary-text);font-size:12.5px;font-weight:700;cursor:pointer;">+ Add ' + esc(_bookName()) + ' Item</button>'
       + '<button type="button" id="ims-export-btn" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">⬇ Download CSV</button>'
       + '<button type="button" id="ims-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
     + '</div>';
@@ -540,7 +562,6 @@ window.Pages['ims'] = (() => {
       clearTimeout(_searchTimer);
       _searchTimer = setTimeout(_load, 300);
     });
-    document.getElementById('ims-category').addEventListener('change', (e) => { _category = e.target.value; _load(); });
     document.getElementById('ims-f-minstock').addEventListener('input', (e) => {
       _fMinStock = e.target.value;
       clearTimeout(_searchTimer);
@@ -554,7 +575,8 @@ window.Pages['ims'] = (() => {
     document.getElementById('ims-lowstock').addEventListener('change', (e) => { _lowStockOnly = e.target.checked; _load(); });
     document.getElementById('ims-negstock').addEventListener('change', (e) => { _negativeOnly = e.target.checked; _load(); });
     document.getElementById('ims-f-clear').addEventListener('click', () => {
-      _fItemCode = ''; _fItemName = ''; _fMinStock = ''; _fMaxStock = ''; _lowStockOnly = false; _negativeOnly = false; _category = '';
+      // _book is deliberately untouched — it's the tab you're on, not a filter.
+      _fItemCode = ''; _fItemName = ''; _fMinStock = ''; _fMaxStock = ''; _lowStockOnly = false; _negativeOnly = false;
       _renderReport(); // rebuilds the inputs themselves back to empty
       _load(); // filtering is server-side here (unlike Inward/Outward List), so clearing needs a real re-fetch
     });
@@ -563,13 +585,13 @@ window.Pages['ims'] = (() => {
     document.getElementById('ims-refresh').addEventListener('click', _load);
   }
 
-  /* ── Day-wise Stock toolbar (search/category shared, range replaces low-stock) ── */
+  /* ── Day-wise Stock toolbar (search shared with the list view, range
+     replaces low-stock; category comes from the active book tab) ────────── */
   function _dayOptionLabel(n) { return n >= 60 ? '3 Months' : n + ' Days'; }
 
   function _historyToolbarHtml() {
     return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
       + '<input type="text" id="ims-h-search" placeholder="Search item code / description…" value="' + esc(_search) + '" style="' + _inputStyle + 'min-width:220px;width:auto;flex:1;" />'
-      + '<select id="ims-h-category" style="' + _inputStyle + 'width:auto;">' + _categoryOptionsHtml(_category) + '</select>'
       + '<div style="display:flex;gap:4px;background:#f1f5f9;padding:3px;border-radius:8px;">'
         + _historyDayOptions.map(n => '<button type="button" class="ims-h-range" data-days="' + n + '" style="padding:6px 12px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;'
           + (n === _historyDays ? 'background:var(--color-primary);color:var(--color-primary-text);' : 'background:transparent;color:#475569;') + '">' + _dayOptionLabel(n) + '</button>').join('')
@@ -585,7 +607,6 @@ window.Pages['ims'] = (() => {
       clearTimeout(_searchTimer);
       _searchTimer = setTimeout(_loadHistory, 300);
     });
-    document.getElementById('ims-h-category').addEventListener('change', (e) => { _category = e.target.value; _loadHistory(); });
     document.getElementById('ims-h-export').addEventListener('click', _exportHistoryCSV);
     document.getElementById('ims-h-refresh').addEventListener('click', _loadHistory);
     document.querySelectorAll('.ims-h-range').forEach(btn => {
@@ -610,26 +631,31 @@ window.Pages['ims'] = (() => {
     _renderReport();
   }
 
+  // Field ids are prefixed 'ims-if-' (item form), NOT 'ims-f-' — the filter bar
+  // above already owns 'ims-f-code' and this panel renders above it in the same
+  // document, so sharing the prefix made getElementById('ims-f-code') resolve
+  // to whichever came first: typing an item code into the form re-ran the list
+  // filter, and the filter box itself went dead while the form was open.
   function _formHtml(row) {
     const isEdit = !!row;
     return '<div style="background:#fff;border:1.5px solid var(--color-primary);border-radius:12px;padding:16px;margin-bottom:16px;">'
-      + '<div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:12px;">' + (isEdit ? 'Edit Item — ' + esc(row.itemCode) : 'Add New Item') + '</div>'
+      + '<div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:2px;">' + (isEdit ? 'Edit Item — ' + esc(row.itemCode) : 'Add New Item') + '</div>'
+      + '<div style="font-size:11.5px;color:#64748b;margin-bottom:12px;">Goes into the <b>' + esc(_bookName()) + '</b> catalog.</div>'
       + '<form id="ims-item-form" style="display:flex;flex-direction:column;gap:14px;">'
         + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">'
-          + _textField('ims-f-code', 'Item Code', { value: isEdit ? row.itemCode : '', disabled: isEdit })
-          + _selectField('ims-f-category', 'Category', _categories, isEdit ? (row.category || 'Stores') : 'Stores')
-          + _textField('ims-f-desc', 'Description', { value: isEdit ? row.description : '' })
-          + _textField('ims-f-size', 'Size', { value: isEdit ? row.size : '' })
-          + _textField('ims-f-uom', 'UOM', { value: isEdit ? row.uom : '' })
-          + _textField('ims-f-moq', 'MOQ (Min Order Qty)', { value: isEdit ? row.moq : '' })
-          + _textField('ims-f-maxlevel', 'Max Level', { value: isEdit ? row.maxLevel : '' })
-          + _textField('ims-f-onorder', 'On Order Qty', { value: isEdit ? row.onOrderQty : '' })
-          + _textField('ims-f-vendor', 'Vendor Name', { value: isEdit ? row.vendorName : '' })
-          + (isEdit ? '' : _textField('ims-f-opening', 'Opening Stock', { value: '0' }))
+          + _textField('ims-if-code', 'Item Code', { value: isEdit ? row.itemCode : '', disabled: isEdit })
+          + _textField('ims-if-desc', 'Description', { value: isEdit ? row.description : '' })
+          + _textField('ims-if-size', 'Size', { value: isEdit ? row.size : '' })
+          + _textField('ims-if-uom', 'UOM', { value: isEdit ? row.uom : '' })
+          + _textField('ims-if-moq', 'MOQ (Min Order Qty)', { value: isEdit ? row.moq : '' })
+          + _textField('ims-if-maxlevel', 'Max Level', { value: isEdit ? row.maxLevel : '' })
+          + _textField('ims-if-onorder', 'On Order Qty', { value: isEdit ? row.onOrderQty : '' })
+          + _textField('ims-if-vendor', 'Vendor Name', { value: isEdit ? row.vendorName : '' })
+          + (isEdit ? '' : _textField('ims-if-opening', 'Opening Stock', { value: '0' }))
         + '</div>'
         + '<div style="display:flex;gap:10px;">'
-          + '<button type="submit" id="ims-f-submit" style="padding:9px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">' + (isEdit ? 'Save Changes' : 'Add Item') + '</button>'
-          + '<button type="button" id="ims-f-cancel" style="padding:9px 22px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
+          + '<button type="submit" id="ims-if-submit" style="padding:9px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">' + (isEdit ? 'Save Changes' : 'Add Item') + '</button>'
+          + '<button type="button" id="ims-if-cancel" style="padding:9px 22px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
         + '</div>'
       + '</form>'
     + '</div>';
@@ -639,26 +665,26 @@ window.Pages['ims'] = (() => {
     e.preventDefault();
     const isEdit = !!row;
     const body = {
-      category: document.getElementById('ims-f-category').value,
-      description: document.getElementById('ims-f-desc').value.trim(),
-      size: document.getElementById('ims-f-size').value.trim(),
-      uom: document.getElementById('ims-f-uom').value.trim(),
-      moq: document.getElementById('ims-f-moq').value.trim(),
-      maxLevel: document.getElementById('ims-f-maxlevel').value.trim(),
-      onOrderQty: document.getElementById('ims-f-onorder').value.trim(),
-      vendorName: document.getElementById('ims-f-vendor').value.trim(),
+      category: _book, // the tab you're on, not a form field
+      description: document.getElementById('ims-if-desc').value.trim(),
+      size: document.getElementById('ims-if-size').value.trim(),
+      uom: document.getElementById('ims-if-uom').value.trim(),
+      moq: document.getElementById('ims-if-moq').value.trim(),
+      maxLevel: document.getElementById('ims-if-maxlevel').value.trim(),
+      onOrderQty: document.getElementById('ims-if-onorder').value.trim(),
+      vendorName: document.getElementById('ims-if-vendor').value.trim(),
     };
-    const btn = document.getElementById('ims-f-submit');
+    const btn = document.getElementById('ims-if-submit');
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
       if (isEdit) {
         await Utils.apiFetch('/api/ims/items/' + encodeURIComponent(row.itemCode), { method: 'PATCH', body: JSON.stringify(body) });
         Utils.showToast('Item updated', 'success');
       } else {
-        const itemCode = document.getElementById('ims-f-code').value.trim();
+        const itemCode = document.getElementById('ims-if-code').value.trim();
         if (!itemCode) { Utils.showToast('Item Code is required', 'error'); btn.disabled = false; btn.textContent = 'Add Item'; return; }
         body.itemCode = itemCode;
-        body.openingStock = document.getElementById('ims-f-opening').value.trim();
+        body.openingStock = document.getElementById('ims-if-opening').value.trim();
         await Utils.apiFetch('/api/ims/items', { method: 'POST', body: JSON.stringify(body) });
         Utils.showToast('Item added', 'success');
       }
@@ -728,11 +754,11 @@ window.Pages['ims'] = (() => {
       bodyHtml = _filterBarHtml()
         + _colorLegendHtml()
         + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-          + '<table style="width:100%;border-collapse:collapse;min-width:1180px;">'
+          + '<table style="width:100%;border-collapse:collapse;min-width:1080px;">'
             + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-              + ['Item Code', 'Category', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order', 'Vendor', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+              + ['Item Code', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order', 'Vendor', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
             + '</tr></thead>'
-            + '<tbody id="ims-body"><tr><td colspan="11" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+            + '<tbody id="ims-body"><tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
           + '</table>'
         + '</div>';
     }
@@ -767,18 +793,51 @@ window.Pages['ims'] = (() => {
 
     if (_formOpen) {
       document.getElementById('ims-item-form').addEventListener('submit', (e) => _submitForm(e, formRow));
-      document.getElementById('ims-f-cancel').addEventListener('click', _closeForm);
+      document.getElementById('ims-if-cancel').addEventListener('click', _closeForm);
     }
 
     _renderTable();
     if (!_loaded) _load(); // only the very first render needs a fetch — filter/refresh/save actions trigger their own
-    _loadMasters(); // fire-and-forget; hardcoded fallback already covers Stores/ALU so no re-render needed today
   }
 
-  /* ── Top-level tabs: Inward / Outward / Report — one "IMS" sidebar entry
-     now covers all three; Inward/Outward bodies are the same modules that
+  /* ── Book tabs (outer) — one separate IMS per stock book. Switching book
+     re-scopes every fetch on the page, so the three cached datasets below are
+     dropped and re-pulled for the new book rather than showing the previous
+     one's rows under the new tab's heading. ────────────────────────────── */
+  function _bookTabsHtml() {
+    return '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">'
+      + _bookTabs.map(t => {
+        const active = t.key === _book;
+        return '<button type="button" class="ims-book-tab" data-book="' + esc(t.key) + '" style="'
+          + 'padding:9px 18px;border-radius:10px;cursor:pointer;font-size:13px;font-weight:700;'
+          + (active
+            ? 'background:var(--color-primary);color:var(--color-primary-text);border:1.5px solid var(--color-primary);'
+            : 'background:#fff;color:#64748b;border:1.5px solid #e2e8f0;')
+          + '">' + esc(t.label) + '</button>';
+      }).join('')
+    + '</div>';
+  }
+
+  function _switchBook(key) {
+    if (key === _book) return;
+    _book = key;
+    // Every cached dataset belonged to the old book.
+    _loaded = false; _rows = []; _loadError = '';
+    _historyLoaded = false; _historyRows = []; _historyDates = []; _historyLoadError = '';
+    _physLoaded = false; _physRows = []; _physLoadError = '';
+    // Item filters are per-book too — a code typed while browsing Stores
+    // would otherwise silently hide everything in Accessories.
+    _fItemCode = ''; _fItemName = ''; _fMinStock = ''; _fMaxStock = '';
+    _lowStockOnly = false; _negativeOnly = false; _search = '';
+    _formOpen = false; _editingCode = null;
+    renderPage();
+  }
+
+  /* ── Sub-tabs: Inward / Outward / Report — the three views of whichever
+     book is selected above. Inward/Outward bodies are the same modules that
      used to be their own standalone pages (see inward.js/outward.js), just
-     mounted into #ims-tabbody instead of #main-content directly. ────────── */
+     mounted into #ims-tabbody instead of #main-content directly, and locked
+     to the active book. ─────────────────────────────────────────────────── */
   let _topTab = 'inward'; // 'inward' | 'outward' | 'report'
 
   function _topTabsHtml() {
@@ -799,13 +858,17 @@ window.Pages['ims'] = (() => {
 
     el.innerHTML = '<div style="max-width:1300px;margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
-        + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">IMS</h1>'
-        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Inventory Management — log stock movement and track the live item catalog.</p>'
+        + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">' + esc(_bookLabel()) + '</h1>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Inventory Management — log stock movement and track the live ' + esc(_bookName()) + ' catalog.</p>'
       + '</div>'
+      + _bookTabsHtml()
       + _topTabsHtml()
       + '<div id="ims-tabbody"></div>'
     + '</div>';
 
+    document.querySelectorAll('.ims-book-tab').forEach(btn => {
+      btn.addEventListener('click', () => _switchBook(btn.dataset.book));
+    });
     document.querySelectorAll('.ims-top-tab').forEach(btn => {
       btn.addEventListener('click', () => {
         if (btn.dataset.tab === _topTab) return;
@@ -814,8 +877,11 @@ window.Pages['ims'] = (() => {
       });
     });
 
-    if (_topTab === 'inward')  { window.Pages['inward'].render({ containerId: 'ims-tabbody', embedded: true }); return; }
-    if (_topTab === 'outward') { window.Pages['outward'].render({ containerId: 'ims-tabbody', embedded: true }); return; }
+    _loadMasters(); // fire-and-forget; re-renders only if the server's book list differs from the fallback
+
+    const mountOpts = { containerId: 'ims-tabbody', embedded: true, category: _book, categoryLabel: _bookName() };
+    if (_topTab === 'inward')  { window.Pages['inward'].render(mountOpts); return; }
+    if (_topTab === 'outward') { window.Pages['outward'].render(mountOpts); return; }
     _renderReport();
   }
 

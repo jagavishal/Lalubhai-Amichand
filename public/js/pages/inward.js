@@ -11,14 +11,23 @@ window.Pages = window.Pages || {};
 // batch insert) so partial success/failure per item is still visible and
 // cancellable individually from the Inward List tab below.
 // Cancelling an entry there reverses its effect on that item's current_stock.
+//
+// The category is NOT chosen here any more: the IMS page mounts this module
+// once per stock book and passes the book in via render({category}), so the
+// Stores tab's Inward form only ever touches the Stores catalog, the Alu & SS
+// tab only ALU, and so on (see ims.js). Everything below — the item-code
+// typeahead, the "+ New Item" modal, and the Inward List — is scoped to that
+// one category.
 window.Pages['inward'] = (() => {
   /* ── state ──────────────────────────────────────────────────── */
   let _view = 'create'; // 'create' | 'list'
   let _departments = [];
-  let _categories = ['Stores', 'ALU', 'Trading']; // overwritten from /api/ims/masters once loaded
   let _sources = ['In/Out (Manual)', 'IN/OUT(HINDALCO)']; // overwritten from /api/ims/masters once loaded
   let _mastersLoaded = false;
-  let _category = 'Stores'; // scopes the item-code dropdown + "+ New Item" modal to one catalog at a time
+  // The book this mount is locked to — set from render({category}) by ims.js.
+  // 'Stores' is only the standalone-page fallback.
+  let _category = 'Stores';
+  let _categoryLabel = 'Stores'; // display name ("Alu & SS"); _category stays the stored value ('ALU')
 
   // List (in-page tab) state.
   let _rows = [];
@@ -89,13 +98,10 @@ window.Pages['inward'] = (() => {
     try {
       const data = await Utils.apiFetch('/api/ims/masters');
       _departments = (data && data.departments) || [];
-      if (Array.isArray(data?.categories) && data.categories.length) _categories = data.categories;
       if (Array.isArray(data?.sources) && data.sources.length) _sources = data.sources;
       _mastersLoaded = true;
       const sel = document.getElementById('inw-department');
       if (sel) sel.innerHTML = '<option value="">Select…</option>' + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
-      const catSel = document.getElementById('inw-category');
-      if (catSel) catSel.innerHTML = _categories.map(c => '<option value="' + esc(c) + '"' + (c === _category ? ' selected' : '') + '>' + esc(c) + '</option>').join('');
       const srcSel = document.getElementById('inw-source');
       if (srcSel) srcSel.innerHTML = _sources.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('');
     } catch (e) {
@@ -204,8 +210,8 @@ window.Pages['inward'] = (() => {
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10000;display:grid;place-items:center;padding:16px;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
     overlay.innerHTML = '<div style="background:#fff;border-radius:18px;width:100%;max-width:440px;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.2);animation:pop-in 200ms cubic-bezier(.16,1,.3,1);">'
       + '<div style="padding:22px 24px 4px;">'
-        + '<div style="font-size:15px;font-weight:700;color:#0f172a;">New ' + esc(_category) + ' Item</div>'
-        + '<div style="font-size:12px;color:#64748b;margin:2px 0 14px;">Adds a new item to the ' + esc(_category) + ' catalog with 0 opening stock.</div>'
+        + '<div style="font-size:15px;font-weight:700;color:#0f172a;">New ' + esc(_categoryLabel) + ' Item</div>'
+        + '<div style="font-size:12px;color:#64748b;margin:2px 0 14px;">Adds a new item to the ' + esc(_categoryLabel) + ' catalog with 0 opening stock.</div>'
       + '</div>'
       + '<form id="inw-ni-form" style="padding:0 24px 22px;display:flex;flex-direction:column;gap:12px;">'
         + _textField('inw-ni-code', 'Item Code')
@@ -252,7 +258,7 @@ window.Pages['inward'] = (() => {
             category: _category,
           }),
         });
-        Utils.showToast('"' + itemCode + '" added to ' + _category, 'success');
+        Utils.showToast('"' + itemCode + '" added to ' + _categoryLabel, 'success');
         close();
       } catch (err) {
         Utils.showToast(err.message || 'Failed to add item', 'error');
@@ -267,7 +273,7 @@ window.Pages['inward'] = (() => {
     _loadError = '';
     _renderTable();
     try {
-      _rows = await Utils.apiFetch('/api/ims/inward/list') || [];
+      _rows = await Utils.apiFetch('/api/ims/inward/list?category=' + encodeURIComponent(_category)) || [];
     } catch (e) {
       _rows = [];
       _loadError = e.message || 'Failed to load Inward entries';
@@ -303,7 +309,7 @@ window.Pages['inward'] = (() => {
     const rows = _filteredRows();
     if (countEl) countEl.textContent = rows.length + ' of ' + _rows.length;
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_rows.length ? 'No entries match these filters' : 'No Inward entries yet') + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_rows.length ? 'No entries match these filters' : 'No ' + esc(_categoryLabel) + ' Inward entries yet') + '</td></tr>';
       return;
     }
     body.innerHTML = rows.map(r => ''
@@ -371,7 +377,7 @@ window.Pages['inward'] = (() => {
 
   function _listViewHtml() {
     return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;">'
-        + '<p style="font-size:12.5px;color:#64748b;margin:0;">Every stock-in entry logged here.</p>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:0;">Every stock-in entry logged against the ' + esc(_categoryLabel) + ' catalog.</p>'
         + '<span id="inwl-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
       + '</div>'
       + _filterBarHtml()
@@ -402,16 +408,9 @@ window.Pages['inward'] = (() => {
   }
 
   /* ── Create form ────────────────────────────────────────────────────── */
-  function _categorySelectHtml() {
-    return _fieldWrap('Category', '<select id="inw-category" style="' + _inputStyle + '">'
-      + _categories.map(c => '<option value="' + esc(c) + '"' + (c === _category ? ' selected' : '') + '>' + esc(c) + '</option>').join('')
-    + '</select>');
-  }
-
   // Source (In/Out (Manual) vs IN/OUT(HINDALCO)) only applies to the Trading
-  // catalog — every other category keeps behaving exactly as before this field
-  // existed, so the wrapper is hidden (not omitted, so toggling doesn't need a
-  // full re-render) whenever Category isn't "Trading".
+  // catalog — every other book keeps behaving exactly as before this field
+  // existed, so it's only rendered at all when this mount is the Trading book.
   function _sourceFieldHtml() {
     return _fieldWrap('Source', '<select id="inw-source" style="' + _inputStyle + '">'
       + _sources.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('')
@@ -422,11 +421,10 @@ window.Pages['inward'] = (() => {
     return '<form id="inw-form" style="display:flex;flex-direction:column;gap:16px;">'
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
         + _textField('inw-date', 'Date', { type: 'date', value: _today() })
-        + _categorySelectHtml()
         + _fieldWrap('Department', '<select id="inw-department" style="' + _inputStyle + '"><option value="">Select…</option></select>')
-        + '<div id="inw-source-wrap" style="display:' + (_category === 'Trading' ? 'block' : 'none') + ';">' + _sourceFieldHtml() + '</div>'
+        + (_category === 'Trading' ? _sourceFieldHtml() : '')
       + '</div>'
-      + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
+      + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">' + esc(_categoryLabel) + ' Items</div>'
       + _itemsTableHtml()
       + '<div style="display:flex;gap:8px;">'
         + '<button type="button" id="inw-add-row" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item Row</button>'
@@ -483,14 +481,23 @@ window.Pages['inward'] = (() => {
 
   /* ── Render ─────────────────────────────────────────────────────────── */
   // opts.containerId / opts.embedded let the IMS page (see ims.js) mount this
-  // whole module inside its own "Inward" tab instead of #main-content — pass
-  // once from render(opts) and every internal re-render (submit, tab switch,
-  // category change) keeps reusing it via _renderOpts, no threading needed.
+  // whole module inside one book's "Inward" tab instead of #main-content, and
+  // opts.category locks that mount to the book. They're passed once from
+  // render(opts) and every internal re-render (submit, tab switch) keeps
+  // reusing them via _renderOpts, no threading needed — so a later
+  // renderPage() with no args stays on the same book.
   let _renderOpts = {};
   function renderPage(opts) {
     if (opts) _renderOpts = opts;
     const containerId = _renderOpts.containerId || 'main-content';
     const embedded = !!_renderOpts.embedded;
+    if (_renderOpts.category && _renderOpts.category !== _category) {
+      // Switched book — the loaded list and its filters belonged to the old one.
+      _category = _renderOpts.category;
+      _rows = []; _loaded = false; _loadError = '';
+      _fItem = ''; _fFrom = ''; _fTo = '';
+    }
+    _categoryLabel = _renderOpts.categoryLabel || _category;
     const el = document.getElementById(containerId);
     if (!el) return;
 
@@ -516,11 +523,6 @@ window.Pages['inward'] = (() => {
       return;
     }
 
-    document.getElementById('inw-category').addEventListener('change', (e) => {
-      _category = e.target.value;
-      const wrap = document.getElementById('inw-source-wrap');
-      if (wrap) wrap.style.display = _category === 'Trading' ? 'block' : 'none';
-    });
     document.getElementById('inw-add-row').addEventListener('click', () => {
       document.getElementById('inw-items-tbody').insertAdjacentHTML('beforeend', _itemRowHtml());
       _bindItemRow(document.getElementById('inw-items-tbody').lastElementChild);

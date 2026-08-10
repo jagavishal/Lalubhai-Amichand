@@ -276,12 +276,26 @@ const SCHEMA = [
   `ALTER TABLE ims_transactions ADD COLUMN IF NOT EXISTS source VARCHAR(32) NOT NULL DEFAULT ''`,
 ];
 
-// Canonical IMS category list — shown in the filter dropdown even before any
-// item in that category exists yet (e.g. "ALU" before the catalog is imported).
-// "Trading" holds the TRD-coded aluminum bar/rod/section catalog job-worked
-// with Hindalco (see ims_items_trading_import.sql) — its Inward/Outward
-// entries additionally carry a Source (IMS_SOURCES below).
-const IMS_CATEGORIES = ['Stores', 'ALU', 'Trading'];
+// Canonical IMS category list — every value the API will accept/store on an
+// item. "Trading" holds the TRD-coded aluminum bar/rod/section catalog
+// job-worked with Hindalco (see ims_items_trading_import.sql) — its
+// Inward/Outward entries additionally carry a Source (IMS_SOURCES below).
+const IMS_CATEGORIES = ['Stores', 'ALU', 'Accessories', 'Trading'];
+
+// The books the IMS page actually shows as its top-level tabs, in order —
+// each one is a self-contained IMS (its own Inward form, Outward form and
+// Report), so a category is picked by choosing a tab rather than from a
+// dropdown inside the forms. `label` is display-only: the ALU tab reads
+// "IMS Alu & SS" because stainless-steel items live in that same book, while
+// the stored category value stays 'ALU' (no migration of the ~1257 existing
+// ALU rows). "Trading" is deliberately NOT a tab right now — its 548 TRD
+// items stay untouched in the DB and it stays a valid category above, so
+// adding a 4th entry here is all it takes to bring that book back on screen.
+const IMS_CATEGORY_TABS = [
+  { key: 'Stores',      label: 'IMS Stores' },
+  { key: 'ALU',         label: 'IMS Alu & SS' },
+  { key: 'Accessories', label: 'IMS Accessories' },
+];
 
 // Ledger-source options shown on the Inward/Outward forms only when Category
 // is "Trading" — lets a Trading entry be tagged as typed straight in by store
@@ -4045,8 +4059,11 @@ app.get('/api/payment-history', requireAuth, async (req, res) => {
 // Outward create/cancel routes below — PATCH /api/ims/items never touches it.
 
 // GET /api/ims/masters — dropdown data shared by the Inward/Outward forms.
+// categoryTabs drives the IMS page's top-level book tabs (see
+// IMS_CATEGORY_TABS); categories stays the full set of valid values so an
+// item already filed under a non-tabbed book (Trading) still validates.
 app.get('/api/ims/masters', requireAuth, async (req, res) => {
-  return res.json({ departments: PO_DEPARTMENTS, categories: IMS_CATEGORIES, sources: IMS_SOURCES });
+  return res.json({ departments: PO_DEPARTMENTS, categories: IMS_CATEGORIES, categoryTabs: IMS_CATEGORY_TABS, sources: IMS_SOURCES });
 });
 
 // GET /api/ims/items?q=&lowStock=1&category=Stores — item master search; backs
@@ -4335,12 +4352,31 @@ async function _imsPhysicalStockUpdate(body, user) {
   return { id, systemStock, physicalStock, variance };
 }
 
+// Ledger lists are scoped to one book via ?category= (the IMS page's Inward/
+// Outward/Physical tabs each belong to exactly one book — see
+// IMS_CATEGORY_TABS). ims_transactions itself carries no category: an entry
+// belongs to whichever book its item is filed under, so the filter joins
+// through ims_items on item_code. Omitting the param keeps the old
+// every-book behaviour. The LIMIT is applied after filtering, so a book's
+// tab shows its own 1000 most recent entries rather than whatever survives a
+// global cut-off.
+function _imsTxnListQuery(direction, category, columns) {
+  const params = [direction];
+  let sql = `SELECT ${columns} FROM ims_transactions t`;
+  if (category) sql += ' JOIN ims_items i ON i.item_code = t.item_code';
+  sql += ' WHERE t.direction = $1';
+  if (category) { params.push(category); sql += ` AND i.category = $${params.length}`; }
+  sql += ' ORDER BY t.created_at DESC LIMIT 1000';
+  return { sql, params };
+}
+const IMS_TXN_LIST_COLUMNS = `t.id, t.txn_date AS date, t.item_code AS itemCode, t.item_name AS itemName,
+  t.quantity, t.uom, t.department, t.remarks, t.status, t.created_by AS createdBy, t.created_at AS createdAt, t.source`;
+
 app.get('/api/ims/inward/list', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    const rows = await q(
-      `SELECT id, txn_date AS date, item_code AS itemCode, item_name AS itemName, quantity, uom, department, remarks, status, created_by AS createdBy, created_at AS createdAt, source
-       FROM ims_transactions WHERE direction='IN' ORDER BY created_at DESC LIMIT 1000`);
+    const { sql, params } = _imsTxnListQuery('IN', String(req.query.category || '').trim(), IMS_TXN_LIST_COLUMNS);
+    const rows = await q(sql, params);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
@@ -4367,9 +4403,8 @@ app.put('/api/ims/inward/cancel', requireAuth, async (req, res) => {
 app.get('/api/ims/outward/list', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    const rows = await q(
-      `SELECT id, txn_date AS date, item_code AS itemCode, item_name AS itemName, quantity, uom, department, remarks, status, created_by AS createdBy, created_at AS createdAt, source
-       FROM ims_transactions WHERE direction='OUT' ORDER BY created_at DESC LIMIT 1000`);
+    const { sql, params } = _imsTxnListQuery('OUT', String(req.query.category || '').trim(), IMS_TXN_LIST_COLUMNS);
+    const rows = await q(sql, params);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
@@ -4398,9 +4433,10 @@ app.put('/api/ims/outward/cancel', requireAuth, async (req, res) => {
 app.get('/api/ims/physical-stock/list', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    const rows = await q(
-      `SELECT id, txn_date AS date, item_code AS itemCode, item_name AS itemName, quantity AS variance, remarks, status, created_by AS createdBy, created_at AS createdAt
-       FROM ims_transactions WHERE direction='ADJ' ORDER BY created_at DESC LIMIT 1000`);
+    const { sql, params } = _imsTxnListQuery('ADJ', String(req.query.category || '').trim(),
+      `t.id, t.txn_date AS date, t.item_code AS itemCode, t.item_name AS itemName,
+       t.quantity AS variance, t.remarks, t.status, t.created_by AS createdBy, t.created_at AS createdAt`);
+    const rows = await q(sql, params);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
