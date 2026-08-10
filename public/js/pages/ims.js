@@ -43,6 +43,16 @@ window.Pages = window.Pages || {};
     { route: 'ims-trading',     category: 'Trading',     label: 'IMS Trading' },
   ];
 
+  // Which book page is currently on screen. All four pages render into the
+  // same #main-content using the same element ids (#ims-body, #ims-history-
+  // body, …), so a fetch started on one page will happily paint into another
+  // one's table if it resolves after you've navigated away — showing Stores
+  // rows under the "IMS Alu & SS" heading. Every DOM write below is gated on
+  // this, so a late response from a page you've left is simply dropped (its
+  // own closure state is still updated, so returning to that page shows the
+  // right rows without re-fetching).
+  let _mountedRoute = null;
+
   function createPage(book) {
     /* ── state ──────────────────────────────────────────────────── */
     let _rows = [];
@@ -99,6 +109,8 @@ window.Pages = window.Pages || {};
     const _bookName = _bookLabel.replace(/^IMS\s+/i, '');
     // Safe for a filename: "Alu & SS" -> "Alu_SS".
     const _bookSlug = _bookName.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    // True only while this book's page owns #main-content — see _mountedRoute.
+    function _isActive() { return _mountedRoute === book.route; }
 
     /* ── CSV export — quotes any cell with a comma/quote/newline (item
        descriptions and vendor names routinely have commas), unlike a bare
@@ -238,6 +250,7 @@ window.Pages = window.Pages || {};
     }
 
     function _renderTable() {
+      if (!_isActive()) return;
       const body = document.getElementById('ims-body');
       const countEl = document.getElementById('ims-count');
       if (!body) return;
@@ -292,6 +305,7 @@ window.Pages = window.Pages || {};
     }
 
     function _renderHistoryTable() {
+      if (!_isActive()) return;
       const head = document.getElementById('ims-history-head');
       const body = document.getElementById('ims-history-body');
       const countEl = document.getElementById('ims-count');
@@ -362,6 +376,7 @@ window.Pages = window.Pages || {};
     }
 
     function _renderPhysicalTable() {
+      if (!_isActive()) return;
       const body = document.getElementById('ims-phys-body');
       const countEl = document.getElementById('ims-count');
       if (!body) return;
@@ -715,6 +730,7 @@ window.Pages = window.Pages || {};
     /* ── Report tab body (catalog + day-wise stock) — mounts into #ims-tabbody,
        the container the top-level tab bar below owns. ─────────────────────── */
     function _renderReport(formRow) {
+      if (!_isActive()) return;
       const el = document.getElementById('ims-tabbody');
       if (!el) return;
       const isDaywise = _viewMode === 'daywise';
@@ -813,6 +829,9 @@ window.Pages = window.Pages || {};
     function renderPage() {
       const el = document.getElementById('main-content');
       if (!el) return;
+      // Claim the shared container before writing to it, so any request still
+      // in flight from the book we're leaving stops painting (see _isActive).
+      _mountedRoute = book.route;
 
       el.innerHTML = '<div style="max-width:1300px;margin:0 auto;padding:4px 0 40px;">'
         + '<div style="margin-bottom:14px;">'

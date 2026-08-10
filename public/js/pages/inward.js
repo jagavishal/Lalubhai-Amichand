@@ -93,20 +93,46 @@ window.Pages['inward'] = (() => {
     else { sel.value = ''; other.style.display = 'none'; other.value = ''; }
   }
 
-  /* ── Masters (departments / categories) ────────────────────────────── */
-  async function _loadMasters() {
-    try {
-      const data = await Utils.apiFetch('/api/ims/masters');
-      _departments = (data && data.departments) || [];
-      if (Array.isArray(data?.sources) && data.sources.length) _sources = data.sources;
-      _mastersLoaded = true;
-      const sel = document.getElementById('inw-department');
-      if (sel) sel.innerHTML = '<option value="">Select…</option>' + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
-      const srcSel = document.getElementById('inw-source');
-      if (srcSel) srcSel.innerHTML = _sources.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('');
-    } catch (e) {
-      Utils.showToast(e.message || 'Failed to load departments', 'error');
+  /* ── Masters (departments / sources) ───────────────────────────────── */
+  // Fetching and filling are deliberately separate. renderPage() rebuilds the
+  // form's <select>s from scratch every time — switching book, switching
+  // Log/List, or coming back to Inward from another tab — so filling has to
+  // happen on EVERY render, while the fetch must happen only once. Guarding
+  // the whole thing behind a "already loaded" flag (as this used to) left the
+  // Department dropdown permanently empty from the second render onward.
+  function _fillMasterSelects() {
+    const sel = document.getElementById('inw-department');
+    if (sel) {
+      const keep = sel.value;
+      sel.innerHTML = '<option value="">Select…</option>' + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
+      if (keep) sel.value = keep; // don't wipe a selection the user already made
     }
+    const srcSel = document.getElementById('inw-source');
+    if (srcSel) {
+      const keep = srcSel.value;
+      srcSel.innerHTML = _sources.map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('');
+      if (keep) srcSel.value = keep;
+    }
+  }
+
+  // One in-flight fetch shared by every caller; cleared on failure so a later
+  // render retries instead of being stuck with empty dropdowns forever.
+  let _mastersPromise = null;
+  function _loadMasters() {
+    if (!_mastersPromise) {
+      _mastersPromise = Utils.apiFetch('/api/ims/masters').then(data => {
+        _departments = (data && data.departments) || [];
+        if (Array.isArray(data?.sources) && data.sources.length) _sources = data.sources;
+        _mastersLoaded = true;
+      }).catch(e => {
+        _mastersPromise = null;
+        Utils.showToast(e.message || 'Failed to load departments', 'error');
+      });
+    }
+    // Fill from whatever is cached right now (instant on later renders), then
+    // again once the first fetch lands.
+    _fillMasterSelects();
+    return _mastersPromise.then(_fillMasterSelects);
   }
 
   /* ── Item-code typeahead per row — scoped to the selected Category, shows
@@ -268,16 +294,25 @@ window.Pages['inward'] = (() => {
   }
 
   /* ── List (in-page tab) ────────────────────────────────────────────── */
+  // Bumped on every _load() and on every book switch. The four IMS book pages
+  // all mount this same module into the same #inwl-body, so without this a
+  // slow Stores request that lands after you've moved to Alu & SS would paint
+  // Stores entries into the Alu & SS list.
+  let _loadGen = 0;
   async function _load() {
+    const gen = ++_loadGen;
     _loaded = false;
     _loadError = '';
     _renderTable();
+    let rows = [], err = '';
     try {
-      _rows = await Utils.apiFetch('/api/ims/inward/list?category=' + encodeURIComponent(_category)) || [];
+      rows = await Utils.apiFetch('/api/ims/inward/list?category=' + encodeURIComponent(_category)) || [];
     } catch (e) {
-      _rows = [];
-      _loadError = e.message || 'Failed to load Inward entries';
+      err = e.message || 'Failed to load Inward entries';
     }
+    if (gen !== _loadGen) return; // superseded — a newer load (or another book) owns the table now
+    _rows = rows;
+    _loadError = err;
     _loaded = true;
     _renderTable();
   }
@@ -499,6 +534,7 @@ window.Pages['inward'] = (() => {
       // Alu & SS's list instead of its Log Inward form.
       _category = _renderOpts.category;
       _view = 'create';
+      _loadGen++; // drop any response still in flight for the previous book
       _rows = []; _loaded = false; _loadError = '';
       _fItem = ''; _fFrom = ''; _fTo = '';
     }
@@ -535,7 +571,7 @@ window.Pages['inward'] = (() => {
     document.getElementById('inw-new-item').addEventListener('click', _openNewItemModal);
     _bindAllItemRows();
     document.getElementById('inw-form').addEventListener('submit', _submit);
-    if (!_mastersLoaded) _loadMasters();
+    _loadMasters(); // fills the freshly-built selects; only fetches on the first call
   }
 
   return {
