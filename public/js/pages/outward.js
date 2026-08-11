@@ -43,6 +43,15 @@ window.Pages['outward'] = (() => {
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
+  // "Issued To (Department)" is a Stores-side concept — which internal
+  // department consumed the stock. Trading is Hindalco job-work moving against
+  // a party, not an internal department, so the field is dropped from the form
+  // AND the list for that book only (mirror image of how Source is
+  // Trading-only). Every other book keeps behaving exactly as before.
+  function _showDepartment() { return _category !== 'Trading'; }
+  // Column count of the list table, which loses one column without Issued To.
+  function _colCount() { return _showDepartment() ? 9 : 8; }
+
   // Canonical UOM list, seeded from what's actually in use across the real
   // Stores/ALU catalogs (Kg/Ltr/PCS/PKT/FOOT/c.m etc.) plus a few common
   // general-purpose units — "Other…" always covers anything not listed here
@@ -341,19 +350,19 @@ window.Pages['outward'] = (() => {
     if (!body) return;
 
     if (!_loaded) {
-      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      body.innerHTML = '<tr><td colspan="' + _colCount() + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_loadError) {
-      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_loadError) + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="' + _colCount() + '" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_loadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     const rows = _filteredRows();
     if (countEl) countEl.textContent = rows.length + ' of ' + _rows.length;
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_rows.length ? 'No entries match these filters' : 'No ' + esc(_categoryLabel) + ' Outward entries yet') + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="' + _colCount() + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_rows.length ? 'No entries match these filters' : 'No ' + esc(_categoryLabel) + ' Outward entries yet') + '</td></tr>';
       return;
     }
     body.innerHTML = rows.map(r => ''
@@ -363,7 +372,7 @@ window.Pages['outward'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.itemName) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.quantity) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.department) + '</td>'
+        + (_showDepartment() ? '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.department) + '</td>' : '')
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.source) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;color:#64748b;">' + esc(r.remarks) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
@@ -428,9 +437,9 @@ window.Pages['outward'] = (() => {
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
         + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['Date', 'Item Code', 'Description', 'Quantity', 'UOM', 'Issued To', 'Source', 'Remarks', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + ['Date', 'Item Code', 'Description', 'Quantity', 'UOM'].concat(_showDepartment() ? ['Issued To'] : []).concat(['Source', 'Remarks', 'Actions']).map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
-          + '<tbody id="outwl-body"><tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '<tbody id="outwl-body"><tr><td colspan="' + _colCount() + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
       + '</div>';
   }
@@ -465,7 +474,7 @@ window.Pages['outward'] = (() => {
     return '<form id="outw-form" style="display:flex;flex-direction:column;gap:16px;">'
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
         + _textField('outw-date', 'Date', { type: 'date', value: _today() })
-        + _fieldWrap('Issued To (Department)', '<select id="outw-department" style="' + _inputStyle + '"><option value="">Select…</option></select>')
+        + (_showDepartment() ? _fieldWrap('Issued To (Department)', '<select id="outw-department" style="' + _inputStyle + '"><option value="">Select…</option></select>') : '')
         + (_category === 'Trading' ? _sourceFieldHtml() : '')
       + '</div>'
       + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">' + esc(_categoryLabel) + ' Items</div>'
@@ -482,7 +491,8 @@ window.Pages['outward'] = (() => {
   async function _submit(e) {
     e.preventDefault();
     const date = document.getElementById('outw-date').value;
-    const department = document.getElementById('outw-department').value;
+    const deptSel = document.getElementById('outw-department');
+    const department = deptSel ? deptSel.value : ''; // absent on the Trading book
     const remarks = document.getElementById('outw-remarks').value.trim();
     const sourceSel = document.getElementById('outw-source');
     const source = (_category === 'Trading' && sourceSel) ? sourceSel.value : '';

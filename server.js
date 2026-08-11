@@ -889,7 +889,12 @@ app.post('/api/auth/login', async (req, res) => {
       department: user.department || '',
       roles,
     };
-    return res.json({ user: { ...req.session.user, picture: user.picture || null, featureFlags: { fms: FMS_ENABLED } } });
+    // Include permissions here too, not just in /api/auth/session: login.js sets
+    // window.currentUser straight from this response and renders the sidebar off
+    // it, so without permissions a restricted user sees the FULL menu until a
+    // hard reload (which re-bootstraps via /api/auth/session). parsePermissions
+    // handles the raw JSON-string (DB) / object (store) / null cases alike.
+    return res.json({ user: { ...req.session.user, picture: user.picture || null, permissions: parsePermissions(user.permissions), featureFlags: { fms: FMS_ENABLED } } });
   } catch (err) {
     console.error('[auth/login]', err.message);
     return res.status(500).json({ error: err.message });
