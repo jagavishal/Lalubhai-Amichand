@@ -38,38 +38,53 @@ window.Sidebar = {
     imsalu:       '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 12.09-9.17 4.16a2 2 0 0 1-1.66 0L2 12.09"/><path d="m22 16.92-9.17 4.17a2 2 0 0 1-1.66 0L2 16.92"/></svg>',
     imsaccess:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M19.1 4.9l-2.2 2.2M7.1 16.9l-2.2 2.2"/></svg>',
     imstrading:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h13l-3-3"/><path d="M21 16H8l3 3"/></svg>',
+    developer:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
   },
 
-  // Nav sections — matches SECTIONS in Sidebar.jsx
+  // Nav sections — the whole ERP grouped into the company's own five
+  // categories: Basic (everyone's day-to-day), the two operating departments
+  // (Export / Trading), Admin Section and Accounts. A section whose items are
+  // all hidden by permissions renders nothing at all (see _buildHTML), so a
+  // user only ever sees the departments they actually work in.
   // route = hash fragment used by Router (href without leading slash)
   _sections: [
-    { title: 'Workspace', items: [
+    { title: 'Basic', items: [
       { route: 'dashboard',     label: 'Dashboard',      icon: 'dashboard',     alwaysShow: true },
       { route: 'all-tasks',     label: 'All Tasks',      icon: 'tasks' },
       { route: 'approvals',     label: 'Approvals',      icon: 'approve',       badge: true },
+      { route: 'daily-task',    label: 'Daily Task',     icon: 'dailytask' },
+      { route: 'leave-tracker', label: 'Leave Tracker',  icon: 'leave' },
+      { route: 'meetings',      label: 'Meetings',       icon: 'meetings' },
       { route: 'announcements', label: 'Announcements',  icon: 'announcements' },
       { route: 'help-ticket',   label: 'Help Ticket',    icon: 'helpticket' },
-      { route: 'leave-tracker', label: 'Leave Tracker', icon: 'leave' },
+      { route: 'profile',       label: 'Profile',        icon: 'profile' },
     ]},
-    { title: 'Operations', items: [
-      { route: 'fms',            label: 'FMS',            icon: 'fms',           flag: 'fms' },
-      { route: 'mis',            label: 'MIS Report',     icon: 'mis' },
-      { route: 'client-master',  label: 'Vendor Master',  icon: 'clientmaster' },
+    { title: 'Export Department', items: [
+      { route: 'proforma-invoice', label: 'Proforma Invoice', icon: 'picreation' },
       { route: 'pr-creation',    label: 'PR Creation',    icon: 'prcreation' },
       { route: 'po-creation',    label: 'PO Creation',    icon: 'pocreation' },
       { route: 'grn-creation',   label: 'GRN Creation',   icon: 'grncreation' },
-      { route: 'proforma-invoice', label: 'Proforma Invoice', icon: 'picreation' },
       // One entry per IMS stock book -- each route is its own page with its
       // own Inward/Outward/Report tabs, hard-scoped to that book's category
-      // (see IMS_BOOKS in ims.js; routes must match it exactly).
+      // (see IMS_BOOKS in ims.js; routes must match it exactly). The first
+      // three books are the export unit's own stock; the Trading book belongs
+      // to the Trading department below.
       { route: 'ims-stores',      label: 'IMS Stores',      icon: 'ims' },
       { route: 'ims-alu',         label: 'IMS Alu & SS',    icon: 'imsalu' },
       { route: 'ims-accessories', label: 'IMS Accessories', icon: 'imsaccess' },
+    ]},
+    { title: 'Trading Department', items: [
       { route: 'ims-trading',     label: 'IMS Trading',     icon: 'imstrading' },
     ]},
-    { title: 'Administration', items: [
+    { title: 'Admin Section', items: [
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
-      { route: 'profile',       label: 'Profile',      icon: 'profile' },
+      { route: 'fms',           label: 'FMS',          icon: 'fms',          flag: 'fms' },
+      { route: 'mis',           label: 'MIS Report',   icon: 'mis' },
+      { route: 'race-tracker',  label: 'Race Tracker', icon: 'race' },
+      { route: 'developer',     label: 'Developer',    icon: 'developer',    adminOnly: true },
+    ]},
+    { title: 'Accounts', items: [
+      { route: 'client-master',  label: 'Vendor Master',  icon: 'clientmaster' },
     ]},
   ],
 

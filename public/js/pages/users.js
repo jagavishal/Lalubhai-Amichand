@@ -38,32 +38,41 @@ window.Pages.users = (() => {
   let _permSaving     = false;
   let _searchAccess   = '';
 
+  // Listed in the same five categories, and the same order, as the sidebar's
+  // _sections (js/components/sidebar.js) — so what an admin ticks here reads
+  // exactly like the menu the user will end up seeing. `cat` only drives the
+  // group headings below; the saved permission is still just the page key.
+  // Dashboard is never listed (everyone gets it), and Users/Developer aren't
+  // either — those are Admin/HOD-only, not per-user grants.
   const ALL_PAGES = [
-    { key: 'all-tasks',     label: 'All Tasks' },
-    { key: 'approvals',     label: 'Approvals' },
-    { key: 'daily-task',    label: 'Daily Task' },
-    { key: 'mis',           label: 'MIS Report' },
-    { key: 'fms',           label: 'FMS Master' },
-    { key: 'client-master', label: 'Vendor Master' },
-    { key: 'pr-creation',   label: 'PR Creation' },
-    { key: 'po-creation',   label: 'PO Creation' },
-    { key: 'grn-creation',  label: 'GRN Creation' },
-    { key: 'proforma-invoice', label: 'Proforma Invoice' },
+    { cat: 'Basic', key: 'all-tasks',     label: 'All Tasks' },
+    { cat: 'Basic', key: 'approvals',     label: 'Approvals' },
+    { cat: 'Basic', key: 'daily-task',    label: 'Daily Task' },
+    { cat: 'Basic', key: 'leave-tracker', label: 'Leave Tracker' },
+    { cat: 'Basic', key: 'meetings',      label: 'Meetings' },
+    { cat: 'Basic', key: 'announcements', label: 'Announcements' },
+    { cat: 'Basic', key: 'help-ticket',   label: 'Help Ticket' },
+    { cat: 'Basic', key: 'profile',       label: 'Profile' },
+
+    { cat: 'Export Department', key: 'proforma-invoice', label: 'Proforma Invoice' },
+    { cat: 'Export Department', key: 'pr-creation',   label: 'PR Creation' },
+    { cat: 'Export Department', key: 'po-creation',   label: 'PO Creation' },
+    { cat: 'Export Department', key: 'grn-creation',  label: 'GRN Creation' },
     // One key per IMS stock book; each covers that book's Inward/Outward/
     // Report tabs. The retired 'ims' key (and the older 'inward'/'outward'
     // ones) still grant access to all four — see sidebar.js's routeAliases —
     // so existing users keep working until they're re-permissioned here.
-    { key: 'ims-stores',      label: 'IMS Stores' },
-    { key: 'ims-alu',         label: 'IMS Alu & SS' },
-    { key: 'ims-accessories', label: 'IMS Accessories' },
-    { key: 'ims-trading',     label: 'IMS Trading' },
+    { cat: 'Export Department', key: 'ims-stores',      label: 'IMS Stores' },
+    { cat: 'Export Department', key: 'ims-alu',         label: 'IMS Alu & SS' },
+    { cat: 'Export Department', key: 'ims-accessories', label: 'IMS Accessories' },
 
-    { key: 'meetings',      label: 'Meetings' },
-    { key: 'leave-tracker', label: 'Leave Tracker' },
-    { key: 'race-tracker',  label: 'Race Tracker' },
-    { key: 'announcements', label: 'Announcements' },
-    { key: 'help-ticket',   label: 'Help Ticket' },
-    { key: 'profile',       label: 'Profile' },
+    { cat: 'Trading Department', key: 'ims-trading',    label: 'IMS Trading' },
+
+    { cat: 'Admin Section', key: 'fms',          label: 'FMS Master' },
+    { cat: 'Admin Section', key: 'mis',          label: 'MIS Report' },
+    { cat: 'Admin Section', key: 'race-tracker', label: 'Race Tracker' },
+
+    { cat: 'Accounts', key: 'client-master',     label: 'Vendor Master' },
   ];
 
   const ALL_FEATURES = {
@@ -629,8 +638,26 @@ window.Pages.users = (() => {
       </div>`;
   }
 
+  /* ── Access grid: category grouping ───────────────────────────────────
+     The grid has one column per page, so the five categories are shown as a
+     band across the top plus a heavier left edge on each group's first
+     column, carried down into the body rows so the groups stay separable
+     when the header has scrolled. ─────────────────────────────────────── */
+  const _catEdge = 'border-left:2px solid #cbd5e1;';
+  function _isCatStart(p) {
+    const i = ALL_PAGES.indexOf(p);
+    return i === 0 || ALL_PAGES[i - 1].cat !== p.cat;
+  }
+
   function renderPermInline() {
+    let lastCat = null;
     const pagesHtml = ALL_PAGES.map(p => {
+      // ALL_PAGES is kept grouped by `cat`, so a heading is emitted the first
+      // time each category comes round.
+      const catHtml = p.cat && p.cat !== lastCat
+        ? `<div style="padding:${lastCat ? '12px' : '2px'} 0 4px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8;">${esc(p.cat)}</div>`
+        : '';
+      lastCat = p.cat || lastCat;
       const checked = _permData.pages.includes(p.key);
       const feats   = ALL_FEATURES[p.key] || [];
       const featHtml = feats.map(f => {
@@ -640,7 +667,7 @@ window.Pages.users = (() => {
           ${esc(f.label)}
         </label>`;
       }).join('');
-      return `<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9;">
+      return `${catHtml}<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9;">
         <label style="display:flex;align-items:center;gap:6px;min-width:130px;cursor:pointer;font-size:13px;font-weight:600;color:#1e293b;">
           <input type="checkbox" class="pi-page" data-page="${esc(p.key)}" ${checked ? 'checked' : ''} style="width:14px;height:14px;accent-color:#0150AA;" />
           ${esc(p.label)}
@@ -709,12 +736,13 @@ window.Pages.users = (() => {
 
       const pageCells = ALL_PAGES.map(p => {
         const checked = userHasPage(u, p.key);
+        const tdStyle = `padding:10px 12px;border-bottom:1px solid #f1f5f9;text-align:center;${_isCatStart(p) ? _catEdge : ''}`;
         if (isHod) {
-          return `<td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;text-align:center;">
+          return `<td style="${tdStyle}">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </td>`;
         }
-        return `<td style="padding:10px 12px;border-bottom:1px solid #f1f5f9;text-align:center;">
+        return `<td style="${tdStyle}">
           <input type="checkbox" class="acc-chk" data-uid="${esc(u.id)}" data-page="${esc(p.key)}" ${checked ? 'checked' : ''}
             style="width:16px;height:16px;accent-color:#0150AA;cursor:pointer;" />
         </td>`;
@@ -723,7 +751,20 @@ window.Pages.users = (() => {
       return `<tr style="transition:background .1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">${nameTd}${pageCells}</tr>`;
     }).join('');
 
-    const colHeaders = ALL_PAGES.map(p => `<th style="${thStyle}">${p.label}</th>`).join('');
+    const colHeaders = ALL_PAGES.map(p => `<th style="${thStyle}${_isCatStart(p) ? _catEdge : ''}">${p.label}</th>`).join('');
+
+    // Category band above the page columns. Deliberately NOT sticky — the page
+    // header row below it is, and two sticky rows at top:0 would overlap; this
+    // one just scrolls under it, while the group edges on the columns keep the
+    // grouping readable however far the table is scrolled.
+    const catHeaders = ALL_PAGES.reduce((acc, p) => {
+      const last = acc[acc.length - 1];
+      if (last && last.cat === p.cat) last.span++;
+      else acc.push({ cat: p.cat || '', span: 1 });
+      return acc;
+    }, []).map(g =>
+      `<th colspan="${g.span}" style="padding:6px 12px;font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;text-align:center;white-space:nowrap;background:#f1f5f9;${_catEdge}">${esc(g.cat)}</th>`
+    ).join('');
 
     return `
       <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
@@ -738,6 +779,10 @@ window.Pages.users = (() => {
         <div style="overflow:auto;max-height:65vh;">
           <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
             <thead>
+              <tr style="background:#f1f5f9;">
+                <th style="padding:6px 16px;background:#f1f5f9;position:sticky;left:0;z-index:2;"></th>
+                ${catHeaders}
+              </tr>
               <tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0;">
                 <th style="${thFirst}">User</th>
                 ${colHeaders}
