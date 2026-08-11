@@ -39,6 +39,41 @@ window.Sidebar = {
     imsaccess:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M19.1 4.9l-2.2 2.2M7.1 16.9l-2.2 2.2"/></svg>',
     imstrading:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h13l-3-3"/><path d="M21 16H8l3 3"/></svg>',
     developer:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+    // Section open/close arrow — drawn pointing right and rotated 90° when the
+    // section is open, so one icon covers both states.
+    chevron:      '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
+  },
+
+  /* ── Section open/closed state ─────────────────────────────────────────
+     Each category can be folded away by its arrow, so only the section being
+     worked in has to be on screen. The choice is remembered per browser; on a
+     first visit only the section holding the current page is open. ─────── */
+  _SECTIONS_KEY: 'sb-open-sections',
+  _openSections: null,
+
+  _loadOpenSections(activeRoute) {
+    try {
+      const raw = localStorage.getItem(this._SECTIONS_KEY);
+      const arr = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(arr)) return new Set(arr);
+    } catch {}
+    const sec = this._sections.find(s => s.items.some(i => i.route === activeRoute));
+    return new Set([(sec || this._sections[0]).title]);
+  },
+
+  toggleSection(title) {
+    if (!this._openSections) this._openSections = new Set();
+    const open = !this._openSections.has(title);
+    if (open) this._openSections.add(title);
+    else      this._openSections.delete(title);
+    try { localStorage.setItem(this._SECTIONS_KEY, JSON.stringify([...this._openSections])); } catch {}
+
+    const items = document.querySelector(`#sidebar [data-section-items="${title}"]`);
+    const arrow = document.querySelector(`#sidebar [data-section-arrow="${title}"]`);
+    const head  = document.querySelector(`#sidebar [data-section-head="${title}"]`);
+    if (items) items.style.display = open ? 'flex' : 'none';
+    if (arrow) arrow.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)';
+    if (head)  head.setAttribute('aria-expanded', open ? 'true' : 'false');
   },
 
   // Nav sections — the whole ERP grouped into the company's own five
@@ -167,17 +202,37 @@ window.Sidebar = {
     const permissions = isAdmin ? null : (user?.permissions || null);
     const featureFlags = user?.featureFlags || {};
 
+    if (!this._openSections) this._openSections = this._loadOpenSections(activeRoute);
+
     const sectionsHTML = this._sections.map(sec => {
       const itemsHTML = sec.items
         .map(item => this._buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions, featureFlags))
         .join('');
       if (!itemsHTML.trim()) return '';
+      const open = this._openSections.has(sec.title);
       return `
         <div style="margin-bottom:6px;">
-          <div class="sb-label" style="padding:10px 14px 3px;opacity:0;transition:opacity .22s;">
+          <button
+            class="sb-label"
+            data-section-head="${sec.title}"
+            aria-expanded="${open ? 'true' : 'false'}"
+            onclick="window.Sidebar.toggleSection('${sec.title}')"
+            title="${sec.title}"
+            style="
+              display:flex;align-items:center;justify-content:space-between;gap:6px;
+              width:100%;padding:10px 12px 3px;
+              background:transparent;border:none;cursor:pointer;font-family:inherit;
+              opacity:0;transition:opacity .22s;
+            "
+          >
             <span style="font-size:9.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--sidebar-section-label);">${sec.title}</span>
-          </div>
-          <div style="padding:0 6px;display:flex;flex-direction:column;gap:2px;">
+            <span data-section-arrow="${sec.title}"
+                  style="display:flex;flex-shrink:0;color:var(--sidebar-section-label);transform:rotate(${open ? 90 : 0}deg);transition:transform .18s;">
+              ${this._icons.chevron}
+            </span>
+          </button>
+          <div data-section-items="${sec.title}"
+               style="padding:0 6px;display:${open ? 'flex' : 'none'};flex-direction:column;gap:2px;">
             ${itemsHTML}
           </div>
         </div>`;
