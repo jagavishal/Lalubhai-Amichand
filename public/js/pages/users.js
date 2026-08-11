@@ -396,6 +396,17 @@ window.Pages.users = (() => {
   }
 
   /* ── render: main page ──────────────────────────────────────────────── */
+  // Search boxes call renderPage() on every keystroke, which rebuilds the whole
+  // #main-content (input included), so the freshly-typed-into field is destroyed
+  // and focus is lost — the user had to re-click after each letter. Re-focus the
+  // new input and restore the caret right after the rebuild.
+  function _restoreFocus(id, caret) {
+    const inp = document.getElementById(id);
+    if (!inp) return;
+    inp.focus();
+    if (caret != null) { try { inp.setSelectionRange(caret, caret); } catch {} }
+  }
+
   function renderPage() {
     const el = document.getElementById('main-content');
     if (!el) return;
@@ -429,7 +440,7 @@ window.Pages.users = (() => {
     });
 
     if (_tab === 'Users') {
-      document.getElementById('users-search')?.addEventListener('input', e => { _search = e.target.value; renderPage(); });
+      document.getElementById('users-search')?.addEventListener('input', e => { const c = e.target.selectionStart; _search = e.target.value; renderPage(); _restoreFocus('users-search', c); });
 
       document.getElementById('users-add-btn')?.addEventListener('click', () => {
         _editingUser = null; _form = blankForm(); _picture = null; _pictureChanged = false; _bulkFile = null; _bulkMsg = ''; _modalOpen = true;
@@ -495,7 +506,7 @@ window.Pages.users = (() => {
       /* search */
       const accSearch = el.querySelector('#acc-search');
       if (accSearch) {
-        accSearch.addEventListener('input', e => { _searchAccess = e.target.value; renderPage(); });
+        accSearch.addEventListener('input', e => { const c = e.target.selectionStart; _searchAccess = e.target.value; renderPage(); _restoreFocus('acc-search', c); });
       }
 
       /* grid checkboxes — auto-save on change */
