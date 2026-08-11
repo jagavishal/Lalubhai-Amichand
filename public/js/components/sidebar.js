@@ -39,39 +39,6 @@ window.Sidebar = {
     imsaccess:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M19.1 4.9l-2.2 2.2M7.1 16.9l-2.2 2.2"/></svg>',
     imstrading:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h13l-3-3"/><path d="M21 16H8l3 3"/></svg>',
     developer:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
-    // Expand/collapse toggle — chevrons point the way the rail will move.
-    expand:       '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/></svg>',
-    collapse:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/></svg>',
-  },
-
-  // Rail is icon-only and widens on hover. Clicking the toggle below pins it
-  // open — the choice is remembered across page loads (and across logins on
-  // this browser), which is what someone who works with the menu open expects.
-  _PIN_KEY: 'sb-pinned',
-  _pinned: false,
-
-  _readPinned() {
-    try { return localStorage.getItem(this._PIN_KEY) === '1'; } catch { return false; }
-  },
-
-  // Pinning is width + label opacity only; every rule that does it is in the
-  // injected <style> under .sb-pinned, because render() writes width into the
-  // element's inline style and only !important on a class rule can beat that.
-  togglePin() {
-    const el = document.getElementById('sidebar');
-    if (!el) return;
-    this._pinned = !this._pinned;
-    try { localStorage.setItem(this._PIN_KEY, this._pinned ? '1' : '0'); } catch {}
-    el.classList.toggle('sb-pinned', this._pinned);
-
-    const btn = document.getElementById('sb-toggle');
-    if (btn) {
-      btn.title = this._pinned ? 'Collapse menu' : 'Expand menu';
-      const icon  = btn.querySelector('.sb-toggle-icon');
-      const label = btn.querySelector('.sb-label');
-      if (icon)  icon.innerHTML  = this._pinned ? this._icons.collapse : this._icons.expand;
-      if (label) label.textContent = this._pinned ? 'Collapse menu' : 'Expand menu';
-    }
   },
 
   // Nav sections — the whole ERP grouped into the company's own five
@@ -233,21 +200,6 @@ window.Sidebar = {
         #sidebar:hover .sb-brand-name { opacity: 1 !important; }
         #sidebar:hover .sb-user-info  { opacity: 1 !important; }
         #sidebar:hover .sb-signout    { opacity: 1 !important; }
-
-        /* Pinned open — same end state as hover, but it stays after the
-           pointer leaves. width needs !important to beat render()'s inline
-           style; the #shell-body push deliberately does NOT, so the mobile
-           rules (where the rail is display:none) keep winning. */
-        #sidebar.sb-pinned { width: var(--sidebar-w-expanded, 228px) !important; }
-        #sidebar.sb-pinned ~ #shell-body {
-          margin-left: var(--sidebar-w-expanded, 228px);
-          width: calc(100vw - var(--sidebar-w-expanded, 228px));
-        }
-        #sidebar.sb-pinned .sb-label      { opacity: 1 !important; }
-        #sidebar.sb-pinned .sb-brand-name { opacity: 1 !important; }
-        #sidebar.sb-pinned .sb-user-info  { opacity: 1 !important; }
-        #sidebar.sb-pinned .sb-signout    { opacity: 1 !important; }
-
         #sidebar nav::-webkit-scrollbar { width: 0; }
       </style>
 
@@ -268,34 +220,6 @@ window.Sidebar = {
       <nav style="flex:1;overflow-y:auto;overflow-x:hidden;padding:6px 0;">
         ${sectionsHTML}
       </nav>
-
-      <!-- Expand / collapse toggle. Styled like a nav row so it reads as part
-           of the rail and stays clickable at the 52px collapsed width, where
-           only its icon shows. -->
-      <div style="padding:2px 6px 6px;flex-shrink:0;">
-        <button
-          id="sb-toggle"
-          onclick="window.Sidebar.togglePin()"
-          title="${this._pinned ? 'Collapse menu' : 'Expand menu'}"
-          style="
-            display:flex;align-items:center;gap:10px;
-            width:100%;height:34px;padding:0 8px;
-            border:none;border-radius:7px;background:transparent;
-            font-size:12.5px;font-weight:500;font-family:inherit;
-            color:var(--sidebar-text-muted);text-align:left;cursor:pointer;
-            transition:background 0.14s,color 0.14s;
-          "
-          onmouseenter="this.style.background='rgba(255,255,255,0.06)';this.style.color='var(--sidebar-text)';"
-          onmouseleave="this.style.background='transparent';this.style.color='var(--sidebar-text-muted)';"
-        >
-          <span class="sb-toggle-icon" style="display:flex;flex-shrink:0;color:var(--sidebar-icon-muted);">
-            ${this._pinned ? this._icons.collapse : this._icons.expand}
-          </span>
-          <span class="sb-label" style="opacity:0;transition:opacity 0.22s;white-space:nowrap;overflow:hidden;">
-            ${this._pinned ? 'Collapse menu' : 'Expand menu'}
-          </span>
-        </button>
-      </div>
 
       <!-- User card -->
       <div style="padding:6px 6px 10px;border-top:1px solid var(--sidebar-border);flex-shrink:0;">
@@ -406,11 +330,6 @@ window.Sidebar = {
       z-index:40;overflow:hidden;
       transition:width 0.22s cubic-bezier(0.4,0,0.2,1);
     `;
-
-    // Restore the pinned-open choice before building, so the toggle renders
-    // with the right icon/label and the rail doesn't visibly snap open after.
-    this._pinned = this._readPinned();
-    el.classList.toggle('sb-pinned', this._pinned);
 
     const isAdmin = this._isAdmin(user);
     let pendingCount = 0;
