@@ -1,5 +1,11 @@
 'use strict';
 /**
+ * SUPERSEDED — kept only as the record of how the PI spreadsheet + Drive
+ * folder were first created. The domestic INR/GST/HSN template it paints in
+ * step 4 is NOT the format in use: the PI is an export document now, and
+ * scripts/rebuild-pi-sheet.js repaints that same tab from
+ * backend/lib/pi-format.js. Do not re-run this against the live sheet.
+ *
  * One-time script to create the live "Proforma Invoice" spreadsheet (a brand
  * new sheet, dedicated to the PI feature) plus its Drive PDF folder, both
  * inside the same Shared Drive the PO/PR/GRN PDFs already live in

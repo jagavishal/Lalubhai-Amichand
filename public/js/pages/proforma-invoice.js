@@ -2,12 +2,17 @@ window.Pages = window.Pages || {};
 
 // ── Proforma Invoice (PI) Creation ────────────────────────────────────────────
 // Fills a brand-new, dedicated live Google Sheet ("ERP - Proforma Invoice" —
-// see PI_CREATION_SHEET_ID in server.js / scripts/create-pi-sheet.js). Unlike
+// see PI_CREATION_SHEET_ID in server.js / scripts/rebuild-pi-sheet.js). Unlike
 // PO/PR/GRN Creation (create-then-Cancel-only), a PI is a genuine two-stage
-// record: any User creates it (buyer + items + qty — no price at all), then
-// whoever is granted the 'set_price' feature for this page (Admin/HOD always,
-// or a specific User granted it from Users → Access tab) opens that same PI
-// and fills in Rate/GST/Freight, which finalizes it in place.
+// record: any User creates it (consignee + shipping + items — no price at all),
+// then whoever is granted the 'set_price' feature for this page (Admin/HOD
+// always, or a specific User granted it from Users → Access tab) opens that
+// same PI and fills in the C&F US$ rate per piece, which finalizes it in place.
+//
+// This is the company's EXPORT PI / OCS document — priced in C&F US$, with
+// consignee/port/container details and CBM + weight per line. There is no
+// GST/HSN/INR anywhere: those belong to a domestic invoice, which this app
+// does not raise. The printed layout lives in backend/lib/pi-format.js.
 window.Pages['proforma-invoice'] = (() => {
   /* ── permission helper — same hasFeature() shape as all-tasks.js /
      client-master.js, scoped to this page's one feature key ───────────── */
@@ -29,6 +34,8 @@ window.Pages['proforma-invoice'] = (() => {
   let _mastersLoaded = false;
   let _nextPiNumber = null;
   let _recentBuyers = [];
+  let _defaults = null;     // boilerplate from backend/lib/pi-format.js
+  let _maxItems = 30;
 
   // PI List (in-page tab) state — read-only history from the ERP PI Log tab.
   let _pilRows = [];
@@ -45,7 +52,7 @@ window.Pages['proforma-invoice'] = (() => {
   function _today() { return new Date().toISOString().slice(0, 10); }
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
-  function _fmtMoney(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function _fmtUsd(n) { return (n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
   /* ── field helpers (styled like PO/GRN Creation, for a consistent look) ── */
   function _fieldWrap(label, innerHtml, extra) {
@@ -62,27 +69,48 @@ window.Pages['proforma-invoice'] = (() => {
   function _readonlyField(id, label, value) {
     return _fieldWrap(label, '<div id="' + id + '" style="padding:8px 10px;border:1.5px dashed #e2e8f0;border-radius:8px;font-size:13px;color:#64748b;background:#f8fafc;">' + esc(value) + '</div>');
   }
+  function _textareaField(id, label, value, rows) {
+    return _fieldWrap(label, '<textarea id="' + id + '" rows="' + (rows || 8) + '" style="' + _inputStyle + 'resize:vertical;line-height:1.5;font-family:inherit;">' + esc(value) + '</textarea>');
+  }
+  function _sectionTitle(text) {
+    return '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:8px 2px -4px;">' + esc(text) + '</div>';
+  }
 
-  /* ── Masters (next PI number / recent buyers) ──────────────────────── */
-  async function _loadMasters() {
+  /* ── Masters (next PI number / recent buyers / boilerplate defaults) ──
+     The PI number is scoped to the PI date's financial year ("VTV/052/25-26"),
+     so it is re-fetched whenever the date changes — the server assigns the
+     real one at submit time regardless, this is only the preview. */
+  async function _loadMasters(date) {
     try {
-      const data = await Utils.apiFetch('/api/proforma-invoice/masters');
+      const data = await Utils.apiFetch('/api/proforma-invoice/masters?date=' + encodeURIComponent(date || _today()));
       if (!data) return;
       _nextPiNumber = data.nextPiNumber;
       _recentBuyers = data.recentBuyers || [];
+      if (data.defaults) _defaults = data.defaults;
+      if (data.maxItems) _maxItems = data.maxItems;
       _mastersLoaded = true;
       const el = document.getElementById('pic-next-no');
       if (el) el.textContent = _nextPiNumber || 'Loading…';
+      const terms = document.getElementById('pic-terms');
+      if (terms && !terms.value && _defaults) terms.value = (_defaults.terms || []).join('\n');
+      const load = document.getElementById('pic-port-loading');
+      if (load && !load.value && _defaults) load.value = _defaults.portOfLoading || '';
+      const origin = document.getElementById('pic-origin');
+      if (origin && !origin.value && _defaults) origin.value = _defaults.countryOfOrigin || '';
+      const validity = document.getElementById('pic-validity');
+      if (validity && !validity.value && _defaults) validity.value = _defaults.validity || '';
+      const shipment = document.getElementById('pic-shipment-note');
+      if (shipment && !shipment.value && _defaults) shipment.value = _defaults.shipmentNote || '';
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load Proforma Invoice masters', 'error');
     }
   }
 
-  /* ── Buyer — free-text input + suggestion dropdown of recent buyers (no
+  /* ── Consignee — free-text input + suggestion dropdown of recent buyers (no
      dedicated Buyer/Customer master exists in this app yet) ─────────────── */
   function _buyerField() {
-    return _fieldWrap('Buyer Name', ''
-      + '<input type="text" id="pic-buyer" autocomplete="off" placeholder="Type buyer / company name…" style="' + _inputStyle + '" />'
+    return _fieldWrap('Consignee Name', ''
+      + '<input type="text" id="pic-buyer" autocomplete="off" placeholder="M/s. …" style="' + _inputStyle + '" />'
       + '<div id="pic-buyer-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>');
   }
 
@@ -110,13 +138,14 @@ window.Pages['proforma-invoice'] = (() => {
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
   }
 
-  /* ── Item-code typeahead per row — same fixed-position dropdown pattern
-     used by PO/GRN Creation, backed by the same ITEM_CODES catalog ─────── */
+  /* ── Model-No typeahead per row — same fixed-position dropdown pattern
+     used by PO/GRN Creation, backed by the same ITEM_CODES catalog. The
+     catalog's code becomes Model No. and its description the Item Name. ─── */
   let _itemSearchTimer = null;
   function _bindItemCodeInput(input) {
     const row = input.closest('.pic-item-row');
     const dd = row.querySelector('.pic-item-dd');
-    const descInput = row.querySelector('[data-field="description"]');
+    const nameInput = row.querySelector('[data-field="itemName"]');
     const runSearch = () => {
       clearTimeout(_itemSearchTimer);
       _itemSearchTimer = setTimeout(async () => {
@@ -129,7 +158,7 @@ window.Pages['proforma-invoice'] = (() => {
           dd.innerHTML = matches.map(m => '<div class="pic-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.code) + '" data-desc="' + esc(m.description) + '">'
             + '<b>' + esc(m.code) + '</b> — ' + esc(m.description) + '</div>').join('');
           const rect = input.getBoundingClientRect();
-          dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 260) + 'px';
+          dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 300) + 'px';
           dd.style.display = 'block';
         } catch {}
       }, 220);
@@ -140,7 +169,7 @@ window.Pages['proforma-invoice'] = (() => {
       const opt = e.target.closest('.pic-item-opt');
       if (!opt) return;
       input.value = opt.dataset.code;
-      if (descInput && !descInput.value) descInput.value = opt.dataset.desc || '';
+      if (nameInput && !nameInput.value) nameInput.value = opt.dataset.desc || '';
       dd.style.display = 'none';
     });
     window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
@@ -148,36 +177,50 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   /* ── Item rows (Create form) — deliberately NO Rate/Amount column here:
-     pricing is a separate, permission-gated step done later ────────────── */
+     pricing is a separate, permission-gated step done later. The columns
+     mirror the printed PI exactly, minus the two priced ones. ──────────── */
+  const _ITEM_COLS = [
+    { field: 'modelNo', label: 'Model No.', width: 130, typeahead: true },
+    { field: 'itemName', label: 'Item Name', width: 190 },
+    { field: 'size', label: 'Size', width: 70 },
+    { field: 'swg', label: 'SWG', width: 65 },
+    { field: 'packing', label: 'Per Box Dozen Packing', width: 90 },
+    { field: 'qty', label: 'Total Qty (Pcs/Set)', width: 95, numeric: true },
+    { field: 'boxes', label: 'Total Box', width: 80, numeric: true },
+    { field: 'cbm', label: 'Total CBM', width: 85, numeric: true },
+    { field: 'weight', label: 'Total Weight (Kgs)', width: 95, numeric: true },
+    { field: 'remarks', label: 'Remarks', width: 120 },
+  ];
+  const _cellInput = 'width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;';
+
   function _itemRowHtml() {
     return '<tr class="pic-item-row" style="border-bottom:1px solid #f1f5f9;">'
-      + '<td style="padding:6px;min-width:140px;position:relative;">'
-        + '<input type="text" class="pic-item-code" data-field="itemCode" autocomplete="off" placeholder="Item code…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
-        + '<div class="pic-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
-      + '</td>'
-      + '<td style="padding:6px;min-width:180px;"><input type="text" data-field="description" placeholder="Description" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
-      + '<td style="padding:6px;min-width:100px;"><input type="text" data-field="hsnCode" placeholder="HSN" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
-      + '<td style="padding:6px;min-width:80px;"><input type="text" inputmode="decimal" data-field="qty" placeholder="Qty" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
-      + '<td style="padding:6px;min-width:80px;"><input type="text" data-field="uom" placeholder="UOM" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + _ITEM_COLS.map(c => '<td style="padding:6px;min-width:' + c.width + 'px;' + (c.typeahead ? 'position:relative;' : '') + '">'
+          + '<input type="text" ' + (c.typeahead ? 'class="pic-item-code" autocomplete="off" ' : '') + (c.numeric ? 'inputmode="decimal" ' : '')
+            + 'data-field="' + c.field + '" placeholder="' + esc(c.label) + '" style="' + _cellInput + (c.numeric ? 'text-align:right;' : '') + '" />'
+          + (c.typeahead ? '<div class="pic-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>' : '')
+        + '</td>').join('')
       + '<td style="padding:6px;text-align:center;"><button type="button" class="pic-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
     + '</tr>';
   }
 
   function _itemsTableHtml() {
+    const minWidth = _ITEM_COLS.reduce((sum, c) => sum + c.width, 0) + 60;
     return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:720px;">'
+      + '<table style="width:100%;border-collapse:collapse;min-width:' + minWidth + 'px;">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-          + ['Item Code', 'Description', 'HSN Code', 'Qty', 'UOM'].map(h => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+          + _ITEM_COLS.map(c => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(c.label) + '</th>').join('')
           + '<th></th>'
         + '</tr></thead>'
         + '<tbody id="pic-items-tbody">' + _itemRowHtml() + '</tbody>'
       + '</table>'
     + '</div>'
-    + '<p style="font-size:11.5px;color:#94a3b8;margin:8px 2px 0;">Price is added later by an authorized user — this form only captures buyer &amp; item details.</p>';
+    + '<p style="font-size:11.5px;color:#94a3b8;margin:8px 2px 0;">C&amp;F US$ rate is added later by an authorized user — this form only captures consignee, shipping &amp; item details.</p>';
   }
 
   function _bindItemRow(rowEl) {
-    _bindItemCodeInput(rowEl.querySelector('.pic-item-code'));
+    const codeInput = rowEl.querySelector('.pic-item-code');
+    if (codeInput) _bindItemCodeInput(codeInput);
     const removeBtn = rowEl.querySelector('.pic-item-remove');
     removeBtn.addEventListener('click', () => {
       const tbody = document.getElementById('pic-items-tbody');
@@ -190,17 +233,49 @@ window.Pages['proforma-invoice'] = (() => {
     document.querySelectorAll('#pic-items-tbody .pic-item-row').forEach(_bindItemRow);
   }
 
-  /* ── Header fields (Create form) ───────────────────────────────────── */
-  function _headerFieldsHtml() {
-    return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
+  /* ── Header fields (Create form), grouped the way the printed PI reads:
+     invoice details, then consignee, then shipping. ─────────────────────── */
+  const _grid = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;';
+
+  function _invoiceFieldsHtml() {
+    return '<div style="' + _grid + '">'
       + _textField('pic-date', 'PI Date', { type: 'date', value: _today() })
-      + _readonlyField('pic-next-no', 'PI No. (auto-assigned)', _nextPiNumber || 'Loading…')
+      + _readonlyField('pic-next-no', 'Pro. Invoice No. (auto-assigned)', _nextPiNumber || 'Loading…')
+      + _textField('pic-order-no', 'Order No.', { placeholder: 'Buyer order reference' })
+      + _textField('pic-payment-terms', 'Terms of Payment', { placeholder: 'e.g. 30% ADVANCE AND BALANCE AGT. B/L COPY' })
+    + '</div>';
+  }
+
+  function _consigneeFieldsHtml() {
+    return '<div style="' + _grid + '">'
       + _buyerField()
-      + _textField('pic-buyer-address', 'Buyer Address')
-      + _textField('pic-buyer-gstin', 'Buyer GSTIN')
-      + _textField('pic-payment-terms', 'Payment Terms', { placeholder: 'e.g. 50% advance, balance before dispatch' })
-      + _textField('pic-validity', 'Validity', { placeholder: 'e.g. 30 days' })
-      + _textField('pic-made-by', 'PI Made By', { value: (window.currentUser && window.currentUser.name) || '' })
+      + _textField('pic-buyer-trn', 'TRN / Tax Reg. No.', { placeholder: 'e.g. TRN NO: 100502326000003' })
+      + _textField('pic-buyer-addr1', 'Address Line 1', { placeholder: 'P.O. Box, plot, block…' })
+      + _textField('pic-buyer-addr2', 'Address Line 2', { placeholder: 'Area, city, country' })
+      + _textField('pic-buyer-contact', 'Tel. / Email', { placeholder: 'TEL: +971 … , Email: …' })
+    + '</div>';
+  }
+
+  function _shippingFieldsHtml() {
+    return '<div style="' + _grid + '">'
+      + _textField('pic-port-loading', 'Port of Loading', { value: _defaults ? _defaults.portOfLoading : '' })
+      + _textField('pic-port-discharge', 'Port of Discharge', { placeholder: 'e.g. JEBEL ALI' })
+      + _textField('pic-place-delivery', 'Place of Delivery', { placeholder: 'e.g. JEBEL ALI' })
+      + _textField('pic-origin', 'Country of Origin of Goods', { value: _defaults ? _defaults.countryOfOrigin : '' })
+      + _textField('pic-shipment-note', 'Shipment / Container Note', { value: _defaults ? _defaults.shipmentNote : '' })
+    + '</div>';
+  }
+
+  function _footerFieldsHtml() {
+    return '<div style="' + _grid + '">'
+      + _textField('pic-validity', 'Price Validity', { value: _defaults ? _defaults.validity : '', placeholder: 'e.g. 03 WORKING DAYS' })
+      + _fieldWrap('Declaration', '<label style="display:flex;align-items:flex-start;gap:9px;font-size:12.5px;color:#475569;cursor:pointer;line-height:1.45;">'
+          + '<input type="checkbox" id="pic-declaration" checked style="margin-top:2px;" />'
+          + '<span>Print the non-Israeli origin / material declaration (required by most Gulf buyers).</span>'
+        + '</label>')
+    + '</div>'
+    + '<div style="margin-top:14px;">'
+      + _textareaField('pic-terms', 'Terms & Conditions (one per line, printed as-is)', _defaults ? (_defaults.terms || []).join('\n') : '', 9)
     + '</div>';
   }
 
@@ -222,38 +297,49 @@ window.Pages['proforma-invoice'] = (() => {
 
   /* ── Submit (Create) ────────────────────────────────────────────────── */
   function _collectItems() {
-    return Array.from(document.querySelectorAll('#pic-items-tbody .pic-item-row')).map(row => ({
-      itemCode: row.querySelector('[data-field="itemCode"]').value.trim(),
-      description: row.querySelector('[data-field="description"]').value.trim(),
-      hsnCode: row.querySelector('[data-field="hsnCode"]').value.trim(),
-      qty: row.querySelector('[data-field="qty"]').value.trim(),
-      uom: row.querySelector('[data-field="uom"]').value.trim(),
-    })).filter(it => it.itemCode);
+    return Array.from(document.querySelectorAll('#pic-items-tbody .pic-item-row')).map(row => {
+      const item = {};
+      _ITEM_COLS.forEach(c => { item[c.field] = row.querySelector('[data-field="' + c.field + '"]').value.trim(); });
+      return item;
+    }).filter(it => it.modelNo || it.itemName);
   }
 
   async function _submit(e) {
     e.preventDefault();
+    const val = (id) => document.getElementById(id).value.trim();
     const date = document.getElementById('pic-date').value;
-    const buyerName = document.getElementById('pic-buyer').value.trim();
-    const buyerAddress = document.getElementById('pic-buyer-address').value.trim();
-    const buyerGstin = document.getElementById('pic-buyer-gstin').value.trim();
-    const paymentTerms = document.getElementById('pic-payment-terms').value.trim();
-    const validity = document.getElementById('pic-validity').value.trim();
+    const buyerName = val('pic-buyer');
     const items = _collectItems();
 
     if (!date) { Utils.showToast('PI Date is required', 'error'); return; }
-    if (!buyerName) { Utils.showToast('Buyer Name is required', 'error'); return; }
+    if (!buyerName) { Utils.showToast('Consignee Name is required', 'error'); return; }
     if (!items.length) { Utils.showToast('Add at least one item', 'error'); return; }
+    if (items.length > _maxItems) { Utils.showToast('The PI template holds ' + _maxItems + ' item rows — this PI has ' + items.length, 'error'); return; }
+
+    const payload = {
+      date, buyerName, items,
+      orderNo: val('pic-order-no'),
+      paymentTerms: val('pic-payment-terms'),
+      buyerTrn: val('pic-buyer-trn'),
+      buyerAddress1: val('pic-buyer-addr1'),
+      buyerAddress2: val('pic-buyer-addr2'),
+      buyerContact: val('pic-buyer-contact'),
+      portOfLoading: val('pic-port-loading'),
+      portOfDischarge: val('pic-port-discharge'),
+      placeOfDelivery: val('pic-place-delivery'),
+      countryOfOrigin: val('pic-origin'),
+      shipmentNote: val('pic-shipment-note'),
+      validity: val('pic-validity'),
+      terms: val('pic-terms').split('\n').map(t => t.trim()).filter(Boolean),
+      includeDeclaration: document.getElementById('pic-declaration').checked,
+    };
 
     const btn = document.getElementById('pic-submit-btn');
     btn.disabled = true; btn.textContent = 'Creating…';
     try {
-      const result = await Utils.apiFetch('/api/proforma-invoice', {
-        method: 'POST',
-        body: JSON.stringify({ date, buyerName, buyerAddress, buyerGstin, paymentTerms, validity, items }),
-      });
-      Utils.showToast('PI #' + result.piNumber + ' created' + (result.pdfLink ? ' — PDF saved to Drive' : ' (PDF export failed, PI still saved)'), result.pdfLink ? 'success' : 'warning');
-      await _loadMasters();
+      const result = await Utils.apiFetch('/api/proforma-invoice', { method: 'POST', body: JSON.stringify(payload) });
+      Utils.showToast('PI ' + result.piNumber + ' created' + (result.pdfLink ? ' — PDF saved to Drive' : ' (PDF export failed, PI still saved)'), result.pdfLink ? 'success' : 'warning');
+      await _loadMasters(date);
       renderPage();
     } catch (err) {
       Utils.showToast(err.message || 'Failed to create Proforma Invoice', 'error');
@@ -317,7 +403,7 @@ window.Pages['proforma-invoice'] = (() => {
     }
     body.innerHTML = rows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
-        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">#' + esc(r.piNo) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.piNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + _statusPillHtml(r.status) + '</td>'
@@ -341,11 +427,11 @@ window.Pages['proforma-invoice'] = (() => {
     body.addEventListener('click', async (e) => {
       const cancelBtn = e.target.closest('.pic-cancel-btn');
       if (cancelBtn) {
-        const ok = await Utils.showConfirm('PI #' + cancelBtn.dataset.pi + ' will be marked Cancelled. This can\'t be undone.', { title: 'Cancel Proforma Invoice', confirmText: 'Cancel PI', danger: true });
+        const ok = await Utils.showConfirm('PI ' + cancelBtn.dataset.pi + ' will be marked Cancelled. This can\'t be undone.', { title: 'Cancel Proforma Invoice', confirmText: 'Cancel PI', danger: true });
         if (!ok) return;
         try {
           await Utils.apiFetch('/api/proforma-invoice/cancel?piNo=' + encodeURIComponent(cancelBtn.dataset.pi), { method: 'PUT' });
-          Utils.showToast('PI #' + cancelBtn.dataset.pi + ' cancelled', 'success');
+          Utils.showToast('PI ' + cancelBtn.dataset.pi + ' cancelled', 'success');
           await _pilLoad();
         } catch (err) {
           Utils.showToast(err.message || 'Failed to cancel', 'error');
@@ -362,7 +448,7 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _pilFilterBarHtml() {
     return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
-      + '<input type="text" id="pil-buyer" placeholder="Search buyer…" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
+      + '<input type="text" id="pil-buyer" placeholder="Search consignee…" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
       + '<input type="date" id="pil-from" style="' + _inputStyle + 'width:auto;" />'
       + '<span style="color:#94a3b8;font-size:12px;">to</span>'
       + '<input type="date" id="pil-to" style="' + _inputStyle + 'width:auto;" />'
@@ -394,7 +480,7 @@ window.Pages['proforma-invoice'] = (() => {
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
         + '<table style="width:100%;border-collapse:collapse;min-width:880px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['PI No', 'Date', 'Buyer', 'Status', 'Total (INR)', 'PDF', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + ['Pro. Invoice No', 'Date', 'Consignee', 'Status', 'Total C&F (US$)', 'PDF', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
           + '<tbody id="pil-body"><tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
@@ -403,25 +489,22 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   /* ── Add Price modal — lists the PI's own stored items (read-only
-     description/qty from Form JSON) with a Rate input per row, plus GST%/
-     Freight — submits to PUT /api/proforma-invoice/price ────────────────── */
+     model/name/size/qty from Form JSON) with a C&F US$ per-piece input per
+     row. Rows are addressed by index, not model number: an export PI can
+     legitimately list the same model twice at different sizes. Submits to
+     PUT /api/proforma-invoice/price ────────────────────────────────────── */
   function _priceRecompute() {
     const modal = document.getElementById('pi-price-modal');
     if (!modal) return;
-    let subtotal = 0;
+    let total = 0;
     modal.querySelectorAll('.pipm-item-row').forEach(row => {
       const qty = _num(row.dataset.qty);
       const rate = _num(row.querySelector('.pipm-rate').value);
-      const amt = qty * rate;
-      row.querySelector('.pipm-amount').textContent = _fmtMoney(amt);
-      subtotal += amt;
+      const amt = Math.round(qty * rate * 100) / 100;
+      row.querySelector('.pipm-amount').textContent = _fmtUsd(amt);
+      total += amt;
     });
-    const gstPercent = _num(document.getElementById('pipm-gst').value);
-    const freight = _num(document.getElementById('pipm-freight').value);
-    const gstAmount = subtotal * gstPercent / 100;
-    const total = subtotal + gstAmount + freight;
-    document.getElementById('pipm-subtotal').textContent = _fmtMoney(subtotal);
-    document.getElementById('pipm-total').textContent = _fmtMoney(total);
+    document.getElementById('pipm-total').textContent = _fmtUsd(total);
   }
 
   function _closePriceModal() {
@@ -439,38 +522,36 @@ window.Pages['proforma-invoice'] = (() => {
     const items = Array.isArray(form.items) ? form.items : [];
 
     modal.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="pipm-backdrop">'
-      + '<div style="background:#fff;border-radius:18px;width:100%;max-width:720px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
+      + '<div style="background:#fff;border-radius:18px;width:100%;max-width:820px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
         + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;">'
-          + '<div style="flex:1;"><div style="font-size:15px;font-weight:700;color:#1e293b;">' + (row.status === 'Priced' ? 'Edit Price' : 'Add Price') + ' — PI #' + esc(row.piNo) + '</div><div style="font-size:12px;color:#94a3b8;margin-top:1px;">' + esc(row.buyer) + '</div></div>'
+          + '<div style="flex:1;"><div style="font-size:15px;font-weight:700;color:#1e293b;">' + (row.status === 'Priced' ? 'Edit Price' : 'Add Price') + ' — PI ' + esc(row.piNo) + '</div><div style="font-size:12px;color:#94a3b8;margin-top:1px;">' + esc(row.buyer) + '</div></div>'
           + '<button id="pipm-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;">'
             + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
           + '</button>'
         + '</div>'
         + '<div style="padding:22px 24px;max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:16px;">'
           + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-            + '<table style="width:100%;border-collapse:collapse;min-width:560px;">'
+            + '<table style="width:100%;border-collapse:collapse;min-width:640px;">'
               + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-                + ['Item Code', 'Description', 'Qty', 'UOM', 'Rate (INR)', 'Amount (INR)'].map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+                + ['Model No.', 'Item Name', 'Size', 'Total Qty', 'C&F US$ Per Pc', 'Amount (US$)'].map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
               + '</tr></thead>'
-              + '<tbody>' + items.map(it => ''
-                + '<tr class="pipm-item-row" data-code="' + esc(it.itemCode || '') + '" data-qty="' + esc(it.qty || 0) + '" style="border-bottom:1px solid #f1f5f9;">'
-                  + '<td style="padding:6px 8px;font-size:12.5px;">' + esc(it.itemCode) + '</td>'
-                  + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.description || '—') + '</td>'
-                  + '<td style="padding:6px 8px;font-size:12.5px;">' + esc(it.qty) + '</td>'
-                  + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.uom || '—') + '</td>'
-                  + '<td style="padding:6px 8px;"><input type="text" inputmode="decimal" class="pipm-rate" value="' + esc(it.rate || '') + '" placeholder="0" style="width:100px;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+              + '<tbody>' + items.map((it, i) => ''
+                + '<tr class="pipm-item-row" data-index="' + i + '" data-qty="' + esc(it.qty || 0) + '" style="border-bottom:1px solid #f1f5f9;">'
+                  // itemCode/description are the pre-export-format field names —
+                  // a Draft raised before the switch still has to be priceable.
+                  + '<td style="padding:6px 8px;font-size:12.5px;">' + esc(it.modelNo || it.itemCode || '—') + '</td>'
+                  + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.itemName || it.description || '—') + '</td>'
+                  + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.size || '—') + '</td>'
+                  + '<td style="padding:6px 8px;font-size:12.5px;text-align:right;">' + esc(it.qty || '') + '</td>'
+                  + '<td style="padding:6px 8px;"><input type="text" inputmode="decimal" class="pipm-rate" value="' + esc(it.rate || '') + '" placeholder="0.000" style="width:110px;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" /></td>'
                   + '<td class="pipm-amount" style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;">0.00</td>'
                 + '</tr>').join('')
               + '</tbody>'
             + '</table>'
           + '</div>'
-          + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">'
-            + _fieldWrap('GST %', '<input type="text" inputmode="decimal" id="pipm-gst" value="' + esc(form.gstPercent || '') + '" placeholder="0" style="' + _inputStyle + '" />')
-            + _fieldWrap('Freight / Other Charges', '<input type="text" inputmode="decimal" id="pipm-freight" value="' + esc(form.freight || '') + '" placeholder="0" style="' + _inputStyle + '" />')
-          + '</div>'
           + '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
-            + '<div style="font-size:12px;color:#64748b;">Subtotal: ₹<span id="pipm-subtotal">0.00</span></div>'
-            + '<div><span style="font-size:12.5px;font-weight:700;color:#64748b;">Total </span><span style="font-size:17px;font-weight:800;color:#0f172a;">₹<span id="pipm-total">0.00</span></span></div>'
+            + '<div><span style="font-size:12.5px;font-weight:700;color:#64748b;">Total C&amp;F US$ </span><span style="font-size:17px;font-weight:800;color:#0f172a;"><span id="pipm-total">0.00</span></span></div>'
+            + '<div style="font-size:11.5px;color:#94a3b8;">Shown for confirmation — the printed total is the sheet\'s own formula.</div>'
           + '</div>'
         + '</div>'
         + '<div style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;">'
@@ -484,8 +565,6 @@ window.Pages['proforma-invoice'] = (() => {
     document.getElementById('pipm-close').addEventListener('click', _closePriceModal);
     document.getElementById('pipm-cancel').addEventListener('click', _closePriceModal);
     modal.querySelectorAll('.pipm-rate').forEach(inp => inp.addEventListener('input', _priceRecompute));
-    document.getElementById('pipm-gst').addEventListener('input', _priceRecompute);
-    document.getElementById('pipm-freight').addEventListener('input', _priceRecompute);
     document.getElementById('pipm-save').addEventListener('click', _submitPrice);
     _priceRecompute();
   }
@@ -494,9 +573,10 @@ window.Pages['proforma-invoice'] = (() => {
     if (_priceSaving || !_priceModalRow) return;
     const piNo = _priceModalRow.piNo;
     const modal = document.getElementById('pi-price-modal');
-    const items = Array.from(modal.querySelectorAll('.pipm-item-row')).map(row => ({ code: row.dataset.code, rate: row.querySelector('.pipm-rate').value.trim() }));
-    const gstPercent = document.getElementById('pipm-gst').value.trim();
-    const freight = document.getElementById('pipm-freight').value.trim();
+    const items = Array.from(modal.querySelectorAll('.pipm-item-row')).map(row => ({
+      index: parseInt(row.dataset.index, 10),
+      rate: row.querySelector('.pipm-rate').value.trim(),
+    }));
 
     _priceSaving = true;
     const btn = document.getElementById('pipm-save');
@@ -504,9 +584,9 @@ window.Pages['proforma-invoice'] = (() => {
     try {
       const result = await Utils.apiFetch('/api/proforma-invoice/price?piNo=' + encodeURIComponent(piNo), {
         method: 'PUT',
-        body: JSON.stringify({ items, gstPercent, freight }),
+        body: JSON.stringify({ items }),
       });
-      Utils.showToast('PI #' + piNo + ' priced' + (result.pdfLink ? ' — PDF updated on Drive' : ''), 'success');
+      Utils.showToast('PI ' + piNo + ' priced' + (result.pdfLink ? ' — PDF updated on Drive' : ''), 'success');
       _closePriceModal();
       await _pilLoad();
     } catch (err) {
@@ -526,19 +606,26 @@ window.Pages['proforma-invoice'] = (() => {
     const bodyHtml = isList
       ? _pilViewHtml()
       : '<form id="pic-form" style="display:flex;flex-direction:column;gap:16px;">'
-        + _headerFieldsHtml()
-        + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
+        + _sectionTitle('Invoice Details')
+        + _invoiceFieldsHtml()
+        + _sectionTitle('Consignee')
+        + _consigneeFieldsHtml()
+        + _sectionTitle('Shipping')
+        + _shippingFieldsHtml()
+        + _sectionTitle('Items')
         + _itemsTableHtml()
         + '<div>'
           + '<button type="button" id="pic-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item</button>'
         + '</div>'
+        + _sectionTitle('Validity & Terms')
+        + _footerFieldsHtml()
         + '<button type="submit" id="pic-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Proforma Invoice</button>'
       + '</form>';
 
-    el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '1080px') + ';margin:0 auto;padding:4px 0 40px;">'
+    el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '1180px') + ';margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
-        + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Proforma Invoice</h1>'
-        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Create captures buyer &amp; items only — price is added afterward by an authorized user.</p>'
+        + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Proforma Invoice / OCS</h1>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Export PI in C&amp;F US$. Create captures consignee, shipping &amp; items only — the rate is added afterward by an authorized user.</p>'
       + '</div>'
       + _tabsHtml()
       + bodyHtml
@@ -558,13 +645,21 @@ window.Pages['proforma-invoice'] = (() => {
     _bindAllItemRows();
 
     document.getElementById('pic-add-item').addEventListener('click', () => {
-      document.getElementById('pic-items-tbody').insertAdjacentHTML('beforeend', _itemRowHtml());
-      _bindItemRow(document.getElementById('pic-items-tbody').lastElementChild);
+      const tbody = document.getElementById('pic-items-tbody');
+      if (tbody.querySelectorAll('.pic-item-row').length >= _maxItems) {
+        Utils.showToast('The PI template holds ' + _maxItems + ' item rows', 'warning');
+        return;
+      }
+      tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
+      _bindItemRow(tbody.lastElementChild);
     });
+
+    // The PI number is FY-scoped, so a date change can change it.
+    document.getElementById('pic-date').addEventListener('change', (e) => { _loadMasters(e.target.value); });
 
     document.getElementById('pic-form').addEventListener('submit', _submit);
 
-    if (!_mastersLoaded) _loadMasters();
+    if (!_mastersLoaded) _loadMasters(_today());
   }
 
   return {

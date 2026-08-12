@@ -2861,11 +2861,18 @@ async function _exportSheetTabPdf(spreadsheetId, sourceSheetId, colRange) {
   const client = await auth.getClient();
   const { token } = await client.getAccessToken();
   const rangeParams = colRange ? `&c1=${colRange.c1}&c2=${colRange.c2}` : '';
+  // Optional row window — the PI template tab is 80 rows tall but only ~69 of
+  // them are the invoice, and the trailing blanks otherwise spill a second,
+  // empty page into the PDF.
+  const rowParams = colRange && colRange.r2 != null ? `&r1=${colRange.r1 || 0}&r2=${colRange.r2}` : '';
+  // Portrait unless the caller opts out — only the Proforma Invoice does, its
+  // export table is 13 columns wide and will not fit an A4 portrait page.
+  const portrait = !colRange || colRange.portrait !== false;
   const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export`
-    + `?format=pdf&gid=${sourceSheetId}&size=A4&portrait=true&fitw=true`
+    + `?format=pdf&gid=${sourceSheetId}&size=A4&portrait=${portrait}&fitw=true`
     + `&gridlines=false&printtitle=false&sheetnames=false`
     + `&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3`
-    + rangeParams;
+    + rangeParams + rowParams;
   const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
   if (!resp.ok) throw new Error('PDF export failed: HTTP ' + resp.status);
   const buf = Buffer.from(await resp.arrayBuffer());
@@ -3791,109 +3798,221 @@ const PI_CREATION_LOG_TAB = 'ERP PI Log';
 const PI_TEMPLATE_TAB = 'Proforma Invoice';
 const PI_PDF_DRIVE_FOLDER_ID = '1i693XlvXIlS8Ep1p4NJhkxolTCNE47qs';
 
-// Cell map matches the template scripts/create-pi-sheet.js actually built —
-// designed fresh (no pre-existing sheet to reverse-engineer), so unlike PO's
-// map this one is authoritative by construction, not inference. Amount (H)
-// and the Subtotal/GST Amount/Total cells are real per-row/summary formulas
-// — never written to directly, same discipline as PO_FORMAT_CONFIG.
-const PI_HEADER_CELLS = { piNo: 'B3', date: 'E3', buyerName: 'B4', buyerAddress: 'B5', buyerGstin: 'B6', paymentTerms: 'E6', validity: 'B7', piMadeBy: 'E7' };
-// clearCols stops at G, NOT H: column H holds a real per-row formula
-// (=IF(E="","",E*G)) typed into each row individually at sheet-creation time
-// (scripts/create-pi-sheet.js), not a spill from the header — clearing over
-// it wipes it out for good (same caveat as PO's Diamond PO format; see that
-// tab's own clearCols comment above). Confirmed restored on the live sheet.
-const PI_ITEMS = { firstRow: 10, lastRow: 39, clearCols: ['A', 'G'], srNoCol: 'A', fields: { itemCode: 'B', description: 'C', hsnCode: 'D', qty: 'E', uom: 'F', rate: 'G' } };
-const PI_SUMMARY_CELLS = { gstPercent: 'H42', freight: 'H44' };
-const PI_TOTAL_CELL = 'H45';
+// The PI is an EXPORT document — the company's real "Proforma Invoice / Order
+// Confirmation Sheet (OCS)": letterhead, consignee + shipping blocks, an item
+// table priced in C&F US$ (no GST/HSN — those belong to a domestic invoice),
+// amount in words, boilerplate T&C and a two-sided acceptance signature.
+//
+// The layout (every row number, every cell, the boilerplate text) lives in
+// backend/lib/pi-format.js, which scripts/rebuild-pi-sheet.js also reads when
+// it paints the template tab. That shared module is why this cell map cannot
+// drift from the sheet — unlike PO's map, which was reverse-engineered.
+// Column L (Amount) and the totals row are live sheet formulas: cleared
+// around, never written over.
+const PI_FMT = require('./backend/lib/pi-format.js');
+const PI_NO_PREFIX = 'VTV';   // Vatva works — the real "VTV/052/25-26" series
+const PI_LOG_HEADER = ['PI No', 'Date', 'Buyer', 'Total C&F (US$)', 'PDF Link', 'Created By', 'Created At', 'Priced By', 'Priced At', 'Form JSON', 'Status'];
 
-async function _piSheetMeta() {
+// Indian financial year label for a PI date — "25-26" for 1 Apr 2025 through
+// 31 Mar 2026. The printed number restarts every FY, so the sequence alone is
+// not unique; "VTV/052/25-26" as a whole is, and that whole string is the log
+// row's key.
+function _piFyLabel(dateStr) {
+  const d = new Date(dateStr);
+  const dt = isNaN(d.getTime()) ? new Date() : d;
+  const startYear = dt.getMonth() >= 3 ? dt.getFullYear() : dt.getFullYear() - 1;  // April = month 3
+  return String(startYear % 100).padStart(2, '0') + '-' + String((startYear + 1) % 100).padStart(2, '0');
+}
+
+function _piNoFormat(seq, fy) {
+  return `${PI_NO_PREFIX}/${String(seq).padStart(3, '0')}/${fy}`;
+}
+
+// Reads the sequence out of either the current "VTV/052/25-26" form or the
+// legacy "PI052" one the old domestic template used, so numbering keeps
+// climbing across the format change instead of restarting at 1 mid-year.
+// Current-form numbers only count toward their OWN financial year.
+function _piSeqOf(raw, fy) {
+  const s = String(raw ?? '').trim();
+  const m = /^[A-Za-z]+\/(\d+)\/(\d{2}-\d{2})$/.exec(s);
+  if (m) return m[2] === fy ? parseInt(m[1], 10) : 0;
+  const legacy = parseInt(s.replace(/^[A-Za-z]+/, ''), 10);
+  return isNaN(legacy) ? 0 : legacy;
+}
+
+// dd.mm.yyyy, the form the buyer's copy has always used. Written as text (see
+// the leading apostrophe at the call site) so Sheets doesn't re-interpret it
+// against the spreadsheet's own locale.
+function _piDisplayDate(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || '').trim());
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : String(dateStr || '');
+}
+
+/* ── amount in words (US$) ─────────────────────────────────────────────
+   International scale (thousand / million / billion), NOT the lakh-crore
+   scale the rest of this app uses for INR — this line is read by the
+   overseas buyer. */
+const _PI_ONES = ['', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE', 'TEN',
+  'ELEVEN', 'TWELVE', 'THIRTEEN', 'FOURTEEN', 'FIFTEEN', 'SIXTEEN', 'SEVENTEEN', 'EIGHTEEN', 'NINETEEN'];
+const _PI_TENS = ['', '', 'TWENTY', 'THIRTY', 'FORTY', 'FIFTY', 'SIXTY', 'SEVENTY', 'EIGHTY', 'NINETY'];
+
+function _piWordsUnder1000(n) {
+  const parts = [];
+  if (n >= 100) { parts.push(_PI_ONES[Math.floor(n / 100)], 'HUNDRED'); n %= 100; }
+  if (n >= 20) { parts.push(_PI_TENS[Math.floor(n / 10)]); n %= 10; }
+  if (n > 0) parts.push(_PI_ONES[n]);
+  return parts.join(' ');
+}
+
+function _piWordsInt(n) {
+  n = Math.floor(Math.abs(n));
+  if (n === 0) return 'ZERO';
+  const scales = [[1e9, 'BILLION'], [1e6, 'MILLION'], [1e3, 'THOUSAND']];
+  const parts = [];
+  for (const [value, name] of scales) {
+    if (n >= value) { parts.push(_piWordsUnder1000(Math.floor(n / value)), name); n %= value; }
+  }
+  if (n > 0) parts.push(_piWordsUnder1000(n));
+  return parts.join(' ');
+}
+
+function _piAmountInWords(amount) {
+  const n = Math.round((Number(amount) || 0) * 100) / 100;
+  const whole = Math.floor(n);
+  const cents = Math.round((n - whole) * 100);
+  let s = '(C&F US DOLLAR ' + _piWordsInt(whole);
+  if (cents > 0) s += ' AND ' + _piWordsInt(cents) + ' CENTS';
+  return s + ' ONLY)';
+}
+
+// `fy` scopes the "next number" lookup to one financial year (see _piSeqOf).
+async function _piSheetMeta(fy) {
   const auth = getGoogleAuth();
   const { google } = require('googleapis');
   const sheets = google.sheets({ version: 'v4', auth });
   const meta = await sheets.spreadsheets.get({ spreadsheetId: PI_CREATION_SHEET_ID });
   const tpl = meta.data.sheets.find(s => s.properties.title === PI_TEMPLATE_TAB);
-  let maxPiNo = 0;
+  let maxSeq = 0;
   try {
-    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' });
-    for (const row of (logRes.data.values || [])) {
-      const n = parseInt(String(row[0] ?? '').replace(/^[A-Za-z]+/, ''), 10);
-      if (!isNaN(n)) maxPiNo = Math.max(maxPiNo, n);
-    }
+    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'FORMATTED_VALUE' });
+    for (const row of (logRes.data.values || [])) maxSeq = Math.max(maxSeq, _piSeqOf(row[0], fy));
   } catch (e) {
     if (!/unable to parse range/i.test(e.message || '')) console.error('[proforma-invoice] log read for numbering failed:', e.message);
   }
-  return { nextPiNo: maxPiNo + 1, templateSheetId: tpl ? tpl.properties.sheetId : 0 };
+  return { nextSeq: maxSeq + 1, templateSheetId: tpl ? tpl.properties.sheetId : 0 };
 }
 
-// Fills the (single, shared) template tab with the given header/items/
-// summary — used identically by create (rate left blank) and price-add
-// (rate filled in), always as a FULL rewrite of the current item list, never
-// a partial patch, since the tab only ever reflects the most recent write.
+// Fills the (single, shared) template tab — used identically by create (rate
+// left blank) and price-add (rate filled in), always as a FULL rewrite of the
+// current PI, never a partial patch, since the tab only ever reflects the most
+// recent write. Every mapped cell is written even when blank: a leftover value
+// from the previous PI would otherwise print on this one.
 async function _fillPiTemplate(sheets, form) {
   const tab = PI_TEMPLATE_TAB;
+  const { LAYOUT: L, CELLS: C, ITEMS: IT, DEFAULTS: D } = PI_FMT;
   const items = form.items || [];
-  await sheets.spreadsheets.values.clear({
+
+  // Two ranges, not one: column L holds the per-row Amount formula written
+  // once by scripts/rebuild-pi-sheet.js, and clearing over it destroys it.
+  await sheets.spreadsheets.values.batchClear({
     spreadsheetId: PI_CREATION_SHEET_ID,
-    range: `'${tab}'!${PI_ITEMS.clearCols[0]}${PI_ITEMS.firstRow}:${PI_ITEMS.clearCols[1]}${PI_ITEMS.lastRow}`,
+    requestBody: { ranges: IT.clearRanges.map(([a, b]) => `'${tab}'!${a}${L.itemsFirstRow}:${b}${L.itemsLastRow}`) },
   });
+
   const data = [];
-  const put = (a1, value) => { if (value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
-  put(PI_HEADER_CELLS.piNo, form.piNo);
-  put(PI_HEADER_CELLS.date, form.date);
-  put(PI_HEADER_CELLS.buyerName, form.buyerName);
-  put(PI_HEADER_CELLS.buyerAddress, form.buyerAddress);
-  put(PI_HEADER_CELLS.buyerGstin, form.buyerGstin);
-  put(PI_HEADER_CELLS.paymentTerms, form.paymentTerms);
-  put(PI_HEADER_CELLS.validity, form.validity);
-  put(PI_HEADER_CELLS.piMadeBy, form.piMadeBy);
-  // Always written, even 0 — feeds the sheet's own Total formula, must never
-  // carry a previous PI's numbers into this one.
-  data.push({ range: `'${tab}'!${PI_SUMMARY_CELLS.gstPercent}`, values: [[parseFloat(form.gstPercent) || 0]] });
-  data.push({ range: `'${tab}'!${PI_SUMMARY_CELLS.freight}`, values: [[parseFloat(form.freight) || 0]] });
+  const put = (a1, value) => data.push({ range: `'${tab}'!${a1}`, values: [[value ?? '']] });
+  const putText = (a1, value) => put(a1, value ? "'" + value : '');   // force text, never a parsed date/number
+
+  putText(C.piNo, form.piNo);
+  putText(C.date, _piDisplayDate(form.date));
+  put(C.orderNo, form.orderNo);
+  put(C.paymentTerms, form.paymentTerms);
+  put(C.portOfLoading, form.portOfLoading);
+  put(C.portOfDischarge, form.portOfDischarge);
+  put(C.placeOfDelivery, form.placeOfDelivery);
+  put(C.countryOfOrigin, form.countryOfOrigin);
+  put(C.buyerName, form.buyerName);
+  put(C.buyerTrn, form.buyerTrn);
+  put(C.buyerAddress1, form.buyerAddress1);
+  put(C.buyerAddress2, form.buyerAddress2);
+  put(C.buyerContact, form.buyerContact);
+  put(C.shipmentNote, form.shipmentNote);
+  put(C.validityNote, PI_FMT.validityNote(form.validity));
+  put(C.bankNote, D.bankNote);
+  put(C.confirmLine, D.confirmLine);
+  // Gulf buyers require the non-Israeli-origin declaration; everyone else
+  // gets a blank line rather than an irrelevant one.
+  put(C.declaration, form.includeDeclaration === false ? '' : D.declaration);
+  put(C.acceptedBy, form.buyerName ? 'I Accept & By,   For, ' + form.buyerName : 'I Accept & By,');
+
+  const terms = Array.isArray(form.terms) && form.terms.length ? form.terms : D.terms;
+  for (let r = L.termsFirstRow; r <= L.termsLastRow; r++) put(`A${r}`, terms[r - L.termsFirstRow] || '');
+
   items.forEach((it, i) => {
-    const row = PI_ITEMS.firstRow + i;
-    if (row > PI_ITEMS.lastRow) return; // beyond template capacity — drop silently
-    put(`${PI_ITEMS.srNoCol}${row}`, i + 1);
-    Object.entries(PI_ITEMS.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
+    const row = L.itemsFirstRow + i;
+    if (row > L.itemsLastRow) return;   // beyond template capacity — see the cap enforced in POST
+    put(`${IT.srNoCol}${row}`, i + 1);
+    Object.entries(IT.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
+    put(`${IT.remarksCol}${row}`, it.remarks);
   });
-  if (data.length) {
-    await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
-  }
+
+  await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
 }
 
-// Shared post-write step for both create and price-add: wait for the
-// sheet's formulas to settle, read back the computed Total, export + upload
-// the PDF. Never lets a Drive/export hiccup block the actual data write.
+// Shared post-write step for both create and price-add: wait for the sheet's
+// formulas to settle, read back the computed Total, stamp the amount in words
+// (which can only be built once that Total exists), then export + upload the
+// PDF. Never lets a Drive/export hiccup block the actual data write.
 async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId) {
   await _sleep(2000);
   let totalAmount = null;
   try {
-    const totalRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_TEMPLATE_TAB}'!${PI_TOTAL_CELL}`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    const totalRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_TEMPLATE_TAB}'!${PI_FMT.TOTAL_CELL}`, valueRenderOption: 'UNFORMATTED_VALUE' });
     totalAmount = totalRes.data.values?.[0]?.[0] ?? null;
   } catch (e) { console.error('[proforma-invoice] total read-back failed:', e.message); }
+  try {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: PI_CREATION_SHEET_ID,
+      range: `'${PI_TEMPLATE_TAB}'!${PI_FMT.CELLS.amountInWords}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [[totalAmount ? _piAmountInWords(totalAmount) : '']] },
+    });
+    await _sleep(600);
+  } catch (e) { console.error('[proforma-invoice] amount-in-words write failed:', e.message); }
   let pdfLink = null;
   try {
-    const pdfBuffer = await _exportSheetTabPdf(PI_CREATION_SHEET_ID, templateSheetId, { c1: 0, c2: 8 });
-    pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${piNoFormatted} - Proforma Invoice.pdf`, PI_PDF_DRIVE_FOLDER_ID);
+    const pdfBuffer = await _exportSheetTabPdf(PI_CREATION_SHEET_ID, templateSheetId, {
+      c1: 0, c2: PI_FMT.LAYOUT.colCount, r1: 0, r2: PI_FMT.LAYOUT.lastRow, portrait: false,
+    });
+    // "VTV/052/25-26" has slashes in it — a Drive filename must not.
+    pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${piNoFormatted.replace(/\//g, '-')} - Proforma Invoice.pdf`, PI_PDF_DRIVE_FOLDER_ID);
   } catch (e) { console.error('[proforma-invoice] PDF export failed:', e.message); }
   return { totalAmount, pdfLink };
 }
 
-// GET /api/proforma-invoice/masters — next PI number + a lightweight
-// recent-buyers typeahead (no dedicated Buyer/Customer master exists in this
-// app — only a Vendor Master — so this is scraped straight off the log).
+// GET /api/proforma-invoice/masters?date=YYYY-MM-DD — next PI number for that
+// date's financial year, the boilerplate defaults the create form pre-fills
+// (single source: backend/lib/pi-format.js), and a lightweight recent-buyers
+// typeahead (no dedicated Buyer/Customer master exists in this app — only a
+// Vendor Master — so this is scraped straight off the log).
 app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
   try {
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
+    const fy = _piFyLabel(req.query.date);
     const [meta, buyerRes] = await Promise.all([
-      _piSheetMeta(),
+      _piSheetMeta(fy),
       sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!C2:C`, valueRenderOption: 'FORMATTED_VALUE' }).catch(() => ({ data: {} })),
     ]);
     const recentBuyers = [...new Set((buyerRes.data.values || []).map(r => (r[0] || '').trim()).filter(Boolean))].slice(-50).reverse();
-    return res.json({ nextPiNumber: _padSeqNo('PI', meta.nextPiNo), recentBuyers });
+    return res.json({
+      nextPiNumber: _piNoFormat(meta.nextSeq, fy),
+      recentBuyers,
+      maxItems: PI_FMT.LAYOUT.itemsLastRow - PI_FMT.LAYOUT.itemsFirstRow + 1,
+      defaults: PI_FMT.DEFAULTS,
+    });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -3915,30 +4034,68 @@ app.get('/api/proforma-invoice/items', requireAuth, async (req, res) => {
 // step (PUT /price below).
 app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
   try {
-    const { date, buyerName, buyerAddress, buyerGstin, paymentTerms, validity, items } = req.body;
-    if (!date || !buyerName) return res.status(400).json({ error: 'Date and Buyer Name are required' });
-    const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemCode || '').trim());
+    const b = req.body || {};
+    if (!b.date || !String(b.buyerName || '').trim()) return res.status(400).json({ error: 'Date and Consignee Name are required' });
+
+    // A row counts as an item once it names the goods either way round — the
+    // model number alone is meaningless to the buyer, the item name alone is
+    // still a valid line.
+    const cleanItems = (Array.isArray(b.items) ? b.items : [])
+      .filter(it => it && (String(it.modelNo || '').trim() || String(it.itemName || '').trim()))
+      .map(it => ({
+        modelNo: String(it.modelNo || '').trim(),
+        itemName: String(it.itemName || '').trim(),
+        size: String(it.size || '').trim(),
+        swg: String(it.swg || '').trim(),
+        packing: String(it.packing || '').trim(),
+        qty: it.qty, boxes: it.boxes, cbm: it.cbm, weight: it.weight,
+        remarks: String(it.remarks || '').trim(),
+      }));
     if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
+    const maxItems = PI_FMT.LAYOUT.itemsLastRow - PI_FMT.LAYOUT.itemsFirstRow + 1;
+    // The old template silently dropped anything past its last row. Refuse
+    // instead — a PI missing lines the user typed is worse than an error.
+    if (cleanItems.length > maxItems) return res.status(400).json({ error: `The Proforma Invoice template holds ${maxItems} item rows — this PI has ${cleanItems.length}` });
 
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
 
-    const { nextPiNo, templateSheetId } = await _piSheetMeta();
-    const piNoFormatted = _padSeqNo('PI', nextPiNo);
-    const piMadeBy = req.session.user.name || '';
+    const fy = _piFyLabel(b.date);
+    const { nextSeq, templateSheetId } = await _piSheetMeta(fy);
+    const piNoFormatted = _piNoFormat(nextSeq, fy);
 
-    await _fillPiTemplate(sheets, {
-      piNo: piNoFormatted, date, buyerName, buyerAddress, buyerGstin, paymentTerms, validity, piMadeBy,
-      items: cleanItems, gstPercent: 0, freight: 0,
-    });
+    // Everything the printed PI needs, kept together so the price step can
+    // re-render the exact same document later from this one JSON blob.
+    const form = {
+      date: b.date,
+      orderNo: String(b.orderNo || '').trim(),
+      buyerName: String(b.buyerName).trim(),
+      buyerTrn: String(b.buyerTrn || '').trim(),
+      buyerAddress1: String(b.buyerAddress1 || '').trim(),
+      buyerAddress2: String(b.buyerAddress2 || '').trim(),
+      buyerContact: String(b.buyerContact || '').trim(),
+      paymentTerms: String(b.paymentTerms || '').trim(),
+      portOfLoading: String(b.portOfLoading || PI_FMT.DEFAULTS.portOfLoading).trim(),
+      portOfDischarge: String(b.portOfDischarge || '').trim(),
+      placeOfDelivery: String(b.placeOfDelivery || '').trim(),
+      countryOfOrigin: String(b.countryOfOrigin || PI_FMT.DEFAULTS.countryOfOrigin).trim(),
+      shipmentNote: String(b.shipmentNote || PI_FMT.DEFAULTS.shipmentNote).trim(),
+      validity: String(b.validity || PI_FMT.DEFAULTS.validity).trim(),
+      terms: (Array.isArray(b.terms) ? b.terms : PI_FMT.DEFAULTS.terms).map(t => String(t || '').trim()).filter(Boolean),
+      includeDeclaration: b.includeDeclaration !== false,
+      piMadeBy: req.session.user.name || '',
+      items: cleanItems,
+    };
+
+    await _fillPiTemplate(sheets, { ...form, piNo: piNoFormatted });
     const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNoFormatted, templateSheetId);
 
-    await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, ['PI No', 'Date', 'Buyer', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Priced By', 'Priced At', 'Form JSON', 'Status']);
+    await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, PI_LOG_HEADER);
     await appendLogRow(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, [
-      piNoFormatted, "'" + date, buyerName, totalAmount ?? '', pdfLink || '', req.session.user.name || '', _timestampForSheet(), '', '',
-      JSON.stringify({ date, buyerName, buyerAddress, buyerGstin, paymentTerms, validity, piMadeBy, items: cleanItems, gstPercent: 0, freight: 0 }),
+      "'" + piNoFormatted, "'" + b.date, form.buyerName, totalAmount ?? '', pdfLink || '', req.session.user.name || '', _timestampForSheet(), '', '',
+      JSON.stringify(form),
       'Draft',
     ]);
 
@@ -3999,21 +4156,28 @@ app.put('/api/proforma-invoice/price', requireAuth, async (req, res) => {
     let existingForm = {};
     try { existingForm = rowVals[9] ? JSON.parse(rowVals[9]) : {}; } catch {}
 
-    const rateByCode = {};
-    (Array.isArray(req.body?.items) ? req.body.items : []).forEach(it => { if (it && it.code != null) rateByCode[String(it.code).trim()] = it.rate; });
-    const mergedItems = (existingForm.items || []).map(it => ({ ...it, rate: rateByCode[String(it.itemCode || '').trim()] ?? it.rate }));
-    const gstPercent = parseFloat(req.body?.gstPercent) || 0;
-    const freight = parseFloat(req.body?.freight) || 0;
-
-    const { templateSheetId } = await _piSheetMeta();
-    await _fillPiTemplate(sheets, {
-      piNo, date: existingForm.date, buyerName: existingForm.buyerName, buyerAddress: existingForm.buyerAddress,
-      buyerGstin: existingForm.buyerGstin, paymentTerms: existingForm.paymentTerms, validity: existingForm.validity,
-      piMadeBy: existingForm.piMadeBy, items: mergedItems, gstPercent, freight,
+    // Rates arrive keyed by row index, not by model number — an export PI can
+    // legitimately list the same model twice at different sizes, and keying by
+    // code would price both rows off whichever one was sent last.
+    const rateByIndex = {};
+    (Array.isArray(req.body?.items) ? req.body.items : []).forEach(it => {
+      if (it && it.index != null && !isNaN(parseInt(it.index, 10))) rateByIndex[parseInt(it.index, 10)] = it.rate;
     });
+    // Drafts raised before the export format existed carry itemCode/description
+    // instead of modelNo/itemName. Map them across rather than printing a PI
+    // with two blank columns.
+    const mergedItems = (existingForm.items || []).map((it, i) => ({
+      ...it,
+      modelNo: it.modelNo || it.itemCode || '',
+      itemName: it.itemName || it.description || '',
+      rate: rateByIndex[i] ?? it.rate,
+    }));
+
+    const { templateSheetId } = await _piSheetMeta(_piFyLabel(existingForm.date));
+    await _fillPiTemplate(sheets, { ...existingForm, piNo, items: mergedItems });
     const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNo, templateSheetId);
 
-    const mergedForm = { ...existingForm, items: mergedItems, gstPercent, freight };
+    const mergedForm = { ...existingForm, items: mergedItems };
     await _updateLogRowCells(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo, {
       D: totalAmount ?? '', E: pdfLink || rowVals[4] || '', H: req.session.user.name || '', I: _timestampForSheet(),
       J: JSON.stringify(mergedForm), K: 'Priced',

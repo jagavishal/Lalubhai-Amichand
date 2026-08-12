@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PI format preview — export Proforma Invoice / OCS</title>
+<!--
+  Static preview of the layout scripts/rebuild-pi-sheet.js paints onto the
+  live "Proforma Invoice" tab, filled with the Zam Zam sample data so the
+  format can be approved before the live sheet is touched.
+
+  It mirrors backend/lib/pi-format.js row for row and column for column — if
+  that module changes, this file is stale. It is a reference sample only;
+  nothing in the app reads it.
+-->
+<style>
+  @page { size: A4 landscape; margin: 8mm; }
+  body { margin: 0; padding: 24px; background: #eef1f5; font-family: Arial, Helvetica, sans-serif; color: #000; }
+  .sheet {
+    width: 1010px; margin: 0 auto; background: #fff; padding: 10px;
+    border: 2px solid #000; box-shadow: 0 8px 28px rgba(0,0,0,.14);
+  }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+  td, th { padding: 2px 4px; vertical-align: middle; }
+  .lh-name { font-size: 17px; font-weight: bold; text-align: center; padding: 4px; }
+  .lh-addr { font-size: 8px; text-align: center; }
+  .title { font-size: 12px; font-weight: bold; text-align: center; background: #d9e3f2; padding: 5px; }
+  .party td { border: 1px solid #000; font-size: 9px; height: 18px; }
+  .party .lbl { font-weight: bold; font-size: 8px; }
+  .party .consignee { vertical-align: top; }
+  .buyer { font-weight: bold; font-size: 10px; }
+  .shipnote { border: 1px solid #000; background: #f5f7fb; font-weight: bold; font-size: 10px; text-align: center; padding: 4px; }
+  .items th { border: 1px solid #000; background: #d9e3f2; font-size: 8px; font-weight: bold; text-align: center; height: 34px; }
+  .items td { border: 1px solid #000; font-size: 9px; text-align: center; height: 16px; }
+  .items td.name { text-align: left; }
+  .items td.rem { text-align: left; font-size: 8px; }
+  .items tr.total td { background: #f5f7fb; font-weight: bold; height: 19px; }
+  .items tr.total td.lbl { text-align: right; }
+  .items tr.words td { font-weight: bold; height: 21px; }
+  .items tr.words td.wordtext { text-align: left; font-size: 9px; }
+  .items tr.words td.totlbl { text-align: right; font-size: 9px; }
+  .items tr.words td.totval { text-align: center; font-size: 10px; }
+  .notes { border: 1px solid #000; border-top: none; }
+  .notes div { padding: 2px 4px; }
+  .n-validity { font-size: 8px; font-weight: bold; }
+  .n-bank { font-size: 8px; font-weight: bold; }
+  .n-head { font-size: 9px; font-weight: bold; }
+  .n-term { font-size: 8px; }
+  .n-confirm { font-size: 9px; font-weight: bold; }
+  .n-decl { font-size: 8px; }
+  .sign { margin-top: 4px; font-size: 9px; font-weight: bold; }
+  .sign td { padding-top: 4px; }
+  .sign .pen { height: 42px; }
+  .caption { width: 1030px; margin: 0 auto 14px; font: 13px/1.5 Arial, sans-serif; color: #334155; }
+  @media print { body { background: #fff; padding: 0; } .caption { display: none; } .sheet { box-shadow: none; margin: 0; } }
+</style>
+</head>
+<body>
+
+<p class="caption">
+  Preview of the new export PI / OCS layout — this is what the generated PDF will look like.
+  Data shown is the Zam Zam sample. Print to PDF (A4 landscape) to check page fit.
+</p>
+
+<div class="sheet">
+
+  <!-- rows 1-5 : letterhead -->
+  <table>
+    <tr><td class="lh-name">LALLUBHAI AMICHAND LIMITED</td></tr>
+    <tr><td class="lh-addr">Regd. Office : 48/50, Kansara Chawl, Kalbadevi Road, Mumbai - 400 002, India.&nbsp;&nbsp;&nbsp;Email : queen1911@laltd.co.in</td></tr>
+    <tr><td class="lh-addr">Admin. Office : 225/27, J. Dadajee Road, Tardeo, Mumbai - 400 007, India.</td></tr>
+    <tr><td class="lh-addr">Works : 175/3, Ghodasar Village, Near GIDC Vatva, Vatva - 382 445, Ahmedabad, Gujarat, India.</td></tr>
+    <tr><td class="title">PROFORMA INVOICE / ORDER CONFIRMATION SHEET (OCS)</td></tr>
+  </table>
+
+  <!-- rows 6-13 : consignee (A:F) | label (G:H) | value (I:M) -->
+  <table class="party">
+    <colgroup><col style="width:46%"><col style="width:20%"><col style="width:34%"></colgroup>
+    <tr>
+      <td class="consignee" rowspan="8" style="vertical-align:top;">
+        <div style="font-weight:bold;font-size:9px;">Consignee :</div>
+        <div class="buyer">M/s. ZAM ZAM PERFUMES INDUSTRIAL CO LLC.</div>
+        <div>TRN NO: 100502326000003</div>
+        <div>P.O. BOX: 326901, PLOT 1953, BLOCK 2,</div>
+        <div>UMM DERA, UMM AL QUWAIN</div>
+        <div>TEL: +9716 743 3100, Email: info@zamzamperfumes.ae</div>
+      </td>
+      <td class="lbl">Pro. Invoice No. :</td><td>VTV/052/25-26</td>
+    </tr>
+    <tr><td class="lbl">Date :</td><td>10.02.2026</td></tr>
+    <tr><td class="lbl">Order No. :</td><td>2042</td></tr>
+    <tr><td class="lbl">Terms of Payment :</td><td>30% ADVANCE PAYMENT AND BALANCE AGT. B/L COPY.</td></tr>
+    <tr><td class="lbl">Port of Loading :</td><td>Mundra / India</td></tr>
+    <tr><td class="lbl">Port of Discharge :</td><td>JEBEL ALI</td></tr>
+    <tr><td class="lbl">Place of Delivery :</td><td>JEBEL ALI</td></tr>
+    <tr><td class="lbl">Country of Origin of Goods :</td><td>INDIA</td></tr>
+  </table>
+
+  <!-- row 14 : shipment note -->
+  <div class="shipnote">Total 01 Container (20' FCL Container) Order</div>
+
+  <!-- rows 15-47 : item table, totals, amount in words -->
+  <table class="items">
+    <colgroup>
+      <col style="width:38px"><col style="width:92px"><col style="width:168px"><col style="width:48px">
+      <col style="width:44px"><col style="width:72px"><col style="width:78px"><col style="width:58px">
+      <col style="width:62px"><col style="width:74px"><col style="width:74px"><col style="width:88px">
+      <col style="width:96px">
+    </colgroup>
+    <tr>
+      <th>Sr No</th><th>Model No.</th><th>Item Name</th><th>Size</th><th>SWG</th>
+      <th>Per Box Dozen Packing</th><th>Total Qty (Pcs / Set)</th><th>Total Box</th>
+      <th>Total CBM</th><th>Total Weight (Kgs)</th><th>C&amp;F US$ Per Pc</th>
+      <th>Amount (US$)</th><th>Remarks</th>
+    </tr>
+    <tr>
+      <td>1</td><td>LA-1025/6</td><td class="name">NAXI KADI DABBA</td><td>6</td><td>0.91</td>
+      <td>120</td><td>45,120</td><td>376</td><td>29.8168</td><td>4,060.80</td>
+      <td>0.770</td><td>34,742.40</td><td class="rem">QUEEN BRAND</td>
+    </tr>
+    <tr><td>&nbsp;</td><td></td><td class="name"></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="rem"></td></tr>
+    <tr><td>&nbsp;</td><td></td><td class="name"></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="rem"></td></tr>
+    <tr><td>&nbsp;</td><td></td><td class="name"></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="rem"></td></tr>
+    <tr><td>&nbsp;</td><td></td><td class="name"></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="rem"></td></tr>
+    <tr><td>&nbsp;</td><td></td><td class="name"></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="rem"></td></tr>
+    <tr class="total">
+      <td class="lbl" colspan="6">TOTAL</td>
+      <td>45,120</td><td>376</td><td>29.8168</td><td>4,060.80</td><td>-</td><td>34,742.40</td><td></td>
+    </tr>
+    <tr class="words">
+      <td class="wordtext" colspan="8">(C&amp;F US DOLLAR THIRTY FOUR THOUSAND SEVEN HUNDRED FORTY TWO AND FORTY CENTS ONLY)</td>
+      <td class="totlbl" colspan="3">Total C&amp;F US$</td>
+      <td class="totval" colspan="2">34,742.40</td>
+    </tr>
+  </table>
+
+  <!-- rows 49-63 : validity, bank note, T&C, declaration -->
+  <div class="notes" style="border-top:1px solid #000;margin-top:6px;">
+    <div class="n-validity">*** THIS PRICE / P.I. IS VALID FOR 03 WORKING DAYS ONLY, AND THIS PRICE IS VALID ONLY FOR THIS ORDER. IF A NEW ORDER IS GIVEN AFTER THIS ORDER, A NEW PRICE WILL BE APPLICABLE (INCREASE IN PRICE 5% OR AS PER THE MARKET SITUATION).</div>
+    <div class="n-bank">WE HAVE SENT THE BANK DETAILS BY MAIL &amp; BY WHATSAPP, SO KINDLY TALLY ALL BANK DETAILS AND THEN MAKE THE PAYMENT.</div>
+    <div class="n-head">Terms &amp; Conditions :</div>
+    <div class="n-term">1) WEIGHT &amp; CBM VARIATION +/- 5% WILL BE ALLOWED.</div>
+    <div class="n-term">2) PACKING IN PACKAGES.</div>
+    <div class="n-term">3) SHIPMENT AS PER THE AGREED DELIVERY SCHEDULE, SUBJECT TO TIMELY RECEIPT OF CONFIRMATION AND ADVANCE PAYMENT.</div>
+    <div class="n-term">4) INSURANCE / LEGALISATION / SGS CHARGES WILL BE EXTRA AS ACTUAL.</div>
+    <div class="n-term">5) FOREIGN BANK CHARGES WILL BE ON BUYER'S ACCOUNT.</div>
+    <div class="n-term">6) THIS PROFORMA INVOICE IS SUBJECT TO OUR FINAL CONFIRMATION.</div>
+    <div class="n-term">7) IN CASE OF NATURAL DISASTER &amp; UNCONTROLLABLE CIRCUMSTANCES WE ARE NOT BOUND FOR THE DELIVERY PERIOD.</div>
+    <div class="n-term">8) IMPORTANT NOTE : IF WE RECEIVE ANY ADVANCE PAYMENT OR INVOICE PAYMENT OTHER THAN THE NAME MENTIONED IN THIS PROFORMA INVOICE, YOU HAVE TO GIVE US A THIRD PARTY RELATIONSHIP CERTIFICATE FOR THE SAME.</div>
+    <div class="n-term">&nbsp;</div>
+    <div class="n-term">&nbsp;</div>
+    <div class="n-confirm">PLEASE CONFIRM THIS PROFORMA INVOICE BY RETURN MAIL OR WHATSAPP.</div>
+    <div class="n-decl">IT IS FURTHER DECLARED THAT THE ABOVE GOODS ARE NOT OF ISRAELI ORIGIN / MANUFACTURE NOR DO THEY CONTAIN ANY ISRAELI MATERIAL.</div>
+  </div>
+
+  <!-- rows 65-69 : signatures -->
+  <table class="sign">
+    <colgroup><col style="width:46%"><col style="width:8%"><col style="width:46%"></colgroup>
+    <tr>
+      <td>For, LALLUBHAI AMICHAND LIMITED</td><td></td>
+      <td>I Accept &amp; By,&nbsp;&nbsp;&nbsp;For, M/s. ZAM ZAM PERFUMES INDUSTRIAL CO LLC.</td>
+    </tr>
+    <tr><td class="pen"></td><td></td><td class="pen"></td></tr>
+    <tr><td>Authorised Signatory</td><td></td><td>Authorised Signatory</td></tr>
+  </table>
+
+</div>
+
+</body>
+</html>
