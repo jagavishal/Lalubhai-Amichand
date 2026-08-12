@@ -19,11 +19,22 @@ window.Pages['po-pending'] = (() => {
   let _tick = null;
   let _onlyPending = true;
 
+  // opts.containerId / opts.embedded let the FMS page (see fms.js) mount this
+  // whole module inside its "Stores Approval FMS Report" tab instead of
+  // #main-content — same embed contract inward.js/outward.js use for IMS.
+  let _opts = {};
+
+  // Bumped on every render(). A timer only keeps running while it belongs to
+  // the newest mount: the router (and the FMS tab bar) replace their container
+  // outright with no unmount hook, so leaving and re-entering quickly would
+  // otherwise leave the previous mount's interval polling forever alongside
+  // the new one.
+  let _gen = 0;
+
   const esc = s => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-  const alive = () => (window.location.hash || '').replace('#', '') === 'po-pending'
-    && !!document.getElementById('pop-root');
+  const alive = myGen => myGen === _gen && !!document.getElementById('pop-root');
 
   function stopTimers() {
     if (_poll) { clearInterval(_poll); _poll = null; }
@@ -32,6 +43,7 @@ window.Pages['po-pending'] = (() => {
 
   async function load(force) {
     if (_loading) return;
+    const myGen = _gen;
     _loading = true;
     paintStatus();
     try {
@@ -45,24 +57,25 @@ window.Pages['po-pending'] = (() => {
       _error = e.message || String(e);
     } finally {
       _loading = false;
-      if (alive()) paint();
+      if (alive(myGen)) paint();
     }
   }
 
   // ── timers ───────────────────────────────────────────────────────────────
-  // The router swaps #main-content wholesale and gives pages no unmount hook,
-  // so every tick re-checks that this page is still the one on screen and
-  // tears its own timers down if not. Polling also pauses while the tab is
-  // hidden — a backgrounded dashboard shouldn't keep spending read quota.
-  function startTimers() {
+  // Neither the router nor the FMS tab bar gives pages an unmount hook, so
+  // every tick re-checks that this mount is still the one on screen and tears
+  // its own timers down if not. Polling also pauses while the browser tab is
+  // hidden — a dashboard left open in the background shouldn't keep spending
+  // Sheets read quota.
+  function startTimers(myGen) {
     stopTimers();
     _poll = setInterval(() => {
-      if (!alive()) { stopTimers(); return; }
+      if (!alive(myGen)) { stopTimers(); return; }
       if (document.hidden) return;
       load(false);
     }, POLL_MS);
     _tick = setInterval(() => {
-      if (!alive()) { stopTimers(); return; }
+      if (!alive(myGen)) { stopTimers(); return; }
       paintStatus();
     }, TICK_MS);
   }
@@ -94,7 +107,7 @@ window.Pages['po-pending'] = (() => {
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;">
         ${window.UI.statTile({ label: 'PRs Pending', value: s.pending, sub: `${s.tracked} tracked in FMS`, color: 'brand' })}
         ${window.UI.statTile({ label: 'Overdue', value: s.overdue, sub: 'past planned date', color: 'danger' })}
-        ${window.UI.statTile({ label: 'Stuck at PO Stage', value: s.atPoSteps, sub: 'Create PO / PO Approval / Issue PO', color: 'warning' })}
+        ${window.UI.statTile({ label: 'Stuck at PO Stage', value: s.atPoSteps, sub: 'Create PO / Issue PO to Vendor', color: 'warning' })}
         ${window.UI.statTile({ label: 'Bottleneck', value: bn ? bn.count : 0, sub: bn ? `${bn.label} — ${bn.owner}` : 'none', color: 'warning' })}
       </div>`;
   }
@@ -105,7 +118,7 @@ window.Pages['po-pending'] = (() => {
     const max = Math.max(...list.map(s => s.count));
     const rows = list.map(s => {
       const pct = Math.round((s.count / max) * 100);
-      const isPo = ['S5', 'S5B', 'S6'].includes(s.key);
+      const isPo = ['S5', 'S6'].includes(s.key);
       const bar = s.overdue > 0 ? 'var(--color-danger)' : 'var(--color-primary)';
       return `
         <div style="display:grid;grid-template-columns:minmax(150px,220px) 1fr auto;align-items:center;gap:12px;">
@@ -308,12 +321,14 @@ window.Pages['po-pending'] = (() => {
   }
 
   return {
-    async render() {
-      const el = document.getElementById('main-content');
+    async render(opts) {
+      if (opts) _opts = opts;
+      const el = document.getElementById(_opts.containerId || 'main-content');
       if (!el) return;
+      const myGen = ++_gen;   // claims the page; any older mount's timers stop
       el.innerHTML = `<div id="pop-root" class="space-y-4 animate-fade-in"></div>`;
       paint();
-      startTimers();
+      startTimers(myGen);
       await load(false);
     },
   };

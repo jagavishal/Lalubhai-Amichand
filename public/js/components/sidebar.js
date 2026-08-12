@@ -100,9 +100,9 @@ window.Sidebar = {
       { route: 'pr-creation',    label: 'PR Creation',    icon: 'prcreation' },
       { route: 'po-creation',    label: 'PO Creation',    icon: 'pocreation' },
       { route: 'grn-creation',   label: 'GRN Creation',   icon: 'grncreation' },
-      // Read-only mirror of the store team's approval FMS — sits next to PO
-      // Creation because that's the stage it reports on.
-      { route: 'po-pending',     label: 'PO Pending',     icon: 'popending' },
+      // No entry for 'po-pending': it lives inside the FMS page's "Stores
+      // Approval FMS Report" tab (see fms.js). The route still resolves on its
+      // own so older links to #po-pending keep working.
       // One entry per IMS stock book -- each route is its own page with its
       // own Inward/Outward/Report tabs, hard-scoped to that book's category
       // (see IMS_BOOKS in ims.js; routes must match it exactly). The first

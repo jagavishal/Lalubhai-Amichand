@@ -202,6 +202,7 @@ window.FmsDoneModal = (function () {
 window.Pages.fms = (() => {
   /* ── state ─────────────────────────────────────────────────────────── */
   let _view = 'list';        // 'list' | 'detail'
+  let _topTab = 'workflows'; // 'workflows' | 'report' — see FMS_TOP_TABS
   let _sheets = [];
   let _users = [];
   let _detailId = null;
@@ -313,7 +314,29 @@ window.Pages.fms = (() => {
       </div>`;
   }
 
+  // Top-level tabs. 'workflows' is the card list this page has always been;
+  // 'report' mounts po-pending.js — a read-only view of the store team's own
+  // approval FMS — into this page's body, the same embed contract ims.js uses
+  // for its Inward/Outward tabs.
+  const FMS_TOP_TABS = [
+    { key: 'workflows', label: 'Workflows' },
+    { key: 'report',    label: 'Stores Approval FMS Report' },
+  ];
+
+  function renderTopTabs() {
+    return `<div style="display:flex;gap:8px;flex-wrap:wrap;">${FMS_TOP_TABS.map(t => {
+      const on = t.key === _topTab;
+      return `<button class="fms-top-tab" data-tab="${t.key}" style="
+        padding:8px 16px;border-radius:10px;font-size:12.5px;font-weight:${on ? '600' : '500'};cursor:pointer;
+        border:1px solid ${on ? 'transparent' : 'var(--border-light)'};
+        background:${on ? 'var(--color-primary)' : 'var(--surface)'};
+        color:${on ? 'var(--color-primary-text)' : 'var(--text-secondary)'};
+        transition:background .14s,color .14s;">${t.label}</button>`;
+    }).join('')}</div>`;
+  }
+
   function renderList(el, user, admin) {
+    const onWorkflows = _topTab === 'workflows';
     el.innerHTML = `
       <div class="space-y-6 animate-fade-in">
         <div class="flex flex-wrap items-center justify-between gap-3">
@@ -321,17 +344,33 @@ window.Pages.fms = (() => {
             <h1 class="text-xl font-bold text-slate-900">FMS — Flow Management System</h1>
             <p class="text-[13px] text-slate-500 mt-0.5">Recurring workflows tracked live in Google Sheets</p>
           </div>
-          ${admin ? `
+          ${admin && onWorkflows ? `
           <button id="fms-add-btn" class="btn-primary flex items-center gap-1.5">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
             Add FMS
           </button>` : ''}
         </div>
-        ${_sheets.length === 0 ? window.UI.emptyState({
+        ${renderTopTabs()}
+        <div id="fms-tabbody">${!onWorkflows ? '' : (_sheets.length === 0 ? window.UI.emptyState({
           title: admin ? 'No FMS workflows yet' : 'No FMS assigned to you',
           message: admin ? 'Add your first flow to start tracking it from a live Google Sheet.' : 'Ask an admin to assign you as a doer on a step.',
-        }) : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;">${_sheets.map(s => renderCard(s, admin)).join('')}</div>`}
+        }) : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;">${_sheets.map(s => renderCard(s, admin)).join('')}</div>`)}</div>
       </div>`;
+
+    el.querySelectorAll('.fms-top-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.tab === _topTab) return;
+        _topTab = btn.dataset.tab;
+        renderPage();
+      });
+    });
+
+    // Leaving this tab replaces #fms-tabbody, which is how po-pending.js knows
+    // to stop its own polling — nothing to tear down here.
+    if (!onWorkflows) {
+      window.Pages['po-pending']?.render({ containerId: 'fms-tabbody', embedded: true });
+      return;
+    }
 
     document.getElementById('fms-add-btn')?.addEventListener('click', () => openAddModal());
     el.querySelectorAll('[data-action="open"]').forEach(b => b.addEventListener('click', () => openDetail(b.dataset.id)));

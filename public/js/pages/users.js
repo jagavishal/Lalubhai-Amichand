@@ -58,7 +58,6 @@ window.Pages.users = (() => {
     { cat: 'Export Department', key: 'pr-creation',   label: 'PR Creation' },
     { cat: 'Export Department', key: 'po-creation',   label: 'PO Creation' },
     { cat: 'Export Department', key: 'grn-creation',  label: 'GRN Creation' },
-    { cat: 'Export Department', key: 'po-pending',    label: 'PO Pending' },
     // One key per IMS stock book; each covers that book's Inward/Outward/
     // Report tabs. The retired 'ims' key (and the older 'inward'/'outward'
     // ones) still grant access to all four — see sidebar.js's routeAliases —

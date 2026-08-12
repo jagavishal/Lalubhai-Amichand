@@ -3635,13 +3635,23 @@ const FMS_PO_STEPS = [
   { key: 'S4A', label: 'Quotations Giving',      owner: 'Sagar',                      planned: 37,  actual: 38,  prCol: 39,  by: 40,  timeline: 50 },
   { key: 'S4B', label: 'Quotations Approval',    owner: 'Sajil Sir / Dhiren Sir',     planned: 52,  actual: 53,  prCol: null, by: 54, approval: 57, timeline: 59 },
   { key: 'S5',  label: 'Create PO',              owner: 'Khurshid / Sagar / Ashok',   planned: 61,  actual: 62,  prCol: 63,  by: 64,  approval: 65, poNo: 66, timeline: 68, poStep: true },
-  { key: 'S5B', label: 'PO Approval',            owner: 'Sajil Sir',                  planned: 70,  actual: 71,  prCol: 72,  by: 73,  approval: 74, poNo: 75, timeline: 77, poStep: true },
+  // Not used in practice — the chain routinely completes past it with its
+  // Actual Time left blank, so counting it would park every PR on a step
+  // nobody is waiting for. Dropped from the report entirely; delete `ignored`
+  // to bring it back.
+  { key: 'S5B', label: 'PO Approval',            owner: 'Sajil Sir',                  planned: 70,  actual: 71,  prCol: 72,  by: 73,  approval: 74, poNo: 75, timeline: 77, poStep: true, ignored: true },
   { key: 'S6',  label: 'Issue PO to Vendor',     owner: 'Khurshid / Sagar / Ashok',   planned: 79,  actual: 80,  prCol: 81,  by: 83,  approval: 84, poNo: 82, timeline: 87, poStep: true },
   { key: 'S7',  label: 'Advance Payment',        owner: 'Sushil Sir',                 planned: 89,  actual: 91,  prCol: 90,  by: 93,  approval: 94, poNo: 92, timeline: 95 },
   { key: 'S8A', label: 'Goods Challan Filling',  owner: 'Sagar',                      planned: 97,  actual: 98,  prCol: 99,  by: 101, poNo: 100, timeline: 105 },
   { key: 'S8B', label: 'Goods Supervisor Form',  owner: 'Supervisors',                planned: 107, actual: 108, prCol: 109, by: 111, poNo: 110, timeline: 123 },
   { key: 'S9',  label: 'Accounts Checklist',     owner: 'Sagar',                      planned: 125, actual: 126, prCol: 127, by: 129, poNo: 128, timeline: 143 },
 ];
+
+// The steps the report actually reasons about. Everything downstream —
+// progress track, "pending at", bypassed detection, the bottleneck — walks
+// this list, so an ignored step can never become the answer to "kahan atka
+// hai" nor make a finished chain look unfinished.
+const FMS_PO_STEPS_ACTIVE = FMS_PO_STEPS.filter(s => !s.ignored);
 
 // Row 4 of the live sheet holds PR175's Step 1 but Step 9's response for
 // PR172 — a step's Form appends to the next free row of its OWN block, which
@@ -3705,7 +3715,7 @@ async function _buildFmsPoPending() {
   // Pass 1: every block occurrence, tagged with the PR it names itself for.
   const claimed = new Map(); // `${prKey}|${stepKey}` -> block snapshot
   for (const { r } of monRows.slice(3).map((r, i) => ({ r, sheetRow: i + 4 }))) {
-    for (const step of FMS_PO_STEPS) {
+    for (const step of FMS_PO_STEPS_ACTIVE) {
       if (step.prCol == null) continue;
       const own = _normalizePrNo(_fmsBlockValue(r, step, 'prCol'));
       if (!own) continue;
@@ -3736,7 +3746,7 @@ async function _buildFmsPoPending() {
     const prNo = String(r[1] ?? '').trim();
     const prKey = _normalizePrNo(prNo);
 
-    const steps = FMS_PO_STEPS.map(step => {
+    const steps = FMS_PO_STEPS_ACTIVE.map(step => {
       const own = step.prCol == null ? '' : _normalizePrNo(_fmsBlockValue(r, step, 'prCol'));
       // A block naming someone else is that PR's data parked on this row.
       const strayHere = !!own && own !== prKey;
@@ -3812,11 +3822,11 @@ async function _buildFmsPoPending() {
     e.count++; e.prNos.push(r.prNo);
     if (r.pendingAt.daysLate > 0) e.overdue++;
   }
-  const byStep = FMS_PO_STEPS.map(s => byStepMap.get(s.key)).filter(Boolean).sort((a, b) => b.count - a.count);
+  const byStep = FMS_PO_STEPS_ACTIVE.map(s => byStepMap.get(s.key)).filter(Boolean).sort((a, b) => b.count - a.count);
 
   return {
     fetchedAt: new Date().toISOString(),
-    steps: FMS_PO_STEPS.map(s => ({ key: s.key, label: s.label, owner: s.owner, poStep: !!s.poStep })),
+    steps: FMS_PO_STEPS_ACTIVE.map(s => ({ key: s.key, label: s.label, owner: s.owner, poStep: !!s.poStep })),
     rows,
     notInFms,
     summary: {
@@ -3824,7 +3834,7 @@ async function _buildFmsPoPending() {
       complete: rows.filter(r => r.complete).length,
       pending: pending.length,
       overdue: pending.filter(r => r.pendingAt.daysLate > 0).length,
-      atPoSteps: pending.filter(r => ['S5', 'S5B', 'S6'].includes(r.pendingAt.key)).length,
+      atPoSteps: pending.filter(r => ['S5', 'S6'].includes(r.pendingAt.key)).length,
       bypassed: rows.filter(r => r.bypassed.length).length,
       mismatched: rows.filter(r => r.poMismatch).length,
       notInFms: notInFms.length,
