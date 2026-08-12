@@ -23,7 +23,8 @@ window.Pages = window.Pages || {};
 window.Pages['outward'] = (() => {
   /* ── state ──────────────────────────────────────────────────── */
   let _view = 'create'; // 'create' | 'list'
-  let _departments = [];
+  // Departments live in Utils' shared cache (the app-wide master list), not in
+  // this page's state — _loadMasters() only primes it from /api/ims/masters.
   let _sources = ['In/Out (Manual)', 'IN/OUT(HINDALCO)']; // overwritten from /api/ims/masters once loaded
   let _mastersLoaded = false;
   // The book this mount is locked to — set from render({category}) by ims.js.
@@ -115,9 +116,12 @@ window.Pages['outward'] = (() => {
   function _fillMasterSelects() {
     const sel = document.getElementById('outw-department');
     if (sel) {
-      const keep = sel.value;
-      sel.innerHTML = '<option value="">Select…</option>' + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
-      if (keep) sel.value = keep; // don't wipe a selection the user already made
+      // Departments are the app-wide master list (same one Users, Daily Task
+      // and PR/PO Creation use), and the dropdown's last row adds to it — a
+      // store hand who finds their department missing mid-entry doesn't have to
+      // go find an Admin. Fill keeps whatever selection is already made.
+      Utils.fillDeptSelect(sel);
+      Utils.bindDeptSelect(sel);
     }
     const srcSel = document.getElementById('outw-source');
     if (srcSel) {
@@ -133,7 +137,7 @@ window.Pages['outward'] = (() => {
   function _loadMasters() {
     if (!_mastersPromise) {
       _mastersPromise = Utils.apiFetch('/api/ims/masters').then(data => {
-        _departments = (data && data.departments) || [];
+        Utils.setDepartments((data && data.departments) || []);
         if (Array.isArray(data?.sources) && data.sources.length) _sources = data.sources;
         _mastersLoaded = true;
       }).catch(e => {

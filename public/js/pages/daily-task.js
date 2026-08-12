@@ -1,12 +1,5 @@
 window.Pages['daily-task'] = (function () {
 
-  /* ── constants ─────────────────────────────────────────────── */
-  const DEPARTMENTS = [
-    'CXO', 'Business Automation', 'Social Media', 'Graphic Designing',
-    'Google Ads', 'SEO', 'Meta Ads', 'Content Writing', 'AI',
-    'Website Design & Development', 'MDO', 'eMarketing Accounts',
-  ];
-
   /* ── state ─────────────────────────────────────────────────── */
   let rows       = [blankRow()];
   let entryDate  = todayISO();
@@ -108,8 +101,7 @@ window.Pages['daily-task'] = (function () {
         </td>
         <td class="table-td">
           <select class="input row-dept" data-field="department" data-i="${i}">
-            <option value="">--select--</option>
-            ${DEPARTMENTS.map(d => `<option value="${esc(d)}" ${r.department === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}
+            ${Utils.deptOptionsHtml(r.department, { placeholder: '--select--' })}
           </select>
         </td>
         <td class="table-td">
@@ -527,19 +519,30 @@ window.Pages['daily-task'] = (function () {
     const tbody = document.getElementById('task-rows');
     if (!tbody) return;
 
-    // Input / select / textarea change
+    // Input / select / textarea change. The Department select's "+ Add new
+    // department" row is a sentinel, not a value — Utils.bindDeptSelect below
+    // handles it (and writes the real department back into the row), so it must
+    // never be stored here as if it were a department name.
     tbody.querySelectorAll('[data-field]').forEach(el => {
       el.addEventListener('input', (e) => {
         const i     = Number(e.target.dataset.i);
         const field = e.target.dataset.field;
+        if (e.target.value === Utils.DEPT_ADD_NEW) return;
         rows[i][field] = e.target.value;
         if (field === 'minutes') refreshTotal();
       });
       el.addEventListener('change', (e) => {
         const i     = Number(e.target.dataset.i);
         const field = e.target.dataset.field;
+        if (e.target.value === Utils.DEPT_ADD_NEW) return;
         rows[i][field] = e.target.value;
       });
+    });
+
+    // Department dropdowns — one master list for the whole app, and adding one
+    // here makes it available everywhere else too.
+    tbody.querySelectorAll('.row-dept').forEach(sel => {
+      Utils.bindDeptSelect(sel, (value) => { rows[Number(sel.dataset.i)].department = value; }, { placeholder: '--select--' });
     });
 
     // DUP / DEL buttons
@@ -603,8 +606,9 @@ window.Pages['daily-task'] = (function () {
         </div>
       `;
 
-      // Load data in parallel
-      await Promise.all([loadPast(), loadUsers(), loadClients()]);
+      // Load data in parallel — departments included, because renderPage()
+      // builds every row's Department dropdown straight out of Utils' cache.
+      await Promise.all([loadPast(), loadUsers(), loadClients(), Utils.getDepartments()]);
 
       // Full render
       el.innerHTML = renderPage();

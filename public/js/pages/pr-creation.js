@@ -53,16 +53,15 @@ window.Pages['pr-creation'] = (() => {
   // concept on their template at all.
   const DEPARTMENT_MODE = { ITEM_CODE: 'manual', PACKING_STICKER: 'none', PACKING_BOX: 'none', ALU: 'manual' };
 
-  // Fixed list for ALU's manual Department dropdown — matches the store
-  // team's own PR-tracking categories (the same scheme "PR Form Responses"/
-  // RM_1_res uses for its Department column and per-category product-name
-  // columns), deliberately NOT PO Creation's shop-floor department list,
-  // which is a different, broader set. "Other" reveals a free-text input,
-  // same as that sheet's own "If New Department then Enter Here" column.
-  const PR_DEPARTMENTS = [
-    'Accessory dept', 'Brazing dept', 'CNC dept', 'Consumable', 'Electric dept',
-    'Packing dept', 'Pressing dept', 'Washing dept', 'Welding dept', 'Other',
-  ];
+  // ALU's manual Department dropdown, and the PR Form tab's own Department
+  // multi-select further down, are both built from the app-wide department
+  // master (Utils' shared cache, primed from /api/pr-creation/masters) — the
+  // same list Users, Daily Task, IMS Inward/Outward and PO Creation use. They
+  // used to be two separate hardcoded lists here, spelled differently from each
+  // other and from PO Creation's. "Other" is kept on the end of this one: it
+  // reveals a free-text input, same as the sheet's own "If New Department then
+  // Enter Here" column, for a one-off that isn't worth adding to the master.
+  const PR_DEPARTMENT_EXTRAS = ['Other'];
 
   // Manual item columns per format, in on-sheet order — everything else
   // (description, size, totals) is computed by the sheet's own formulas once
@@ -133,10 +132,11 @@ window.Pages['pr-creation'] = (() => {
     'SHREENATHJI TRD COMPANY', 'JAI MATADI CORPORATION', 'PARASNATH PACAKAGING',
   ];
 
-  const PF_DEPARTMENT_LIST = [
-    'accessory dept', 'Brazing dept', 'CNC dept', 'consumable', 'electric dept',
-    'Packing dept', 'Pressing dept', 'Washing dept', 'Welding dept',
-  ];
+  // The PR Form tab's Department options — the app-wide master list again (this
+  // was its own hardcoded, differently-spelled copy). No "+ Add new" row here:
+  // this form already has its own "If New Department then Enter Here" field,
+  // which is what the paper form it mirrors uses.
+  function _pfDepartmentList() { return Utils.departments(); }
 
   const PF_PRODUCT_CATALOG = {
     accessory: ['BACK LIGHT MILK JUG KNOB', 'BRASS INSERT', 'S.S MILK JUG SCREW', 'STEEL CAP RIVET'],
@@ -196,9 +196,14 @@ window.Pages['pr-creation'] = (() => {
       if (!data) return;
       _vendors = data.vendors || [];
       _nextPrNumber = data.nextPrNumber;
+      Utils.setDepartments(data.departments || []);
       _mastersLoaded = true;
       const el = document.getElementById('pcr-next-no');
       if (el) el.textContent = _nextPrNumber != null ? _nextPrNumber : '—';
+      // The Department select renders before this fetch resolves — re-fill it in
+      // place (keeping any pick already made) rather than leaving it empty.
+      const deptSel = document.getElementById('pcr-department');
+      if (deptSel) Utils.fillDeptSelect(deptSel, null, { extra: PR_DEPARTMENT_EXTRAS });
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load PR masters', 'error');
     }
@@ -443,8 +448,8 @@ window.Pages['pr-creation'] = (() => {
     const deptMode = DEPARTMENT_MODE[_format];
     const dept = deptMode === 'manual'
       ? _fieldWrap('Department', ''
-          + '<select id="pcr-department" style="' + _inputStyle + 'background:#fff;"><option value="">Select…</option>'
-            + PR_DEPARTMENTS.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('') + '</select>'
+          + '<select id="pcr-department" style="' + _inputStyle + 'background:#fff;">'
+            + Utils.deptOptionsHtml('', { extra: PR_DEPARTMENT_EXTRAS }) + '</select>'
           + '<input type="text" id="pcr-department-other" placeholder="Enter department…" autocomplete="off" style="' + _inputStyle + 'margin-top:8px;display:none;" />')
       : '';
     return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
@@ -558,6 +563,10 @@ window.Pages['pr-creation'] = (() => {
     const form = document.getElementById('pcr-form');
     form.addEventListener('submit', _createSubmit);
     form.addEventListener('input', _onFormInput);
+    // Bound on every render (the form is rebuilt from scratch each time), so the
+    // Department dropdown's "+ Add new department" option keeps working after a
+    // format switch or a trip through the Summary tab.
+    Utils.bindDeptSelect(document.getElementById('pcr-department'), null, { extra: PR_DEPARTMENT_EXTRAS });
     if (!_mastersLoaded) _loadMasters();
   }
 
@@ -900,7 +909,7 @@ window.Pages['pr-creation'] = (() => {
         + _pfTextField('pr-filled-by', 'Name of Person Filling the Form', 'फ़ॉर्म भरने वाले व्यक्ति का नाम / ફોર્મ ભરતા વ્યક્તિનું નામ', true)
         + _pfMultiSelectDropdown('pr-vendor-chk', 'Available Options of Vendors', 'ઉપલબ્ધ વેન્ડરના વિકલ્પો / वेंडरों के उपलब्ध विकल्प', PF_VENDOR_LIST, true, { placeholder: 'Select vendor(s)…', searchable: true, full: true })
         + _pfTextField('pr-vendor-other', 'If New Vendor then Enter Here', 'જો નવો વેન્ડર હોય તો અહીં દાખલ કરો / अगर नया वेंडर हो तो यहां दर्ज करें', false)
-        + _pfMultiSelectDropdown('pr-dept-chk', 'Department', 'વિભાગ / विभाग', PF_DEPARTMENT_LIST, true, { placeholder: 'Select department(s)…' })
+        + _pfMultiSelectDropdown('pr-dept-chk', 'Department', 'વિભાગ / विभाग', _pfDepartmentList(), true, { placeholder: 'Select department(s)…' })
         + _pfTextField('pr-dept-other', 'If New Department then Enter Here', 'જો નવો વિભાગ હોય તો અહીં દાખલ કરો / अगर नया विभाग हो तो यहां दर्ज करें', false)
         + '<div class="pr-form-full" style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Product Name (optional)</div>'
         + _pfMultiSelectDropdown('pr-accessory-chk', 'Accessory Product Name', 'અનુસંગી ઉત્પાદનનું નામ / सहायक उत्पाद का नाम', PF_PRODUCT_CATALOG.accessory, true, { required: false })
@@ -926,6 +935,12 @@ window.Pages['pr-creation'] = (() => {
     const formEl = document.getElementById('pr-form-el');
     formEl.addEventListener('submit', _pfSubmit);
     _pfBindMultiSelectDropdowns(formEl);
+    // This view's Department checkboxes are built synchronously from the cached
+    // master list. Opening PR Form first (before anything has fetched it) would
+    // otherwise leave that one dropdown empty — fetch, then re-render.
+    if (!Utils.hasDepartments()) {
+      Utils.getDepartments().then(list => { if (list.length && _view === 'form') renderPage(); });
+    }
   }
 
   /* ── Tabs ───────────────────────────────────────────────────────────── */

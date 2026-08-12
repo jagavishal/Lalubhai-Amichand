@@ -13,12 +13,11 @@ window.Pages['po-creation'] = (() => {
   const PARTY_LABEL  = { PurchaseOrder: 'Customer Name', 'ENR PO': 'Vendor', 'Diamond PO': 'Vendor' };
   const ITEM_CODE_LABEL = { PurchaseOrder: 'Item Code', 'ENR PO': 'Item #', 'Diamond PO': 'Item #' };
 
-  // Fallback list — replaced by the live sheet's own Department dropdown
-  // (Vendor Details!N3:N31) once /api/po-creation/masters resolves.
-  let _departments = [
-    'Press Shop', 'Accessories', 'Fitting', 'Spinning', 'Milk Jug Fitting', 'Washing', 'Packing',
-    'Tool Room', 'Store', 'Time Keeper', 'Cnc', 'Circles', 'Riveting Department', 'ST STEEL', 'PRESSING', 'ALU CIRCLE',
-  ];
+  // Departments are the app-wide master list (Utils' shared cache, primed from
+  // /api/po-creation/masters and served by GET /api/departments) — the same one
+  // Users, Daily Task, IMS Inward/Outward and PR Creation use. This page used to
+  // keep its own copy of the sheet's Vendor Details!N3:N31 dropdown, which spelt
+  // the same shop floors differently from every other form.
 
   // Manual columns per format, in on-sheet order — everything else (description,
   // size, amount/total) is computed by the sheet's own formulas once Item Code
@@ -171,7 +170,7 @@ window.Pages['po-creation'] = (() => {
       if (!data) return;
       _vendors = data.vendors || [];
       _shipToLocations = data.shipToLocations || [];
-      if (Array.isArray(data.departments) && data.departments.length) _departments = data.departments;
+      Utils.setDepartments(data.departments || []);
       _nextPoNumber = data.nextPoNumber;
       _mastersLoaded = true;
       const el = document.getElementById('poc-next-no');
@@ -184,9 +183,8 @@ window.Pages['po-creation'] = (() => {
       }
       const deptSel = document.getElementById('poc-department');
       if (deptSel) {
-        const current = deptSel.value;
-        deptSel.innerHTML = '<option value="">Select…</option>' + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
-        if (current) deptSel.value = current;
+        Utils.fillDeptSelect(deptSel);
+        Utils.bindDeptSelect(deptSel);
       }
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load PO masters', 'error');
@@ -662,7 +660,9 @@ window.Pages['po-creation'] = (() => {
     const shipToOptions = _shipToLocations.length
       ? _shipToLocations.map(s => '<option value="' + esc(s) + '"' + (s.includes('(Factory)') ? ' selected' : '') + '>' + esc(s) + '</option>').join('')
       : '<option value="">Loading…</option>';
-    const deptOptions = '<option value="">Select…</option>' + _departments.map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
+    // Rendered from Utils' cache; _loadMasters() re-fills this select in place
+    // once the master list lands, so an early render is never left empty.
+    const deptOptions = Utils.deptOptionsHtml();
 
     const common = ''
       + _textField('poc-date', 'Date', { type: 'date', value: _today() })
@@ -856,6 +856,12 @@ window.Pages['po-creation'] = (() => {
     _bindPartyField();
     _bindPrNoField();
     _bindAllItemRows();
+
+    // Department dropdown: bound on every render (the form is rebuilt from
+    // scratch each time), not just inside _loadMasters — which only runs on the
+    // first render — so its "+ Add new department" option keeps working when
+    // you switch format or come back from the List tab.
+    Utils.bindDeptSelect(document.getElementById('poc-department'));
 
     document.getElementById('poc-add-item').addEventListener('click', () => {
       document.getElementById('poc-items-tbody').insertAdjacentHTML('beforeend', _itemRowHtml());

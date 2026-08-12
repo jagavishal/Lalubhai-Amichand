@@ -274,6 +274,43 @@ const SCHEMA = [
   // job-work ledger ("IN/OUT(HINDALCO)") — see IMS_SOURCES. Blank for
   // Stores/ALU, which have never needed more than one ledger per category.
   `ALTER TABLE ims_transactions ADD COLUMN IF NOT EXISTS source VARCHAR(32) NOT NULL DEFAULT ''`,
+  // ── Departments master — the ONE list behind every Department dropdown in the
+  // app (Users, Daily Task, IMS Inward/Outward, PR Creation, PO Creation). Each
+  // of those used to carry its own hardcoded list, so the same shop floor was
+  // spelled three different ways depending on the page. Seeded once from
+  // FACTORY_DEPARTMENTS; after that it's plain data — any of those dropdowns'
+  // "+ Add new department" option appends to it and every other page picks the
+  // new name up on its next load. sort_order keeps the seeded list in the
+  // factory's own numbering; anything added later sorts after it.
+  `CREATE TABLE IF NOT EXISTS departments (id VARCHAR(16) PRIMARY KEY, name VARCHAR(128) NOT NULL, sort_order INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(name)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+];
+
+// The factory's own department list (the numbered list the plant keeps on
+// paper), used to seed the `departments` table on a fresh DB and as the
+// fallback whenever that table can't be read. Not the live list — once seeded,
+// `departments` is the source of truth and this is never consulted again.
+const FACTORY_DEPARTMENTS = [
+  'Circle Dept.',
+  'Pressing Dept.',
+  'Rolling Cutting Dept.',
+  'CNC Dept.',
+  'Tool Room Dept.',
+  'New Product Development',
+  'Accessories Dept. (Pressing)',
+  'Moulding Dept.',
+  'Buffing Dept.',
+  'Spinning Dept.',
+  'Charak Dept.',
+  'Fitting Dept.',
+  'Welding Dept.',
+  'Washing Dept.',
+  'Packing Dept.',
+  'Office',
+  'SS Dept.',
+  'General Factory',
+  'Consumable Store',
+  'Accessories Stores',
+  'Fabrication Dept.',
 ];
 
 // Canonical IMS category list — every value the API will accept/store on an
@@ -329,6 +366,44 @@ async function seedIfEmpty() {
   }
 }
 
+// Fills `departments` from FACTORY_DEPARTMENTS the first time only — an empty
+// table means a fresh DB, a non-empty one is the live list (which may well have
+// had rows added or removed since) and is left completely alone.
+async function seedDepartments() {
+  if (!USE_DB) return;
+  const rows = await q('SELECT COUNT(*) AS cnt FROM departments');
+  if (Number(rows[0]?.cnt || 0) > 0) return;
+  for (const [i, name] of FACTORY_DEPARTMENTS.entries()) {
+    await pool.query(
+      'INSERT INTO departments (id,name,sort_order) VALUES ($1,$2,$3) ON CONFLICT (name) DO NOTHING',
+      ['DEP' + String(i + 1).padStart(3, '0'), name, (i + 1) * 10]
+    );
+  }
+  console.log('[db] Seeded', FACTORY_DEPARTMENTS.length, 'departments');
+}
+
+// The canonical department list, in display order — every Department dropdown
+// in the app is served from here (see GET /api/departments and the masters
+// routes for IMS / PR / PO Creation). Never throws: a DB that isn't configured
+// or is momentarily unreachable falls back to the seed list rather than leaving
+// a form with an empty, unusable dropdown.
+async function listDepartments() {
+  if (!USE_DB) {
+    const store = await readStore();
+    const list = Array.isArray(store.departments) ? store.departments.filter(Boolean) : [];
+    return list.length ? list : FACTORY_DEPARTMENTS.slice();
+  }
+  try {
+    await ensureSchema();
+    const rows = await q('SELECT name FROM departments ORDER BY sort_order ASC, name ASC');
+    const list = rows.map(r => r.name).filter(Boolean);
+    return list.length ? list : FACTORY_DEPARTMENTS.slice();
+  } catch (e) {
+    console.error('[departments] read failed, using seed list:', e.message);
+    return FACTORY_DEPARTMENTS.slice();
+  }
+}
+
 async function fixCollations() {
   if (!USE_DB) return;
   // Every table the app creates needs to be listed here, not just the ones a
@@ -342,7 +417,7 @@ async function fixCollations() {
   const tables = ['users','delegations','masters','clients','checklist_completions','daily_tasks','leaves','user_sessions',
     'fms_sheets','fms_sheet_steps','fms_step_doers','fms_extra_rows','fms_intake_fields',
     'holidays','profile','app_config','meetings','dev_backups','help_tickets','announcements',
-    'vendor_submissions','pr_requisitions','payment_entries','ims_items','ims_transactions'];
+    'vendor_submissions','pr_requisitions','payment_entries','ims_items','ims_transactions','departments'];
   // A couple of these tables carry a leftover FOREIGN KEY constraint from an
   // earlier schema iteration (the current schema style is FK-less, app-generated
   // string ids) that blocks ALTER ... CONVERT TO CHARACTER SET on either side of
@@ -418,6 +493,7 @@ async function ensureSchema() {
       }
     }
     await seedIfEmpty().catch((e) => console.error('[db] seedIfEmpty failed:', e.message));
+    await seedDepartments().catch((e) => console.error('[db] seedDepartments failed:', e.message));
     // These two must be awaited, not fire-and-forget: g.__pg_schema_ready is cached
     // and returned instantly to every future ensureSchema() caller the moment this
     // IIFE resolves, so an un-awaited background fix here would race every request
@@ -1789,6 +1865,73 @@ app.post('/api/daily-tasks', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
+// ── Departments master ────────────────────────────────────────────────────────
+// One list, one endpoint, every Department dropdown in the app. Adding is open
+// to any signed-in user because the "+ Add new department" option lives inside
+// the forms themselves (Inward/Outward, PR, PO, Daily Task) — the store hand who
+// hits a missing department mid-entry has to be able to add it without an Admin.
+// Deleting is Admin/HOD only, and only ever removes the name from future
+// dropdowns: departments are stored on past records as plain text, so nothing
+// already saved changes.
+
+app.get('/api/departments', requireAuth, async (req, res) => {
+  try { return res.json(await listDepartments()); }
+  catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/departments', requireAuth, async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Department name is required' });
+    if (name.length > 128) return res.status(400).json({ error: 'Department name is too long (max 128 characters)' });
+
+    const existing = await listDepartments();
+    // Case-insensitive so "Packing Dept." can't come back a second time as
+    // "packing dept." and split the same shop floor across two dropdown entries.
+    const dupe = existing.find(d => d.toLowerCase() === name.toLowerCase());
+    if (dupe) return res.status(409).json({ error: `"${dupe}" already exists in the department list` });
+
+    if (!USE_DB) {
+      const store = await readStore();
+      store.departments = (Array.isArray(store.departments) && store.departments.length)
+        ? store.departments
+        : FACTORY_DEPARTMENTS.slice();
+      store.departments.push(name);
+      await writeStore(store);
+      return res.json({ success: true, name, departments: store.departments });
+    }
+
+    await ensureSchema();
+    const idRows = await q("SELECT MAX(CAST(SUBSTRING(id,4) AS UNSIGNED)) AS maxnum FROM departments WHERE id REGEXP '^DEP[0-9]+'");
+    const id = 'DEP' + ((parseInt(idRows[0]?.maxnum) || 0) + 1).toString().padStart(3, '0');
+    const ordRows = await q('SELECT MAX(sort_order) AS maxord FROM departments');
+    const sortOrder = (parseInt(ordRows[0]?.maxord) || 0) + 10;
+    await pool.query('INSERT INTO departments (id,name,sort_order) VALUES ($1,$2,$3)', [id, name, sortOrder]);
+    return res.json({ success: true, name, departments: await listDepartments() });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/departments', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const name = String(req.query.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Department name is required' });
+
+    if (!USE_DB) {
+      const store = await readStore();
+      const list = (Array.isArray(store.departments) && store.departments.length)
+        ? store.departments
+        : FACTORY_DEPARTMENTS.slice();
+      store.departments = list.filter(d => d.toLowerCase() !== name.toLowerCase());
+      await writeStore(store);
+      return res.json({ success: true, departments: store.departments });
+    }
+
+    await ensureSchema();
+    await pool.query('DELETE FROM departments WHERE LOWER(name) = LOWER($1)', [name]);
+    return res.json({ success: true, departments: await listDepartments() });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
 // ── Users ─────────────────────────────────────────────────────────────────────
 app.get('/api/users', requireAuth, async (req, res) => {
   if (!USE_DB) {
@@ -2605,13 +2748,6 @@ async function safeUploadUserPhotoToDrive(dataUrl, meta) {
 const PO_CREATION_SHEET_ID = '1QB4fZQ1IVFeGs9YKXgGb-dAvsVrTQnBjPCEBzyd0KrM';
 const PO_CREATION_LOG_TAB = 'ERP PO Log';
 
-// Fixed dropdown list backing the sheet's own Department data-validation rule
-// (Vendor Details!N3:N31 on the PurchaseOrder/Diamond PO tabs).
-const PO_DEPARTMENTS = [
-  'Press Shop', 'Accessories', 'Fitting', 'Spinning', 'Milk Jug Fitting', 'Washing', 'Packing',
-  'Tool Room', 'Store', 'Time Keeper', 'Cnc', 'Circles', 'Riveting Department', 'ST STEEL', 'PRESSING', 'ALU CIRCLE',
-];
-
 // Cell refs below were reverse-engineered from the live template tabs (formula
 // render + merge inspection). Every column not listed here is a formula
 // (VLOOKUP against Vendor Details / ITEM_CODES, usually an ARRAYFORMULA spill
@@ -2795,24 +2931,27 @@ async function _poSheetMeta() {
 }
 
 // GET /api/po-creation/masters — vendor list, ship-to locations (PurchaseOrder
-// only), departments (the sheet's own Department dropdown list), and the next
-// PO number — all read live off the sheet (no local mirror).
+// only) and the next PO number, all read live off the sheet (no local mirror),
+// plus departments — which no longer come from the sheet's own Vendor Details!
+// N3:N31 dropdown list but from the app's departments master, so PO Creation
+// offers exactly the same departments as every other form. Department is
+// written into the PO as a plain cell value, so a name outside that sheet-side
+// data-validation list is stored and printed normally.
 app.get('/api/po-creation/masters', requireAuth, async (req, res) => {
   try {
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const [vendorsRes, shipToRes, deptRes, meta] = await Promise.all([
+    const [vendorsRes, shipToRes, departments, meta] = await Promise.all([
       sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:E200`, valueRenderOption: 'FORMATTED_VALUE' }),
       sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!I3:I45`, valueRenderOption: 'FORMATTED_VALUE' }),
-      sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!N3:N31`, valueRenderOption: 'FORMATTED_VALUE' }),
+      listDepartments(),
       _poSheetMeta(),
     ]);
     const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
     const shipToLocations = (shipToRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    const departments = (deptRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    return res.json({ vendors, shipToLocations, departments: departments.length ? departments : PO_DEPARTMENTS, nextPoNumber: _padSeqNo('PO', meta.nextPoNo) });
+    return res.json({ vendors, shipToLocations, departments, nextPoNumber: _padSeqNo('PO', meta.nextPoNo) });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -3229,16 +3368,19 @@ app.get('/api/pr-creation/masters', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const [vendorsRes, meta] = await Promise.all([
+    const [vendorsRes, departments, meta] = await Promise.all([
       sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'Vendor Name'!A3:A1000`, valueRenderOption: 'FORMATTED_VALUE' }),
+      listDepartments(),
       _prSheetMeta(),
     ]);
     const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    // ALU's Department dropdown is a fixed list on the client (PR_DEPARTMENTS
-    // in pr-creation.js) — it matches "PR Form Responses"/RM_1_res's own
-    // category scheme, not PO Creation's shop-floor department list, so
-    // there's nothing live to fetch here.
-    return res.json({ vendors, nextPrNumber: _padSeqNo('PR', meta.nextPrNo) });
+    // Departments (ALU's manual Department dropdown, and the PR Form tab's own
+    // Department multi-select) come from the app's departments master — the
+    // same list every other form uses. They used to be two separate hardcoded
+    // lists in pr-creation.js, spelled differently from each other and from PO
+    // Creation's. Department is only ever a label on the PR record/log here, so
+    // it's not tied to anything structural in the sheet.
+    return res.json({ vendors, departments, nextPrNumber: _padSeqNo('PR', meta.nextPrNo) });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -4580,7 +4722,7 @@ app.get('/api/payment-history', requireAuth, async (req, res) => {
 // IMS_CATEGORY_TABS); categories stays the full set of valid values so an
 // item already filed under a non-tabbed book (Trading) still validates.
 app.get('/api/ims/masters', requireAuth, async (req, res) => {
-  return res.json({ departments: PO_DEPARTMENTS, categories: IMS_CATEGORIES, categoryTabs: IMS_CATEGORY_TABS, sources: IMS_SOURCES });
+  return res.json({ departments: await listDepartments(), categories: IMS_CATEGORIES, categoryTabs: IMS_CATEGORY_TABS, sources: IMS_SOURCES });
 });
 
 // GET /api/ims/items?q=&lowStock=1&category=Stores — item master search; backs

@@ -157,6 +157,187 @@ window.Utils = {
     });
   },
 
+  /* ── Prompt dialog (text input — replaces native prompt()) ──────── */
+  showPrompt(msg, {
+    title       = 'Enter Value',
+    placeholder = '',
+    value       = '',
+    confirmText = 'Save',
+    cancelText  = 'Cancel',
+  } = {}) {
+    return new Promise((resolve) => {
+      const existing = document.getElementById('utils-prompt-overlay');
+      if (existing) existing.remove();
+      const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+      const overlay = document.createElement('div');
+      overlay.id = 'utils-prompt-overlay';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10001;display:grid;place-items:center;padding:16px;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
+      overlay.innerHTML = `
+        <div style="background:#fff;border-radius:18px;width:100%;max-width:400px;box-shadow:0 24px 64px rgba(0,0,0,.2);overflow:hidden;animation:pop-in 220ms cubic-bezier(.16,1,.3,1);">
+          <div style="padding:24px 24px 4px;">
+            <div style="font-size:15px;font-weight:700;color:#1e293b;margin-bottom:5px;">${escHtml(title)}</div>
+            <div style="font-size:13px;color:#64748b;line-height:1.5;">${escHtml(msg)}</div>
+          </div>
+          <div style="padding:16px 24px 4px;">
+            <input id="utils-prompt-input" type="text" value="${escHtml(value)}" placeholder="${escHtml(placeholder)}"
+              style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;color:#1e293b;outline:none;" />
+            <div id="utils-prompt-err" style="display:none;font-size:12px;color:#dc2626;margin-top:6px;"></div>
+          </div>
+          <div style="padding:16px 24px 20px;display:flex;justify-content:flex-end;gap:10px;">
+            <button id="utils-prompt-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;">${escHtml(cancelText)}</button>
+            <button id="utils-prompt-ok" style="padding:9px 22px;border-radius:9px;border:none;background:var(--color-primary);color:var(--color-primary-text,#fff);font-size:13px;font-weight:700;cursor:pointer;">${escHtml(confirmText)}</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+
+      const input = document.getElementById('utils-prompt-input');
+      setTimeout(() => { input?.focus(); input?.select(); }, 60);
+
+      const cleanup = (result) => {
+        document.removeEventListener('keydown', onKey);
+        overlay.style.opacity = '0';
+        overlay.style.transition = 'opacity .2s';
+        setTimeout(() => overlay.remove(), 210);
+        resolve(result);
+      };
+      const submit = () => {
+        const val = (input?.value || '').trim();
+        if (!val) {
+          const err = document.getElementById('utils-prompt-err');
+          if (err) { err.textContent = 'Please enter a value'; err.style.display = 'block'; }
+          input?.focus();
+          return;
+        }
+        cleanup(val);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') cleanup(null);
+        if (e.key === 'Enter' && document.getElementById('utils-prompt-overlay')) { e.preventDefault(); submit(); }
+      };
+
+      document.getElementById('utils-prompt-ok').addEventListener('click', submit);
+      document.getElementById('utils-prompt-cancel').addEventListener('click', () => cleanup(null));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(null); });
+      document.addEventListener('keydown', onKey);
+    });
+  },
+
+  /* ── Departments master ─────────────────────────────────────────── */
+  // Every Department dropdown in the app (Users, Daily Task, IMS Inward/
+  // Outward, PR Creation, PO Creation) is built from this one list, served by
+  // GET /api/departments. Each of those pages used to hardcode its own list, so
+  // the same shop floor was spelled differently depending on where you were
+  // standing. Cached per page-load and shared across pages; addDepartment()
+  // refreshes the cache so a department added on one form is immediately
+  // present in the dropdown of the next.
+  _deptCache: null,
+  _deptPromise: null,
+  DEPT_ADD_NEW: '__add_new__',
+
+  async getDepartments(force = false) {
+    if (force) { this._deptCache = null; this._deptPromise = null; }
+    if (this._deptCache) return this._deptCache;
+    if (!this._deptPromise) {
+      this._deptPromise = this.apiFetch('/api/departments')
+        .then(list => { this._deptCache = Array.isArray(list) ? list : []; return this._deptCache; })
+        .catch(() => { this._deptPromise = null; return []; });
+    }
+    return this._deptPromise;
+  },
+
+  // The cached master list, for views that build their own markup from it
+  // rather than using deptOptionsHtml(). Empty until getDepartments() /
+  // setDepartments() has filled the cache — see hasDepartments().
+  departments() {
+    return (this._deptCache || []).slice();
+  },
+
+  // True once the master list is in hand — for views built synchronously from
+  // the cache, which need to know whether to re-render after a cold-start fetch.
+  hasDepartments() {
+    return Array.isArray(this._deptCache) && this._deptCache.length > 0;
+  },
+
+  // Primes the cache from a response that already carried the master list
+  // (/api/ims/masters, /api/po-creation/masters, /api/pr-creation/masters all
+  // include it) — saves those pages a second round-trip to /api/departments.
+  setDepartments(list) {
+    if (!Array.isArray(list) || !list.length) return this._deptCache || [];
+    this._deptCache = list.slice();
+    this._deptPromise = Promise.resolve(this._deptCache);
+    return this._deptCache;
+  },
+
+  // Adds to the master list, so it shows up everywhere — not just in the
+  // dropdown it was typed into. Throws (with the server's message) on a
+  // duplicate name so the caller can surface it.
+  async addDepartment(name) {
+    const clean = String(name || '').trim();
+    if (!clean) throw new Error('Department name is required');
+    const data = await this.apiFetch('/api/departments', {
+      method: 'POST',
+      body: JSON.stringify({ name: clean }),
+    });
+    this._deptCache = Array.isArray(data?.departments) ? data.departments : (this._deptCache || []).concat(clean);
+    this._deptPromise = Promise.resolve(this._deptCache);
+    return this._deptCache;
+  },
+
+  // <option> markup for a Department <select>. Call after getDepartments() has
+  // resolved (or re-render once it does) — with an empty cache it still renders
+  // the placeholder and the "+ Add new department" row, never an empty box.
+  deptOptionsHtml(selected = '', { placeholder = 'Select…', addNew = true, extra = [] } = {}) {
+    const escHtml = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const list = (this._deptCache || []).slice();
+    // A department stored on an old record but since removed from the master
+    // list must still show as the current selection instead of silently
+    // resetting the field to blank.
+    [].concat(extra, selected ? [selected] : []).forEach(v => { if (v && !list.includes(v)) list.push(v); });
+    return (placeholder != null ? `<option value="">${escHtml(placeholder)}</option>` : '')
+      + list.map(d => `<option value="${escHtml(d)}"${d === selected ? ' selected' : ''}>${escHtml(d)}</option>`).join('')
+      + (addNew ? `<option value="${this.DEPT_ADD_NEW}">+ Add new department</option>` : '');
+  },
+
+  // Rebuilds a live <select>'s options in place, preserving the current pick.
+  fillDeptSelect(sel, selected = null, opts = {}) {
+    if (!sel) return;
+    const keep = selected != null ? selected : sel.value;
+    sel.innerHTML = this.deptOptionsHtml(keep === this.DEPT_ADD_NEW ? '' : keep, opts);
+    if (keep && keep !== this.DEPT_ADD_NEW) sel.value = keep;
+  },
+
+  // Wires the "+ Add new department" option on a Department <select>: asks for
+  // the name, saves it to the master list, then re-fills and selects it.
+  // onChange(value) fires for real picks only (never for the add-new sentinel).
+  bindDeptSelect(sel, onChange, opts = {}) {
+    if (!sel || sel.dataset.deptBound === '1') return;
+    sel.dataset.deptBound = '1';
+    let last = sel.value === this.DEPT_ADD_NEW ? '' : sel.value;
+    sel.addEventListener('change', async () => {
+      if (sel.value !== this.DEPT_ADD_NEW) {
+        last = sel.value;
+        if (typeof onChange === 'function') onChange(sel.value);
+        return;
+      }
+      sel.value = last; // never leave the sentinel showing in the closed select
+      const name = await this.showPrompt(
+        'It will be added to the department list and become available in every Department dropdown.',
+        { title: 'Add New Department', placeholder: 'e.g. Circle Dept.', confirmText: 'Add' }
+      );
+      if (!name) return;
+      try {
+        await this.addDepartment(name);
+        this.fillDeptSelect(sel, name.trim(), opts);
+        last = sel.value;
+        if (typeof onChange === 'function') onChange(sel.value);
+        this.showToast('Department added');
+      } catch (e) {
+        this.showToast(e.message || 'Failed to add department', 'error');
+      }
+    });
+  },
+
   /* ── Page-level loader ──────────────────────────────────────────── */
   showLoader(msg = 'Loading…') {
     const existing = document.getElementById('utils-page-loader');

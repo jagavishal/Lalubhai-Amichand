@@ -165,12 +165,16 @@ window.Pages.users = (() => {
   /* ── API ────────────────────────────────────────────────────────────── */
   async function loadData() {
     try {
+      // Departments come from the app-wide master list (see Utils.getDepartments
+      // / GET /api/departments) — the same one every other Department dropdown
+      // uses. Only if that can't be read do we fall back to whatever departments
+      // the existing users happen to be filed under.
       const [usersData, deptsData] = await Promise.all([
         Utils.apiFetch('/api/users'),
-        Utils.apiFetch('/api/departments').catch(() => null),
+        Utils.getDepartments(true).catch(() => null),
       ]);
       _users       = Array.isArray(usersData) ? usersData : [];
-      _departments = Array.isArray(deptsData)
+      _departments = (Array.isArray(deptsData) && deptsData.length)
         ? deptsData
         : [...new Set(_users.map(u => u.department).filter(Boolean))].sort();
     } catch {
@@ -1010,10 +1014,24 @@ window.Pages.users = (() => {
       const inp = document.getElementById('um-dept-new-input');
       if (inp) inp.value = '';
     });
-    document.getElementById('um-dept-new-save')?.addEventListener('click', () => {
+    document.getElementById('um-dept-new-save')?.addEventListener('click', async () => {
       const inp = document.getElementById('um-dept-new-input');
-      const val = (inp?.value || '').trim();
+      let val = (inp?.value || '').trim();
       if (!val) { inp?.focus(); return; }
+      // Saved to the app-wide department master, not just this dropdown — the
+      // new department is immediately offered on Daily Task, IMS Inward/Outward
+      // and PR/PO Creation too.
+      try {
+        _departments = await Utils.addDepartment(val);
+        Utils.showToast('Department added');
+      } catch (e) {
+        // A name that already exists isn't a failure for what the user is doing
+        // — they still want it selected — so fall through to selecting the
+        // list's own spelling of it. Anything else stops here.
+        const dupe = (await Utils.getDepartments().catch(() => [])).find(d => d.toLowerCase() === val.toLowerCase());
+        if (!dupe) { Utils.showToast(e.message || 'Failed to add department', 'error'); inp?.focus(); return; }
+        val = dupe;
+      }
       if (!_departments.includes(val)) _departments.push(val);
       const sel = document.getElementById('um-department');
       if (sel) {
