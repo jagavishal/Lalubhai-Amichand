@@ -112,39 +112,6 @@ window.Pages['po-pending'] = (() => {
       </div>`;
   }
 
-  function byStepCard() {
-    const list = _data.byStep;
-    if (!list.length) return '';
-    const max = Math.max(...list.map(s => s.count));
-    const rows = list.map(s => {
-      const pct = Math.round((s.count / max) * 100);
-      const isPo = ['S5', 'S6'].includes(s.key);
-      const bar = s.overdue > 0 ? 'var(--color-danger)' : 'var(--color-primary)';
-      return `
-        <div style="display:grid;grid-template-columns:minmax(150px,220px) 1fr auto;align-items:center;gap:12px;">
-          <div style="min-width:0;">
-            <div style="font-size:12.5px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-              ${isPo ? '<span title="PO stage" style="color:var(--color-warning);margin-right:4px;">&#9679;</span>' : ''}${esc(s.label)}
-            </div>
-            <div style="font-size:11px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.owner)}</div>
-          </div>
-          <div style="height:20px;background:var(--surface-alt);border-radius:5px;overflow:hidden;">
-            <div style="width:${pct}%;height:100%;background:${bar};border-radius:5px;transition:width .5s ease;"></div>
-          </div>
-          <div style="min-width:110px;text-align:right;font-size:11.5px;color:var(--text-secondary);">
-            <b style="color:var(--text-primary);font-size:13px;">${s.count}</b> PR${s.count > 1 ? 's' : ''}
-            ${s.overdue ? `<span style="color:var(--color-danger);font-weight:600;"> &middot; ${s.overdue} late</span>` : ''}
-          </div>
-        </div>`;
-    }).join('');
-    return `
-      <div class="card" style="padding:20px;">
-        <div style="font-size:13.5px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">Kahan atka hai</div>
-        <div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:16px;">Har PR apne pehle adhoore step pe gina gaya hai.</div>
-        <div style="display:flex;flex-direction:column;gap:12px;">${rows}</div>
-      </div>`;
-  }
-
   function stepTrack(row) {
     return _data.steps.map(st => {
       const s = row.steps.find(x => x.key === st.key) || {};
@@ -255,29 +222,6 @@ window.Pages['po-pending'] = (() => {
       </div>`;
   }
 
-  function gapsCard() {
-    const s = _data.summary;
-    if (!s.notInFms && !s.bypassed && !s.mismatched) return '';
-    const items = [];
-    if (s.notInFms) {
-      items.push(`<li style="margin-bottom:6px;"><b>${s.notInFms} PR approval chain mein hai hi nahi</b> — ERP PR Log mein hain par FMS Monitoring mein entry nahi:
-        <span style="color:var(--text-secondary);">${esc(_data.notInFms.map(x => x.prNo + (x.poNo ? ' → ' + x.poNo : '')).join(', '))}</span></li>`);
-    }
-    if (s.mismatched) {
-      const m = _data.rows.filter(r => r.poMismatch).map(r => `${r.prNo} → ${r.erpPoNo}`);
-      items.push(`<li style="margin-bottom:6px;"><b>${s.mismatched} PO ERP mein bana hai par FMS ka "Create PO" step khaali hai</b>: <span style="color:var(--text-secondary);">${esc(m.join(', '))}</span></li>`);
-    }
-    if (s.bypassed) {
-      const b = _data.rows.filter(r => r.bypassed.length).map(r => `${r.prNo} (${r.bypassed.map(x => x.label).join(', ')})`);
-      items.push(`<li><b>${s.bypassed} PR mein step skip hua</b> — baad ke step complete hain par ye khaali: <span style="color:var(--text-secondary);">${esc(b.join('; '))}</span></li>`);
-    }
-    return `
-      <div class="card" style="padding:18px 20px;border-left:3px solid var(--color-warning);">
-        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Gaps &amp; mismatches</div>
-        <ul style="margin:0;padding-left:18px;font-size:12.5px;line-height:1.6;color:var(--text-primary);">${items.join('')}</ul>
-      </div>`;
-  }
-
   function header() {
     return `
       <div class="card" style="padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
@@ -307,7 +251,7 @@ window.Pages['po-pending'] = (() => {
     } else {
       root.innerHTML = header()
         + (_error ? `<div class="card" style="padding:12px 18px;border-left:3px solid var(--color-warning);font-size:12px;color:var(--color-warning-text);">${esc(_error)}</div>` : '')
-        + tiles() + byStepCard() + gapsCard() + tableCard();
+        + tiles() + tableCard();
     }
     paintStatus();
     bind();
