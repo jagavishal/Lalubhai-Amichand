@@ -129,11 +129,14 @@ async function run() {
 
   /* 2) Static text: letterhead, block labels, table header, boilerplate. */
   const put = (a1, value) => ({ range: `'${TAB}'!${a1}`, values: [[value]] });
+  const TC = L.letterheadTextCol;
   const values = [
-    put(`A${L.letterheadRows.company}`, LETTERHEAD.company),
-    put(`A${L.letterheadRows.regd}`, LETTERHEAD.regd),
-    put(`A${L.letterheadRows.admin}`, LETTERHEAD.admin),
-    put(`A${L.letterheadRows.works}`, LETTERHEAD.works),
+    // mode 1 = scale to fit the merged block, keeping the logo's aspect ratio.
+    put(`${L.logoCols.first}${L.letterheadRows.company}`, `=IMAGE("${LETTERHEAD.logoUrl}", 1)`),
+    put(`${TC}${L.letterheadRows.company}`, LETTERHEAD.company),
+    put(`${TC}${L.letterheadRows.regd}`, LETTERHEAD.regd),
+    put(`${TC}${L.letterheadRows.admin}`, LETTERHEAD.admin),
+    put(`${TC}${L.letterheadRows.works}`, LETTERHEAD.works),
     put(`A${L.letterheadRows.title}`, LETTERHEAD.title),
     put(CELLS.consigneeHeading, 'Consignee :'),
     put(`I${L.wordsRow}`, 'Total C&F US$'),
@@ -188,11 +191,14 @@ async function run() {
   // Base look for the whole sheet, then overrides on top.
   requests.push(text(sheetId, 1, L.rowCount, FC, LC, { size: 9 }));
 
-  // ── letterhead
-  [L.letterheadRows.company, L.letterheadRows.regd, L.letterheadRows.admin, L.letterheadRows.works, L.letterheadRows.title]
-    .forEach(r => requests.push(merge(sheetId, r, r, FC, LC)));
-  requests.push(text(sheetId, L.letterheadRows.company, L.letterheadRows.company, FC, LC, { align: 'CENTER', bold: true, size: 16 }));
-  requests.push(text(sheetId, L.letterheadRows.regd, L.letterheadRows.works, FC, LC, { align: 'CENTER', size: 8 }));
+  // ── letterhead: logo block on the left, name + addresses to its right
+  requests.push(merge(sheetId, L.letterheadRows.company, L.letterheadRows.works, L.logoCols.first, L.logoCols.last));
+  [L.letterheadRows.company, L.letterheadRows.regd, L.letterheadRows.admin, L.letterheadRows.works]
+    .forEach(r => requests.push(merge(sheetId, r, r, TC, LC)));
+  requests.push(merge(sheetId, L.letterheadRows.title, L.letterheadRows.title, FC, LC));
+  requests.push(text(sheetId, L.letterheadRows.company, L.letterheadRows.works, L.logoCols.first, L.logoCols.last, { align: 'CENTER', valign: 'MIDDLE', size: 9 }));
+  requests.push(text(sheetId, L.letterheadRows.company, L.letterheadRows.company, TC, LC, { align: 'CENTER', bold: true, size: 16 }));
+  requests.push(text(sheetId, L.letterheadRows.regd, L.letterheadRows.works, TC, LC, { align: 'CENTER', size: 8 }));
   requests.push(text(sheetId, L.letterheadRows.title, L.letterheadRows.title, FC, LC, { align: 'CENTER', bold: true, size: 12, bg: BAND }));
   requests.push(rowHeight(sheetId, L.letterheadRows.company, L.letterheadRows.company, 28));
   requests.push(rowHeight(sheetId, L.letterheadRows.regd, L.letterheadRows.works, 14));

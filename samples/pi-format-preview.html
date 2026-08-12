@@ -21,6 +21,8 @@
   }
   table { border-collapse: collapse; width: 100%; table-layout: fixed; }
   td, th { padding: 2px 4px; vertical-align: middle; }
+  .logo { width: 130px; text-align: center; vertical-align: middle; }
+  .logo img { max-width: 122px; max-height: 68px; object-fit: contain; }
   .lh-name { font-size: 17px; font-weight: bold; text-align: center; padding: 4px; }
   .lh-addr { font-size: 8px; text-align: center; }
   .title { font-size: 12px; font-weight: bold; text-align: center; background: #d9e3f2; padding: 5px; }
@@ -63,12 +65,19 @@
 
 <div class="sheet">
 
-  <!-- rows 1-5 : letterhead -->
+  <!-- rows 1-4 : logo block (A1:B4) + name and addresses (C:M) -->
   <table>
-    <tr><td class="lh-name">LALLUBHAI AMICHAND LIMITED</td></tr>
+    <colgroup><col style="width:130px"><col></colgroup>
+    <tr>
+      <td rowspan="4" class="logo"><img src="../public/logo.png" alt="Lallubhai Amichand" /></td>
+      <td class="lh-name">LALLUBHAI AMICHAND LIMITED</td>
+    </tr>
     <tr><td class="lh-addr">Regd. Office : 48/50, Kansara Chawl, Kalbadevi Road, Mumbai - 400 002, India.&nbsp;&nbsp;&nbsp;Email : queen1911@laltd.co.in</td></tr>
     <tr><td class="lh-addr">Admin. Office : 225/27, J. Dadajee Road, Tardeo, Mumbai - 400 007, India.</td></tr>
     <tr><td class="lh-addr">Works : 175/3, Ghodasar Village, Near GIDC Vatva, Vatva - 382 445, Ahmedabad, Gujarat, India.</td></tr>
+  </table>
+  <!-- row 5 : title band, full width -->
+  <table>
     <tr><td class="title">PROFORMA INVOICE / ORDER CONFIRMATION SHEET (OCS)</td></tr>
   </table>
 

@@ -16,6 +16,12 @@
  */
 
 const LETTERHEAD = {
+  // Rendered by an =IMAGE() formula in the merged logo block, so the URL has
+  // to be publicly fetchable by Google's servers — not just by a logged-in
+  // browser. public/logo.png is served unauthenticated, which is why the app's
+  // own origin is used rather than a Drive link (Drive's uc?export URLs are
+  // unreliable inside IMAGE()).
+  logoUrl: 'https://laltdoffice.com/logo.png',
   company: 'LALLUBHAI AMICHAND LIMITED',
   regd: 'Regd. Office : 48/50, Kansara Chawl, Kalbadevi Road, Mumbai - 400 002, India.   Email : queen1911@laltd.co.in',
   admin: 'Admin. Office : 225/27, J. Dadajee Road, Tardeo, Mumbai - 400 007, India.',
@@ -32,7 +38,12 @@ const LAYOUT = {
   colCount: 13,
   rowCount: 80,
 
+  // Logo occupies A1:B4; the company name and the three addresses sit to its
+  // right in C:M, so they are centred against the text block rather than the
+  // whole page. The title band on row 5 still spans the full width.
   letterheadRows: { company: 1, regd: 2, admin: 3, works: 4, title: 5 },
+  logoCols: { first: 'A', last: 'B' },
+  letterheadTextCol: 'C',
   partyBlock: { firstRow: 6, lastRow: 13 },   // consignee (A:F) | shipping (G:H label, I:M value)
   shipmentNoteRow: 14,
   itemHeaderRow: 15,
