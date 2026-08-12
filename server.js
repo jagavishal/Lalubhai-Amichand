@@ -2641,6 +2641,33 @@ function _timestampForSheet() {
   return `${get('month')}/${get('day')}/${get('year')} ${get('hour')}:${get('minute')}:${get('second')}`;
 }
 
+// Sheets holds every date as a serial number (days since 1899-12-30) and only
+// *renders* it as a date if the cell's number format says to. A log tab whose
+// Date column ended up formatted as a plain number therefore answers even
+// FORMATTED_VALUE with "46246" instead of "2026-08-12" — unreadable in the
+// list pages, and unusable by their date-range filters, which compare plain
+// "YYYY-MM-DD" strings. This normalizes such a serial back to ISO; a value
+// that's already a date string (the "'"-prefixed literal the log writers use)
+// or blank is passed through untouched.
+//
+// ERP PR Log is the tab this was written for: unlike the PO/GRN/PI writers it
+// wrote its Date column unquoted for a long time, so Sheets reparsed each one
+// into a real date value and every row logged in that period reads back as a
+// serial. The write side is quoted now, but the existing rows stay as they are
+// — converting on read is what fixes those without touching the sheet.
+function _sheetDateToIso(v) {
+  const s = String(v ?? '').trim();
+  // 5 digits (optionally with a time fraction) is the only shape a date serial
+  // can take in the range below — anything else is left exactly as it came.
+  if (!/^\d{5}(\.\d+)?$/.test(s)) return s;
+  const n = Number(s);
+  // 25569 = 1970-01-01, 73050 = 2100-01-01. A number outside that window is
+  // some other quantity that merely looks like a serial, not a date.
+  if (!(n >= 25569 && n <= 73050)) return s;
+  const d = new Date(Math.round((n - 25569) * 86400000));
+  return isNaN(d.getTime()) ? s : d.toISOString().slice(0, 10);
+}
+
 // Drive upload is a separate failure domain from the Sheets row (e.g. the
 // service account can have Sheets access without matching Drive folder
 // permissions) — never let a Drive failure block the Sheets sync.
@@ -3165,7 +3192,7 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
       let form = null;
       try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
       return {
-        poNo: r[0] || '', format: r[1] || '', date: r[2] || '', party: r[3] || '', department: r[4] || '',
+        poNo: r[0] || '', format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', department: r[4] || '',
         total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', createdAt: r[8] || '', prNo: r[9] || '', form,
         status: r[11] || 'Active',
       };
@@ -3223,7 +3250,7 @@ app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
       .map(r => {
         let items = [];
         try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
-        return { prNo: _normalizePrNo(r[0]), prTabName: r[1] || '', date: r[2] || '', party: r[3] || '', requestedBy: r[4] || '', department: r[5] || '', items };
+        return { prNo: _normalizePrNo(r[0]), prTabName: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', requestedBy: r[4] || '', department: r[5] || '', items };
       })
       .reverse();
     return res.json(pending.slice(0, 200));
@@ -3548,7 +3575,13 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     // Creation's pending-PR picker.
     await ensureLogTab(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, ['PR No', 'Format', 'Date', 'Vendor/Party', 'Requested By', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Form JSON', 'Status']);
     await appendLogRow(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, [
-      prNoFormatted, tab, dateRequested || '', party, requestedBy, departmentOut, totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
+      // Leading "'" forces the ISO date to stay literal text instead of being
+      // reparsed into a Sheets date value — same convention as ERP PO/GRN/PI
+      // Log. Without it Sheets stored a serial number, which the log's own
+      // plain-number column format then handed straight back to the PR Summary
+      // table as "46246" (see _sheetDateToIso, which repairs the rows written
+      // before this was quoted).
+      prNoFormatted, tab, dateRequested ? "'" + dateRequested : '', party, requestedBy, departmentOut, totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(),
       JSON.stringify({ format: req.body.format, requestedBy, vendorName, partyName, personWhoRaisedPr, orderNo, department, termsOfPayment, estimatedDelDate, dateRequested, items: cleanItems }),
       'Active',
     ]);
@@ -3584,7 +3617,7 @@ app.get('/api/pr-creation/list', requireAuth, async (req, res) => {
       let form = null;
       try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
       return {
-        prNo: r[0] || '', format: r[1] || '', date: r[2] || '', party: r[3] || '', requestedBy: r[4] || '',
+        prNo: r[0] || '', format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', requestedBy: r[4] || '',
         department: r[5] || '', total: r[6] || '', pdfLink: r[7] || '', createdBy: r[8] || '', createdAt: r[9] || '', form,
         status: r[11] || 'Active',
       };
@@ -3739,7 +3772,7 @@ async function _buildFmsPoPending() {
   for (const r of erpPoRows) {
     if (!r[0] || (r[11] || 'Active') === 'Cancelled') continue;
     const k = _normalizePrNo(r[9]);
-    if (k && !erpPoByPr.has(k)) erpPoByPr.set(k, { poNo: r[0], date: r[2] || '', party: r[3] || '', total: r[5] || '' });
+    if (k && !erpPoByPr.has(k)) erpPoByPr.set(k, { poNo: r[0], date: _sheetDateToIso(r[2]), party: r[3] || '', total: r[5] || '' });
   }
 
   const rows = dataRows.map(({ r, sheetRow }) => {
@@ -4155,7 +4188,7 @@ app.get('/api/grn-creation/list', requireAuth, async (req, res) => {
       let form = null;
       try { form = JSON.parse(r[11] || 'null'); } catch { form = null; }
       return {
-        grNo: r[0] || '', date: r[1] || '', madeBy: r[2] || '', prNo: r[3] || '', vendorName: r[4] || '',
+        grNo: r[0] || '', date: _sheetDateToIso(r[1]), madeBy: r[2] || '', prNo: r[3] || '', vendorName: r[4] || '',
         poNo: r[5] || '', billNo: r[6] || '', total: r[7] || '', pdfLink: r[8] || '', createdBy: r[9] || '', createdAt: r[10] || '', form,
         status: r[12] || 'Active',
       };
@@ -4538,7 +4571,7 @@ app.get('/api/proforma-invoice/list', requireAuth, async (req, res) => {
       try { form = r[9] ? JSON.parse(r[9]) : null; } catch {}
       const status = r[10] || 'Draft';
       return {
-        piNo: r[0] || '', date: r[1] || '', buyer: r[2] || '', total: r[3] || '', pdfLink: r[4] || '',
+        piNo: r[0] || '', date: _sheetDateToIso(r[1]), buyer: r[2] || '', total: r[3] || '', pdfLink: r[4] || '',
         createdBy: r[5] || '', createdAt: r[6] || '', pricedBy: r[7] || '', pricedAt: r[8] || '',
         form, status, canSetPrice: canSetPrice && status === 'Draft',
       };
