@@ -15,6 +15,7 @@ window.Topbar = {
     'client-master':'',
     'daily-task':   'Daily Task',
     'race-tracker': 'Race Tracker',
+    'po-pending':   'PO Pending',
     'compliance':   'Compliance',
   },
 

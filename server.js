@@ -3468,6 +3468,247 @@ app.put('/api/pr-creation/cancel', requireAuth, async (req, res) => {
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });
 
+// ── PO Pending (read-only report over the store team's approval FMS) ──────
+// The PR→PO approval chain does NOT live in this app: it lives in the "FMS
+// (Stores)" workbook's "Monitoring" tab, where each of the 12 steps below is
+// its own Google Form. Every step block is a fixed column range holding a
+// Planned Time / Actual Time pair — a blank Actual Time IS the pending state,
+// which is what this endpoint reports on. Nothing here ever writes.
+const FMS_MONITORING_SHEET_ID = '1J-JxWsTmWPm8v1QwkkQQCv29Xw6dmxajj1fIVoybfzQ';
+const FMS_MONITORING_TAB = 'Monitoring';
+
+// Column indexes reverse-engineered from the live tab's two header rows
+// (row 1 = step banner + owner, row 3 = per-field labels; data starts row 4).
+//
+// Two blocks do NOT match their own header row and must stay as written:
+//  - S4B's form writes the approver's name into col 54 (the column labelled
+//    "PR No.") and the approval into 57 (labelled 58), so this block has no
+//    usable PR column at all — hence prCol: null.
+//  - S7 has "PR. No" at 90 and "Actual Time" at 91, i.e. the reverse of every
+//    other block's planned/actual/PR ordering.
+const FMS_PO_STEPS = [
+  { key: 'S1',  label: 'PR Generation',          owner: 'Sagar',                      planned: null, actual: 0,   prCol: 1 },
+  { key: 'S2',  label: 'Factory Manager Approval', owner: 'Khurshid Alam',            planned: 21,  actual: 22,  prCol: 23,  by: 24,  approval: 25, timeline: 27 },
+  { key: 'S3',  label: 'Manager Approval',       owner: 'Kannu Sir',                  planned: 29,  actual: 30,  prCol: 31,  by: 32,  approval: 33, timeline: 35 },
+  { key: 'S4A', label: 'Quotations Giving',      owner: 'Sagar',                      planned: 37,  actual: 38,  prCol: 39,  by: 40,  timeline: 50 },
+  { key: 'S4B', label: 'Quotations Approval',    owner: 'Sajil Sir / Dhiren Sir',     planned: 52,  actual: 53,  prCol: null, by: 54, approval: 57, timeline: 59 },
+  { key: 'S5',  label: 'Create PO',              owner: 'Khurshid / Sagar / Ashok',   planned: 61,  actual: 62,  prCol: 63,  by: 64,  approval: 65, poNo: 66, timeline: 68, poStep: true },
+  { key: 'S5B', label: 'PO Approval',            owner: 'Sajil Sir',                  planned: 70,  actual: 71,  prCol: 72,  by: 73,  approval: 74, poNo: 75, timeline: 77, poStep: true },
+  { key: 'S6',  label: 'Issue PO to Vendor',     owner: 'Khurshid / Sagar / Ashok',   planned: 79,  actual: 80,  prCol: 81,  by: 83,  approval: 84, poNo: 82, timeline: 87, poStep: true },
+  { key: 'S7',  label: 'Advance Payment',        owner: 'Sushil Sir',                 planned: 89,  actual: 91,  prCol: 90,  by: 93,  approval: 94, poNo: 92, timeline: 95 },
+  { key: 'S8A', label: 'Goods Challan Filling',  owner: 'Sagar',                      planned: 97,  actual: 98,  prCol: 99,  by: 101, poNo: 100, timeline: 105 },
+  { key: 'S8B', label: 'Goods Supervisor Form',  owner: 'Supervisors',                planned: 107, actual: 108, prCol: 109, by: 111, poNo: 110, timeline: 123 },
+  { key: 'S9',  label: 'Accounts Checklist',     owner: 'Sagar',                      planned: 125, actual: 126, prCol: 127, by: 129, poNo: 128, timeline: 143 },
+];
+
+// Row 4 of the live sheet holds PR175's Step 1 but Step 9's response for
+// PR172 — a step's Form appends to the next free row of its OWN block, which
+// is not necessarily the row that step's PR started on. So a block whose PR
+// column names a different PR than the row does is treated as belonging to
+// that named PR, not to the row it physically sits on. Without this, PR175
+// reads as "Accounts Checklist done" off a neighbour's data.
+function _fmsBlockValue(row, step, field) {
+  const c = step[field];
+  return c == null ? '' : String((row || [])[c] ?? '').trim();
+}
+
+// Planned cells are a mix of dd/mm/yyyy text, raw Sheets serials (a Form that
+// wrote a timestamp rather than a date) and literal "NA". Normalize to a
+// display string plus a UTC ms value where one can be read.
+function _fmsParseDate(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s || /^(na|n\/a|-+)$/i.test(s)) return { display: s === '' ? '' : s, ms: null };
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const ms = Date.UTC(1899, 11, 30) + Math.floor(parseFloat(s)) * 86400000;
+    const d = new Date(ms);
+    return { display: `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`, ms };
+  }
+  const m = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/.exec(s);
+  if (m) return { display: s, ms: Date.UTC(+m[3], +m[2] - 1, +m[1]) };
+  return { display: s, ms: null };
+}
+
+// One shared cache for all viewers: the page polls live, and three Sheets
+// reads per viewer per poll would burn the per-minute read quota (already
+// seen returning 429). On a fetch error the last good payload is served with
+// stale:true rather than blanking the page.
+let _fmsPendingCache = { at: 0, payload: null };
+const FMS_PENDING_TTL_MS = 45000;
+
+async function _buildFmsPoPending() {
+  const auth = getGoogleAuth();
+  if (!auth) throw new Error('Google Sheets is not configured on this server');
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const read = async (spreadsheetId, range) => {
+    try {
+      const r = await sheets.spreadsheets.values.get({ spreadsheetId, range, valueRenderOption: 'FORMATTED_VALUE' });
+      return r.data.values || [];
+    } catch (e) {
+      if (/unable to parse range/i.test(e.message || '')) return [];
+      throw e;
+    }
+  };
+
+  const [monRows, erpPrRows, erpPoRows] = await Promise.all([
+    read(FMS_MONITORING_SHEET_ID, `'${FMS_MONITORING_TAB}'!A1:EO1000`),
+    read(PR_CREATION_SHEET_ID, `'${PR_CREATION_LOG_TAB}'!A2:L1000`),
+    read(PO_CREATION_SHEET_ID, `'${PO_CREATION_LOG_TAB}'!A2:L1000`),
+  ]);
+
+  // Data starts at row 4 (index 3) — rows 1-3 are the two header bands.
+  const dataRows = monRows.slice(3).map((r, i) => ({ r, sheetRow: i + 4 })).filter(x => String(x.r[1] ?? '').trim());
+
+  // Pass 1: every block occurrence, tagged with the PR it names itself for.
+  const claimed = new Map(); // `${prKey}|${stepKey}` -> block snapshot
+  for (const { r } of monRows.slice(3).map((r, i) => ({ r, sheetRow: i + 4 }))) {
+    for (const step of FMS_PO_STEPS) {
+      if (step.prCol == null) continue;
+      const own = _normalizePrNo(_fmsBlockValue(r, step, 'prCol'));
+      if (!own) continue;
+      const actual = _fmsBlockValue(r, step, 'actual');
+      if (!actual) continue;
+      const k = `${own}|${step.key}`;
+      if (!claimed.has(k)) {
+        claimed.set(k, {
+          actual, by: _fmsBlockValue(r, step, 'by'), approval: _fmsBlockValue(r, step, 'approval'),
+          poNo: _fmsBlockValue(r, step, 'poNo'), timeline: _fmsBlockValue(r, step, 'timeline'),
+        });
+      }
+    }
+  }
+
+  const todayMs = (() => { const n = new Date(); return Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()); })();
+
+  // ERP PO Log, keyed by the PR it was raised against — lets the report show
+  // the real PO number next to an FMS step that only records "PO Made: YES".
+  const erpPoByPr = new Map();
+  for (const r of erpPoRows) {
+    if (!r[0] || (r[11] || 'Active') === 'Cancelled') continue;
+    const k = _normalizePrNo(r[9]);
+    if (k && !erpPoByPr.has(k)) erpPoByPr.set(k, { poNo: r[0], date: r[2] || '', party: r[3] || '', total: r[5] || '' });
+  }
+
+  const rows = dataRows.map(({ r, sheetRow }) => {
+    const prNo = String(r[1] ?? '').trim();
+    const prKey = _normalizePrNo(prNo);
+
+    const steps = FMS_PO_STEPS.map(step => {
+      const own = step.prCol == null ? '' : _normalizePrNo(_fmsBlockValue(r, step, 'prCol'));
+      // A block naming someone else is that PR's data parked on this row.
+      const strayHere = !!own && own !== prKey;
+      const mine = claimed.get(`${prKey}|${step.key}`);
+      const inline = strayHere ? null : {
+        actual: _fmsBlockValue(r, step, 'actual'), by: _fmsBlockValue(r, step, 'by'),
+        approval: _fmsBlockValue(r, step, 'approval'), poNo: _fmsBlockValue(r, step, 'poNo'),
+        timeline: _fmsBlockValue(r, step, 'timeline'),
+      };
+      const src = (inline && inline.actual) ? inline : (mine || inline || {});
+      // Planned always comes off the PR's own row — it is written there when
+      // the previous step completes, even if the response landed elsewhere.
+      const planned = _fmsParseDate(step.planned == null ? '' : String(r[step.planned] ?? '').trim());
+      const actual = _fmsParseDate(src.actual || '');
+      return {
+        key: step.key, label: step.label, owner: step.owner, poStep: !!step.poStep,
+        done: !!actual.display, planned: planned.display, plannedMs: planned.ms,
+        actual: actual.display, by: src.by || '', approval: src.approval || '',
+        poNo: (src.poNo || '').replace(/^-+$/, ''), timeline: src.timeline || '',
+      };
+    });
+
+    const firstOpen = steps.find(s => !s.done) || null;
+    const lastDoneIdx = steps.reduce((acc, s, i) => (s.done ? i : acc), -1);
+    // A blank step that has a completed step after it was never filled in —
+    // the chain moved on without it (e.g. goods received against a PO whose
+    // approval step is still empty).
+    const bypassed = steps.filter((s, i) => !s.done && i < lastDoneIdx)
+      .map(s => ({ key: s.key, label: s.label, owner: s.owner }));
+
+    const pendingAt = firstOpen ? {
+      key: firstOpen.key, label: firstOpen.label, owner: firstOpen.owner,
+      planned: firstOpen.planned,
+      daysLate: firstOpen.plannedMs == null ? null : Math.round((todayMs - firstOpen.plannedMs) / 86400000),
+    } : null;
+
+    const erpPo = erpPoByPr.get(prKey) || null;
+    const fmsPoNo = (steps.find(s => s.poNo)?.poNo) || '';
+
+    return {
+      prNo, prKey, sheetRow,
+      raisedOn: String(r[0] ?? '').trim(),
+      requestedBy: String(r[2] ?? '').trim(),
+      vendor: String(r[3] ?? '').trim() || String(r[4] ?? '').trim(),
+      department: String(r[5] ?? '').trim() || String(r[6] ?? '').trim(),
+      steps, pendingAt, bypassed,
+      complete: !pendingAt,
+      erpPoNo: erpPo?.poNo || '', erpPoDate: erpPo?.date || '', erpPoTotal: erpPo?.total || '',
+      fmsPoNo,
+      // The PO exists in the ERP but the FMS step that creates it was never
+      // filled — the two systems disagree about where this PR actually is.
+      poMismatch: !!erpPo && !steps.find(s => s.key === 'S5')?.done,
+    };
+  });
+
+  // PRs the ERP knows about that never entered the approval chain at all.
+  const inFms = new Set(rows.map(r => r.prKey));
+  const notInFms = erpPrRows
+    .filter(r => r[0] && (r[11] || 'Active') !== 'Cancelled' && !inFms.has(_normalizePrNo(r[0])))
+    .map(r => {
+      const k = _normalizePrNo(r[0]);
+      const po = erpPoByPr.get(k);
+      return { prNo: r[0], party: r[3] || '', requestedBy: r[4] || '', total: r[6] || '', poNo: po?.poNo || '' };
+    })
+    .reverse();
+
+  const pending = rows.filter(r => r.pendingAt);
+  const byStepMap = new Map();
+  for (const r of pending) {
+    const k = r.pendingAt.key;
+    if (!byStepMap.has(k)) byStepMap.set(k, { key: k, label: r.pendingAt.label, owner: r.pendingAt.owner, count: 0, overdue: 0, prNos: [] });
+    const e = byStepMap.get(k);
+    e.count++; e.prNos.push(r.prNo);
+    if (r.pendingAt.daysLate > 0) e.overdue++;
+  }
+  const byStep = FMS_PO_STEPS.map(s => byStepMap.get(s.key)).filter(Boolean).sort((a, b) => b.count - a.count);
+
+  return {
+    fetchedAt: new Date().toISOString(),
+    steps: FMS_PO_STEPS.map(s => ({ key: s.key, label: s.label, owner: s.owner, poStep: !!s.poStep })),
+    rows,
+    notInFms,
+    summary: {
+      tracked: rows.length,
+      complete: rows.filter(r => r.complete).length,
+      pending: pending.length,
+      overdue: pending.filter(r => r.pendingAt.daysLate > 0).length,
+      atPoSteps: pending.filter(r => ['S5', 'S5B', 'S6'].includes(r.pendingAt.key)).length,
+      bypassed: rows.filter(r => r.bypassed.length).length,
+      mismatched: rows.filter(r => r.poMismatch).length,
+      notInFms: notInFms.length,
+      bottleneck: byStep[0] || null,
+    },
+    byStep,
+  };
+}
+
+// GET /api/fms-po-pending?refresh=1 — where every tracked PR currently sits in
+// the Stores approval FMS. Cached for FMS_PENDING_TTL_MS; ?refresh=1 forces a
+// re-read (the page's manual Refresh button).
+app.get('/api/fms-po-pending', requireAuth, async (req, res) => {
+  const force = req.query.refresh === '1';
+  const fresh = !force && _fmsPendingCache.payload && (Date.now() - _fmsPendingCache.at) < FMS_PENDING_TTL_MS;
+  if (fresh) return res.json({ ..._fmsPendingCache.payload, cached: true });
+  try {
+    const payload = await _buildFmsPoPending();
+    _fmsPendingCache = { at: Date.now(), payload };
+    return res.json({ ...payload, cached: false });
+  } catch (e) {
+    if (_fmsPendingCache.payload) return res.json({ ..._fmsPendingCache.payload, cached: true, stale: true, error: e.message });
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // ── GRN Creation (same pattern as PO Creation above: fills the store team's
 // live "GRN June 2026" Google Sheet directly — that sheet IS the database
 // here too). The "GRN" tab is a single reusable template (no multi-format
