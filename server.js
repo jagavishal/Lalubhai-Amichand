@@ -2868,8 +2868,14 @@ async function _exportSheetTabPdf(spreadsheetId, sourceSheetId, colRange) {
   // Portrait unless the caller opts out — only the Proforma Invoice does, its
   // export table is 13 columns wide and will not fit an A4 portrait page.
   const portrait = !colRange || colRange.portrait !== false;
+  // fitw=true fits to WIDTH — which scales a narrow sheet UP, making a page
+  // that was 6px too tall overflow onto a second sheet. scale=4 is Sheets'
+  // "fit to page": it only ever scales down, and only as far as it must, so
+  // the document always lands on one page. The PI asks for it; PO/PR/GRN keep
+  // the fit-to-width behaviour their layouts were tuned against.
+  const fitMode = colRange && colRange.scale ? `&scale=${colRange.scale}` : '&fitw=true';
   const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export`
-    + `?format=pdf&gid=${sourceSheetId}&size=A4&portrait=${portrait}&fitw=true`
+    + `?format=pdf&gid=${sourceSheetId}&size=A4&portrait=${portrait}${fitMode}`
     + `&gridlines=false&printtitle=false&sheetnames=false`
     + `&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3`
     + rangeParams + rowParams;
@@ -3907,7 +3913,7 @@ async function _piSheetMeta(fy) {
 // current PI, never a partial patch, since the tab only ever reflects the most
 // recent write. Every mapped cell is written even when blank: a leftover value
 // from the previous PI would otherwise print on this one.
-async function _fillPiTemplate(sheets, form) {
+async function _fillPiTemplate(sheets, form, templateSheetId) {
   const tab = PI_TEMPLATE_TAB;
   const { LAYOUT: L, CELLS: C, ITEMS: IT, DEFAULTS: D } = PI_FMT;
   const items = form.items || [];
@@ -3957,6 +3963,25 @@ async function _fillPiTemplate(sheets, form) {
   });
 
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
+
+  // The template carries 30 item rows; a 1-item PI would otherwise print 29
+  // empty ones and push the totals onto a second page. Hidden rows are left
+  // out of the PDF export, so collapse the unused tail and re-show whatever
+  // the previous PI had hidden.
+  if (templateSheetId != null) {
+    const firstIdx = L.itemsFirstRow - 1;
+    const endIdx = L.itemsLastRow;
+    const usedEnd = Math.min(firstIdx + Math.max(items.length, 1), endIdx);
+    const rowRange = (startIndex, endIndex, hidden) => ({
+      updateDimensionProperties: {
+        range: { sheetId: templateSheetId, dimension: 'ROWS', startIndex, endIndex },
+        properties: { hiddenByUser: hidden }, fields: 'hiddenByUser',
+      },
+    });
+    const requests = [rowRange(firstIdx, usedEnd, false)];
+    if (usedEnd < endIdx) requests.push(rowRange(usedEnd, endIdx, true));
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { requests } });
+  }
 }
 
 // Shared post-write step for both create and price-add: wait for the sheet's
@@ -3982,7 +4007,7 @@ async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId) {
   let pdfLink = null;
   try {
     const pdfBuffer = await _exportSheetTabPdf(PI_CREATION_SHEET_ID, templateSheetId, {
-      c1: 0, c2: PI_FMT.LAYOUT.colCount, r1: 0, r2: PI_FMT.LAYOUT.lastRow, portrait: false,
+      c1: 0, c2: PI_FMT.LAYOUT.colCount, r1: 0, r2: PI_FMT.LAYOUT.lastRow, portrait: false, scale: 4,
     });
     // "VTV/052/25-26" has slashes in it — a Drive filename must not.
     pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${piNoFormatted.replace(/\//g, '-')} - Proforma Invoice.pdf`, PI_PDF_DRIVE_FOLDER_ID);
@@ -4089,7 +4114,7 @@ app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
       items: cleanItems,
     };
 
-    await _fillPiTemplate(sheets, { ...form, piNo: piNoFormatted });
+    await _fillPiTemplate(sheets, { ...form, piNo: piNoFormatted }, templateSheetId);
     const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNoFormatted, templateSheetId);
 
     await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, PI_LOG_HEADER);
@@ -4174,7 +4199,7 @@ app.put('/api/proforma-invoice/price', requireAuth, async (req, res) => {
     }));
 
     const { templateSheetId } = await _piSheetMeta(_piFyLabel(existingForm.date));
-    await _fillPiTemplate(sheets, { ...existingForm, piNo, items: mergedItems });
+    await _fillPiTemplate(sheets, { ...existingForm, piNo, items: mergedItems }, templateSheetId);
     const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNo, templateSheetId);
 
     const mergedForm = { ...existingForm, items: mergedItems };

@@ -115,6 +115,9 @@ async function run() {
       requests: [
         { updateSheetProperties: { properties: { sheetId, gridProperties: { rowCount: L.rowCount, columnCount: L.colCount } }, fields: 'gridProperties.rowCount,gridProperties.columnCount' } },
         { unmergeCells: { range: { sheetId } } },
+        // server.js collapses the unused item rows per PI; a rebuild has to
+        // hand back a template with all of them showing again.
+        { updateDimensionProperties: { range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: L.rowCount }, properties: { hiddenByUser: false }, fields: 'hiddenByUser' } },
         { repeatCell: { range: { sheetId }, cell: { userEnteredFormat: {} }, fields: 'userEnteredFormat' } },
         // Clear leftover borders from the old INR template.
         borders(sheetId, 1, L.rowCount, FC, LC, {
@@ -200,9 +203,9 @@ async function run() {
   requests.push(text(sheetId, L.letterheadRows.company, L.letterheadRows.company, TC, LC, { align: 'CENTER', bold: true, size: 16 }));
   requests.push(text(sheetId, L.letterheadRows.regd, L.letterheadRows.works, TC, LC, { align: 'CENTER', size: 8 }));
   requests.push(text(sheetId, L.letterheadRows.title, L.letterheadRows.title, FC, LC, { align: 'CENTER', bold: true, size: 12, bg: BAND }));
-  requests.push(rowHeight(sheetId, L.letterheadRows.company, L.letterheadRows.company, 28));
-  requests.push(rowHeight(sheetId, L.letterheadRows.regd, L.letterheadRows.works, 14));
-  requests.push(rowHeight(sheetId, L.letterheadRows.title, L.letterheadRows.title, 24));
+  requests.push(rowHeight(sheetId, L.letterheadRows.company, L.letterheadRows.company, 26));
+  requests.push(rowHeight(sheetId, L.letterheadRows.regd, L.letterheadRows.works, 13));
+  requests.push(rowHeight(sheetId, L.letterheadRows.title, L.letterheadRows.title, 22));
 
   // ── party block: consignee (A:F) | label (G:H) | value (I:M)
   for (let r = L.partyBlock.firstRow; r <= L.partyBlock.lastRow; r++) {
@@ -215,7 +218,7 @@ async function run() {
   requests.push(text(sheetId, L.partyBlock.firstRow + 1, L.partyBlock.firstRow + 1, 'A', 'F', { bold: true, size: 10 })); // buyer name
   requests.push(text(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 'G', 'H', { bold: true, size: 8 }));
   requests.push(text(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 'I', LC, { size: 9 }));
-  requests.push(rowHeight(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 18));
+  requests.push(rowHeight(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 16));
 
   // ── shipment note strip
   requests.push(merge(sheetId, L.shipmentNoteRow, L.shipmentNoteRow, FC, LC));
@@ -224,7 +227,7 @@ async function run() {
 
   // ── item table
   requests.push(text(sheetId, L.itemHeaderRow, L.itemHeaderRow, FC, LC, { align: 'CENTER', bold: true, size: 8, bg: BAND }));
-  requests.push(rowHeight(sheetId, L.itemHeaderRow, L.itemHeaderRow, 36));
+  requests.push(rowHeight(sheetId, L.itemHeaderRow, L.itemHeaderRow, 32));
   requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, FC, LC, { align: 'CENTER', size: 9 }));
   requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, 'C', 'C', { align: 'LEFT', size: 9 }));   // item name reads better left
   requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, 'M', 'M', { align: 'LEFT', size: 8 }));     // remarks
@@ -257,11 +260,19 @@ async function run() {
   requests.push(text(sheetId, L.termsFirstRow, L.termsLastRow, FC, LC, { size: 8 }));
   requests.push(text(sheetId, L.confirmRow, L.confirmRow, FC, LC, { bold: true, size: 9 }));
   requests.push(text(sheetId, L.declarationRow, L.declarationRow, FC, LC, { size: 8 }));
-  requests.push(rowHeight(sheetId, L.validityRow, L.validityRow, 30));
-  requests.push(rowHeight(sheetId, L.bankRow, L.bankRow, 18));
-  requests.push(rowHeight(sheetId, L.termsHeadingRow, L.termsHeadingRow, 18));
-  requests.push(rowHeight(sheetId, L.termsFirstRow, L.termsLastRow, 18));
-  requests.push(rowHeight(sheetId, L.confirmRow, L.declarationRow, 18));
+  // Two lines' worth on the note and T&C rows: the validity warning and term 8
+  // both wrap, and a merged wrapped cell is clipped, not auto-grown — at 18px
+  // the second half of term 8 ("…RELATIONSHIP CERTIFICATE FOR THE SAME.")
+  // simply vanished off the printed PI.
+  requests.push(rowHeight(sheetId, L.validityRow, L.validityRow, 24));
+  requests.push(rowHeight(sheetId, L.bankRow, L.bankRow, 16));
+  requests.push(rowHeight(sheetId, L.termsHeadingRow, L.termsHeadingRow, 16));
+  requests.push(rowHeight(sheetId, L.termsFirstRow, L.termsLastRow, 22));
+  requests.push(rowHeight(sheetId, L.confirmRow, L.declarationRow, 16));
+  // Spacer rows — default 21px each is wasted vertical budget on a page that
+  // is already fighting to stay on one sheet.
+  requests.push(rowHeight(sheetId, L.wordsRow + 1, L.wordsRow + 1, 6));
+  requests.push(rowHeight(sheetId, L.declarationRow + 1, L.declarationRow + 1, 6));
 
   // ── signature block
   requests.push(merge(sheetId, L.signatureRow, L.signatureRow, 'A', 'F'));
@@ -270,8 +281,9 @@ async function run() {
   requests.push(merge(sheetId, L.signatoryRow, L.signatoryRow, 'H', LC));
   requests.push(text(sheetId, L.signatureRow, L.signatureRow, FC, LC, { bold: true, size: 9 }));
   requests.push(text(sheetId, L.signatoryRow, L.signatoryRow, FC, LC, { bold: true, size: 9 }));
-  requests.push(rowHeight(sheetId, L.signatureRow, L.signatureRow, 20));
-  requests.push(rowHeight(sheetId, L.signatureRow + 1, L.signatoryRow - 1, 18));   // pen space
+  requests.push(rowHeight(sheetId, L.signatureRow, L.signatureRow, 18));
+  requests.push(rowHeight(sheetId, L.signatureRow + 1, L.signatoryRow - 1, 14));   // pen space
+  requests.push(rowHeight(sheetId, L.signatoryRow, L.signatoryRow, 16));
 
   // ── borders: party panels, shipment strip, item grid, page box
   requests.push(borders(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 'A', 'F', { top: SOLID, bottom: SOLID, left: SOLID, right: SOLID }));
@@ -291,6 +303,13 @@ async function run() {
 
   console.log('\n=== DONE ===');
   console.log('Open it: https://docs.google.com/spreadsheets/d/' + SPREADSHEET_ID + '/edit#gid=' + sheetId);
+  console.log('\n!! ONE MANUAL STEP: open that link in a desktop browser, signed in as a user');
+  console.log('   with edit access, and wait for the logo to appear in cell A1.');
+  console.log('   Sheets refuses to fetch an external URL for =IMAGE() when the formula was');
+  console.log('   written by a service account — it answers #REF! with "Please use a desktop');
+  console.log('   web browser to allow access to fetch data from external urls." A single');
+  console.log('   human visit resolves and caches it; after that every exported PDF has the');
+  console.log('   logo, because nothing rewrites A1 again.');
 }
 
 run().catch(e => { console.error('FAILED:', e.message); process.exit(1); });
