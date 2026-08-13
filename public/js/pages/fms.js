@@ -639,18 +639,131 @@ window.Pages.fms = (() => {
     return `<option value="">— None —</option>` + _users.map(u => `<option value="${esc(u.id)}" ${u.id === selectedId ? 'selected' : ''}>${esc(u.name)}</option>`).join('');
   }
 
-  // Column-letter fields (Plan/Actual/Doer Name) are all "pick a column from
-  // the fetched header row" — a dropdown once headers are loaded, but keep
-  // whatever is already configured as a selectable option even if it no
-  // longer matches a fetched header (sheet reshuffled, or not fetched yet).
-  function colSelectHTML(i, key, currentVal, placeholder) {
-    const currentMissing = currentVal && !_modalHeaders.some(h => h.col === currentVal);
+  // Column-letter fields (Plan/Actual/Doer Name, and the extra-field columns)
+  // are all "pick a column from the fetched header row". They render as a
+  // type-ahead combobox: click for the full header list, or type to filter by
+  // header name / column letter. A raw column letter is still accepted so the
+  // field stays usable before headers are fetched, and whatever is already
+  // configured is preserved even if it no longer matches a fetched header
+  // (sheet reshuffled).
+  function comboDisplay(col) {
+    if (!col) return '';
+    const h = _modalHeaders.find(x => x.col === col);
+    return h ? `${h.name} (${h.col})` : col;
+  }
+
+  function comboId(i, key, row) {
+    return row != null ? `fms-combo-${i}-x${row}` : `fms-combo-${i}-${key}`;
+  }
+
+  function colSelectHTML(i, key, currentVal, placeholder, row) {
+    const id = comboId(i, key, row);
     return `
-      <select class="input fms-step-field" data-step="${i}" data-k="${key}">
-        <option value="">${esc(placeholder)}</option>
-        ${currentMissing ? `<option value="${esc(currentVal)}" selected>${esc(currentVal)} (current)</option>` : ''}
-        ${_modalHeaders.map(h => `<option value="${esc(h.col)}" ${currentVal === h.col ? 'selected' : ''}>${esc(h.name)} (${esc(h.col)})</option>`).join('')}
-      </select>`;
+      <div class="fms-combo" style="position:relative;">
+        <input class="input fms-combo-input" id="${id}" type="text" autocomplete="off" spellcheck="false"
+               placeholder="${esc(placeholder)}" value="${esc(comboDisplay(currentVal))}"
+               data-step="${i}" ${row != null ? `data-row="${row}"` : ''} data-k="${esc(key)}" data-val="${esc(currentVal || '')}"
+               style="padding-right:26px;" />
+        <span style="position:absolute;right:9px;top:50%;transform:translateY(-50%);pointer-events:none;color:#94a3b8;font-size:9px;">▼</span>
+        <div class="fms-combo-list" id="${id}-list" style="display:none;position:absolute;z-index:60;top:calc(100% + 2px);left:0;right:0;max-height:190px;overflow-y:auto;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 20px rgba(15,23,42,.14);"></div>
+      </div>`;
+  }
+
+  // Resolves whatever the admin typed to a column letter: an exact
+  // "Name (X)" pick, a header name, a column letter, or '' to clear.
+  // Returns null when it matches nothing, so the caller can revert.
+  function resolveComboText(text) {
+    const t = (text || '').trim();
+    if (!t) return '';
+    const low = t.toLowerCase();
+    const exact = _modalHeaders.find(h => `${h.name} (${h.col})`.toLowerCase() === low);
+    if (exact) return exact.col;
+    const byName = _modalHeaders.find(h => h.name.toLowerCase() === low);
+    if (byName) return byName.col;
+    const byCol = _modalHeaders.find(h => h.col.toLowerCase() === low);
+    if (byCol) return byCol.col;
+    if (/^[A-Za-z]{1,3}$/.test(t)) return t.toUpperCase();
+    const partial = _modalHeaders.find(h => h.name.toLowerCase().includes(low));
+    return partial ? partial.col : null;
+  }
+
+  function writeComboValue(inp, col) {
+    const i = parseInt(inp.dataset.step, 10);
+    const step = _modalForm.steps[i];
+    if (!step) return;
+    inp.dataset.val = col;
+    inp.value = comboDisplay(col);
+    if (inp.dataset.row != null) {
+      const er = step.extraRows[parseInt(inp.dataset.row, 10)];
+      if (er) er[inp.dataset.k] = col;
+    } else {
+      step[inp.dataset.k] = col;
+      // The label carries the picked header's name — keep it in sync without
+      // re-rendering the step block.
+      const lbl = document.getElementById(`fms-collabel-${i}-${inp.dataset.k}`);
+      if (lbl) lbl.innerHTML = colLabelHTML(lbl.dataset.base, col);
+    }
+  }
+
+  function renderComboList(inp, list) {
+    const typed = (inp.value || '').trim().toLowerCase();
+    // Clicking a field that already holds a value should show everything,
+    // not just the one row matching its own text.
+    const showAll = !typed || typed === comboDisplay(inp.dataset.val).toLowerCase();
+    const items = _modalHeaders.filter(h => showAll
+      || h.name.toLowerCase().includes(typed)
+      || h.col.toLowerCase().startsWith(typed));
+    const optStyle = 'padding:6px 9px;font-size:12px;color:#334155;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    const rows = [`<div class="fms-combo-opt" data-col="" style="${optStyle}color:#94a3b8;">— None —</div>`];
+    if (items.length) {
+      items.forEach(h => rows.push(`<div class="fms-combo-opt" data-col="${esc(h.col)}" style="${optStyle}${h.col === inp.dataset.val ? 'background:#fef3c7;font-weight:600;' : ''}">${esc(h.name)} <span style="color:#94a3b8;">(${esc(h.col)})</span></div>`));
+    } else {
+      rows.push(`<div style="padding:8px 9px;font-size:11.5px;color:#94a3b8;">${_modalHeaders.length ? 'No matching column — or type a column letter' : 'Fetch column headers above, or type a column letter (e.g. I)'}</div>`);
+    }
+    list.innerHTML = rows.join('');
+  }
+
+  function bindColCombos(container) {
+    container.querySelectorAll('.fms-combo-input').forEach(inp => {
+      const list = document.getElementById(`${inp.id}-list`);
+      if (!list) return;
+      const open = () => {
+        renderComboList(inp, list);
+        // The modal body scrolls, so a field near its bottom edge would open
+        // into clipped space — flip the list above the input instead.
+        const body = inp.closest('.modal-body');
+        if (body) {
+          const r = inp.getBoundingClientRect();
+          const b = body.getBoundingClientRect();
+          const spaceBelow = b.bottom - r.bottom;
+          const flipUp = spaceBelow < 200 && (r.top - b.top) > spaceBelow;
+          list.style.top = flipUp ? 'auto' : 'calc(100% + 2px)';
+          list.style.bottom = flipUp ? 'calc(100% + 2px)' : 'auto';
+        }
+        list.style.display = '';
+      };
+      const commit = () => {
+        const col = resolveComboText(inp.value);
+        if (col === null) inp.value = comboDisplay(inp.dataset.val); // unrecognised — revert
+        else writeComboValue(inp, col);
+      };
+      inp.addEventListener('focus', open);
+      inp.addEventListener('click', open);
+      inp.addEventListener('input', open);
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { inp.value = comboDisplay(inp.dataset.val); list.style.display = 'none'; }
+        else if (e.key === 'Enter') { e.preventDefault(); commit(); list.style.display = 'none'; }
+      });
+      inp.addEventListener('blur', () => { commit(); list.style.display = 'none'; });
+      // mousedown (not click) so the pick lands before the input blurs.
+      list.addEventListener('mousedown', (e) => {
+        const opt = e.target.closest && e.target.closest('.fms-combo-opt');
+        if (!opt) return;
+        e.preventDefault();
+        writeComboValue(inp, opt.dataset.col || '');
+        list.style.display = 'none';
+      });
+    });
   }
 
   // Shows the underlying sheet header text next to the label once a column is
@@ -673,7 +786,7 @@ window.Pages.fms = (() => {
     const doerPickerOpen = !!_modalDoerPickerOpen[i];
 
     const doerChecks = _users.map(u => `
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#334155;padding:2px 0;cursor:pointer;">
+      <label class="fms-doer-row" data-name="${esc((u.name || '').toLowerCase())}" style="display:flex;align-items:center;gap:6px;font-size:12px;color:#334155;padding:2px 0;cursor:pointer;">
         <input type="checkbox" class="fms-doer-chk" data-step="${i}" data-uid="${esc(u.id)}" ${step.doerIds.includes(u.id) ? 'checked' : ''} />
         ${esc(u.name)}
       </label>`).join('');
@@ -687,18 +800,10 @@ window.Pages.fms = (() => {
       </label>`).join('') : '';
 
     const loadResult = _modalLoadResult[i];
-    // Column pickers stay consistent everywhere — a dropdown fed by the fetched
-    // headers, same as Plan/Actual/Doer Name Column, just bound to the nested
-    // extraRows array via the .fms-extra-field handler instead of .fms-step-field.
-    const extraColSelectHTML = (j, currentVal) => {
-      const currentMissing = currentVal && !_modalHeaders.some(h => h.col === currentVal);
-      return `
-        <select class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="colLetter">
-          <option value="">Select column…</option>
-          ${currentMissing ? `<option value="${esc(currentVal)}" selected>${esc(currentVal)} (current)</option>` : ''}
-          ${_modalHeaders.map(h => `<option value="${esc(h.col)}" ${currentVal === h.col ? 'selected' : ''}>${esc(h.name)} (${esc(h.col)})</option>`).join('')}
-        </select>`;
-    };
+    // Column pickers stay consistent everywhere — the same type-ahead combobox
+    // as Plan/Actual/Doer Name Column, just bound to the nested extraRows array
+    // (via the data-row attribute) instead of the step itself.
+    const extraColSelectHTML = (j, currentVal) => colSelectHTML(i, 'colLetter', currentVal, 'Select or type column…', j);
     const extraRowsHTML = step.extraRows.map((er, j) => `
       <div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-bottom:8px;position:relative;">
         <button type="button" class="icon-btn danger fms-extra-remove" data-step="${i}" data-row="${j}" title="Remove field" style="position:absolute;top:8px;right:8px;">
@@ -749,7 +854,11 @@ window.Pages.fms = (() => {
           </div>
         </div>
         <div id="fms-doer-list-${i}" style="margin-bottom:10px;${doerPickerOpen ? '' : 'display:none;'}">
+          <input type="text" class="input fms-doer-search" id="fms-doer-search-${i}" data-step="${i}" autocomplete="off" placeholder="Type to search users…" style="margin-bottom:6px;" />
           <div style="max-height:150px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;">${doerChecks || '<span style="font-size:11.5px;color:#94a3b8;">No users found.</span>'}</div>
+          <div style="display:flex;justify-content:flex-end;margin-top:6px;">
+            <button type="button" class="btn-secondary btn-sm fms-doer-done" data-step="${i}">Done</button>
+          </div>
           ${loadResult ? `
           <div style="margin-top:6px;padding:8px;background:#f8fafc;border-radius:8px;font-size:11.5px;">
             <div style="color:#16a34a;font-weight:600;">Matched: ${loadResult.matched.map(m => esc(m.user_name)).join(', ') || '—'}</div>
@@ -759,8 +868,8 @@ window.Pages.fms = (() => {
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-          <div><label class="label">${colLabelHTML('Plan Column', step.planCol)}</label>${colSelectHTML(i, 'planCol', step.planCol, 'Column e.g. I')}</div>
-          <div><label class="label">${colLabelHTML('Actual Column', step.actualCol)}</label>${colSelectHTML(i, 'actualCol', step.actualCol, 'Column e.g. J')}</div>
+          <div><label class="label" id="fms-collabel-${i}-planCol" data-base="Plan Column">${colLabelHTML('Plan Column', step.planCol)}</label>${colSelectHTML(i, 'planCol', step.planCol, 'Select or type column…')}</div>
+          <div><label class="label" id="fms-collabel-${i}-actualCol" data-base="Actual Column">${colLabelHTML('Actual Column', step.actualCol)}</label>${colSelectHTML(i, 'actualCol', step.actualCol, 'Select or type column…')}</div>
         </div>
 
         <div style="margin-bottom:10px;">
@@ -772,7 +881,7 @@ window.Pages.fms = (() => {
         <div style="display:flex;gap:8px;align-items:flex-end;max-width:calc(50% - 4px);margin-bottom:10px;">
           <div style="flex:1;">
             <label class="label">Doer Name Column <span style="font-weight:400;color:#94a3b8;">(auto-saved on completion)</span></label>
-            ${colSelectHTML(i, 'doerNameCol', step.doerNameCol, 'None')}
+            ${colSelectHTML(i, 'doerNameCol', step.doerNameCol, 'None — select or type column…')}
           </div>
           <button type="button" class="btn-secondary btn-sm fms-loaddoers-btn" data-step="${i}" style="white-space:nowrap;padding:9px 12px;">Load Doers</button>
         </div>
@@ -879,9 +988,38 @@ window.Pages.fms = (() => {
     document.getElementById('fms-m-addstep-top')?.addEventListener('click', () => { _modalForm.steps.push(newStep()); refreshStepsList(); });
   }
 
+  function closeDoerPicker(i) {
+    _modalDoerPickerOpen[i] = false;
+    const list = document.getElementById(`fms-doer-list-${i}`);
+    if (list) list.style.display = 'none';
+    const search = document.getElementById(`fms-doer-search-${i}`);
+    if (search) {
+      search.value = '';
+      list?.querySelectorAll('.fms-doer-row').forEach(r => { r.style.display = ''; });
+    }
+  }
+
+  // Bound once on the document (not per render) so an open doer checklist
+  // closes when the admin clicks anywhere else in the modal.
+  let _doerOutsideBound = false;
+  function bindDoerOutsideClose() {
+    if (_doerOutsideBound) return;
+    _doerOutsideBound = true;
+    document.addEventListener('mousedown', (e) => {
+      const t = e.target instanceof Element ? e.target : null;
+      Object.keys(_modalDoerPickerOpen).forEach(k => {
+        if (!_modalDoerPickerOpen[k]) return;
+        if (t && (t.closest(`#fms-doer-list-${k}`) || t.closest(`.fms-doer-toggle[data-step="${k}"]`))) return;
+        closeDoerPicker(k);
+      });
+    });
+  }
+
   function bindStepsList() {
     const container = document.getElementById('fms-m-steps');
     if (!container) return;
+    bindDoerOutsideClose();
+    bindColCombos(container);
 
     container.querySelectorAll('.fms-step-remove').forEach(b => b.addEventListener('click', () => {
       _modalForm.steps.splice(parseInt(b.dataset.step, 10), 1);
@@ -976,12 +1114,25 @@ window.Pages.fms = (() => {
     }));
     container.querySelectorAll('.fms-doer-toggle').forEach(el => el.addEventListener('click', () => {
       const i = parseInt(el.dataset.step, 10);
-      _modalDoerPickerOpen[i] = !_modalDoerPickerOpen[i];
+      if (_modalDoerPickerOpen[i]) { closeDoerPicker(i); return; }
+      // Only one picker open at a time, so a multi-step FMS never ends up with
+      // several checklists stacked open at once.
+      Object.keys(_modalDoerPickerOpen).forEach(k => { if (_modalDoerPickerOpen[k]) closeDoerPicker(k); });
+      _modalDoerPickerOpen[i] = true;
       // Pure display toggle — no re-render, so opening/closing the doer list
-      // for each step while configuring a multi-step FMS never causes a flash.
+      // never causes a flash.
       const list = document.getElementById(`fms-doer-list-${i}`);
-      if (list) list.style.display = _modalDoerPickerOpen[i] ? '' : 'none';
+      if (list) list.style.display = '';
+      document.getElementById(`fms-doer-search-${i}`)?.focus();
     }));
+    container.querySelectorAll('.fms-doer-search').forEach(el => el.addEventListener('input', () => {
+      const q = el.value.trim().toLowerCase();
+      const list = document.getElementById(`fms-doer-list-${el.dataset.step}`);
+      list?.querySelectorAll('.fms-doer-row').forEach(r => {
+        r.style.display = (!q || (r.dataset.name || '').includes(q)) ? '' : 'none';
+      });
+    }));
+    container.querySelectorAll('.fms-doer-done').forEach(b => b.addEventListener('click', () => closeDoerPicker(parseInt(b.dataset.step, 10))));
     container.querySelectorAll('.fms-loaddoers-btn').forEach(b => b.addEventListener('click', () => loadDoersFromColumn(parseInt(b.dataset.step, 10))));
     container.querySelectorAll('.fms-adopt-matched').forEach(b => b.addEventListener('click', () => {
       const i = parseInt(b.dataset.step, 10);
