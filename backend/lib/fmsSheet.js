@@ -204,20 +204,22 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     await pool.query('DELETE FROM fms_sheet_steps WHERE fms_id = $1', [fmsId]);
   }
 
-  async function createFmsSheet({ fmsName, sheetName, sheetId, headerRow, createdBy, steps, processCoordinatorId }) {
+  async function createFmsSheet({ fmsName, sheetName, sheetId, headerRow, createdBy, steps, processCoordinatorId, notifyEnabled }) {
     const id = genId('FMS');
     await pool.query(
-      `INSERT INTO fms_sheets (id, fms_name, sheet_name, sheet_id, header_row, created_by, process_coordinator_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [id, fmsName || '', sheetName || '', extractSpreadsheetId(sheetId), headerRow || 1, createdBy || null, processCoordinatorId || null]
+      `INSERT INTO fms_sheets (id, fms_name, sheet_name, sheet_id, header_row, created_by, process_coordinator_id, notify_enabled) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [id, fmsName || '', sheetName || '', extractSpreadsheetId(sheetId), headerRow || 1, createdBy || null, processCoordinatorId || null,
+        notifyEnabled === false ? 0 : 1]
     );
     await insertStepsForFms(id, steps);
     return getFmsSheet(id);
   }
 
-  async function updateFmsSheet(id, { fmsName, sheetName, sheetId, headerRow, steps, processCoordinatorId }) {
+  async function updateFmsSheet(id, { fmsName, sheetName, sheetId, headerRow, steps, processCoordinatorId, notifyEnabled }) {
     await pool.query(
-      `UPDATE fms_sheets SET fms_name=$1, sheet_name=$2, sheet_id=$3, header_row=$4, process_coordinator_id=$5 WHERE id=$6`,
-      [fmsName || '', sheetName || '', extractSpreadsheetId(sheetId), headerRow || 1, processCoordinatorId || null, id]
+      `UPDATE fms_sheets SET fms_name=$1, sheet_name=$2, sheet_id=$3, header_row=$4, process_coordinator_id=$5, notify_enabled=$6 WHERE id=$7`,
+      [fmsName || '', sheetName || '', extractSpreadsheetId(sheetId), headerRow || 1, processCoordinatorId || null,
+        notifyEnabled === false ? 0 : 1, id]
     );
     await clearStepsForFms(id);
     await insertStepsForFms(id, steps);
@@ -524,6 +526,63 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     }
   }
 
+  /* ── next-step notification ──────────────────────────────────────────── */
+  // Called right after writeStepDone(): works out who now owns this row and what
+  // they need to see. Reads only the header row + the single row that changed
+  // (never the whole sheet), so the notification costs two cheap Sheets reads.
+  // Returns null whenever there is nothing to notify about — last step of the
+  // flow, next step already filled in, or nobody resolvable to an email address.
+  async function getNextStepNotification({ sheet, step, rowNumber }) {
+    const steps = await getFullSteps(sheet.id);
+    const idx = steps.findIndex(s => s.id === step.id);
+    if (idx === -1 || idx + 1 >= steps.length) return null; // last step — flow ends here
+    const next = steps[idx + 1];
+
+    const headerRowNum = sheet.header_row || 1;
+    const [headerVals, rowVals] = await Promise.all([
+      fetchRange(sheet.sheet_id, `'${sheet.sheet_name}'!A${headerRowNum}:ZZ${headerRowNum}`),
+      fetchRange(sheet.sheet_id, `'${sheet.sheet_name}'!A${rowNumber}:ZZ${rowNumber}`),
+    ]);
+    const headers = (headerVals[0] || []).map((h, i) => stripZW(h) || idxToCol(i));
+    const row = rowVals[0] || [];
+
+    // Same "pending" definition computePendingRows() uses — if the next step's
+    // actual cell is already filled, that step isn't waiting on anyone.
+    if (stripZW(row[colToIdx(next.actual_col)])) return null;
+    const planValue = stripZW(row[colToIdx(next.plan_col)]);
+
+    // Row-level doer wins over the step's configured doers, exactly like
+    // computePendingRows() decides whose pending list the row lands in.
+    const rowDoerName = next.doer_name_col ? stripZW(row[colToIdx(next.doer_name_col)]) : '';
+    let recipients = [];
+    if (rowDoerName) {
+      recipients = await q('SELECT id, name, email FROM users WHERE LOWER(name) = LOWER($1) AND active = 1', [rowDoerName]);
+    }
+    if (!recipients.length && (next.doers || []).length) {
+      const ids = next.doers.map(d => d.user_id).filter(Boolean);
+      if (ids.length) {
+        const ph = inClausePlaceholders(ids);
+        recipients = await q(`SELECT id, name, email FROM users WHERE id IN (${ph}) AND active = 1`, ids);
+      }
+    }
+    const seen = new Set();
+    recipients = recipients.filter(u => {
+      const e = (u.email || '').trim().toLowerCase();
+      if (!e || seen.has(e)) return false;
+      seen.add(e);
+      return true;
+    });
+    if (!recipients.length) return null;
+
+    // Show the doer the same columns their pending list would show them.
+    const showCols = Array.isArray(next.show_cols) && next.show_cols.length ? next.show_cols : headers.map((_, i) => i);
+    const details = showCols
+      .map(ci => ({ header: headers[ci] || idxToCol(ci), value: String(row[ci] ?? '').trim() }))
+      .filter(d => d.value);
+
+    return { nextStep: next, recipients, planValue, rowDoerName, details };
+  }
+
   /* ── reporting (MIS / digest) ────────────────────────────────────────── */
   async function getFmsMisRows(start, end) {
     const sheets = await listFmsSheets();
@@ -625,7 +684,7 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     getIntakeFields, saveIntakeFields, saveIntakeSheetConfig, effectiveIntakeSheet, sheetColumnValues,
     getFmsSheetsForUser, getFmsSheetsWithStats, getStepsForTaskView,
     computePendingRows, getPendingRowsForStep, getPendingRowsForFmsSteps, getPendingAcrossSteps, getMyFmsPendingRows,
-    submitIntakeRow, writeStepDone,
+    submitIntakeRow, writeStepDone, getNextStepNotification,
     getFmsMisRows, getFmsMisDetailRows, getFmsPendingGroupedByDoer,
   };
 };

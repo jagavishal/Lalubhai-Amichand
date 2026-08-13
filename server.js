@@ -212,6 +212,10 @@ const SCHEMA = [
   // lives in the live external Google Sheet; these tables only store which sheet,
   // which columns mean what, and who the doers are.
   `CREATE TABLE IF NOT EXISTS fms_sheets (id VARCHAR(24) PRIMARY KEY, fms_name VARCHAR(255) NOT NULL, sheet_name VARCHAR(255) NOT NULL, sheet_id VARCHAR(255) NOT NULL, header_row INT NOT NULL DEFAULT 1, created_by VARCHAR(16) DEFAULT NULL, process_coordinator_id VARCHAR(16) DEFAULT NULL, intake_sheet_id VARCHAR(255) DEFAULT '', intake_sheet_name VARCHAR(255) DEFAULT '', intake_header_row INT DEFAULT NULL, intake_form_name VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  // Per-flow mute for the next-step email (see sendFmsNextStepEmail). Defaults to
+  // 1 so the single global 'fms_notify_enabled' switch is all an admin has to flip
+  // to start mail on every existing flow; this column only exists to silence one.
+  `ALTER TABLE fms_sheets ADD COLUMN IF NOT EXISTS notify_enabled SMALLINT NOT NULL DEFAULT 1`,
   `CREATE TABLE IF NOT EXISTS fms_sheet_steps (id VARCHAR(24) PRIMARY KEY, fms_id VARCHAR(24) NOT NULL, step_order INT NOT NULL DEFAULT 0, step_name VARCHAR(255) NOT NULL, plan_col VARCHAR(8) NOT NULL, actual_col VARCHAR(8) NOT NULL, extra_input VARCHAR(4) NOT NULL DEFAULT 'no', extra_col VARCHAR(8) DEFAULT '', show_cols TEXT DEFAULT NULL, delay_reason_col VARCHAR(8) DEFAULT '', doer_name_col VARCHAR(8) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_fms_steps_fms ON fms_sheet_steps (fms_id)`,
   `CREATE TABLE IF NOT EXISTS fms_step_doers (step_id VARCHAR(24) NOT NULL, user_id VARCHAR(16) NOT NULL, PRIMARY KEY (step_id, user_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -2384,6 +2388,86 @@ function fmsGate(req, res, next) {
   next();
 }
 
+// ── FMS next-step email notification ─────────────────────────────────────────
+// Master switch, persisted in app_config. Defaults to OFF (absent key = off) so
+// that no mail can go out until an admin explicitly turns notifications on from
+// the FMS page — flipping it on is what starts delivery, nothing else.
+async function isFmsNotifyEnabled() {
+  try {
+    const rows = await q(`SELECT "value" FROM app_config WHERE "key" = 'fms_notify_enabled'`);
+    return rows.length > 0 && String(rows[0].value) === 'true';
+  } catch (e) {
+    console.error('[fms-mail] could not read fms_notify_enabled:', e.message);
+    return false;
+  }
+}
+
+function escHtml(v) {
+  return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Called fire-and-forget after a step is marked done — it must never delay or
+// fail the /done response, and an unreachable SMTP server must never surface as
+// a failed "mark done" (the sheet write has already succeeded by then).
+async function sendFmsNextStepEmail({ sheet, step, rowNumber, doneByName }) {
+  if (!(await isFmsNotifyEnabled())) return;
+  if (Number(sheet.notify_enabled ?? 1) === 0) return; // this one flow is muted
+  const mailer = getMailer();
+  if (!mailer) { console.log('[fms-mail] skipped — SMTP_USER/SMTP_PASS not configured'); return; }
+
+  const info = await fmsSheet.getNextStepNotification({ sheet, step, rowNumber });
+  if (!info) { console.log('[fms-mail] no next step to notify for row', rowNumber, 'of', sheet.fms_name); return; }
+  const { nextStep, recipients, planValue, details } = info;
+
+  // Cap the detail table — a wide sheet can have 40+ populated columns, which
+  // makes an unreadable email and risks Gmail clipping the message.
+  const detailRowsHTML = details.slice(0, 12).map(d => `
+    <tr>
+      <td style="padding:7px 10px;background:#f8fafc;font-weight:600;color:#334155;font-size:12.5px;width:38%">${escHtml(d.header)}</td>
+      <td style="padding:7px 10px;color:#1e293b;font-size:12.5px">${escHtml(d.value)}</td>
+    </tr>`).join('');
+
+  const subject = `FMS — Your turn: ${nextStep.step_name} (${sheet.fms_name})`;
+  for (const u of recipients) {
+    try {
+      await mailer.sendMail({
+        from: `"Task Manager" <${process.env.SMTP_USER}>`,
+        to: u.email,
+        subject,
+        html: `<div style="font-family:sans-serif;max-width:560px;margin:auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
+          <div style="background:#0150AA;padding:20px 24px">
+            <h2 style="color:#fff;margin:0;font-size:16px">🔔 Next Step Assigned to You</h2>
+            <div style="color:#c7dbf5;font-size:12.5px;margin-top:4px">${escHtml(sheet.fms_name)}</div>
+          </div>
+          <div style="padding:24px">
+            <p style="margin:0 0 14px;font-size:14px;color:#1e293b">Hi <strong>${escHtml(u.name || '')}</strong>, the previous step has been completed${doneByName ? ` by <strong>${escHtml(doneByName)}</strong>` : ''}. This row is now pending with you.</p>
+            <table style="width:100%;border-collapse:collapse;margin:0 0 16px">
+              <tr>
+                <td style="padding:7px 10px;background:#eef4fc;font-weight:700;color:#0150AA;font-size:12.5px;width:38%">Your Step</td>
+                <td style="padding:7px 10px;color:#0f172a;font-size:12.5px;font-weight:600">${escHtml(nextStep.step_name)}</td>
+              </tr>
+              <tr>
+                <td style="padding:7px 10px;background:#eef4fc;font-weight:700;color:#0150AA;font-size:12.5px">Planned Date</td>
+                <td style="padding:7px 10px;color:#0f172a;font-size:12.5px">${escHtml(planValue || '—')}</td>
+              </tr>
+              <tr>
+                <td style="padding:7px 10px;background:#eef4fc;font-weight:700;color:#0150AA;font-size:12.5px">Completed Step</td>
+                <td style="padding:7px 10px;color:#0f172a;font-size:12.5px">${escHtml(step.step_name)}</td>
+              </tr>
+            </table>
+            ${detailRowsHTML ? `<div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.04em;margin:0 0 6px">Entry Details</div>
+            <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:6px">${detailRowsHTML}</table>` : ''}
+            <p style="margin:18px 0 0;font-size:12.5px;color:#94a3b8">Open FMS → ${escHtml(sheet.fms_name)} → ${escHtml(nextStep.step_name)} to mark it done. This is an automated notification.</p>
+          </div>
+        </div>`,
+      });
+      console.log('[fms-mail] next-step email sent to', u.email, '| step:', nextStep.step_name, '| row:', rowNumber);
+    } catch (e) {
+      console.error('[fms-mail] failed to send to', u.email, '—', e.message);
+    }
+  }
+}
+
 app.get('/api/fms', requireAuth, fmsGate, async (req, res) => {
   try {
     await ensureSchema();
@@ -2404,6 +2488,7 @@ app.post('/api/fms', requireAdmin, fmsGate, async (req, res) => {
       fmsName: b.fmsName.trim(), sheetName: b.sheetName || '', sheetId: b.sheetId,
       headerRow: b.headerRow || 1, createdBy: req.session.user.id, steps: b.steps || [],
       processCoordinatorId: b.processCoordinatorId || null,
+      notifyEnabled: b.notifyEnabled !== false,
     });
     return res.status(201).json(sheet);
   } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
@@ -2421,6 +2506,28 @@ app.post('/api/fms/fetch-headers', requireAdmin, fmsGate, async (req, res) => {
   } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
+// Master on/off switch for the next-step emails. Two segments like /api/fms/:id,
+// so like the literal paths above it has to be registered before that route.
+app.get('/api/fms/notify-settings', requireAuth, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    return res.json({ enabled: await isFmsNotifyEnabled(), smtpConfigured: !!getMailer() });
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/fms/notify-settings', requireAdmin, fmsGate, async (req, res) => {
+  try {
+    await ensureSchema();
+    const enabled = req.body.enabled === true || req.body.enabled === 'true';
+    await pool.query(
+      `INSERT INTO app_config ("key","value") VALUES ('fms_notify_enabled',$1) ON CONFLICT ("key") DO UPDATE SET "value"=$2`,
+      [String(enabled), String(enabled)]
+    );
+    console.log('[fms-mail] notifications turned', enabled ? 'ON' : 'OFF', 'by', req.session.user?.name || '');
+    return res.json({ success: true, enabled });
+  } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/fms/sheet-column-values', requireAdmin, fmsGate, async (req, res) => {
   try {
     const { sheetUrlOrId, tabName, colLetter, headerRow } = req.query;
@@ -2429,6 +2536,19 @@ app.get('/api/fms/sheet-column-values', requireAdmin, fmsGate, async (req, res) 
     const result = await fmsSheet.sheetColumnValues(sheetUrlOrId, tabName, colLetter, headerRow || 1);
     return res.json(result);
   } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
+});
+
+// Backs the "upload" field type. Any FMS user can post here (a step doer
+// filling in an attachment is not an admin), so it sits on requireAuth, and
+// like the two literal paths above it must precede /api/fms/:id.
+app.post('/api/fms/upload', requireAuth, fmsGate, async (req, res) => {
+  try {
+    const { fileName, dataUrl } = req.body;
+    if (!dataUrl) return res.status(400).json({ error: 'dataUrl required' });
+    const url = await uploadFmsFileToDrive(dataUrl, fileName);
+    if (!url) return res.status(500).json({ error: 'Upload failed' });
+    return res.json({ url, name: fileName || '' });
+  } catch (err) { console.error("[fms-upload]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/fms/:id/pc', requireAuth, fmsGate, async (req, res) => {
@@ -2496,6 +2616,7 @@ app.put('/api/fms/:id', requireAdmin, fmsGate, async (req, res) => {
     const sheet = await fmsSheet.updateFmsSheet(req.params.id, {
       fmsName: b.fmsName || '', sheetName: b.sheetName || '', sheetId: b.sheetId || '',
       headerRow: b.headerRow || 1, steps: b.steps || [], processCoordinatorId: b.processCoordinatorId || null,
+      notifyEnabled: b.notifyEnabled !== false,
     });
     return res.json(sheet);
   } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
@@ -2567,6 +2688,11 @@ app.post('/api/fms-tasks/:id/steps/:stepId/done', requireAuth, fmsGate, async (r
     const { rowNumber, delayReason, extraInputs, doerName } = req.body;
     if (!rowNumber) return res.status(400).json({ error: 'rowNumber required' });
     await fmsSheet.writeStepDone({ sheet, step, rowNumber, delayReason, extraInputs, doerName: doerName || user.name });
+    // Fire-and-forget — the sheet write above has already succeeded, so a slow or
+    // unreachable SMTP server must not delay this response or turn a successful
+    // "mark done" into an error for the doer.
+    sendFmsNextStepEmail({ sheet, step, rowNumber, doneByName: doerName || user.name })
+      .catch(e => console.error('[fms-mail] next-step notification failed:', e.message));
     return res.json({ success: true });
   } catch (err) { console.error("[fms]", req.method, req.path, err.message); return res.status(500).json({ error: err.message }); }
 });
@@ -2741,6 +2867,65 @@ async function uploadUserPhotoToDrive(dataUrl, { userId, userName }) {
   await drive.permissions.create({
     fileId: file.data.id, requestBody: { role: 'reader', type: 'anyone' }, supportsAllDrives: true,
   }).catch(e => console.error('[user-photo] share failed:', e.message));
+  return file.data.webViewLink;
+}
+
+// ── FMS attachments → Drive ──────────────────────────────────────────
+// Backs the "upload" field type on FMS intake forms and step-completion
+// extra fields: the browser posts the picked file as a data URL, it lands in
+// a Drive folder, and the shareable link is what gets written into the sheet
+// cell. Same Shared Drive as the user photos — a service account has no
+// storage quota of its own, so an ordinary "My Drive" folder rejects it.
+const FMS_UPLOAD_DRIVE_FOLDER_NAME = 'FMS Uploads';
+let _fmsUploadFolderId = null;
+
+async function ensureFmsUploadFolder(drive) {
+  if (_fmsUploadFolderId) return _fmsUploadFolderId;
+  const override = process.env.FMS_UPLOAD_DRIVE_FOLDER_ID?.trim();
+  if (override) { _fmsUploadFolderId = override; return _fmsUploadFolderId; }
+  const found = await drive.files.list({
+    q: `name = '${FMS_UPLOAD_DRIVE_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    corpora: 'drive', driveId: PHOTO_SHARED_DRIVE_ID,
+    includeItemsFromAllDrives: true, supportsAllDrives: true,
+    fields: 'files(id,name)', pageSize: 1,
+  });
+  if (found.data.files?.length) { _fmsUploadFolderId = found.data.files[0].id; return _fmsUploadFolderId; }
+  const created = await drive.files.create({
+    requestBody: { name: FMS_UPLOAD_DRIVE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder', parents: [PHOTO_SHARED_DRIVE_ID] },
+    fields: 'id', supportsAllDrives: true,
+  });
+  _fmsUploadFolderId = created.data.id;
+  console.log('[fms-upload] created Drive folder', FMS_UPLOAD_DRIVE_FOLDER_NAME, _fmsUploadFolderId);
+  return _fmsUploadFolderId;
+}
+
+// Any mime type, not just images (the photo parser above is deliberately
+// image-only) — an FMS attachment is just as often a PDF or a spreadsheet.
+function _parseAnyDataUrl(dataUrl) {
+  const m = /^data:([\w.+-]+\/[\w.+-]+);base64,(.+)$/s.exec(dataUrl || '');
+  if (!m) return null;
+  return { mimeType: m[1], buffer: Buffer.from(m[2], 'base64') };
+}
+
+async function uploadFmsFileToDrive(dataUrl, fileName) {
+  const parsed = _parseAnyDataUrl(dataUrl);
+  if (!parsed) throw new Error('Unsupported file data');
+  const { google } = require('googleapis');
+  const auth = getGoogleAuth();
+  if (!auth) throw new Error('Google credentials not configured');
+  const drive    = google.drive({ version: 'v3', auth });
+  const folderId = await ensureFmsUploadFolder(drive);
+  const stamp    = _timestampForSheet().replace(/[/:]/g, '-');
+  const safeName = String(fileName || 'file').replace(/[\\/:*?"<>|]/g, ' ').trim().slice(0, 120) || 'file';
+  const file = await drive.files.create({
+    requestBody: { name: `${stamp} - ${safeName}`, parents: [folderId] },
+    media: { mimeType: parsed.mimeType, body: Readable.from(parsed.buffer) },
+    fields: 'id,webViewLink',
+    supportsAllDrives: true,
+  });
+  await drive.permissions.create({
+    fileId: file.data.id, requestBody: { role: 'reader', type: 'anyone' }, supportsAllDrives: true,
+  }).catch(e => console.error('[fms-upload] share failed:', e.message));
   return file.data.webViewLink;
 }
 

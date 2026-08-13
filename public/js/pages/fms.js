@@ -1,5 +1,91 @@
 window.Pages = window.Pages || {};
 
+/* ── shared "upload" field type ─────────────────────────────────────────
+   Used by both FMS forms that collect field values (the intake form and the
+   Mark-as-Done extra fields). The picked file is posted to /api/fms/upload,
+   which puts it in Drive and returns a shareable link — that link is the
+   field's value, so what lands in the sheet cell is clickable, not a blob.
+   The value lives in the caller's own state, so the surrounding modal can
+   re-render freely without losing an upload. ── */
+window.FmsFileUpload = (function () {
+  // Server-side the JSON body cap is 10 MB and base64 inflates by ~37%, so
+  // anything past this would be rejected as a body-too-large with a far less
+  // helpful message than the one below.
+  const MAX_BYTES = 7 * 1024 * 1024;
+  let _busy = 0;
+
+  function esc(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function linkHTML(url) {
+    return `<a href="${esc(url)}" target="_blank" rel="noopener" style="color:#0150AA;font-weight:600;">✓ Uploaded — view file</a>`;
+  }
+
+  function fieldHTML(key, label, reqMark, value) {
+    return `
+      <div>
+        <label class="label">${esc(label)}${reqMark || ''}</label>
+        <input type="file" class="fms-upload-file" data-key="${esc(key)}" style="font-size:11px;padding:6px;width:100%;border:1px solid #e2e8f0;border-radius:8px;background:#fff;" />
+        <div class="fms-upload-status" style="font-size:11px;margin-top:3px;color:#64748b;word-break:break-all;">${value ? linkHTML(value) : ''}</div>
+      </div>`;
+  }
+
+  function readAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => reject(new Error('Could not read the file'));
+      fr.readAsDataURL(file);
+    });
+  }
+
+  // onValue(key, url) is how the caller stores the result in its own state.
+  function bind(root, onValue) {
+    if (!root) return;
+    root.querySelectorAll('.fms-upload-file').forEach(inp => {
+      inp.addEventListener('change', async () => {
+        const status = inp.parentElement.querySelector('.fms-upload-status');
+        const file = inp.files && inp.files[0];
+        if (!file) return;
+        if (file.size > MAX_BYTES) {
+          inp.value = '';
+          if (status) status.innerHTML = `<span style="color:#dc2626;">File is too large (max 7 MB)</span>`;
+          window.Utils.showToast('File is too large — max 7 MB', 'error');
+          return;
+        }
+        _busy++;
+        inp.disabled = true;
+        if (status) status.innerHTML = `<span style="color:#64748b;">Uploading ${esc(file.name)}…</span>`;
+        try {
+          const dataUrl = await readAsDataUrl(file);
+          const res = await window.Utils.apiFetch('/api/fms/upload', {
+            method: 'POST',
+            body: JSON.stringify({ fileName: file.name, dataUrl }),
+          });
+          if (!res?.url) throw new Error('Upload failed');
+          onValue(inp.dataset.key, res.url);
+          if (status) status.innerHTML = linkHTML(res.url);
+        } catch (e) {
+          inp.value = '';
+          if (status) status.innerHTML = `<span style="color:#dc2626;">Upload failed</span>`;
+          window.Utils.showToast(e.message || 'Upload failed', 'error');
+        } finally {
+          _busy--;
+          inp.disabled = false;
+        }
+      });
+    });
+  }
+
+  // Saving while a file is still on its way to Drive would write an empty
+  // cell — the forms check this before submitting.
+  function busy() { return _busy > 0; }
+
+  return { fieldHTML, bind, busy };
+})();
+
 /* ── shared "Mark as Done" modal — reused by the FMS task page, Dashboard, and
    All Tasks. Attached to window so those other pages can call it directly. ── */
 window.FmsDoneModal = (function () {
@@ -48,6 +134,9 @@ window.FmsDoneModal = (function () {
   function extraInputHTML(f) {
     const val = _extra[f.col_letter] ?? '';
     const reqMark = f.required ? ' <span style="color:#dc2626;">*</span>' : '';
+    if (f.field_type === 'upload') {
+      return window.FmsFileUpload.fieldHTML(f.col_letter, f.row_label, reqMark, val);
+    }
     if (f.field_type === 'dropdown') {
       const opts = (f.dropdown_options || '').split(',').map(o => o.trim()).filter(Boolean);
       return `
@@ -150,9 +239,14 @@ window.FmsDoneModal = (function () {
       el.addEventListener('input', (e) => { _extra[el.dataset.col] = e.target.value; });
       el.addEventListener('change', (e) => { _extra[el.dataset.col] = e.target.value; });
     });
+    window.FmsFileUpload.bind(overlay, (col, url) => { _extra[col] = url; });
   }
 
   async function save() {
+    if (window.FmsFileUpload.busy()) {
+      window.Utils.showToast('Please wait — a file is still uploading', 'error');
+      return;
+    }
     if (needsDelayReason() && !_delayReason.trim()) {
       window.Utils.showToast('Please enter a reason for the delay', 'error');
       return;
@@ -213,6 +307,11 @@ window.Pages.fms = (() => {
   let _intakeValues = {};
   let _intakeSaving = false;
 
+  // Master email-notification switch (app_config.fms_notify_enabled). Off until
+  // an admin turns it on — nothing is emailed before that.
+  let _notify = { enabled: false, smtpConfigured: true };
+  let _notifySaving = false;
+
   // Add/Edit FMS modal state
   let _modalOpen = false, _modalMode = 'create', _modalEditId = null, _modalSaving = false;
   let _modalHeaders = [];    // [{name,col,index}] from fetch-headers
@@ -234,6 +333,10 @@ window.Pages.fms = (() => {
     const roles = Array.isArray(user?.roles) ? user.roles : String(user?.roles || '').split(',').map(r => r.trim());
     return roles.includes('Admin') || roles.includes('HOD');
   }
+
+  // Both the step's extra fields and the intake form's fields offer the same
+  // set. 'upload' stores a Drive link (see window.FmsFileUpload) in the cell.
+  const FIELD_TYPES = ['text', 'number', 'date', 'link', 'dropdown', 'upload'];
 
   function newStep() {
     return {
@@ -259,6 +362,33 @@ window.Pages.fms = (() => {
   async function loadUsers() {
     try { _users = await window.Utils.apiFetch('/api/users') || []; }
     catch { _users = []; }
+  }
+
+  async function loadNotifySettings() {
+    try { _notify = await window.Utils.apiFetch('/api/fms/notify-settings') || _notify; }
+    catch { /* leave the switch showing OFF — never guess that mail is live */ }
+  }
+
+  async function toggleNotify() {
+    if (_notifySaving) return;
+    const next = !_notify.enabled;
+    if (next && !_notify.smtpConfigured) {
+      window.Utils.showToast('SMTP is not configured on the server — set SMTP_USER and SMTP_PASS first', 'error');
+      return;
+    }
+    _notifySaving = true;
+    renderPage();
+    try {
+      const res = await window.Utils.apiFetch('/api/fms/notify-settings', { method: 'POST', body: JSON.stringify({ enabled: next }) });
+      _notify.enabled = !!res.enabled;
+      window.Utils.showToast(_notify.enabled
+        ? 'Email notifications ON — the next step\'s doer will now be mailed'
+        : 'Email notifications OFF — no mail will be sent');
+    } catch (e) {
+      window.Utils.showToast(e.message || 'Failed to update notification setting', 'error');
+    }
+    _notifySaving = false;
+    renderPage();
   }
 
   async function loadDetail(id) {
@@ -335,6 +465,31 @@ window.Pages.fms = (() => {
     }).join('')}</div>`;
   }
 
+  // Master switch, admin-only. Deliberately reads as a hard ON/OFF rather than a
+  // silent preference: while it is OFF the app sends no FMS mail at all.
+  function renderNotifyToggle() {
+    const on = !!_notify.enabled;
+    const track = on ? '#16a34a' : '#cbd5e1';
+    return `
+      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border:1px solid var(--border-light);border-radius:10px;background:var(--surface);">
+        <div style="line-height:1.2;">
+          <div style="font-size:12.5px;font-weight:600;color:#0f172a;">Email Notifications</div>
+          <div style="font-size:10.5px;color:${on ? '#16a34a' : '#94a3b8'};font-weight:600;">
+            ${_notifySaving ? 'Saving…' : (on ? 'ON — next step\'s doer gets mailed' : 'OFF — no mail is sent')}
+          </div>
+        </div>
+        <button id="fms-notify-toggle" type="button" role="switch" aria-checked="${on}"
+          title="${on ? 'Turn FMS step emails off' : 'Turn FMS step emails on'}"
+          ${_notifySaving ? 'disabled' : ''}
+          style="position:relative;width:42px;height:23px;border-radius:999px;border:none;cursor:${_notifySaving ? 'default' : 'pointer'};
+                 background:${track};transition:background .16s;flex-shrink:0;padding:0;opacity:${_notifySaving ? '.6' : '1'};">
+          <span style="position:absolute;top:3px;left:${on ? '22px' : '3px'};width:17px;height:17px;border-radius:50%;
+                       background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .16s;"></span>
+        </button>
+      </div>
+      ${!_notify.smtpConfigured ? `<div style="font-size:10.5px;color:#dc2626;font-weight:600;">SMTP not configured on server</div>` : ''}`;
+  }
+
   function renderList(el, user, admin) {
     const onWorkflows = _topTab === 'workflows';
     el.innerHTML = `
@@ -345,10 +500,13 @@ window.Pages.fms = (() => {
             <p class="text-[13px] text-slate-500 mt-0.5">Recurring workflows tracked live in Google Sheets</p>
           </div>
           ${admin && onWorkflows ? `
-          <button id="fms-add-btn" class="btn-primary flex items-center gap-1.5">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-            Add FMS
-          </button>` : ''}
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            ${renderNotifyToggle()}
+            <button id="fms-add-btn" class="btn-primary flex items-center gap-1.5">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+              Add FMS
+            </button>
+          </div>` : ''}
         </div>
         ${renderTopTabs()}
         <div id="fms-tabbody">${!onWorkflows ? '' : (_sheets.length === 0 ? window.UI.emptyState({
@@ -372,6 +530,7 @@ window.Pages.fms = (() => {
       return;
     }
 
+    document.getElementById('fms-notify-toggle')?.addEventListener('click', toggleNotify);
     document.getElementById('fms-add-btn')?.addEventListener('click', () => openAddModal());
     el.querySelectorAll('[data-action="open"]').forEach(b => b.addEventListener('click', () => openDetail(b.dataset.id)));
     el.querySelectorAll('[data-action="edit"]').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); openEditModal(b.dataset.id); }));
@@ -537,6 +696,9 @@ window.Pages.fms = (() => {
     if (f.auto_fill) return ''; // auto-filled fields are never shown to the user
     const val = _intakeValues[f.id] ?? '';
     const reqMark = f.required ? ' <span style="color:#dc2626;">*</span>' : '';
+    if (f.field_type === 'upload') {
+      return window.FmsFileUpload.fieldHTML(f.id, f.field_label, reqMark, val);
+    }
     if (f.field_type === 'dropdown') {
       const opts = (f.dropdown_options || '').split(',').map(o => o.trim()).filter(Boolean);
       return `
@@ -595,6 +757,7 @@ window.Pages.fms = (() => {
       el.addEventListener('input', sync);
       el.addEventListener('change', sync);
     });
+    window.FmsFileUpload.bind(overlay, (id, url) => { _intakeValues[id] = url; });
   }
 
   function openIntakeFormModal() {
@@ -609,6 +772,10 @@ window.Pages.fms = (() => {
   }
 
   async function submitIntakeForm() {
+    if (window.FmsFileUpload.busy()) {
+      window.Utils.showToast('Please wait — a file is still uploading', 'error');
+      return;
+    }
     const fields = (_intake.fields || []).filter(f => !f.auto_fill);
     for (const f of fields) {
       if (f.required && !String(_intakeValues[f.id] ?? '').trim()) {
@@ -817,7 +984,7 @@ window.Pages.fms = (() => {
           <div>
             <label class="label">Field Type</label>
             <select class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="fieldType">
-              ${['text', 'number', 'date', 'link', 'dropdown'].map(t => `<option value="${t}" ${er.fieldType === t ? 'selected' : ''}>${t}</option>`).join('')}
+              ${FIELD_TYPES.map(t => `<option value="${t}" ${er.fieldType === t ? 'selected' : ''}>${t}</option>`).join('')}
             </select>
           </div>
           <div>
@@ -913,6 +1080,13 @@ window.Pages.fms = (() => {
           <div><label class="label">Header Row</label><input id="fms-m-headerrow" class="input" type="number" min="1" value="${esc(f.headerRow)}" /></div>
         </div>
         <div><label class="label">Process Coordinator</label><select id="fms-m-pc" class="input">${userOptionsHTML(f.processCoordinatorId)}</select></div>
+        <label style="display:flex;align-items:flex-start;gap:8px;padding:9px 11px;border:1px solid var(--border-light);border-radius:8px;cursor:pointer;">
+          <input type="checkbox" id="fms-m-notify" ${f.notifyEnabled ? 'checked' : ''} style="margin-top:2px;" />
+          <span style="line-height:1.35;">
+            <span style="font-size:12.5px;font-weight:600;color:#0f172a;">Email the next step's doer when a step is completed</span>
+            <span style="display:block;font-size:11px;color:#94a3b8;">Only takes effect while the master "Email Notifications" switch on the FMS page is ON.</span>
+          </span>
+        </label>
         ${fetchBtnHTML}
 
         <div style="border-top:1px solid #e2e8f0;padding-top:12px;">
@@ -984,6 +1158,7 @@ window.Pages.fms = (() => {
     document.getElementById('fms-m-tabname')?.addEventListener('input', (e) => { _modalForm.sheetName = e.target.value; });
     document.getElementById('fms-m-headerrow')?.addEventListener('input', (e) => { _modalForm.headerRow = parseInt(e.target.value, 10) || 1; });
     document.getElementById('fms-m-pc')?.addEventListener('change', (e) => { _modalForm.processCoordinatorId = e.target.value || null; });
+    document.getElementById('fms-m-notify')?.addEventListener('change', (e) => { _modalForm.notifyEnabled = e.target.checked; });
     document.getElementById('fms-m-refetch')?.addEventListener('click', fetchModalHeaders);
     document.getElementById('fms-m-addstep-top')?.addEventListener('click', () => { _modalForm.steps.push(newStep()); refreshStepsList(); });
   }
@@ -1185,7 +1360,7 @@ window.Pages.fms = (() => {
 
   async function openAddModal() {
     _modalMode = 'create'; _modalEditId = null; _modalHeaders = []; _modalLoadResult = {}; _modalDoerPickerOpen = {};
-    _modalForm = { fmsName: '', sheetName: '', sheetId: '', headerRow: 1, processCoordinatorId: null, steps: [newStep()] };
+    _modalForm = { fmsName: '', sheetName: '', sheetId: '', headerRow: 1, processCoordinatorId: null, notifyEnabled: true, steps: [newStep()] };
     _modalOpen = true;
     renderAddEditModal();
   }
@@ -1193,13 +1368,14 @@ window.Pages.fms = (() => {
   async function openEditModal(id) {
     _modalMode = 'edit'; _modalEditId = id; _modalHeaders = []; _modalLoadResult = {}; _modalDoerPickerOpen = {};
     _modalOpen = true;
-    _modalForm = { fmsName: '', sheetName: '', sheetId: '', headerRow: 1, processCoordinatorId: null, steps: [] };
+    _modalForm = { fmsName: '', sheetName: '', sheetId: '', headerRow: 1, processCoordinatorId: null, notifyEnabled: true, steps: [] };
     renderAddEditModal();
     try {
       const full = await window.Utils.apiFetch(`/api/fms/${id}`);
       _modalForm = {
         fmsName: full.fms_name || '', sheetName: full.sheet_name || '', sheetId: full.sheet_id || '',
         headerRow: full.header_row || 1, processCoordinatorId: full.process_coordinator_id || null,
+        notifyEnabled: Number(full.notify_enabled ?? 1) !== 0,
         steps: (full.steps || []).map(s => ({
           stepName: s.step_name || '', planCol: s.plan_col || '', actualCol: s.actual_col || '',
           delayReasonCol: s.delay_reason_col || '', doerNameCol: s.doer_name_col || '',
@@ -1238,6 +1414,7 @@ window.Pages.fms = (() => {
       const body = JSON.stringify({
         fmsName: f.fmsName.trim(), sheetName: f.sheetName.trim(), sheetId: f.sheetId.trim(),
         headerRow: f.headerRow || 1, processCoordinatorId: f.processCoordinatorId || null,
+        notifyEnabled: f.notifyEnabled !== false,
         steps: f.steps,
       });
       if (_modalMode === 'edit') await window.Utils.apiFetch(`/api/fms/${_modalEditId}`, { method: 'PUT', body });
@@ -1260,7 +1437,7 @@ window.Pages.fms = (() => {
         <input class="input fms-icfg-field" data-row="${j}" data-k="fieldLabel" placeholder="Label" value="${esc(field.fieldLabel)}" />
         <input class="input fms-icfg-field" data-row="${j}" data-k="colLetter" placeholder="Col" value="${esc(field.colLetter)}" style="text-transform:uppercase;" />
         <select class="input fms-icfg-field" data-row="${j}" data-k="fieldType">
-          ${['text', 'number', 'date', 'link', 'dropdown'].map(t => `<option value="${t}" ${field.fieldType === t ? 'selected' : ''}>${t}</option>`).join('')}
+          ${FIELD_TYPES.map(t => `<option value="${t}" ${field.fieldType === t ? 'selected' : ''}>${t}</option>`).join('')}
         </select>
         <input class="input fms-icfg-field" data-row="${j}" data-k="dropdownOptions" placeholder="Dropdown options" value="${esc(field.dropdownOptions)}" ${field.fieldType !== 'dropdown' ? 'disabled style="opacity:.4;"' : ''} />
         <select class="input fms-icfg-field" data-row="${j}" data-k="autoFill">
@@ -1418,7 +1595,7 @@ window.Pages.fms = (() => {
       if (!el) return;
       el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;"><div style="text-align:center;"><div style="width:40px;height:40px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 14px;"></div><div style="font-size:13px;color:#94a3b8;font-weight:500;">Loading…</div></div></div>';
       _view = 'list';
-      await Promise.all([loadList(), loadUsers()]);
+      await Promise.all([loadList(), loadUsers(), loadNotifySettings()]);
       renderPage();
     },
   };
