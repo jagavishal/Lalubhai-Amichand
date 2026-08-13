@@ -4544,6 +4544,126 @@ app.get('/api/proforma-invoice/items', requireAuth, async (req, res) => {
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
+// A new product's photo cannot join the folder the existing ones sit in: those
+// files are only link-readable to this service account (files.get returns no
+// parents), so there is nothing it can add a child to. New photos go in the
+// app's own Shared Drive instead, next to User Photos — the URL shape is what
+// matters to =IMAGE(), not which folder it came from.
+const PI_PRODUCT_PHOTO_FOLDER_NAME = 'Product Photos';
+let _piProductPhotoFolderId = null;
+
+async function _ensurePiProductPhotoFolder(drive) {
+  if (_piProductPhotoFolderId) return _piProductPhotoFolderId;
+  const found = await drive.files.list({
+    q: `name = '${PI_PRODUCT_PHOTO_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    corpora: 'drive', driveId: PHOTO_SHARED_DRIVE_ID,
+    includeItemsFromAllDrives: true, supportsAllDrives: true,
+    fields: 'files(id,name)', pageSize: 1,
+  });
+  if (found.data.files?.length) { _piProductPhotoFolderId = found.data.files[0].id; return _piProductPhotoFolderId; }
+  const created = await drive.files.create({
+    requestBody: { name: PI_PRODUCT_PHOTO_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder', parents: [PHOTO_SHARED_DRIVE_ID] },
+    fields: 'id', supportsAllDrives: true,
+  });
+  _piProductPhotoFolderId = created.data.id;
+  console.log('[pi-product] created Drive folder', PI_PRODUCT_PHOTO_FOLDER_NAME, _piProductPhotoFolderId);
+  return _piProductPhotoFolderId;
+}
+
+// Returns the thumbnail URL to store in the master — the same shape the
+// existing product rows use, and the one =IMAGE() renders reliably.
+async function _uploadPiProductPhoto(dataUrl, modelNo) {
+  const parsed = _parseImageDataUrl(dataUrl);
+  if (!parsed) return '';
+  const { google } = require('googleapis');
+  const auth = getGoogleAuth();
+  if (!auth) return '';
+  const drive = google.drive({ version: 'v3', auth });
+  const folderId = await _ensurePiProductPhotoFolder(drive);
+  const ext = _PHOTO_EXT_BY_MIME[parsed.mimeType] || 'jpg';
+  const safeName = String(modelNo || 'product').replace(/[\\/:*?"<>|]/g, '-').trim() || 'product';
+  const file = await drive.files.create({
+    requestBody: { name: `${safeName}.${ext}`, parents: [folderId] },
+    media: { mimeType: parsed.mimeType, body: Readable.from(parsed.buffer) },
+    fields: 'id', supportsAllDrives: true,
+  });
+  // Google's servers fetch this URL on =IMAGE()'s behalf as an anonymous
+  // caller, so the file has to be readable by link, not just by the account.
+  await drive.permissions.create({
+    fileId: file.data.id, requestBody: { role: 'reader', type: 'anyone' }, supportsAllDrives: true,
+  }).catch(e => console.error('[pi-product] photo share failed:', e.message));
+  return `https://drive.google.com/thumbnail?id=${file.data.id}&sz=w400`;
+}
+
+// POST /api/proforma-invoice/products — adds a finished good to the shared
+// product master so it is immediately pickable on this PI (and every future
+// one). This writes into the customer's own "PI Export (Final)" workbook, not
+// an app-local table, which is why it is permission-gated the same way pricing
+// is: Admin/HOD always, anyone else only if granted 'add_product' from
+// Users → Access.
+app.post('/api/proforma-invoice/products', requireAuth, async (req, res) => {
+  try {
+    const allowed = await userCanUseFeature(req.session.user, 'proforma-invoice', 'add_product');
+    if (!allowed) return res.status(403).json({ error: 'You do not have permission to add a product' });
+
+    const b = req.body || {};
+    const modelNo = String(b.modelNo || '').trim();
+    const itemName = String(b.itemName || '').trim();
+    if (!modelNo || !itemName) return res.status(400).json({ error: 'Model No. and Item Name are required' });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    // The master is keyed by Model No. — a duplicate would make the typeahead
+    // ambiguous and silently price the wrong line later.
+    const existing = await _loadPiProductCatalog();
+    if (existing.some(p => p.modelNo.toLowerCase() === modelNo.toLowerCase())) {
+      return res.status(409).json({ error: `Model No. "${modelNo}" is already in the product master` });
+    }
+
+    const product = {
+      modelNo, itemName,
+      size: String(b.size || '').trim(),
+      swg: String(b.swg || '').trim(),
+      perBoxPacking: String(b.perBoxPacking || '').trim(),
+      perBoxCbm: String(b.perBoxCbm || '').trim(),
+      perPcsWeight: String(b.perPcsWeight || '').trim(),
+      imageUrl: String(b.imageUrl || '').trim(),
+    };
+    if (b.photo) {
+      try {
+        product.imageUrl = (await _uploadPiProductPhoto(b.photo, modelNo)) || product.imageUrl;
+      } catch (e) {
+        // The product itself is still worth saving — the photo can be added
+        // later — but the user must be told the picture didn't make it.
+        console.error('[pi-product] photo upload failed:', e.message);
+      }
+    }
+
+    const src = PI_FMT.PRODUCT_SOURCE;
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: src.spreadsheetId,
+      range: `'${src.tab}'!A:I`,
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values: [[
+          existing.length + 1, product.modelNo, product.itemName, product.size, product.swg,
+          product.perBoxPacking, product.perBoxCbm, product.perPcsWeight, product.imageUrl,
+        ]],
+      },
+    });
+    _piProductCache = null;   // the next typeahead must see it, cache TTL or not
+
+    return res.json({ success: true, product, photoSaved: !b.photo || !!product.imageUrl });
+  } catch (e) {
+    console.error('[pi-product] add failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/proforma-invoice — User stage. No rate/price field is ever read
 // from the body here, by design: pricing is a separate, permission-gated
 // step (PUT /price below).

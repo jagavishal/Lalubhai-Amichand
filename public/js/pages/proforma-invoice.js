@@ -49,6 +49,11 @@ window.Pages['proforma-invoice'] = (() => {
   let _priceModalRow = null; // the PI row (from _pilRows) currently being priced, or null
   let _priceSaving = false;
 
+  // New Product modal state.
+  let _newProductOpen = false;
+  let _newProductPhoto = null;   // data URL, uploaded to Drive on save
+  let _newProductSaving = false;
+
   function _today() { return new Date().toISOString().slice(0, 10); }
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
@@ -299,6 +304,117 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _bindAllItemRows() {
     document.querySelectorAll('#pic-items-tbody .pic-item-row').forEach(_bindItemRow);
+  }
+
+  /* ── New Product — adds a finished good to the shared product master so it
+     is pickable straight away, here and on every future PI. The photo is
+     uploaded to Drive server-side and stored as the same thumbnail URL the
+     existing rows use. ─────────────────────────────────────────────────── */
+  const _NP_FIELDS = [
+    { id: 'np-model', label: 'Model No.', key: 'modelNo', required: true, placeholder: 'e.g. NMJB-7' },
+    { id: 'np-name', label: 'Item Name', key: 'itemName', required: true, placeholder: 'e.g. New Milk Jug Bright' },
+    { id: 'np-size', label: 'Size', key: 'size', placeholder: 'e.g. 7' },
+    { id: 'np-swg', label: 'SWG', key: 'swg', placeholder: 'e.g. 1.22' },
+    { id: 'np-packing', label: 'Per Box Packing (pcs)', key: 'perBoxPacking', placeholder: 'e.g. 36' },
+    { id: 'np-cbm', label: 'Per Box CBM', key: 'perBoxCbm', placeholder: 'e.g. 0.0419' },
+    { id: 'np-weight', label: 'Per Pcs Weight (kg)', key: 'perPcsWeight', placeholder: 'e.g. 0.17' },
+  ];
+
+  function _renderNewProductModal() {
+    const host = document.getElementById('pi-product-modal');
+    if (!host) return;
+    if (!_newProductOpen) { host.innerHTML = ''; return; }
+
+    host.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:60;padding:16px;overflow-y:auto;" id="np-backdrop">'
+      + '<div style="background:#fff;border-radius:18px;width:100%;max-width:640px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
+        + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;">'
+          + '<div style="flex:1;"><div style="font-size:15px;font-weight:700;color:#1e293b;">New Product</div>'
+            + '<div style="font-size:12px;color:#94a3b8;margin-top:1px;">Saved to the shared product master — available on every PI from now on.</div></div>'
+          + '<button id="np-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;">'
+            + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
+          + '</button>'
+        + '</div>'
+        + '<div style="padding:22px 24px;max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px;">'
+          + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;">'
+            + _NP_FIELDS.map(f => _fieldWrap(f.label + (f.required ? ' *' : ''),
+                '<input type="text" id="' + f.id + '" placeholder="' + esc(f.placeholder || '') + '" style="' + _inputStyle + '" />')).join('')
+          + '</div>'
+          + _fieldWrap('Product Photo',
+              '<div style="display:flex;align-items:center;gap:14px;">'
+                + '<div id="np-preview" style="width:76px;height:70px;flex:none;display:grid;place-items:center;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">'
+                  + (_newProductPhoto
+                      ? '<img src="' + esc(_newProductPhoto) + '" alt="" style="max-width:72px;max-height:66px;object-fit:contain;" />'
+                      : '<span style="font-size:10.5px;color:#cbd5e1;">no photo</span>')
+                + '</div>'
+                + '<div style="flex:1;">'
+                  + '<input type="file" id="np-photo" accept="image/*" style="font-size:12.5px;" />'
+                  + '<div style="font-size:11.5px;color:#94a3b8;margin-top:6px;">Shown on the printed PI next to this item. Optional — you can add it later.</div>'
+                + '</div>'
+              + '</div>')
+        + '</div>'
+        + '<div style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;">'
+          + '<button type="button" id="np-cancel" style="padding:9px 18px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:700;cursor:pointer;">Cancel</button>'
+          + '<button type="button" id="np-save" style="padding:9px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">Save Product</button>'
+        + '</div>'
+      + '</div>'
+    + '</div>';
+
+    const close = () => { _newProductOpen = false; _newProductPhoto = null; _renderNewProductModal(); };
+    document.getElementById('np-backdrop').addEventListener('click', close);
+    document.getElementById('np-close').addEventListener('click', close);
+    document.getElementById('np-cancel').addEventListener('click', close);
+    document.getElementById('np-photo').addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      // 900px is plenty for a cell-sized picture on an A4 page, and keeps the
+      // request well inside the server's 10mb JSON limit.
+      _newProductPhoto = await Utils.readOriginalImage(file, 512 * 1024, 900);
+      const prev = document.getElementById('np-preview');
+      prev.innerHTML = _newProductPhoto
+        ? '<img src="' + esc(_newProductPhoto) + '" alt="" style="max-width:72px;max-height:66px;object-fit:contain;" />'
+        : '<span style="font-size:10.5px;color:#cbd5e1;">no photo</span>';
+    });
+    document.getElementById('np-save').addEventListener('click', _saveNewProduct);
+  }
+
+  async function _saveNewProduct() {
+    if (_newProductSaving) return;
+    const payload = { photo: _newProductPhoto || undefined };
+    for (const f of _NP_FIELDS) payload[f.key] = document.getElementById(f.id).value.trim();
+    if (!payload.modelNo || !payload.itemName) { Utils.showToast('Model No. and Item Name are required', 'error'); return; }
+
+    _newProductSaving = true;
+    const btn = document.getElementById('np-save');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      const result = await Utils.apiFetch('/api/proforma-invoice/products', { method: 'POST', body: JSON.stringify(payload) });
+      Utils.showToast('Product ' + result.product.modelNo + ' added'
+        + (result.photoSaved ? '' : ' — photo upload failed, add it later'), result.photoSaved ? 'success' : 'warning');
+      _newProductOpen = false; _newProductPhoto = null;
+      _renderNewProductModal();
+      // Drop it straight onto the PI being written, so adding a product and
+      // using it is one motion rather than two.
+      _useProductOnFirstFreeRow(result.product);
+    } catch (err) {
+      Utils.showToast(err.message || 'Failed to add product', 'error');
+      btn.disabled = false; btn.textContent = 'Save Product';
+    } finally {
+      _newProductSaving = false;
+    }
+  }
+
+  function _useProductOnFirstFreeRow(product) {
+    const tbody = document.getElementById('pic-items-tbody');
+    if (!tbody) return;
+    let row = Array.from(tbody.querySelectorAll('.pic-item-row'))
+      .find(r => !r.querySelector('[data-field="modelNo"]').value.trim());
+    if (!row) {
+      tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
+      row = tbody.lastElementChild;
+      _bindItemRow(row);
+    }
+    row.querySelector('[data-field="modelNo"]').value = product.modelNo;
+    _applyProduct(row, product);
   }
 
   /* ── Header fields (Create form), grouped the way the printed PI reads:
@@ -688,9 +804,13 @@ window.Pages['proforma-invoice'] = (() => {
         + _shippingFieldsHtml()
         + _sectionTitle('Items')
         + _itemsTableHtml()
-        + '<div>'
+        + '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
           + '<button type="button" id="pic-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item</button>'
+          + (_hasFeature('add_product')
+            ? '<button type="button" id="pic-new-product" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px dashed var(--color-primary);color:var(--color-primary);font-size:12.5px;font-weight:700;cursor:pointer;">+ New Product</button>'
+            : '')
         + '</div>'
+        + '<div id="pi-product-modal"></div>'
         + _sectionTitle('Validity & Terms')
         + _footerFieldsHtml()
         + '<button type="submit" id="pic-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Proforma Invoice</button>'
@@ -727,6 +847,11 @@ window.Pages['proforma-invoice'] = (() => {
       tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
       _bindItemRow(tbody.lastElementChild);
     });
+
+    const newProductBtn = document.getElementById('pic-new-product');
+    if (newProductBtn) {
+      newProductBtn.addEventListener('click', () => { _newProductOpen = true; _renderNewProductModal(); });
+    }
 
     // The PI number is FY-scoped, so a date change can change it.
     document.getElementById('pic-date').addEventListener('change', (e) => { _loadMasters(e.target.value); });
