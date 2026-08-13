@@ -139,13 +139,57 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   /* ── Model-No typeahead per row — same fixed-position dropdown pattern
-     used by PO/GRN Creation, backed by the same ITEM_CODES catalog. The
-     catalog's code becomes Model No. and its description the Item Name. ─── */
+     used by PO/GRN Creation, but backed by the finished-goods master
+     (fetch_product), not PO's raw-material ITEM_CODES. Picking a model fills
+     the whole line: name, size, SWG, per-box packing, and the per-box CBM /
+     per-piece weight that Qty is multiplied against below. The product photo
+     rides along on the row and ends up in the printed PI. ───────────────── */
   let _itemSearchTimer = null;
+
+  // Boxes, CBM and Weight all fall out of Qty once a model is picked, so they
+  // are computed rather than typed — but only for fields the user hasn't
+  // overridden by hand, since a part-box order is a real thing.
+  function _recomputeRow(row) {
+    const get = (f) => row.querySelector('[data-field="' + f + '"]');
+    const qty = _num(get('qty').value);
+    const packing = _num(get('packing').value);
+    const cbmPerBox = _num(row.dataset.cbmPerBox);
+    const weightPerPc = _num(row.dataset.weightPerPc);
+    if (!qty) return;
+    const boxesEl = get('boxes'), cbmEl = get('cbm'), weightEl = get('weight');
+    let boxes = _num(boxesEl.value);
+    if (packing > 0 && boxesEl.dataset.touched !== '1') {
+      boxes = Math.round((qty / packing) * 1000) / 1000;
+      boxesEl.value = boxes;
+    }
+    if (cbmPerBox > 0 && boxes > 0 && cbmEl.dataset.touched !== '1') {
+      cbmEl.value = (boxes * cbmPerBox).toFixed(4);
+    }
+    if (weightPerPc > 0 && weightEl.dataset.touched !== '1') {
+      weightEl.value = (qty * weightPerPc).toFixed(2);
+    }
+  }
+
+  function _applyProduct(row, p) {
+    const set = (f, v) => { const el = row.querySelector('[data-field="' + f + '"]'); if (el && v) el.value = v; };
+    set('itemName', p.itemName);
+    set('size', p.size);
+    set('swg', p.swg);
+    set('packing', p.perBoxPacking);
+    row.dataset.cbmPerBox = p.perBoxCbm || '';
+    row.dataset.weightPerPc = p.perPcsWeight || '';
+    row.querySelector('[data-field="imageUrl"]').value = p.imageUrl || '';
+    const thumb = row.querySelector('.pic-item-thumb');
+    thumb.innerHTML = p.imageUrl
+      ? '<img src="' + esc(p.imageUrl) + '" alt="" style="max-width:44px;max-height:40px;object-fit:contain;border-radius:4px;" />'
+      : '<span style="font-size:10px;color:#cbd5e1;">no photo</span>';
+    _recomputeRow(row);
+  }
+
   function _bindItemCodeInput(input) {
     const row = input.closest('.pic-item-row');
     const dd = row.querySelector('.pic-item-dd');
-    const nameInput = row.querySelector('[data-field="itemName"]');
+    let _lastMatches = [];
     const runSearch = () => {
       clearTimeout(_itemSearchTimer);
       _itemSearchTimer = setTimeout(async () => {
@@ -153,12 +197,14 @@ window.Pages['proforma-invoice'] = (() => {
         try {
           const res = await fetch('/api/proforma-invoice/items?q=' + encodeURIComponent(q));
           if (!res.ok) return;
-          const matches = await res.json();
-          if (!matches.length) { dd.style.display = 'none'; return; }
-          dd.innerHTML = matches.map(m => '<div class="pic-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.code) + '" data-desc="' + esc(m.description) + '">'
-            + '<b>' + esc(m.code) + '</b> — ' + esc(m.description) + '</div>').join('');
+          _lastMatches = await res.json();
+          if (!_lastMatches.length) { dd.style.display = 'none'; return; }
+          dd.innerHTML = _lastMatches.slice(0, 50).map((m, i) => '<div class="pic-item-opt" style="display:flex;align-items:center;gap:9px;padding:6px 10px;font-size:12.5px;cursor:pointer;" data-i="' + i + '">'
+            + (m.imageUrl ? '<img src="' + esc(m.imageUrl) + '" alt="" style="width:30px;height:30px;object-fit:contain;flex:none;" />' : '<span style="width:30px;flex:none;"></span>')
+            + '<span><b>' + esc(m.modelNo) + '</b> — ' + esc(m.itemName) + (m.size ? ' <span style="color:#94a3b8;">(size ' + esc(m.size) + ')</span>' : '') + '</span>'
+            + '</div>').join('');
           const rect = input.getBoundingClientRect();
-          dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 300) + 'px';
+          dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 340) + 'px';
           dd.style.display = 'block';
         } catch {}
       }, 220);
@@ -168,8 +214,10 @@ window.Pages['proforma-invoice'] = (() => {
     dd.addEventListener('mousedown', (e) => {
       const opt = e.target.closest('.pic-item-opt');
       if (!opt) return;
-      input.value = opt.dataset.code;
-      if (nameInput && !nameInput.value) nameInput.value = opt.dataset.desc || '';
+      const p = _lastMatches[parseInt(opt.dataset.i, 10)];
+      if (!p) return;
+      input.value = p.modelNo;
+      _applyProduct(row, p);
       dd.style.display = 'none';
     });
     window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
@@ -181,46 +229,66 @@ window.Pages['proforma-invoice'] = (() => {
      mirror the printed PI exactly, minus the two priced ones. ──────────── */
   const _ITEM_COLS = [
     { field: 'modelNo', label: 'Model No.', width: 130, typeahead: true },
-    { field: 'itemName', label: 'Item Name', width: 190 },
-    { field: 'size', label: 'Size', width: 70 },
-    { field: 'swg', label: 'SWG', width: 65 },
-    { field: 'packing', label: 'Per Box Dozen Packing', width: 90 },
-    { field: 'qty', label: 'Total Qty (Pcs/Set)', width: 95, numeric: true },
-    { field: 'boxes', label: 'Total Box', width: 80, numeric: true },
-    { field: 'cbm', label: 'Total CBM', width: 85, numeric: true },
-    { field: 'weight', label: 'Total Weight (Kgs)', width: 95, numeric: true },
-    { field: 'remarks', label: 'Remarks', width: 120 },
+    { field: 'itemName', label: 'Item Name', width: 180 },
+    { field: 'size', label: 'Size', width: 64 },
+    { field: 'swg', label: 'SWG', width: 60 },
+    { field: 'packing', label: 'Per Box Dozen Packing', width: 88, numeric: true },
+    { field: 'qty', label: 'Total Qty (Pcs/Set)', width: 92, numeric: true },
+    { field: 'boxes', label: 'Total Box', width: 78, numeric: true, derived: true },
+    { field: 'cbm', label: 'Total CBM', width: 84, numeric: true, derived: true },
+    { field: 'weight', label: 'Total Weight (Kgs)', width: 92, numeric: true, derived: true },
+    { field: 'remarks', label: 'Remarks', width: 110 },
   ];
   const _cellInput = 'width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;';
 
   function _itemRowHtml() {
     return '<tr class="pic-item-row" style="border-bottom:1px solid #f1f5f9;">'
+      // Photo cell — filled in once a model is picked; also the visual
+      // confirmation that the image the PDF will use actually loads.
+      + '<td style="padding:6px;width:56px;text-align:center;">'
+        + '<div class="pic-item-thumb" style="width:46px;height:42px;display:grid;place-items:center;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">'
+          + '<span style="font-size:10px;color:#cbd5e1;">—</span>'
+        + '</div>'
+        + '<input type="hidden" data-field="imageUrl" />'
+      + '</td>'
       + _ITEM_COLS.map(c => '<td style="padding:6px;min-width:' + c.width + 'px;' + (c.typeahead ? 'position:relative;' : '') + '">'
           + '<input type="text" ' + (c.typeahead ? 'class="pic-item-code" autocomplete="off" ' : '') + (c.numeric ? 'inputmode="decimal" ' : '')
+            + (c.derived ? 'class="pic-derived" ' : '')
             + 'data-field="' + c.field + '" placeholder="' + esc(c.label) + '" style="' + _cellInput + (c.numeric ? 'text-align:right;' : '') + '" />'
-          + (c.typeahead ? '<div class="pic-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>' : '')
+          + (c.typeahead ? '<div class="pic-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:260px;overflow-y:auto;"></div>' : '')
         + '</td>').join('')
       + '<td style="padding:6px;text-align:center;"><button type="button" class="pic-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
     + '</tr>';
   }
 
   function _itemsTableHtml() {
-    const minWidth = _ITEM_COLS.reduce((sum, c) => sum + c.width, 0) + 60;
+    const minWidth = _ITEM_COLS.reduce((sum, c) => sum + c.width, 0) + 120;
     return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
       + '<table style="width:100%;border-collapse:collapse;min-width:' + minWidth + 'px;">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+          + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Photo</th>'
           + _ITEM_COLS.map(c => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(c.label) + '</th>').join('')
           + '<th></th>'
         + '</tr></thead>'
         + '<tbody id="pic-items-tbody">' + _itemRowHtml() + '</tbody>'
       + '</table>'
     + '</div>'
-    + '<p style="font-size:11.5px;color:#94a3b8;margin:8px 2px 0;">C&amp;F US$ rate is added later by an authorized user — this form only captures consignee, shipping &amp; item details.</p>';
+    + '<p style="font-size:11.5px;color:#94a3b8;margin:8px 2px 0;">Pick a Model No. and the name, size, SWG, packing and photo fill in from the product master; Total Box, CBM and Weight are then worked out from Qty. Type over any of them to override. C&amp;F US$ rate is added later by an authorized user.</p>';
   }
 
   function _bindItemRow(rowEl) {
     const codeInput = rowEl.querySelector('.pic-item-code');
     if (codeInput) _bindItemCodeInput(codeInput);
+
+    // Qty (or a corrected packing) re-derives the three computed columns…
+    ['qty', 'packing'].forEach(f => {
+      rowEl.querySelector('[data-field="' + f + '"]').addEventListener('input', () => _recomputeRow(rowEl));
+    });
+    // …until the user types in one of them, which pins it for good.
+    rowEl.querySelectorAll('.pic-derived').forEach(el => {
+      el.addEventListener('input', () => { el.dataset.touched = '1'; });
+    });
+
     const removeBtn = rowEl.querySelector('.pic-item-remove');
     removeBtn.addEventListener('click', () => {
       const tbody = document.getElementById('pic-items-tbody');
@@ -300,6 +368,9 @@ window.Pages['proforma-invoice'] = (() => {
     return Array.from(document.querySelectorAll('#pic-items-tbody .pic-item-row')).map(row => {
       const item = {};
       _ITEM_COLS.forEach(c => { item[c.field] = row.querySelector('[data-field="' + c.field + '"]').value.trim(); });
+      // Not a visible column — it rides along from the product master so the
+      // printed PI can show the photo.
+      item.imageUrl = row.querySelector('[data-field="imageUrl"]').value.trim();
       return item;
     }).filter(it => it.modelNo || it.itemName);
   }
@@ -533,10 +604,13 @@ window.Pages['proforma-invoice'] = (() => {
           + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
             + '<table style="width:100%;border-collapse:collapse;min-width:640px;">'
               + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-                + ['Model No.', 'Item Name', 'Size', 'Total Qty', 'C&F US$ Per Pc', 'Amount (US$)'].map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+                + ['Photo', 'Model No.', 'Item Name', 'Size', 'Total Qty', 'C&F US$ Per Pc', 'Amount (US$)'].map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
               + '</tr></thead>'
               + '<tbody>' + items.map((it, i) => ''
                 + '<tr class="pipm-item-row" data-index="' + i + '" data-qty="' + esc(it.qty || 0) + '" style="border-bottom:1px solid #f1f5f9;">'
+                  + '<td style="padding:6px 8px;">' + (it.imageUrl
+                      ? '<img src="' + esc(it.imageUrl) + '" alt="" style="width:34px;height:34px;object-fit:contain;" />'
+                      : '<span style="color:#cbd5e1;font-size:11px;">—</span>') + '</td>'
                   // itemCode/description are the pre-export-format field names —
                   // a Draft raised before the switch still has to be priceable.
                   + '<td style="padding:6px 8px;font-size:12.5px;">' + esc(it.modelNo || it.itemCode || '—') + '</td>'

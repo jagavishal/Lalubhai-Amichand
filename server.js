@@ -4339,12 +4339,21 @@ async function _piSheetMeta(fy) {
 // current PI, never a partial patch, since the tab only ever reflects the most
 // recent write. Every mapped cell is written even when blank: a leftover value
 // from the previous PI would otherwise print on this one.
+// A product photo URL becomes an =IMAGE() formula. Anything that isn't a bare
+// http(s) URL is dropped rather than interpolated — the value goes into the
+// sheet unescaped, so a stray quote would otherwise rewrite the formula.
+function _piPhotoFormula(url) {
+  const u = String(url || '').trim();
+  if (!/^https?:\/\/[^"\s]+$/i.test(u)) return '';
+  return `=IMAGE("${u}", 1)`;
+}
+
 async function _fillPiTemplate(sheets, form, templateSheetId) {
   const tab = PI_TEMPLATE_TAB;
   const { LAYOUT: L, CELLS: C, ITEMS: IT, DEFAULTS: D } = PI_FMT;
   const items = form.items || [];
 
-  // Two ranges, not one: column L holds the per-row Amount formula written
+  // Two ranges, not one: the Amount column holds a per-row formula written
   // once by scripts/rebuild-pi-sheet.js, and clearing over it destroys it.
   await sheets.spreadsheets.values.batchClear({
     spreadsheetId: PI_CREATION_SHEET_ID,
@@ -4386,6 +4395,11 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
     put(`${IT.srNoCol}${row}`, i + 1);
     Object.entries(IT.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
     put(`${IT.remarksCol}${row}`, it.remarks);
+    // The product photo is a formula, not a value — Sheets has no way to place
+    // a real image in a cell through the API. See LETTERHEAD.logoUrl for why
+    // this resolves at all from a service account. An item with no photo gets
+    // a blank cell rather than a broken =IMAGE().
+    put(`${IT.photoCol}${row}`, _piPhotoFormula(it.imageUrl));
   });
 
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
@@ -4406,6 +4420,18 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
     });
     const requests = [rowRange(firstIdx, usedEnd, false)];
     if (usedEnd < endIdx) requests.push(rowRange(usedEnd, endIdx, true));
+    // A photo needs a row it can actually be seen in, but giving every line
+    // that height would waste a third of the page on a PI whose items have no
+    // picture — so each used row is sized to its own content.
+    items.slice(0, endIdx - firstIdx).forEach((it, i) => {
+      requests.push({
+        updateDimensionProperties: {
+          range: { sheetId: templateSheetId, dimension: 'ROWS', startIndex: firstIdx + i, endIndex: firstIdx + i + 1 },
+          properties: { pixelSize: it.imageUrl ? L.itemRowHeightWithPhoto : L.itemRowHeight },
+          fields: 'pixelSize',
+        },
+      });
+    });
     await sheets.spreadsheets.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { requests } });
   }
 }
@@ -4467,15 +4493,53 @@ app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/proforma-invoice/items?q=... — item-code typeahead, sourced from
-// PO Creation's existing ITEM_CODES catalog (same reuse GRN Creation already
-// does — no separate PI-specific catalog to maintain).
+// The finished-goods master, read from the customer's own "PI Export (Final)"
+// workbook rather than PO Creation's ITEM_CODES catalog. ITEM_CODES lists
+// purchase items (raw material, stores) and carries no packing, CBM, weight or
+// photo — everything an export PI line actually needs. fetch_product is
+// already keyed exactly to the PI's columns, so picking a Model No. fills the
+// whole row and brings its product photo with it.
+let _piProductCache = null; // { at, rows }
+const PI_PRODUCT_TTL_MS = 10 * 60 * 1000;
+
+async function _loadPiProductCatalog() {
+  if (_piProductCache && (Date.now() - _piProductCache.at) < PI_PRODUCT_TTL_MS) return _piProductCache.rows;
+  const auth = getGoogleAuth();
+  if (!auth) return [];
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const src = PI_FMT.PRODUCT_SOURCE;
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: src.spreadsheetId,
+    range: `'${src.tab}'!${src.range}`,
+    valueRenderOption: 'FORMATTED_VALUE',
+  });
+  const c = src.cols;
+  const rows = (result.data.values || [])
+    .filter(r => String(r[c.modelNo] || '').trim())
+    .map(r => ({
+      modelNo: String(r[c.modelNo] || '').trim(),
+      itemName: String(r[c.itemName] || '').trim(),
+      size: String(r[c.size] || '').trim(),
+      swg: String(r[c.swg] || '').trim(),
+      perBoxPacking: String(r[c.perBoxPacking] || '').trim(),
+      perBoxCbm: String(r[c.perBoxCbm] || '').trim(),
+      perPcsWeight: String(r[c.perPcsWeight] || '').trim(),
+      imageUrl: String(r[c.imageUrl] || '').trim(),
+    }));
+  _piProductCache = { at: Date.now(), rows };
+  return rows;
+}
+
+// GET /api/proforma-invoice/items?q=... — Model No. typeahead over that master.
 app.get('/api/proforma-invoice/items', requireAuth, async (req, res) => {
   try {
     const query = String(req.query.q || '').trim().toLowerCase();
-    const rows = await _loadPoItemCatalog('PurchaseOrder');
+    const rows = await _loadPiProductCatalog();
     // No cap — see the matching comment on /api/po-creation/items above.
-    const matches = query ? rows.filter(r => r.code.toLowerCase().includes(query) || r.description.toLowerCase().includes(query)) : rows;
+    const matches = query
+      ? rows.filter(r => r.modelNo.toLowerCase().includes(query) || r.itemName.toLowerCase().includes(query))
+      : rows;
     return res.json(matches);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -4501,6 +4565,9 @@ app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
         packing: String(it.packing || '').trim(),
         qty: it.qty, boxes: it.boxes, cbm: it.cbm, weight: it.weight,
         remarks: String(it.remarks || '').trim(),
+        // Comes from the product master via the form, so the PDF shows the
+        // photo without the server having to look the item up again.
+        imageUrl: String(it.imageUrl || '').trim(),
       }));
     if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
     const maxItems = PI_FMT.LAYOUT.itemsLastRow - PI_FMT.LAYOUT.itemsFirstRow + 1;

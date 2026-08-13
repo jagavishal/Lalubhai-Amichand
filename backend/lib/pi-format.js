@@ -9,18 +9,25 @@
  *
  * Layout follows the company's real PI ("Zam Zam" sample): letterhead,
  * consignee block on the left / shipping block on the right, an export item
- * table priced in C&F US$, amount in words, then boilerplate T&C and the
- * two-sided acceptance signature.
+ * table priced in C&F US$ with a product photo per line, amount in words,
+ * then boilerplate T&C and the two-sided acceptance signature.
  *
- * Grid is A..M (13 columns) — printed LANDSCAPE, unlike PO/PR/GRN.
+ * Grid is A..N (14 columns) — printed LANDSCAPE, unlike PO/PR/GRN.
  */
 
 const LETTERHEAD = {
   // Rendered by an =IMAGE() formula in the merged logo block, so the URL has
   // to be publicly fetchable by Google's servers — not just by a logged-in
   // browser. public/logo.png is served unauthenticated, which is why the app's
-  // own origin is used rather than a Drive link (Drive's uc?export URLs are
-  // unreliable inside IMAGE()).
+  // own origin is used rather than a Drive link.
+  //
+  // NOTE: Sheets refuses external fetches for =IMAGE() written by a service
+  // account until a human has opened the spreadsheet once in a desktop
+  // browser ("Please use a desktop web browser to allow access to fetch data
+  // from external urls"). That authorisation then covers the whole document,
+  // including formulas written later — which is what makes the per-item
+  // product photos below workable at all. If the PI ever moves to a new
+  // spreadsheet, someone has to open it once.
   logoUrl: 'https://laltdoffice.com/logo.png',
   company: 'LALLUBHAI AMICHAND LIMITED',
   regd: 'Regd. Office : 48/50, Kansara Chawl, Kalbadevi Road, Mumbai - 400 002, India.   Email : queen1911@laltd.co.in',
@@ -29,28 +36,41 @@ const LETTERHEAD = {
   title: 'PROFORMA INVOICE / ORDER CONFIRMATION SHEET (OCS)',
 };
 
-// Every row number the template depends on, in one place. Changing a row here
-// means re-running scripts/rebuild-pi-sheet.js — the map and the painted sheet
-// are only ever in step because they come from this object.
+// Every row and column span the template depends on, in one place. Changing
+// anything here means re-running scripts/rebuild-pi-sheet.js — the map and the
+// painted sheet are only ever in step because they come from this object.
 const LAYOUT = {
   firstCol: 'A',
-  lastCol: 'M',
-  colCount: 13,
+  lastCol: 'N',
+  colCount: 14,
   rowCount: 80,
 
   // Logo occupies A1:B4; the company name and the three addresses sit to its
-  // right in C:M, so they are centred against the text block rather than the
+  // right in C:N, so they are centred against the text block rather than the
   // whole page. The title band on row 5 still spans the full width.
   letterheadRows: { company: 1, regd: 2, admin: 3, works: 4, title: 5 },
   logoCols: { first: 'A', last: 'B' },
   letterheadTextCol: 'C',
-  partyBlock: { firstRow: 6, lastRow: 13 },   // consignee (A:F) | shipping (G:H label, I:M value)
+
+  // Consignee panel on the left, shipping label/value pairs on the right.
+  partyBlock: {
+    firstRow: 6, lastRow: 13,
+    consigneeFirst: 'A', consigneeLast: 'F',
+    labelFirst: 'G', labelLast: 'H',
+    valueFirst: 'I',
+  },
+
   shipmentNoteRow: 14,
   itemHeaderRow: 15,
   itemsFirstRow: 16,
   itemsLastRow: 45,                            // 30 item rows
   totalRow: 46,
+  totalLabelFirst: 'A', totalLabelLast: 'G',   // merged "TOTAL" cell
   wordsRow: 47,
+  wordsFirst: 'A', wordsLast: 'I',             // amount in words
+  totalCapFirst: 'J', totalCapLast: 'L',       // "Total C&F US$" caption
+  totalValFirst: 'M',                          // the figure itself
+
   validityRow: 49,
   bankRow: 50,
   termsHeadingRow: 51,
@@ -59,13 +79,17 @@ const LAYOUT = {
   confirmRow: 62,
   declarationRow: 63,
   signatureRow: 65,
+  signatureRightCol: 'H',
   signatoryRow: 69,
   lastRow: 69,
+
+  // Item rows carry a product photo, so they need real height — but only when
+  // there is actually an image to show. server.js sets each used row to one of
+  // these; unused rows are hidden outright.
+  itemRowHeight: 17,
+  itemRowHeightWithPhoto: 46,
 };
 
-// Left column of the party block = consignee; right column = shipping terms.
-// Labels are painted once by the builder; only the value cells are written
-// per PI.
 const PARTY_LABELS = [
   'Pro. Invoice No. :',
   'Date :',
@@ -85,7 +109,7 @@ const CELLS = {
   buyerAddress1: 'A9',
   buyerAddress2: 'A10',
   buyerContact: 'A11',
-  // Shipping block values (each merged I:M), labels sit in G:H
+  // Shipping block values (each merged I:N), labels sit in G:H
   piNo: 'I6',
   date: 'I7',
   orderNo: 'I8',
@@ -104,42 +128,56 @@ const CELLS = {
   acceptedBy: 'H65',
 };
 
-// Item table. Column L (Amount) is a live per-row formula painted by the
+// Item table. Column M (Amount) is a live per-row formula painted by the
 // builder — it is NEVER written to and NEVER cleared, same discipline as the
 // PO template's formula columns. Clearing therefore happens in two ranges
-// (A:K and M:M) so L is stepped over.
+// (A:L and N:N) so M is stepped over.
 const ITEMS = {
   srNoCol: 'A',
-  amountCol: 'L',
-  remarksCol: 'M',
-  clearRanges: [['A', 'K'], ['M', 'M']],
+  photoCol: 'B',
+  qtyCol: 'H',
+  amountCol: 'M',
+  remarksCol: 'N',
+  clearRanges: [['A', 'L'], ['N', 'N']],
   fields: {
-    modelNo: 'B',
-    itemName: 'C',
-    size: 'D',
-    swg: 'E',
-    packing: 'F',
-    qty: 'G',
-    boxes: 'H',
-    cbm: 'I',
-    weight: 'J',
-    rate: 'K',
+    modelNo: 'C',
+    itemName: 'D',
+    size: 'E',
+    swg: 'F',
+    packing: 'G',
+    qty: 'H',
+    boxes: 'I',
+    cbm: 'J',
+    weight: 'K',
+    rate: 'L',
   },
   headers: [
-    'Sr No', 'Model No.', 'Item Name', 'Size', 'SWG', 'Per Box Dozen Packing',
+    'Sr No', 'Photo', 'Model No.', 'Item Name', 'Size', 'SWG', 'Per Box Dozen Packing',
     'Total Qty (Pcs / Set)', 'Total Box', 'Total CBM', 'Total Weight (Kgs)',
     'C&F US$ Per Pc', 'Amount (US$)', 'Remarks',
   ],
-  // px widths, A..M — sums to 1065px, exactly the printable width of an A4
+  // px widths, A..N — sums to 1065px, exactly the printable width of an A4
   // landscape page at the 0.3" margins _exportSheetTabPdf() uses, so the
   // export neither scales the sheet up nor leaves a bare strip down the right.
   // G and H are wider than the item table alone needs because the party
   // block's labels sit in G:H, and the longest of them ("Country of Origin of
   // Goods :") wraps to two lines below ~148px, dragging that row out of line.
-  colWidths: [40, 100, 205, 50, 46, 74, 90, 64, 64, 76, 76, 92, 88],
+  colWidths: [34, 72, 96, 170, 44, 40, 68, 84, 58, 60, 70, 70, 86, 113],
 };
 
-const TOTAL_CELL = 'L46';
+const TOTAL_CELL = 'M46';
+
+// The product master the item typeahead and the photos come from — the
+// customer's own "PI Export (Final)" workbook, not this app's sheet. Its
+// fetch_product tab is already exactly the PI's item columns, image URL
+// included, so nothing has to be re-keyed.
+const PRODUCT_SOURCE = {
+  spreadsheetId: '1V9N17f4S6ZgVZfxaIBsAohcU14rooN6SA1HujPsJYIQ',
+  tab: 'fetch_product',
+  range: 'A2:I2000',
+  // Column offsets within that range.
+  cols: { modelNo: 1, itemName: 2, size: 3, swg: 4, perBoxPacking: 5, perBoxCbm: 6, perPcsWeight: 7, imageUrl: 8 },
+};
 
 // Boilerplate the form pre-fills and the buyer sees verbatim. Editable per PI
 // on the create form — these are only the defaults.
@@ -172,4 +210,4 @@ function validityNote(validity) {
     + '(INCREASE IN PRICE 5% OR AS PER THE MARKET SITUATION).';
 }
 
-module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, DEFAULTS, validityNote };
+module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, PRODUCT_SOURCE, DEFAULTS, validityNote };

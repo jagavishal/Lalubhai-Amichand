@@ -29,7 +29,7 @@ const TAB = 'Proforma Invoice';
 const { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, DEFAULTS } = PI;
 
 /* ── tiny A1 helpers ─────────────────────────────────────────────────── */
-const colIdx = (letter) => letter.toUpperCase().charCodeAt(0) - 65;      // single-letter only (grid is A..M)
+const colIdx = (letter) => letter.toUpperCase().charCodeAt(0) - 65;      // single-letter only (grid is A..N)
 
 // Sheets API ranges are half-open and 0-indexed; every range in this script is
 // written in 1-indexed row / letter-column terms and converted here.
@@ -142,11 +142,11 @@ async function run() {
     put(`${TC}${L.letterheadRows.works}`, LETTERHEAD.works),
     put(`A${L.letterheadRows.title}`, LETTERHEAD.title),
     put(CELLS.consigneeHeading, 'Consignee :'),
-    put(`I${L.wordsRow}`, 'Total C&F US$'),
+    put(`${L.totalCapFirst}${L.wordsRow}`, 'Total C&F US$'),
     put(`A${L.termsHeadingRow}`, 'Terms & Conditions :'),
     put(`A${L.signatureRow}`, 'For, ' + LETTERHEAD.company),
     put(`A${L.signatoryRow}`, 'Authorised Signatory'),
-    put(`H${L.signatoryRow}`, 'Authorised Signatory'),
+    put(`${L.signatureRightCol}${L.signatoryRow}`, 'Authorised Signatory'),
     // Boilerplate the app overwrites per PI — painted here so the tab reads
     // correctly even before the first PI is raised.
     put(CELLS.validityNote, PI.validityNote(DEFAULTS.validity)),
@@ -154,9 +154,9 @@ async function run() {
     put(CELLS.confirmLine, DEFAULTS.confirmLine),
     put(CELLS.declaration, DEFAULTS.declaration),
   ];
-  // Shipping-block labels, G:H of each party-block row.
-  PARTY_LABELS.forEach((label, i) => values.push(put(`G${L.partyBlock.firstRow + i}`, label)));
-  // Item-table header, A..M of the header row.
+  // Shipping-block labels, one per party-block row.
+  PARTY_LABELS.forEach((label, i) => values.push(put(`${L.partyBlock.labelFirst}${L.partyBlock.firstRow + i}`, label)));
+  // Item-table header, full width.
   values.push({ range: `'${TAB}'!A${L.itemHeaderRow}:${LC}${L.itemHeaderRow}`, values: [ITEMS.headers] });
   // Default T&C lines.
   DEFAULTS.terms.forEach((t, i) => {
@@ -165,13 +165,16 @@ async function run() {
 
   /* 3) Live formulas — Amount per row, and the totals row. Written once, by
         this script only; server.js clears around them but never over them. */
+  const QTY = ITEMS.qtyCol, RATE = ITEMS.fields.rate;
   for (let r = L.itemsFirstRow; r <= L.itemsLastRow; r++) {
-    values.push({ range: `'${TAB}'!${ITEMS.amountCol}${r}`, values: [[`=IF(G${r}="","",ROUND(G${r}*K${r},2))`]] });
+    values.push({ range: `'${TAB}'!${ITEMS.amountCol}${r}`, values: [[`=IF(${QTY}${r}="","",ROUND(${QTY}${r}*${RATE}${r},2))`]] });
   }
   const sumRange = (col) => `=IF(SUM(${col}${L.itemsFirstRow}:${col}${L.itemsLastRow})=0,"",SUM(${col}${L.itemsFirstRow}:${col}${L.itemsLastRow}))`;
   values.push(put(`A${L.totalRow}`, 'TOTAL'));
-  ['G', 'H', 'I', 'J'].forEach(col => values.push({ range: `'${TAB}'!${col}${L.totalRow}`, values: [[sumRange(col)]] }));
-  values.push(put(`K${L.totalRow}`, '-'));
+  // Qty, Boxes, CBM and Weight total; the per-piece rate cannot be summed.
+  [ITEMS.fields.qty, ITEMS.fields.boxes, ITEMS.fields.cbm, ITEMS.fields.weight]
+    .forEach(col => values.push({ range: `'${TAB}'!${col}${L.totalRow}`, values: [[sumRange(col)]] }));
+  values.push(put(`${RATE}${L.totalRow}`, '-'));
   values.push({ range: `'${TAB}'!${ITEMS.amountCol}${L.totalRow}`, values: [[sumRange(ITEMS.amountCol)]] });
   values.push({ range: `'${TAB}'!${ITEMS.amountCol}${L.wordsRow}`, values: [[`=${ITEMS.amountCol}${L.totalRow}`]] });
 
@@ -207,17 +210,18 @@ async function run() {
   requests.push(rowHeight(sheetId, L.letterheadRows.regd, L.letterheadRows.works, 13));
   requests.push(rowHeight(sheetId, L.letterheadRows.title, L.letterheadRows.title, 22));
 
-  // ── party block: consignee (A:F) | label (G:H) | value (I:M)
-  for (let r = L.partyBlock.firstRow; r <= L.partyBlock.lastRow; r++) {
-    requests.push(merge(sheetId, r, r, 'A', 'F'));
-    requests.push(merge(sheetId, r, r, 'G', 'H'));
-    requests.push(merge(sheetId, r, r, 'I', LC));
+  // ── party block: consignee | label | value
+  const PB = L.partyBlock;
+  for (let r = PB.firstRow; r <= PB.lastRow; r++) {
+    requests.push(merge(sheetId, r, r, PB.consigneeFirst, PB.consigneeLast));
+    requests.push(merge(sheetId, r, r, PB.labelFirst, PB.labelLast));
+    requests.push(merge(sheetId, r, r, PB.valueFirst, LC));
   }
-  requests.push(text(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 'A', 'F', { size: 9 }));
-  requests.push(text(sheetId, L.partyBlock.firstRow, L.partyBlock.firstRow, 'A', 'F', { bold: true, size: 9 }));      // "Consignee :"
-  requests.push(text(sheetId, L.partyBlock.firstRow + 1, L.partyBlock.firstRow + 1, 'A', 'F', { bold: true, size: 10 })); // buyer name
-  requests.push(text(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 'G', 'H', { bold: true, size: 8 }));
-  requests.push(text(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 'I', LC, { size: 9 }));
+  requests.push(text(sheetId, PB.firstRow, PB.lastRow, PB.consigneeFirst, PB.consigneeLast, { size: 9 }));
+  requests.push(text(sheetId, PB.firstRow, PB.firstRow, PB.consigneeFirst, PB.consigneeLast, { bold: true, size: 9 }));      // "Consignee :"
+  requests.push(text(sheetId, PB.firstRow + 1, PB.firstRow + 1, PB.consigneeFirst, PB.consigneeLast, { bold: true, size: 10 })); // buyer name
+  requests.push(text(sheetId, PB.firstRow, PB.lastRow, PB.labelFirst, PB.labelLast, { bold: true, size: 8 }));
+  requests.push(text(sheetId, PB.firstRow, PB.lastRow, PB.valueFirst, LC, { size: 9 }));
   requests.push(rowHeight(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 16));
 
   // ── shipment note strip
@@ -229,26 +233,27 @@ async function run() {
   requests.push(text(sheetId, L.itemHeaderRow, L.itemHeaderRow, FC, LC, { align: 'CENTER', bold: true, size: 8, bg: BAND }));
   requests.push(rowHeight(sheetId, L.itemHeaderRow, L.itemHeaderRow, 32));
   requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, FC, LC, { align: 'CENTER', size: 9 }));
-  requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, 'C', 'C', { align: 'LEFT', size: 9 }));   // item name reads better left
-  requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, 'M', 'M', { align: 'LEFT', size: 8 }));     // remarks
-  requests.push(rowHeight(sheetId, L.itemsFirstRow, L.itemsLastRow, 17));
-  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, 'G', 'H', '#,##0'));
-  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, 'I', 'I', '0.0000'));
-  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, 'J', 'J', '#,##0.00'));
-  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, 'K', 'K', '0.000'));
-  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.wordsRow, 'L', 'L', '#,##0.00'));
+  requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.itemName, ITEMS.fields.itemName, { align: 'LEFT', size: 9 }));
+  requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.remarksCol, ITEMS.remarksCol, { align: 'LEFT', size: 8 }));
+  requests.push(rowHeight(sheetId, L.itemsFirstRow, L.itemsLastRow, L.itemRowHeight));
+  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.packing, ITEMS.fields.qty, '#,##0'));
+  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.boxes, ITEMS.fields.boxes, '#,##0'));
+  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.cbm, ITEMS.fields.cbm, '0.0000'));
+  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.weight, ITEMS.fields.weight, '#,##0.00'));
+  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.rate, ITEMS.fields.rate, '0.000'));
+  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.wordsRow, ITEMS.amountCol, ITEMS.amountCol, '#,##0.00'));
 
   // ── totals row + amount-in-words row
-  requests.push(merge(sheetId, L.totalRow, L.totalRow, 'A', 'F'));
+  requests.push(merge(sheetId, L.totalRow, L.totalRow, L.totalLabelFirst, L.totalLabelLast));
   requests.push(text(sheetId, L.totalRow, L.totalRow, FC, LC, { align: 'CENTER', bold: true, size: 9, bg: SOFT }));
-  requests.push(text(sheetId, L.totalRow, L.totalRow, 'A', 'F', { align: 'RIGHT', bold: true, size: 9, bg: SOFT }));
+  requests.push(text(sheetId, L.totalRow, L.totalRow, L.totalLabelFirst, L.totalLabelLast, { align: 'RIGHT', bold: true, size: 9, bg: SOFT }));
   requests.push(rowHeight(sheetId, L.totalRow, L.totalRow, 20));
-  requests.push(merge(sheetId, L.wordsRow, L.wordsRow, 'A', 'H'));
-  requests.push(merge(sheetId, L.wordsRow, L.wordsRow, 'I', 'K'));
-  requests.push(merge(sheetId, L.wordsRow, L.wordsRow, 'L', LC));
-  requests.push(text(sheetId, L.wordsRow, L.wordsRow, 'A', 'H', { bold: true, size: 9 }));
-  requests.push(text(sheetId, L.wordsRow, L.wordsRow, 'I', 'K', { align: 'RIGHT', bold: true, size: 9 }));
-  requests.push(text(sheetId, L.wordsRow, L.wordsRow, 'L', LC, { align: 'CENTER', bold: true, size: 10 }));
+  requests.push(merge(sheetId, L.wordsRow, L.wordsRow, L.wordsFirst, L.wordsLast));
+  requests.push(merge(sheetId, L.wordsRow, L.wordsRow, L.totalCapFirst, L.totalCapLast));
+  requests.push(merge(sheetId, L.wordsRow, L.wordsRow, L.totalValFirst, LC));
+  requests.push(text(sheetId, L.wordsRow, L.wordsRow, L.wordsFirst, L.wordsLast, { bold: true, size: 9 }));
+  requests.push(text(sheetId, L.wordsRow, L.wordsRow, L.totalCapFirst, L.totalCapLast, { align: 'RIGHT', bold: true, size: 9 }));
+  requests.push(text(sheetId, L.wordsRow, L.wordsRow, L.totalValFirst, LC, { align: 'CENTER', bold: true, size: 10 }));
   requests.push(rowHeight(sheetId, L.wordsRow, L.wordsRow, 22));
 
   // ── notes, T&C, declaration
@@ -275,10 +280,11 @@ async function run() {
   requests.push(rowHeight(sheetId, L.declarationRow + 1, L.declarationRow + 1, 6));
 
   // ── signature block
+  const SR = L.signatureRightCol;
   requests.push(merge(sheetId, L.signatureRow, L.signatureRow, 'A', 'F'));
-  requests.push(merge(sheetId, L.signatureRow, L.signatureRow, 'H', LC));
+  requests.push(merge(sheetId, L.signatureRow, L.signatureRow, SR, LC));
   requests.push(merge(sheetId, L.signatoryRow, L.signatoryRow, 'A', 'F'));
-  requests.push(merge(sheetId, L.signatoryRow, L.signatoryRow, 'H', LC));
+  requests.push(merge(sheetId, L.signatoryRow, L.signatoryRow, SR, LC));
   requests.push(text(sheetId, L.signatureRow, L.signatureRow, FC, LC, { bold: true, size: 9 }));
   requests.push(text(sheetId, L.signatoryRow, L.signatoryRow, FC, LC, { bold: true, size: 9 }));
   requests.push(rowHeight(sheetId, L.signatureRow, L.signatureRow, 18));
@@ -286,9 +292,9 @@ async function run() {
   requests.push(rowHeight(sheetId, L.signatoryRow, L.signatoryRow, 16));
 
   // ── borders: party panels, shipment strip, item grid, page box
-  requests.push(borders(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 'A', 'F', { top: SOLID, bottom: SOLID, left: SOLID, right: SOLID }));
-  requests.push(borders(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 'G', LC, { top: SOLID, bottom: SOLID, left: SOLID, right: SOLID, innerHorizontal: SOLID }));
-  requests.push(borders(sheetId, L.partyBlock.firstRow, L.partyBlock.lastRow, 'I', 'I', { left: SOLID }));
+  requests.push(borders(sheetId, PB.firstRow, PB.lastRow, PB.consigneeFirst, PB.consigneeLast, { top: SOLID, bottom: SOLID, left: SOLID, right: SOLID }));
+  requests.push(borders(sheetId, PB.firstRow, PB.lastRow, PB.labelFirst, LC, { top: SOLID, bottom: SOLID, left: SOLID, right: SOLID, innerHorizontal: SOLID }));
+  requests.push(borders(sheetId, PB.firstRow, PB.lastRow, PB.valueFirst, PB.valueFirst, { left: SOLID }));
   requests.push(borders(sheetId, L.shipmentNoteRow, L.shipmentNoteRow, FC, LC, { top: SOLID, bottom: SOLID, left: SOLID, right: SOLID }));
   requests.push(borders(sheetId, L.itemHeaderRow, L.wordsRow, FC, LC, { top: SOLID, bottom: SOLID, left: SOLID, right: SOLID, innerHorizontal: SOLID, innerVertical: SOLID }));
   requests.push(borders(sheetId, L.validityRow, L.declarationRow, FC, LC, { top: SOLID, bottom: SOLID, left: SOLID, right: SOLID }));
