@@ -188,7 +188,7 @@ window.Pages['proforma-invoice'] = (() => {
     row.querySelector('[data-field="imageUrl"]').value = p.imageUrl || '';
     const thumb = row.querySelector('.pic-item-thumb');
     thumb.innerHTML = p.imageUrl
-      ? '<img src="' + esc(p.imageUrl) + '" alt="" style="max-width:44px;max-height:40px;object-fit:contain;border-radius:4px;" />'
+      ? '<img src="' + esc(p.imageUrl) + '" alt="" onerror="this.remove()" style="max-width:44px;max-height:40px;object-fit:contain;border-radius:4px;" />'
       : '<span style="font-size:10px;color:#cbd5e1;">no photo</span>';
     _recomputeRow(row);
   }
@@ -206,12 +206,17 @@ window.Pages['proforma-invoice'] = (() => {
           if (!res.ok) return;
           _lastMatches = await res.json();
           if (!_lastMatches.length) { dd.style.display = 'none'; return; }
-          dd.innerHTML = _lastMatches.slice(0, 50).map((m, i) => '<div class="pic-item-opt" style="display:flex;align-items:center;gap:9px;padding:6px 10px;font-size:12.5px;cursor:pointer;" data-i="' + i + '">'
-            + (m.imageUrl ? '<img src="' + esc(m.imageUrl) + '" alt="" style="width:30px;height:30px;object-fit:contain;flex:none;" />' : '<span style="width:30px;flex:none;"></span>')
+          dd.innerHTML = _lastMatches.slice(0, 50).map((m, i) => '<div class="pic-item-opt" style="display:flex;align-items:center;gap:10px;padding:6px 10px;font-size:12.5px;cursor:pointer;border-bottom:1px solid #f8fafc;" data-i="' + i + '">'
+            + '<span style="width:40px;height:40px;flex:none;display:grid;place-items:center;background:#f8fafc;border-radius:5px;overflow:hidden;">'
+              + (m.imageUrl
+                  // A dead thumbnail must not leave a broken-image glyph in the list.
+                  ? '<img src="' + esc(m.imageUrl) + '" alt="" onerror="this.remove()" style="max-width:38px;max-height:38px;object-fit:contain;" />'
+                  : '')
+            + '</span>'
             + '<span><b>' + esc(m.modelNo) + '</b> — ' + esc(m.itemName) + (m.size ? ' <span style="color:#94a3b8;">(size ' + esc(m.size) + ')</span>' : '') + '</span>'
             + '</div>').join('');
           const rect = input.getBoundingClientRect();
-          dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 340) + 'px';
+          dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 360) + 'px';
           dd.style.display = 'block';
         } catch {}
       }, 220);
@@ -742,7 +747,7 @@ window.Pages['proforma-invoice'] = (() => {
               + '<tbody>' + items.map((it, i) => ''
                 + '<tr class="pipm-item-row" data-index="' + i + '" data-qty="' + esc(it.qty || 0) + '" style="border-bottom:1px solid #f1f5f9;">'
                   + '<td style="padding:6px 8px;">' + (it.imageUrl
-                      ? '<img src="' + esc(it.imageUrl) + '" alt="" style="width:34px;height:34px;object-fit:contain;" />'
+                      ? '<img src="' + esc(it.imageUrl) + '" alt="" onerror="this.remove()" style="width:34px;height:34px;object-fit:contain;" />'
                       : '<span style="color:#cbd5e1;font-size:11px;">—</span>') + '</td>'
                   // itemCode/description are the pre-export-format field names —
                   // a Draft raised before the switch still has to be priceable.
