@@ -4339,6 +4339,44 @@ async function _piSheetMeta(fy) {
 // current PI, never a partial patch, since the tab only ever reflects the most
 // recent write. Every mapped cell is written even when blank: a leftover value
 // from the previous PI would otherwise print on this one.
+// Opens the PI's row in the export team's follow-up tracker. Deliberately
+// isolated from the PI write itself: the tracker is a separate workbook owned
+// by another team, and it going down must never cost someone the PI they just
+// filled in — the caller logs and carries on.
+async function _appendPiFmsRow(sheets, entry) {
+  const T = PI_FMT.FMS_TRACKER;
+  const C = T.cols;
+  // First row with neither a timestamp nor a PI number. Scanning beats
+  // values.append here — five rows of process notes above the header row
+  // confuse append's idea of where the table starts.
+  const used = await sheets.spreadsheets.values.get({
+    spreadsheetId: T.spreadsheetId,
+    range: `'${T.tab}'!${C.timestamp}${T.firstDataRow}:${C.piNo}5000`,
+    valueRenderOption: 'FORMATTED_VALUE',
+  });
+  const rows = used.data.values || [];
+  let offset = rows.findIndex(r => !String(r?.[0] ?? '').trim() && !String(r?.[1] ?? '').trim());
+  if (offset === -1) offset = rows.length;
+  const row = T.firstDataRow + offset;
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: T.spreadsheetId,
+    range: `'${T.tab}'!${C.timestamp}${row}:${C.targetDate}${row}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: {
+      values: [[
+        _timestampForSheet(),
+        "'" + entry.piNo,           // "VTV/052/25-26" — text, never a fraction
+        entry.assignedTo || '',
+        entry.customerName || '',
+        entry.quantity || '',
+        entry.targetDate || '',
+      ]],
+    },
+  });
+  return row;
+}
+
 // A product photo URL becomes an =IMAGE() formula. Anything that isn't a bare
 // http(s) URL is dropped rather than interpolated — the value goes into the
 // sheet unescaped, so a stray quote would otherwise rewrite the formula.
@@ -4489,6 +4527,7 @@ app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
       recentBuyers,
       maxItems: PI_FMT.LAYOUT.itemsLastRow - PI_FMT.LAYOUT.itemsFirstRow + 1,
       defaults: PI_FMT.DEFAULTS,
+      assignees: PI_FMT.FMS_TRACKER.assignees,
     });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -4724,6 +4763,10 @@ app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
       terms: (Array.isArray(b.terms) ? b.terms : PI_FMT.DEFAULTS.terms).map(t => String(t || '').trim()).filter(Boolean),
       includeDeclaration: b.includeDeclaration !== false,
       piMadeBy: req.session.user.name || '',
+      // Not printed on the PI — these two exist for the export team's
+      // follow-up tracker, which needs an owner and a date per PI.
+      assignedTo: String(b.assignedTo || '').trim(),
+      targetDate: String(b.targetDate || '').trim(),
       items: cleanItems,
     };
 
@@ -4737,7 +4780,25 @@ app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
       'Draft',
     ]);
 
-    return res.json({ success: true, piNumber: piNoFormatted, pdfLink });
+    // Opens the follow-up row in the export team's tracker. A failure here
+    // leaves the PI itself untouched and logged, so it is reported back rather
+    // than thrown — the row can be added by hand.
+    let fmsTracked = true;
+    try {
+      const totalQty = cleanItems.reduce((sum, it) => sum + (parseFloat(it.qty) || 0), 0);
+      await _appendPiFmsRow(sheets, {
+        piNo: piNoFormatted,
+        assignedTo: form.assignedTo,
+        customerName: form.buyerName,
+        quantity: totalQty || '',
+        targetDate: form.targetDate,
+      });
+    } catch (e) {
+      fmsTracked = false;
+      console.error('[proforma-invoice] Export Marketing FMS row failed:', e.message);
+    }
+
+    return res.json({ success: true, piNumber: piNoFormatted, pdfLink, fmsTracked });
   } catch (e) { console.error('[proforma-invoice] create failed:', e.message); return res.status(500).json({ error: e.message }); }
 });
 

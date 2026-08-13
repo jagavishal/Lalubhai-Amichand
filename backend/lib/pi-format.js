@@ -179,6 +179,26 @@ const PRODUCT_SOURCE = {
   cols: { modelNo: 1, itemName: 2, size: 3, swg: 4, perBoxPacking: 5, perBoxCbm: 6, perPcsWeight: 7, imageUrl: 8 },
 };
 
+// "Export Marketing FMS" — the follow-up tracker the export team runs the PI
+// through (add pricing, send final PDF, chase the signed copy, chase the
+// advance, and so on). Creating a PI opens its row here; every column from
+// the first process step onward is filled in by that team, not by this app.
+//
+// Its header sits on row 6, under five rows of WHO/HOW/WHEN process notes, so
+// rows are placed by finding the first free row rather than by values.append —
+// append's table detection is not reliable under a header block like that.
+const FMS_TRACKER = {
+  spreadsheetId: '1Uf2CXMaOEWybb3ZQETPVGFSUG3l1vTUgnhvUAJCqkZE',
+  tab: 'Sheet1',
+  headerRow: 6,
+  firstDataRow: 7,
+  cols: { timestamp: 'A', piNo: 'B', assignedTo: 'C', customerName: 'D', quantity: 'E', targetDate: 'F' },
+  // Row 3 of the tracker names who a PI can be assigned to. Kept here so the
+  // create form's dropdown and the sheet stay in step; the field is free text
+  // as well, so an unlisted name still goes through.
+  assignees: ['Shival', 'Paresh', 'Obaid'],
+};
+
 // Boilerplate the form pre-fills and the buyer sees verbatim. Editable per PI
 // on the create form — these are only the defaults.
 const DEFAULTS = {
@@ -210,4 +230,4 @@ function validityNote(validity) {
     + '(INCREASE IN PRICE 5% OR AS PER THE MARKET SITUATION).';
 }
 
-module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, PRODUCT_SOURCE, DEFAULTS, validityNote };
+module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, PRODUCT_SOURCE, FMS_TRACKER, DEFAULTS, validityNote };

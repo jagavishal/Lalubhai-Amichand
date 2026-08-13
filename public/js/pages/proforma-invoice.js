@@ -36,6 +36,7 @@ window.Pages['proforma-invoice'] = (() => {
   let _recentBuyers = [];
   let _defaults = null;     // boilerplate from backend/lib/pi-format.js
   let _maxItems = 30;
+  let _assignees = [];      // who a PI can be handed to in the FMS tracker
 
   // PI List (in-page tab) state — read-only history from the ERP PI Log tab.
   let _pilRows = [];
@@ -93,6 +94,7 @@ window.Pages['proforma-invoice'] = (() => {
       _recentBuyers = data.recentBuyers || [];
       if (data.defaults) _defaults = data.defaults;
       if (data.maxItems) _maxItems = data.maxItems;
+      if (data.assignees) _assignees = data.assignees;
       _mastersLoaded = true;
       const el = document.getElementById('pic-next-no');
       if (el) el.textContent = _nextPiNumber || 'Loading…';
@@ -422,11 +424,19 @@ window.Pages['proforma-invoice'] = (() => {
   const _grid = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;';
 
   function _invoiceFieldsHtml() {
+    // Assigned To and Target Date are not printed on the PI — they open the
+    // row in the export team's follow-up tracker, which needs an owner and a
+    // date. Both optional; blank just leaves those cells for the team.
+    const assigneeOpts = (_assignees || []).map(a => '<option value="' + esc(a) + '"></option>').join('');
     return '<div style="' + _grid + '">'
       + _textField('pic-date', 'PI Date', { type: 'date', value: _today() })
       + _readonlyField('pic-next-no', 'Pro. Invoice No. (auto-assigned)', _nextPiNumber || 'Loading…')
       + _textField('pic-order-no', 'Order No.', { placeholder: 'Buyer order reference' })
       + _textField('pic-payment-terms', 'Terms of Payment', { placeholder: 'e.g. 30% ADVANCE AND BALANCE AGT. B/L COPY' })
+      + _fieldWrap('Assigned To',
+          '<input type="text" id="pic-assigned-to" list="pic-assignee-list" autocomplete="off" placeholder="Who follows this PI up" style="' + _inputStyle + '" />'
+          + '<datalist id="pic-assignee-list">' + assigneeOpts + '</datalist>')
+      + _textField('pic-target-date', 'Target Date', { type: 'date' })
     + '</div>';
   }
 
@@ -517,6 +527,8 @@ window.Pages['proforma-invoice'] = (() => {
       countryOfOrigin: val('pic-origin'),
       shipmentNote: val('pic-shipment-note'),
       validity: val('pic-validity'),
+      assignedTo: val('pic-assigned-to'),
+      targetDate: document.getElementById('pic-target-date').value,
       terms: val('pic-terms').split('\n').map(t => t.trim()).filter(Boolean),
       includeDeclaration: document.getElementById('pic-declaration').checked,
     };
@@ -525,7 +537,12 @@ window.Pages['proforma-invoice'] = (() => {
     btn.disabled = true; btn.textContent = 'Creating…';
     try {
       const result = await Utils.apiFetch('/api/proforma-invoice', { method: 'POST', body: JSON.stringify(payload) });
-      Utils.showToast('PI ' + result.piNumber + ' created' + (result.pdfLink ? ' — PDF saved to Drive' : ' (PDF export failed, PI still saved)'), result.pdfLink ? 'success' : 'warning');
+      const warnings = [];
+      if (!result.pdfLink) warnings.push('PDF export failed');
+      if (result.fmsTracked === false) warnings.push('Export Marketing FMS row not added');
+      Utils.showToast('PI ' + result.piNumber + ' created'
+        + (warnings.length ? ' — ' + warnings.join('; ') + ' (PI itself is saved)' : ' — PDF saved to Drive, FMS row opened'),
+        warnings.length ? 'warning' : 'success');
       await _loadMasters(date);
       renderPage();
     } catch (err) {
