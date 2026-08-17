@@ -50,8 +50,15 @@ window.Pages['outward'] = (() => {
   // AND the list for that book only (mirror image of how Source is
   // Trading-only). Every other book keeps behaving exactly as before.
   function _showDepartment() { return _category !== 'Trading'; }
-  // Column count of the list table, which loses one column without Issued To.
-  function _colCount() { return _showDepartment() ? 9 : 8; }
+  // Size (the bar/rod/section dimension) is the mirror image again: it's how
+  // Trading stock is actually identified on the Hindalco paperwork, so that
+  // book gets a Size column on both the entry rows and the list. The other
+  // books keep size purely as a catalog field on the IMS Report tab.
+  function _showSize() { return _category === 'Trading'; }
+  // Column count of the list table, which gains/loses Issued To and Size
+  // depending on the book (8 fixed columns: Date, Item Code, Description,
+  // Quantity, UOM, Source, Remarks, Actions).
+  function _colCount() { return 8 + (_showDepartment() ? 1 : 0) + (_showSize() ? 1 : 0); }
 
   // Canonical UOM list, seeded from what's actually in use across the real
   // Stores/ALU catalogs (Kg/Ltr/PCS/PKT/FOOT/c.m etc.) plus a few common
@@ -162,6 +169,7 @@ window.Pages['outward'] = (() => {
     const row = input.closest('.outw-item-row');
     const dd = row.querySelector('.outw-row-dd');
     const descInput = row.querySelector('.outw-row-desc');
+    const sizeInput = row.querySelector('.outw-row-size'); // Trading only
     const runSearch = () => {
       clearTimeout(_itemSearchTimer);
       _itemSearchTimer = setTimeout(async () => {
@@ -170,8 +178,10 @@ window.Pages['outward'] = (() => {
           const url = '/api/ims/items?category=' + encodeURIComponent(_category) + (query ? '&q=' + encodeURIComponent(query) : '');
           const matches = await Utils.apiFetch(url) || [];
           if (!matches.length) { dd.style.display = 'none'; return; }
-          dd.innerHTML = matches.slice(0, 30).map(m => '<div class="outw-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.itemCode) + '" data-desc="' + esc(m.description) + '" data-uom="' + esc(m.uom) + '" data-stock="' + esc(m.currentStock) + '">'
-            + '<b>' + esc(m.itemCode) + '</b> — ' + esc(m.description) + ' <span style="color:#94a3b8;">(stock: ' + esc(m.currentStock) + ')</span></div>').join('');
+          dd.innerHTML = matches.slice(0, 30).map(m => '<div class="outw-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.itemCode) + '" data-desc="' + esc(m.description) + '" data-size="' + esc(m.size) + '" data-uom="' + esc(m.uom) + '" data-stock="' + esc(m.currentStock) + '">'
+            + '<b>' + esc(m.itemCode) + '</b> — ' + esc(m.description)
+            + (_showSize() && m.size ? ' <span style="color:#64748b;">[' + esc(m.size) + ']</span>' : '')
+            + ' <span style="color:#94a3b8;">(stock: ' + esc(m.currentStock) + ')</span></div>').join('');
           const rect = input.getBoundingClientRect();
           dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 280) + 'px';
           dd.style.display = 'block';
@@ -185,6 +195,9 @@ window.Pages['outward'] = (() => {
       if (!opt) return;
       input.value = opt.dataset.code;
       if (descInput) descInput.value = opt.dataset.desc || '';
+      // Prefilled from the catalog but still editable — stock can be issued at
+      // a size the catalog row hasn't caught up with yet.
+      if (sizeInput) sizeInput.value = opt.dataset.size || '';
       _setUomValue(row, 'row-uom', opt.dataset.uom || '');
       input.dataset.stock = opt.dataset.stock;
       dd.style.display = 'none';
@@ -201,6 +214,7 @@ window.Pages['outward'] = (() => {
         + '<div class="outw-row-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
       + '</td>'
       + '<td style="padding:6px;min-width:170px;"><input type="text" class="outw-row-desc" placeholder="Description" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + (_showSize() ? '<td style="padding:6px;min-width:120px;"><input type="text" class="outw-row-size" placeholder="Size" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>' : '')
       + '<td style="padding:6px;min-width:130px;">' + _uomFieldHtml('row-uom') + '</td>'
       + '<td style="padding:6px;min-width:100px;"><input type="text" inputmode="decimal" class="outw-row-qty" placeholder="Qty" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" /></td>'
       + '<td style="padding:6px;text-align:center;"><button type="button" class="outw-row-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
@@ -209,9 +223,9 @@ window.Pages['outward'] = (() => {
 
   function _itemsTableHtml() {
     return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:780px;">'
+      + '<table style="width:100%;border-collapse:collapse;min-width:' + (_showSize() ? 900 : 780) + 'px;">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-          + ['Item Code', 'Description', 'UOM', 'Quantity', ''].map(h => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+          + ['Item Code', 'Description'].concat(_showSize() ? ['Size'] : []).concat(['UOM', 'Quantity', '']).map(h => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
         + '</tr></thead>'
         + '<tbody id="outw-items-tbody">' + _itemRowHtml() + '</tbody>'
       + '</table>'
@@ -236,9 +250,11 @@ window.Pages['outward'] = (() => {
   function _collectItemRows() {
     return Array.from(document.querySelectorAll('#outw-items-tbody .outw-item-row')).map(row => {
       const codeInput = row.querySelector('.outw-row-code');
+      const sizeInput = row.querySelector('.outw-row-size'); // absent off the Trading book
       return {
         itemCode: codeInput.value.trim(),
         description: row.querySelector('.outw-row-desc').value.trim(),
+        size: sizeInput ? sizeInput.value.trim() : '',
         uom: _getUomValue(row, 'row-uom'),
         quantity: row.querySelector('.outw-row-qty').value.trim(),
         stock: codeInput.dataset.stock, // only set when picked from the dropdown; undefined for a freehand-typed code
@@ -374,6 +390,7 @@ window.Pages['outward'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.itemName) + '</td>'
+        + (_showSize() ? '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.size) + '</td>' : '')
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.quantity) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
         + (_showDepartment() ? '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.department) + '</td>' : '')
@@ -439,9 +456,9 @@ window.Pages['outward'] = (() => {
       + '</div>'
       + _filterBarHtml()
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
+        + '<table style="width:100%;border-collapse:collapse;min-width:' + (_showSize() ? 1020 : 920) + 'px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['Date', 'Item Code', 'Description', 'Quantity', 'UOM'].concat(_showDepartment() ? ['Issued To'] : []).concat(['Source', 'Remarks', 'Actions']).map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + ['Date', 'Item Code', 'Description'].concat(_showSize() ? ['Size'] : []).concat(['Quantity', 'UOM']).concat(_showDepartment() ? ['Issued To'] : []).concat(['Source', 'Remarks', 'Actions']).map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
           + '<tbody id="outwl-body"><tr><td colspan="' + _colCount() + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
@@ -530,7 +547,7 @@ window.Pages['outward'] = (() => {
       try {
         await Utils.apiFetch('/api/ims/outward', {
           method: 'POST',
-          body: JSON.stringify({ date, itemCode: it.itemCode, description: it.description, uom: it.uom, quantity: it.quantity, department, remarks, category: _category, source }),
+          body: JSON.stringify({ date, itemCode: it.itemCode, description: it.description, size: it.size, uom: it.uom, quantity: it.quantity, department, remarks, category: _category, source }),
         });
         okCount++;
       } catch (err) {

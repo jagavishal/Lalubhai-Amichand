@@ -278,6 +278,12 @@ const SCHEMA = [
   // job-work ledger ("IN/OUT(HINDALCO)") — see IMS_SOURCES. Blank for
   // Stores/ALU, which have never needed more than one ledger per category.
   `ALTER TABLE ims_transactions ADD COLUMN IF NOT EXISTS source VARCHAR(32) NOT NULL DEFAULT ''`,
+  // size records the dimension the entry actually moved against (Trading's
+  // bar/rod/section sizes), captured on the entry itself rather than read back
+  // off ims_items.size — the catalog's size can be corrected later, and the
+  // ledger must keep showing what was received/issued at the time. Blank for
+  // Stores/ALU/Accessories, whose forms don't show the field.
+  `ALTER TABLE ims_transactions ADD COLUMN IF NOT EXISTS size VARCHAR(64) NOT NULL DEFAULT ''`,
   // ── Departments master — the ONE list behind every Department dropdown in the
   // app (Users, Daily Task, IMS Inward/Outward, PR Creation, PO Creation). Each
   // of those used to carry its own hardcoded list, so the same shop floor was
@@ -5466,6 +5472,9 @@ async function _imsCreateTxn(direction, body, user) {
   if (!itemCode) throw Object.assign(new Error('itemCode is required'), { status: 400 });
   if (!quantity || quantity <= 0) throw Object.assign(new Error('quantity must be greater than 0'), { status: 400 });
   const txnDate = body.date || new Date().toISOString().slice(0, 10);
+  // Only the Trading form sends this (see inward.js/outward.js); every other
+  // book posts nothing and stores '', exactly as before the column existed.
+  const size = String(body.size || '').trim().slice(0, 64);
 
   const existing = await q('SELECT item_code FROM ims_items WHERE item_code=$1', [itemCode]);
   if (!existing.length) {
@@ -5477,8 +5486,8 @@ async function _imsCreateTxn(direction, body, user) {
     // fell back to the schema default ('Stores'), even when logged as ALU.
     const category = IMS_CATEGORIES.includes(body.category) ? body.category : 'Stores';
     await pool.query(
-      `INSERT INTO ims_items (item_code, description, uom, current_stock, category) VALUES ($1,$2,$3,0,$4)`,
-      [itemCode, body.description || '', body.uom || '', category]
+      `INSERT INTO ims_items (item_code, description, size, uom, current_stock, category) VALUES ($1,$2,$3,$4,0,$5)`,
+      [itemCode, body.description || '', size, body.uom || '', category]
     );
   }
 
@@ -5488,9 +5497,9 @@ async function _imsCreateTxn(direction, body, user) {
   // Stores/ALU entries just get '', same as before this column existed.
   const source = IMS_SOURCES.includes(body.source) ? body.source : '';
   await pool.query(
-    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, quantity, uom, department, remarks, status, created_by, source)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Active',$10,$11)`,
-    [id, txnDate, direction, itemCode, body.description || '', quantity, body.uom || '', body.department || '', body.remarks || '', user, source]
+    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, size, quantity, uom, department, remarks, status, created_by, source)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Active',$11,$12)`,
+    [id, txnDate, direction, itemCode, body.description || '', size, quantity, body.uom || '', body.department || '', body.remarks || '', user, source]
   );
   const delta = direction === 'IN' ? quantity : -quantity;
   await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, itemCode]);
@@ -5538,9 +5547,9 @@ async function _imsPhysicalStockUpdate(body, user) {
   const remarksNote = `Physical count: ${physicalStock} (system was ${systemStock}, variance ${variance > 0 ? '+' : ''}${variance}).`
     + (body.remarks ? ` ${body.remarks}` : '');
   await pool.query(
-    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, quantity, uom, department, remarks, status, created_by, source)
-     VALUES ($1,$2,'ADJ',$3,$4,$5,$6,'',$7,'Active',$8,'')`,
-    [id, txnDate, itemCode, item.description || '', variance, item.uom || '', remarksNote, user]
+    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, size, quantity, uom, department, remarks, status, created_by, source)
+     VALUES ($1,$2,'ADJ',$3,$4,$5,$6,$7,'',$8,'Active',$9,'')`,
+    [id, txnDate, itemCode, item.description || '', item.size || '', variance, item.uom || '', remarksNote, user]
   );
   if (variance !== 0) {
     await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [variance, itemCode]);
@@ -5566,7 +5575,7 @@ function _imsTxnListQuery(direction, category, columns) {
   return { sql, params };
 }
 const IMS_TXN_LIST_COLUMNS = `t.id, t.txn_date AS date, t.item_code AS itemCode, t.item_name AS itemName,
-  t.quantity, t.uom, t.department, t.remarks, t.status, t.created_by AS createdBy, t.created_at AS createdAt, t.source`;
+  t.size, t.quantity, t.uom, t.department, t.remarks, t.status, t.created_by AS createdBy, t.created_at AS createdAt, t.source`;
 
 app.get('/api/ims/inward/list', requireAuth, async (req, res) => {
   try {
