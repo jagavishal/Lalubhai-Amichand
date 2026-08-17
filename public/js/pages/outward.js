@@ -386,38 +386,76 @@ window.Pages['outward'] = (() => {
     return (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
   }
 
-  /* ── Totals row, pinned to the bottom of the list ─────────────────────────
-     Sums the Quantity column over whatever the filters currently show, minus
-     Cancelled entries — those were already added back to current stock, so
-     counting them would overstate what actually went out. Quantities can be in
-     mixed units within one book, so the UOM cell carries a per-unit breakdown
-     whenever more than one unit is on screen instead of implying a single
-     grand total is meaningful. ────────────────────────────────────────────── */
-  function _totalsRowHtml(rows) {
+  /* ── Quantity roll-up ─────────────────────────────────────────────────────
+     Cancelled entries are left out — their quantity was already added back to
+     current stock, so counting it would overstate what actually went out.
+     Quantities can be in mixed units within one book, so the UOM cell carries a
+     per-unit breakdown whenever more than one unit is in play instead of
+     implying a single grand total is meaningful. ──────────────────────────── */
+  function _qtySummary(rows) {
     const active = rows.filter(r => r.status !== 'Cancelled');
-    const cancelled = rows.length - active.length;
-    const total = active.reduce((sum, r) => sum + _num(r.quantity), 0);
-
     const byUom = new Map();
     active.forEach(r => {
       const u = (r.uom || '').trim() || '—';
       byUom.set(u, (byUom.get(u) || 0) + _num(r.quantity));
     });
-    const uomCell = byUom.size > 1
-      ? Array.from(byUom.entries()).map(([u, v]) => esc(_fmtQty(v) + ' ' + u)).join('<br>')
-      : esc(Array.from(byUom.keys())[0] || '');
+    return {
+      active,
+      cancelled: rows.length - active.length,
+      total: active.reduce((sum, r) => sum + _num(r.quantity), 0),
+      uomCell: byUom.size > 1
+        ? Array.from(byUom.entries()).map(([u, v]) => esc(_fmtQty(v) + ' ' + u)).join('<br>')
+        : esc(Array.from(byUom.keys())[0] || ''),
+    };
+  }
 
-    const label = 'Total · ' + active.length + ' entr' + (active.length === 1 ? 'y' : 'ies')
-      + (cancelled ? ' (' + cancelled + ' cancelled excluded)' : '');
-    const leadSpan = 3 + (_showSize() ? 1 : 0);   // Date, Item Code, Description [, Size]
-    const tailSpan = 3 + (_showDepartment() ? 1 : 0); // [Issued To,] Source, Remarks, Actions
-    const cell = 'padding:10px;font-size:12.5px;font-weight:700;color:#0f172a;background:#f8fafc;';
-    return '<tr style="border-top:2px solid #e2e8f0;">'
-      + '<td colspan="' + leadSpan + '" style="' + cell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;">' + esc(label) + '</td>'
-      + '<td style="' + cell + 'text-align:right;">' + esc(_fmtQty(total)) + '</td>'
-      + '<td style="' + cell + 'font-weight:600;color:#64748b;font-size:11.5px;">' + uomCell + '</td>'
-      + '<td colspan="' + tailSpan + '" style="' + cell + '"></td>'
+  // Column spans either side of the Quantity/UOM pair, which shift with the
+  // book's optional Size and Issued To columns.
+  function _leadSpan() { return 3 + (_showSize() ? 1 : 0); }      // Date, Item Code, Description [, Size]
+  function _tailSpan() { return 3 + (_showDepartment() ? 1 : 0); } // [Issued To,] Source, Remarks, Actions
+
+  // prefix is what the row is summing up ('Total', or a date) — the entry count
+  // and the "cancelled excluded" note are appended the same way for both, so a
+  // day whose only entry was cancelled reads as 0 from 0 rather than 0 from 1.
+  function _summaryRowHtml(prefix, rows, opts) {
+    const s = _qtySummary(rows);
+    const grand = !!(opts && opts.grand);
+    const label = prefix + ' · ' + s.active.length + ' entr' + (s.active.length === 1 ? 'y' : 'ies')
+      + (s.cancelled ? ' (' + s.cancelled + ' cancelled excluded)' : '');
+    const cell = 'padding:' + (grand ? '10px' : '7px 10px') + ';font-size:12.5px;background:#f8fafc;'
+      + (grand ? 'font-weight:700;color:#0f172a;' : 'font-weight:600;color:#475569;');
+    return '<tr style="border-top:' + (grand ? '2px solid #e2e8f0' : '1px solid #e2e8f0') + ';">'
+      + '<td colspan="' + _leadSpan() + '" style="' + cell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;">' + esc(label) + '</td>'
+      + '<td style="' + cell + 'text-align:right;">' + esc(_fmtQty(s.total)) + '</td>'
+      + '<td style="' + cell + 'font-weight:600;color:#64748b;font-size:11.5px;">' + s.uomCell + '</td>'
+      + '<td colspan="' + _tailSpan() + '" style="' + cell + '"></td>'
     + '</tr>';
+  }
+
+  // Grand total, pinned to the bottom of the list.
+  function _totalsRowHtml(rows) { return _summaryRowHtml('Total', rows, { grand: true }); }
+
+  /* ── Day-wise grouping ────────────────────────────────────────────────────
+     The list is a dated ledger, so it reads by day: entries are grouped under
+     the date they were logged for (newest day first) and each day closes with
+     its own issued-quantity total, worked out from whatever the filters
+     currently show. That replaces the raw created_at ordering the list used to
+     have — two entries typed on different days no longer interleave just
+     because one was keyed in late. ─────────────────────────────────────────── */
+  function _dayKey(r) { return String(r.date || '').slice(0, 10); }
+  function _dayLabel(key) { return (window.Utils && Utils.formatDate ? Utils.formatDate(key) : '') || key || 'No date'; }
+
+  function _dayGroups(rows) {
+    const map = new Map();
+    rows.forEach(r => {
+      const k = _dayKey(r);
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(r);
+    });
+    // Newest day first; undated entries (there shouldn't be any) sink to the end.
+    return Array.from(map.keys())
+      .sort((a, b) => (a && b) ? b.localeCompare(a) : (a ? -1 : 1))
+      .map(k => ({ key: k, rows: map.get(k) }));
   }
 
   function _renderTable() {
@@ -441,7 +479,7 @@ window.Pages['outward'] = (() => {
       body.innerHTML = '<tr><td colspan="' + _colCount() + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_rows.length ? 'No entries match these filters' : 'No ' + esc(_categoryLabel) + ' Outward entries yet') + '</td></tr>';
       return;
     }
-    body.innerHTML = rows.map(r => ''
+    const rowHtml = (r) => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
@@ -457,8 +495,12 @@ window.Pages['outward'] = (() => {
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
             : '<button type="button" class="outw-cancel-btn" data-id="' + esc(r.id) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
         + '</td>'
-      + '</tr>').join('')
-      + _totalsRowHtml(rows);
+      + '</tr>';
+
+    body.innerHTML = _dayGroups(rows).map(g =>
+      g.rows.map(rowHtml).join('')
+      + _summaryRowHtml(_dayLabel(g.key), g.rows)
+    ).join('') + _totalsRowHtml(rows);
   }
 
   function _bindRowActions() {

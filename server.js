@@ -5367,7 +5367,7 @@ app.get('/api/ims/stock-history', requireAuth, async (req, res) => {
     const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
     // No LIMIT — see the matching comment on /api/ims/items above.
     const items = await q(
-      `SELECT item_code AS itemCode, description, uom, category, current_stock AS currentStock, max_level AS maxLevel
+      `SELECT item_code AS itemCode, description, size, uom, category, current_stock AS currentStock, max_level AS maxLevel
        FROM ims_items ${where} ORDER BY item_code ASC`, params);
     if (!items.length) return res.json({ dates: [], items: [] });
 
@@ -5417,7 +5417,7 @@ app.get('/api/ims/stock-history', requireAuth, async (req, res) => {
         running -= (dayMap.get(dates[i]) || 0);
         daily[i - 1] = running;
       }
-      return { itemCode: it.itemCode, description: it.description, uom: it.uom, category: it.category, currentStock: it.currentStock, maxLevel: it.maxLevel, daily };
+      return { itemCode: it.itemCode, description: it.description, size: it.size, uom: it.uom, category: it.category, currentStock: it.currentStock, maxLevel: it.maxLevel, daily };
     });
 
     return res.json({ dates, dayOptions: IMS_STOCK_HISTORY_DAY_OPTIONS, items: result });
@@ -5493,27 +5493,57 @@ app.get('/api/ims/series-summary', requireAuth, async (req, res) => {
     }
     if (from) { txnParams.push(from); txnClauses.push(`t.txn_date >= $${txnParams.length}`); }
     if (to)   { txnParams.push(to);   txnClauses.push(`t.txn_date <= $${txnParams.length}`); }
+    // Grouped by day as well as item+direction so the same read serves both the
+    // period totals and the month-by-month breakdown. Bucketing the months in
+    // JS rather than SQL keeps this portable — DATE_FORMAT/TO_CHAR would pin
+    // the query to one of MySQL/Postgres, and this app runs on either.
     const txns = await q(
-      `SELECT t.item_code AS itemCode, t.direction, SUM(t.quantity) AS qty
+      `SELECT t.item_code AS itemCode, t.direction, t.txn_date AS txnDate, SUM(t.quantity) AS qty
        FROM ims_transactions t ${join}
        WHERE ${txnClauses.join(' AND ')}
-       GROUP BY t.item_code, t.direction`, txnParams);
+       GROUP BY t.item_code, t.direction, t.txn_date`, txnParams);
+
+    // months.get('2026-08').get('6061') = {inward, outward} for that month.
+    const months = new Map();
     for (const r of txns) {
-      const b = bucket(seriesOf.get(r.itemCode) || 'Other');
-      if (r.direction === 'OUT') b.outward += Number(r.qty) || 0;
-      else b.inward += Number(r.qty) || 0;
+      const name = seriesOf.get(r.itemCode) || 'Other';
+      const b = bucket(name);
+      const qty = Number(r.qty) || 0;
+      const out = r.direction === 'OUT';
+      if (out) b.outward += qty; else b.inward += qty;
+
+      const month = (_isoDateOnly(r.txnDate) || '').slice(0, 7);
+      if (!month) continue;
+      if (!months.has(month)) months.set(month, new Map());
+      const bySeries = months.get(month);
+      if (!bySeries.has(name)) bySeries.set(name, { inward: 0, outward: 0 });
+      const cell = bySeries.get(name);
+      if (out) cell.outward += qty; else cell.inward += qty;
     }
 
     // Fixed grade order, 'Other' last — never sorted by value, so a bar keeps
     // its place (and its colour) as the date filter moves.
     const round2 = (n) => Math.round(n * 100) / 100;
-    const series = [...IMS_ALLOY_SERIES, 'Other']
-      .filter(name => buckets.has(name))
-      .map(name => {
-        const b = buckets.get(name);
-        return { series: b.series, items: b.items, stock: round2(b.stock), inward: round2(b.inward), outward: round2(b.outward) };
+    const order = [...IMS_ALLOY_SERIES, 'Other'].filter(name => buckets.has(name));
+    const series = order.map(name => {
+      const b = buckets.get(name);
+      return { series: b.series, items: b.items, stock: round2(b.stock), inward: round2(b.inward), outward: round2(b.outward) };
+    });
+
+    // Oldest → newest, one entry per month that actually saw movement. Every
+    // series carries a number in every month (zero where nothing moved) so the
+    // client can plot straight off it without filling gaps itself.
+    const monthly = [...months.keys()].sort().map(month => {
+      const bySeries = months.get(month);
+      const row = { month, series: {} };
+      order.forEach(name => {
+        const cell = bySeries.get(name) || { inward: 0, outward: 0 };
+        row.series[name] = { inward: round2(cell.inward), outward: round2(cell.outward) };
       });
-    return res.json({ series, from, to, knownSeries: IMS_ALLOY_SERIES });
+      return row;
+    });
+
+    return res.json({ series, monthly, from, to, knownSeries: IMS_ALLOY_SERIES });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 

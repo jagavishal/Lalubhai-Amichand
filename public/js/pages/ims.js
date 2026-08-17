@@ -108,6 +108,7 @@ window.Pages = window.Pages || {};
     // rollup of the catalog, charted as bars. Rows come pre-bucketed and
     // pre-ordered from /api/ims/series-summary.
     let _seriesRows = [];
+    let _seriesMonthly = []; // [{ month:'2026-08', series:{ '6061': {inward, outward} } }]
     let _seriesLoaded = false;
     let _seriesLoadError = '';
     let _seriesFrom = '';
@@ -166,9 +167,9 @@ window.Pages = window.Pages || {};
     }
     function _exportHistoryCSV() {
       if (!_historyRows.length) { Utils.showToast('No items to export', 'warning'); return; }
-      const headers = ['Item Code', 'Description', 'UOM', ..._historyDates.map(_dateLabel)];
-      const rows = _historyRows.map(r => [r.itemCode, r.description, r.uom, ...(r.daily || [])]);
-      rows.push(['Total (' + _historyRows.length + ' items)', '', '',
+      const headers = ['Item Code', 'Description', 'Size', 'UOM', ..._historyDates.map(_dateLabel)];
+      const rows = _historyRows.map(r => [r.itemCode, r.description, r.size, r.uom, ...(r.daily || [])]);
+      rows.push(['Total (' + _historyRows.length + ' items)', '', '', '',
         ..._historyDates.map((_, i) => _historyRows.reduce((s, r) => s + _num((r.daily || [])[i]), 0))]);
       _downloadCSV('IMS_' + _bookSlug + '_DayWiseStock_' + _todayStamp() + '.csv', headers, rows);
     }
@@ -360,7 +361,7 @@ window.Pages = window.Pages || {};
       const body = document.getElementById('ims-history-body');
       const countEl = document.getElementById('ims-count');
       if (!body || !head) return;
-      const colCount = 3 + _historyDates.length; // Item Code, Description, UOM + one per day
+      const colCount = 4 + _historyDates.length; // Item Code, Description, Size, UOM + one per day
 
       if (!_historyLoaded) {
         body.innerHTML = '<tr><td colspan="' + colCount + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
@@ -375,7 +376,7 @@ window.Pages = window.Pages || {};
       if (countEl) countEl.textContent = _historyRows.length + ' item' + (_historyRows.length === 1 ? '' : 's') + ' · ' + _historyDates.length + ' day' + (_historyDates.length === 1 ? '' : 's');
 
       head.innerHTML = '<tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-        + ['Item Code', 'Description', 'UOM'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;position:sticky;left:0;background:#f8fafc;">' + esc(h) + '</th>').join('')
+        + ['Item Code', 'Description', 'Size', 'UOM'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;position:sticky;left:0;background:#f8fafc;">' + esc(h) + '</th>').join('')
         + _historyDates.map(d => '<th style="padding:8px 10px;text-align:right;font-size:10.5px;color:#94a3b8;white-space:nowrap;">' + esc(_dateLabel(d)) + '</th>').join('')
       + '</tr>';
 
@@ -387,6 +388,7 @@ window.Pages = window.Pages || {};
         return '<tr style="border-bottom:1px solid #f1f5f9;">'
           + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;position:sticky;left:0;background:#fff;">' + esc(r.itemCode) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + esc(r.description) + '</td>'
+          + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + esc(r.size) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
           + (r.daily || []).map(v => {
               const c = _stockLevelColor(v, r.maxLevel);
@@ -405,7 +407,7 @@ window.Pages = window.Pages || {};
       const totals = _historyDates.map((_, i) => _historyRows.reduce((s, r) => s + _num((r.daily || [])[i]), 0));
       const cell = 'padding:10px;font-size:12.5px;font-weight:700;color:#0f172a;background:#f8fafc;';
       return '<tr style="border-top:2px solid #e2e8f0;">'
-        + '<td colspan="3" style="' + cell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;white-space:nowrap;position:sticky;left:0;">' + esc('Total · ' + _historyRows.length + ' item' + (_historyRows.length === 1 ? '' : 's')) + '</td>'
+        + '<td colspan="4" style="' + cell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;white-space:nowrap;position:sticky;left:0;">' + esc('Total · ' + _historyRows.length + ' item' + (_historyRows.length === 1 ? '' : 's')) + '</td>'
         + totals.map(t => '<td style="' + cell + 'text-align:right;' + (t < 0 ? 'color:#c2410c;' : '') + '">' + esc(_fmtQty(t)) + '</td>').join('')
       + '</tr>';
     }
@@ -791,22 +793,28 @@ window.Pages = window.Pages || {};
     const _CHART_INWARD = '#2a78d6';
     const _CHART_OUTWARD = '#eb6834';
     const _CHART_STOCK = '#2a78d6';
+    // One hue per grade for the monthly sales lines, in the same fixed order the
+    // server returns the grades in — colour follows the alloy, not its rank, so
+    // a change of date range never repaints the lines.
+    const _CHART_SERIES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4'];
 
     async function _loadSeries() {
       _seriesLoaded = false;
       _seriesLoadError = '';
       _renderSeriesBody();
-      let rows = [], err = '';
+      let rows = [], monthly = [], err = '';
       try {
         const params = new URLSearchParams({ category: _book });
         if (_seriesFrom) params.set('from', _seriesFrom);
         if (_seriesTo) params.set('to', _seriesTo);
         const data = await Utils.apiFetch('/api/ims/series-summary?' + params.toString());
         rows = (data && data.series) || [];
+        monthly = (data && data.monthly) || [];
       } catch (e) {
         err = e.message || 'Failed to load the series summary';
       }
       _seriesRows = rows;
+      _seriesMonthly = monthly;
       _seriesLoadError = err;
       _seriesLoaded = true;
       _renderSeriesBody();
@@ -899,6 +907,70 @@ window.Pages = window.Pages || {};
       + '</svg>';
     }
 
+    /* ── Line chart (inline SVG) — sales per alloy over the months ───────────
+       One line per grade so a grade's trend, and how it ranks against the
+       others, both read off the same picture; bars would need 5 × N of them.
+       Sales are never negative, so this one sits on a plain zero baseline.
+       lines: [{ key, label, color, points: [] }] against months: ['2026-08'].  */
+    function _monthLabel(ym) {
+      const parts = String(ym).split('-');
+      if (parts.length < 2) return ym;
+      const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return (MONTHS[parseInt(parts[1], 10) - 1] || parts[1]) + ' ' + parts[0].slice(2);
+    }
+    function _lineChartSvg(months, lines, unit) {
+      const W = 980, H = 300;
+      const padL = 76, padR = 96, padT = 20, padB = 40; // padR leaves room for the end labels
+      const plotW = W - padL - padR;
+      const plotH = H - padT - padB;
+
+      const all = lines.flatMap(l => l.points.map(_num));
+      const step = _niceStep(Math.max(...all, 0) || 1, 4);
+      let dMax = Math.ceil(Math.max(...all, 0) / step) * step;
+      if (dMax <= 0) dMax = step;
+      const yOf = (v) => padT + ((dMax - v) / dMax) * plotH;
+      const xOf = (i) => months.length === 1 ? padL + plotW / 2 : padL + (i / (months.length - 1)) * plotW;
+
+      const ticks = [];
+      for (let t = 0; t <= dMax + step / 2; t += step) ticks.push(Math.round(t * 1e6) / 1e6);
+      const grid = ticks.map(t => {
+        const y = yOf(t);
+        return '<line x1="' + padL + '" y1="' + y + '" x2="' + (padL + plotW) + '" y2="' + y + '" stroke="' + (t === 0 ? '#cbd5e1' : '#eef2f7') + '" stroke-width="1" />'
+          + '<text x="' + (padL - 8) + '" y="' + (y + 4) + '" text-anchor="end" font-size="10.5" fill="#94a3b8">' + esc(_axisLabel(t)) + '</text>';
+      }).join('');
+
+      const xLabels = months.map((m, i) => '<text x="' + xOf(i) + '" y="' + (padT + plotH + 20) + '" text-anchor="middle" font-size="11" font-weight="600" fill="#334155">' + esc(_monthLabel(m)) + '</text>').join('');
+
+      const series = lines.map(l => {
+        const pts = l.points.map((v, i) => xOf(i) + ',' + yOf(_num(v))).join(' ');
+        const dots = l.points.map((v, i) => '<circle cx="' + xOf(i) + '" cy="' + yOf(_num(v)) + '" r="3.5" fill="' + l.color + '" stroke="#fff" stroke-width="1.5">'
+          + '<title>' + esc(l.label + ' · ' + _monthLabel(months[i]) + ': ' + _fmtQty(v) + (unit ? ' ' + unit : '')) + '</title></circle>').join('');
+        return '<polyline points="' + pts + '" fill="none" stroke="' + l.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />' + dots;
+      }).join('');
+
+      /* Direct labels at the line ends — the palette's lighter hues sit below
+         3:1 on white, so identity can't rest on colour alone. Grades that sell
+         next to nothing all finish on the baseline, so the labels are nudged
+         apart (keeping their vertical order) instead of being drawn on top of
+         each other; the leader dot stays on the line's real end point. */
+      const lastX = xOf(months.length - 1);
+      const placed = lines
+        .map(l => ({ l, y: yOf(_num(l.points[l.points.length - 1])) }))
+        .sort((a, b) => a.y - b.y);
+      const GAP = 14;
+      placed.forEach((p, i) => { if (i && p.y - placed[i - 1].y < GAP) p.y = placed[i - 1].y + GAP; });
+      const overflow = placed.length ? Math.max(0, placed[placed.length - 1].y - (padT + plotH)) : 0;
+      placed.forEach(p => { p.y -= overflow; }); // keep the stack inside the plot
+      const endLabels = placed.map(p =>
+        '<circle cx="' + (lastX + 12) + '" cy="' + p.y + '" r="4" fill="' + p.l.color + '" />'
+        + '<text x="' + (lastX + 20) + '" y="' + (p.y + 4) + '" font-size="11" font-weight="700" fill="#334155">' + esc(p.l.label) + '</text>'
+      ).join('');
+
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" style="width:100%;max-width:' + W + 'px;height:auto;display:block;margin:0 auto;overflow:visible;">'
+        + grid + xLabels + series + endLabels
+      + '</svg>';
+    }
+
     function _chartCardHtml(title, subtitle, legend, svg) {
       return '<div style="border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:16px 18px 12px;">'
         + '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">'
@@ -967,6 +1039,49 @@ window.Pages = window.Pages || {};
       + '</div>';
     }
 
+    /* ── Monthly report: sales (Outward) per alloy, month by month ───────────
+       Outward only — that's the sale; what came in is already in the movement
+       chart above. Every grade keeps a line even when it sells nothing, since
+       "which grades aren't moving" is half of what this is read for. ───────── */
+    const _MONTHLY_MAX = 12;
+
+    function _monthlySalesCardHtml(rows) {
+      const all = _seriesMonthly;
+      if (!all.length) {
+        return _chartCardHtml('Monthly sales by alloy', 'No stock movement in this range yet.', '',
+          '<div style="padding:28px;text-align:center;color:#94a3b8;font-size:12.5px;">Nothing to plot.</div>');
+      }
+      // Newest months win when the range is long — with no date filter this book
+      // reaches back years, and 40+ columns is a smear rather than a report.
+      const months = all.slice(-_MONTHLY_MAX);
+      const trimmed = all.length - months.length;
+      const lines = rows.map((r, i) => ({
+        key: r.series,
+        label: r.series,
+        color: _CHART_SERIES[i % _CHART_SERIES.length],
+        points: months.map(m => ((m.series || {})[r.series] || {}).outward || 0),
+      }));
+      const subtitle = 'Outward (sales) quantity per grade, ' + _monthLabel(months[0].month) + ' to ' + _monthLabel(months[months.length - 1].month)
+        + (trimmed ? ' — most recent ' + months.length + ' months of ' + all.length + ', narrow the dates to see the earlier ones.' : '.');
+      return _chartCardHtml('Monthly sales by alloy', subtitle,
+        _legendHtml(lines.map(l => [l.color, l.label])),
+        _lineChartSvg(months.map(m => m.month), lines));
+    }
+
+    // Month × grade sales, the numbers behind the lines above.
+    function _exportMonthlyCSV() {
+      if (!_seriesMonthly.length) { Utils.showToast('Nothing to export yet', 'warning'); return; }
+      const names = _seriesRows.map(r => r.series);
+      const headers = ['Month', ...names, 'Total'];
+      const rows = _seriesMonthly.map(m => {
+        const vals = names.map(n => _num(((m.series || {})[n] || {}).outward));
+        return [m.month, ...vals, vals.reduce((s, v) => s + v, 0)];
+      });
+      const colTotal = (i) => rows.reduce((s, r) => s + _num(r[i + 1]), 0);
+      rows.push(['Total', ...names.map((_, i) => colTotal(i)), rows.reduce((s, r) => s + _num(r[r.length - 1]), 0)]);
+      _downloadCSV('IMS_' + _bookSlug + '_MonthlySalesByAlloy_' + _todayStamp() + '.csv', headers, rows);
+    }
+
     function _exportSeriesCSV() {
       if (!_seriesRows.length) { Utils.showToast('Nothing to export yet', 'warning'); return; }
       const headers = ['Series', 'Items', 'Current Stock', 'Inward', 'Outward'];
@@ -1021,6 +1136,7 @@ window.Pages = window.Pages || {};
           + _chartCardHtml('Inward vs Outward by series', 'Stock movement logged ' + _seriesRangeLabel() + ', cancelled entries excluded.',
               _legendHtml([[_CHART_INWARD, 'Inward'], [_CHART_OUTWARD, 'Outward']]), moveChart)
         + '</div>'
+        + '<div style="margin-top:14px;">' + _monthlySalesCardHtml(rows) + '</div>'
         + '<div style="margin-top:14px;">' + _seriesTableHtml(rows) + '</div>';
     }
 
@@ -1033,6 +1149,7 @@ window.Pages = window.Pages || {};
         + '<button type="button" id="ims-ser-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
         + '<button type="button" id="ims-ser-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
         + '<button type="button" id="ims-ser-export" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Export CSV</button>'
+        + '<button type="button" id="ims-ser-export-monthly" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Monthly CSV</button>'
       + '</div>';
     }
 
@@ -1049,6 +1166,7 @@ window.Pages = window.Pages || {};
       });
       document.getElementById('ims-ser-refresh').addEventListener('click', _loadSeries);
       document.getElementById('ims-ser-export').addEventListener('click', _exportSeriesCSV);
+      document.getElementById('ims-ser-export-monthly').addEventListener('click', _exportMonthlyCSV);
     }
 
     function _renderSeries() {
