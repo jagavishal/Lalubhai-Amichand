@@ -2340,6 +2340,16 @@ const PO_MONITORING_SHEET_ID = '19wbm97_bYYsVDCpgOzGHZlriYc81McuPSKpqumf96MI';
 // Department are written; the rest are left blank rather than guessed.
 const PR_MONITORING_SHEET_ID = '1CHOh_MRtlI6Bpw1ztmKthZ7vkgVVNn9xdV48DGU87kY';
 const PR_MONITORING_TAB_NAME = 'RM_1_res';
+// The archived PR PDF's Drive link, written alongside each synced row so the
+// store team can open the actual requisition from the sheet they already
+// watch. Column U — the first column past the Form's own A..T layout — NOT
+// one of the blank category columns (H..T): those belong to the Form and it
+// keeps writing them on its own hand-filled submissions. A header cell is
+// stamped there once (see _ensurePrResponsesPdfHeader) since a Form response
+// tab has no header for a column the Form doesn't own.
+const PR_MONITORING_PDF_COL = 'U';
+const PR_MONITORING_PDF_HEADER = 'PR PDF Link';
+const PR_MONITORING_ROW_WIDTH = 20; // A..T, the Form's own columns
 
 // Hosting-panel env-var editors routinely mangle a multi-line PEM key pasted
 // from a .env file: surrounding quotes get included literally, CRLF sneaks
@@ -2730,6 +2740,21 @@ async function appendLogRow(spreadsheetId, tabName, rowValues) {
   await sheets.spreadsheets.values.append({
     spreadsheetId, range: `${tabName}!A:A`, valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
     requestBody: { values: [rowValues] },
+  });
+}
+
+// ensureLogTab can't label the PR PDF column on "RM_1_res": that tab always
+// exists (the Google Form owns it) so the header write there never runs, and
+// rewriting the whole header row would clobber the Form's own A..T labels.
+// This stamps just that one cell, and only while it's still blank — so a
+// label the store team renames by hand stays renamed.
+async function _ensurePrResponsesPdfHeader(sheets) {
+  const range = `'${PR_MONITORING_TAB_NAME}'!${PR_MONITORING_PDF_COL}1`;
+  const cur = await sheets.spreadsheets.values.get({ spreadsheetId: PR_MONITORING_SHEET_ID, range });
+  if (cur.data.values?.[0]?.[0]) return;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: PR_MONITORING_SHEET_ID, range, valueInputOption: 'RAW',
+    requestBody: { values: [[PR_MONITORING_PDF_HEADER]] },
   });
 }
 
@@ -3807,14 +3832,22 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     // PR_MONITORING_SHEET_ID above for why this, not "FMS (Stores)". Column
     // order matches that sheet's own header row exactly: Timestamp, PR No,
     // Name, Vendor, If New Vendor, Department, If New Department, then 6
-    // category "Product Name" columns left blank (see constant comment).
+    // category "Product Name" columns left blank (see constant comment), and
+    // finally the archived PDF's Drive link in the appended column U. The
+    // blanks between are padded explicitly rather than omitted — append()
+    // fills from column A, so a short row would land the link in H (a Form
+    // column) instead of U.
     // Best-effort and last: a failure here must never undo/block the PR
     // itself, which is already fully created at this point.
     try {
-      await appendLogRow(PR_MONITORING_SHEET_ID, PR_MONITORING_TAB_NAME, [
+      const row = [
         _timestampForSheet(), prNoFormatted, requestedBy, party, '', departmentOut, '',
-      ]);
-      console.log('[pr-creation] PR Form Responses sync: row appended for', prNoFormatted);
+      ];
+      while (row.length < PR_MONITORING_ROW_WIDTH) row.push('');
+      row.push(pdfLink || '');
+      if (pdfLink) { try { await _ensurePrResponsesPdfHeader(sheets); } catch (e) { console.error('[pr-creation] PR Form Responses PDF header stamp failed:', e.message); } }
+      await appendLogRow(PR_MONITORING_SHEET_ID, PR_MONITORING_TAB_NAME, row);
+      console.log('[pr-creation] PR Form Responses sync: row appended for', prNoFormatted, '| PDF link:', pdfLink ? 'yes' : 'none');
     } catch (e) { console.error('[pr-creation] PR Form Responses sync failed:', e.message); }
 
     return res.json({ success: true, prNumber: prNoFormatted, totalAmount, department: departmentOut, pdfLink });
