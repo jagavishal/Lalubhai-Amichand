@@ -1846,35 +1846,6 @@ app.delete('/api/checklist-completions', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
-// ── Daily Tasks ───────────────────────────────────────────────────────────────
-app.get('/api/daily-tasks', requireAuth, async (req, res) => {
-  try {
-    await ensureSchema();
-    const doerId = req.query.doerId;
-    const rows = doerId
-      ? await q(`SELECT id, entry_date AS entryDate, doer_id AS doerId, doer, client, department, description, minutes, created_at AS createdAt FROM daily_tasks WHERE doer_id=$1 ORDER BY entry_date DESC, created_at DESC`, [doerId])
-      : await q(`SELECT id, entry_date AS entryDate, doer_id AS doerId, doer, client, department, description, minutes, created_at AS createdAt FROM daily_tasks ORDER BY entry_date DESC, created_at DESC`);
-    return res.json(rows);
-  } catch (err) { return res.status(500).json({ error:err.message }); }
-});
-
-app.post('/api/daily-tasks', requireAuth, async (req, res) => {
-  try {
-    await ensureSchema();
-    const body = req.body;
-    const rows = Array.isArray(body.rows) ? body.rows : [];
-    if (!body.entryDate||!body.doer||rows.length===0) return res.status(400).json({ error:'entryDate, doer and at least one row required' });
-    const c = await q('SELECT COUNT(*) AS cnt FROM daily_tasks');
-    let n = Number(c[0].cnt);
-    for (const r of rows) {
-      n+=1;
-      const id = 'DT'+n.toString().padStart(5,'0');
-      await pool.query('INSERT INTO daily_tasks (id,entry_date,doer_id,doer,client,department,description,minutes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [id,body.entryDate,body.doerId||null,body.doer,r.client||'',r.department||'',r.description||'',Number(r.minutes)||0]);
-    }
-    return res.status(201).json({ success:true, inserted:rows.length });
-  } catch (err) { return res.status(500).json({ error:err.message }); }
-});
-
 // ── Departments master ────────────────────────────────────────────────────────
 // One list, one endpoint, every Department dropdown in the app. Adding is open
 // to any signed-in user because the "+ Add new department" option lives inside
@@ -2181,40 +2152,6 @@ app.delete('/api/holidays', requireAuth, async (req, res) => {
     const id = req.query.id;
     if (!id) return res.status(400).json({ error:'id required' });
     await pool.query('DELETE FROM holidays WHERE id = $1', [id]);
-    return res.json({ success:true });
-  } catch (err) { return res.status(500).json({ error:err.message }); }
-});
-
-// ── Meetings ──────────────────────────────────────────────────────────────────
-app.get('/api/meetings', requireAuth, async (req, res) => {
-  try {
-    await ensureSchema();
-    const { from, to } = req.query;
-    const rows = (from&&to)
-      ? await q(`SELECT id, title, meeting_date AS date, start_time AS startTime, end_time AS endTime, attendees, notes, created_by AS createdBy FROM meetings WHERE meeting_date BETWEEN $1 AND $2 ORDER BY meeting_date ASC, start_time ASC`, [from,to])
-      : await q(`SELECT id, title, meeting_date AS date, start_time AS startTime, end_time AS endTime, attendees, notes, created_by AS createdBy FROM meetings ORDER BY meeting_date ASC, start_time ASC`);
-    return res.json(rows);
-  } catch (err) { return res.status(500).json({ error:err.message }); }
-});
-
-app.post('/api/meetings', requireAuth, async (req, res) => {
-  try {
-    await ensureSchema();
-    const body = req.body;
-    if (!body.title?.trim()||!body.date) return res.status(400).json({ error:'title and date required' });
-    const c = await q('SELECT COUNT(*) AS cnt FROM meetings');
-    const id = 'MTG'+(Number(c[0].cnt)+1).toString().padStart(4,'0');
-    await pool.query('INSERT INTO meetings (id,title,meeting_date,start_time,end_time,attendees,notes,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [id,body.title.trim(),body.date,body.startTime||null,body.endTime||null,body.attendees||'',body.notes||'',body.createdBy||'']);
-    return res.status(201).json({ success:true, id });
-  } catch (err) { return res.status(500).json({ error:err.message }); }
-});
-
-app.delete('/api/meetings', requireAuth, async (req, res) => {
-  try {
-    await ensureSchema();
-    const id = req.query.id;
-    if (!id) return res.status(400).json({ error:'id required' });
-    await pool.query('DELETE FROM meetings WHERE id = $1', [id]);
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });

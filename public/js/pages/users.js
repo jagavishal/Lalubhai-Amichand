@@ -47,9 +47,7 @@ window.Pages.users = (() => {
   const ALL_PAGES = [
     { cat: 'Basic', key: 'all-tasks',     label: 'All Tasks' },
     { cat: 'Basic', key: 'approvals',     label: 'Approvals' },
-    { cat: 'Basic', key: 'daily-task',    label: 'Daily Task' },
     { cat: 'Basic', key: 'leave-tracker', label: 'Leave Tracker' },
-    { cat: 'Basic', key: 'meetings',      label: 'Meetings' },
     { cat: 'Basic', key: 'announcements', label: 'Announcements' },
     { cat: 'Basic', key: 'help-ticket',   label: 'Help Ticket' },
     { cat: 'Basic', key: 'profile',       label: 'Profile' },
