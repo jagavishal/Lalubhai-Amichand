@@ -5728,6 +5728,11 @@ app.get('/api/mis', requireAuth, async (req, res) => {
         const summary = {'Total Tasks':data.length,'Employees':rows.length,'Completed':data.filter(d=>d.status==='done').length,'Pending':data.filter(d=>d.status!=='done').length,'Delayed':data.filter(d=>d.status!=='done'&&d.dueDate&&new Date(d.dueDate)<now).length,'Period':`${fmtDate(fromISO)} – ${fmtDate(toISO)}`};
         return res.json({ rows, summary, view:'employee' });
       }
+      if (employee&&type==='Checklist MIS') {
+        const mine=(store.masters||[]).filter(m=>(m.assignedTo||'').trim().toLowerCase()===String(employee).trim().toLowerCase());
+        const rows=mine.map((m,i)=>({'#':i+1,'Description':(m.task||'').substring(0,100),'Assigned By':'—','Due Date':m.frequency||'—','Status':'pending'}));
+        return res.json({ rows, summary:{} });
+      }
       if (type==='Checklist MIS') {
         const masters=store.masters||[]; const empMap={};
         for (const m of masters) { const name=m.assignedTo||'Unknown'; if(!empMap[name]) empMap[name]={name,total:0,completed:0,pending:0,revised:0,delayed:0}; empMap[name].total++; empMap[name].pending++; }
@@ -5758,6 +5763,18 @@ app.get('/api/mis', requireAuth, async (req, res) => {
       const rows=Object.values(empMap).map(e=>({...e,score:e.total>0?Math.round(((e.completed/e.total)-1)*100-(e.delayed/e.total)*50):0}));
       const summary={'Total Tasks':data.length,'Employees':rows.length,'Completed':data.filter(d=>d.status==='done').length,'Pending':data.filter(d=>d.status!=='done').length,'Delayed':data.filter(d=>d.status!=='done'&&d.due_date&&new Date(d.due_date)<now).length,'Period':`${fmtDate(fromDT)} – ${fmtDate(toDT)}`};
       return res.json({ rows, summary, view:'employee' });
+    }
+    // Row-level drill-down for a single employee. Without this, clicking a name
+    // on the Checklist tab fell through to the aggregate branch below and the
+    // modal rendered one blank row per employee.
+    if (employee&&type==='Checklist MIS') {
+      const [masters, completions] = await Promise.all([
+        q('SELECT id, task, frequency FROM masters WHERE LOWER(TRIM(assigned_to))=LOWER(TRIM($1)) ORDER BY id', [employee]),
+        q('SELECT master_id FROM checklist_completions WHERE date BETWEEN $1 AND $2', [start,end]).catch(()=>[]),
+      ]);
+      const doneSet = new Set(completions.map(c=>c.master_id));
+      const rows = masters.map((m,i) => ({'#':i+1,'Description':(m.task||'').substring(0,100),'Assigned By':'—','Due Date':m.frequency||'—','Status':doneSet.has(m.id)?'done':'pending'}));
+      return res.json({ rows, summary:{} });
     }
     if (type==='Checklist MIS') {
       const [masters, completions] = await Promise.all([

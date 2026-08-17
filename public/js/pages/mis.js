@@ -51,10 +51,14 @@
     const el = document.getElementById('main-content');
     el.innerHTML = '<div class="space-y-4"><div id="mis-body"></div></div>';
 
+    // Always paint the shell first — the filter bar, tabs, #mis-summary and
+    // #mis-table-wrap all live inside it, and _generateMIS() writes straight
+    // into those nodes. Going to _generateMIS() before the shell existed left
+    // the page completely blank on first open.
+    this._renderMIS();
+
     if (s.misRows.length === 0 && !s.misLoading) {
       await this._generateMIS();
-    } else {
-      this._renderMIS();
     }
   },
 
