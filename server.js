@@ -5424,6 +5424,99 @@ app.get('/api/ims/stock-history', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+// ── Alloy series (Trading book) ──────────────────────────────────────────────
+// Trading stock is Hindalco aluminium bar/rod, and its alloy grade lives inside
+// the description rather than in a column of its own:
+//   'Alum. Bar 10336 x 6082T6 x 2500'  ->  6082
+// These four grades cover all but a handful of the Trading catalog, so they are
+// the fixed buckets of the Series tab's chart (see ims.js); anything that
+// matches none of them lands in 'Other' rather than inventing a bucket per
+// stray number.
+const IMS_ALLOY_SERIES = ['6061', '6082', '7075', '2014'];
+// The grade digits must not be flanked by other digits, so neither a bar length
+// nor a die number ('12014', '60612', '20140') can be misread as a grade — a
+// trailing temper ('6082T6', '6082-T6') still matches.
+const IMS_ALLOY_SERIES_RE = new RegExp('(?:^|[^0-9])(' + IMS_ALLOY_SERIES.join('|') + ')(?![0-9])');
+function _imsAlloySeries(text) {
+  const m = IMS_ALLOY_SERIES_RE.exec(String(text || ''));
+  return m ? m[1] : 'Other';
+}
+
+// GET /api/ims/series-summary?category=Trading&from=&to= — per-alloy-series
+// rollup behind the Trading page's Series tab: how many catalog items carry
+// each grade, their combined current stock, and how much moved in/out over the
+// (optional) date window. Rolled up here rather than in the browser because
+// /api/ims/inward|outward/list are capped at their 1000 most recent rows, which
+// the Trading ledger is well past — charting those would silently plot a slice.
+// Physical-stock adjustments (direction 'ADJ') are left out of the in/out
+// figures: they're corrections to a count, not stock movement. They do still
+// show up in current stock, which is the stored balance they were applied to.
+app.get('/api/ims/series-summary', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const category = String(req.query.category || '').trim();
+    const from = String(req.query.from || '').trim();
+    const to = String(req.query.to || '').trim();
+
+    const itemParams = [];
+    let itemWhere = '';
+    if (category) { itemParams.push(category); itemWhere = 'WHERE category = $1'; }
+    const items = await q(
+      `SELECT item_code AS itemCode, description, size, current_stock AS currentStock
+       FROM ims_items ${itemWhere}`, itemParams);
+
+    const buckets = new Map();
+    function bucket(name) {
+      if (!buckets.has(name)) buckets.set(name, { series: name, items: 0, stock: 0, inward: 0, outward: 0 });
+      return buckets.get(name);
+    }
+    IMS_ALLOY_SERIES.forEach(name => bucket(name)); // every known grade charts, even at zero
+
+    // item_code -> series, so the transaction rollup below buckets by lookup
+    // instead of re-parsing a description per transaction row.
+    const seriesOf = new Map();
+    for (const it of items) {
+      const name = _imsAlloySeries(`${it.description || ''} ${it.size || ''}`);
+      seriesOf.set(it.itemCode, name);
+      const b = bucket(name);
+      b.items += 1;
+      b.stock += Number(it.currentStock) || 0;
+    }
+
+    const txnParams = [];
+    const txnClauses = ["t.status = 'Active'", "t.direction IN ('IN','OUT')"];
+    let join = '';
+    if (category) {
+      txnParams.push(category);
+      join = 'JOIN ims_items i ON i.item_code = t.item_code';
+      txnClauses.push(`i.category = $${txnParams.length}`);
+    }
+    if (from) { txnParams.push(from); txnClauses.push(`t.txn_date >= $${txnParams.length}`); }
+    if (to)   { txnParams.push(to);   txnClauses.push(`t.txn_date <= $${txnParams.length}`); }
+    const txns = await q(
+      `SELECT t.item_code AS itemCode, t.direction, SUM(t.quantity) AS qty
+       FROM ims_transactions t ${join}
+       WHERE ${txnClauses.join(' AND ')}
+       GROUP BY t.item_code, t.direction`, txnParams);
+    for (const r of txns) {
+      const b = bucket(seriesOf.get(r.itemCode) || 'Other');
+      if (r.direction === 'OUT') b.outward += Number(r.qty) || 0;
+      else b.inward += Number(r.qty) || 0;
+    }
+
+    // Fixed grade order, 'Other' last — never sorted by value, so a bar keeps
+    // its place (and its colour) as the date filter moves.
+    const round2 = (n) => Math.round(n * 100) / 100;
+    const series = [...IMS_ALLOY_SERIES, 'Other']
+      .filter(name => buckets.has(name))
+      .map(name => {
+        const b = buckets.get(name);
+        return { series: b.series, items: b.items, stock: round2(b.stock), inward: round2(b.inward), outward: round2(b.outward) };
+      });
+    return res.json({ series, from, to, knownSeries: IMS_ALLOY_SERIES });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 // POST /api/ims/items — add a new catalog item.
 app.post('/api/ims/items', requireAuth, async (req, res) => {
   try {

@@ -36,6 +36,11 @@ window.Pages = window.Pages || {};
 (() => {
   // route must match sidebar.js's nav entries and users.js's ALL_PAGES keys;
   // category must be a value in server.js's IMS_CATEGORIES.
+  // Alloy grades the Trading Series tab charts — display copy only; the actual
+  // bucketing happens server-side and must stay in step with IMS_ALLOY_SERIES
+  // in server.js.
+  const SERIES_LABELS = ['6061', '6082', '7075', '2014'];
+
   const IMS_BOOKS = [
     { route: 'ims-stores',      category: 'Stores',      label: 'IMS Stores' },
     { route: 'ims-alu',         category: 'ALU',         label: 'IMS Alu & SS' },
@@ -99,8 +104,22 @@ window.Pages = window.Pages || {};
     let _physFFrom = '';
     let _physFTo = '';
 
+    // Series tab (Trading book only — see _isTrading below): per-alloy-grade
+    // rollup of the catalog, charted as bars. Rows come pre-bucketed and
+    // pre-ordered from /api/ims/series-summary.
+    let _seriesRows = [];
+    let _seriesLoaded = false;
+    let _seriesLoadError = '';
+    let _seriesFrom = '';
+    let _seriesTo = '';
+
     function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
     function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
+    // 1234.5 -> "1,234.5" — stock is stored as a decimal but is a whole number
+    // most of the time, so trailing .00 is dropped rather than padded.
+    function _fmtQty(n) {
+      return (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    }
     function _today() { return new Date().toISOString().slice(0, 10); }
     // Display name of this book ("IMS Alu & SS"), vs _book which is the stored
     // category value ('ALU') everything is actually queried by.
@@ -111,6 +130,10 @@ window.Pages = window.Pages || {};
     const _bookSlug = _bookName.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '');
     // True only while this book's page owns #main-content — see _mountedRoute.
     function _isActive() { return _mountedRoute === book.route; }
+    // The Series tab exists on the Trading book alone: alloy grade is a
+    // property of Hindalco bar stock, and nothing in the Stores/ALU/Accessories
+    // catalogs carries one.
+    const _isTrading = _book === 'Trading';
 
     /* ── CSV export — quotes any cell with a comma/quote/newline (item
        descriptions and vendor names routinely have commas), unlike a bare
@@ -134,12 +157,19 @@ window.Pages = window.Pages || {};
       if (!_rows.length) { Utils.showToast('No items to export', 'warning'); return; }
       const headers = ['Item Code', 'Category', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order Qty', 'Vendor Name'];
       const rows = _rows.map(r => [r.itemCode, r.category || _book, r.description, r.size, r.uom, r.currentStock, r.moq, r.maxLevel, r.onOrderQty, r.vendorName]);
+      // Same totals the on-screen table's last row shows (Current Stock and On
+      // Order only — see _itemTotalsRowHtml).
+      rows.push(['Total (' + _rows.length + ' items)', '', '', '', '',
+        _rows.reduce((s, r) => s + _num(r.currentStock), 0), '', '',
+        _rows.reduce((s, r) => s + _num(r.onOrderQty), 0), '']);
       _downloadCSV('IMS_' + _bookSlug + '_Items_' + _todayStamp() + '.csv', headers, rows);
     }
     function _exportHistoryCSV() {
       if (!_historyRows.length) { Utils.showToast('No items to export', 'warning'); return; }
       const headers = ['Item Code', 'Description', 'UOM', ..._historyDates.map(_dateLabel)];
       const rows = _historyRows.map(r => [r.itemCode, r.description, r.uom, ...(r.daily || [])]);
+      rows.push(['Total (' + _historyRows.length + ' items)', '', '',
+        ..._historyDates.map((_, i) => _historyRows.reduce((s, r) => s + _num((r.daily || [])[i]), 0))]);
       _downloadCSV('IMS_' + _bookSlug + '_DayWiseStock_' + _todayStamp() + '.csv', headers, rows);
     }
     function _todayStamp() {
@@ -292,7 +322,27 @@ window.Pages = window.Pages || {};
             + '<button type="button" class="ims-phys-btn" data-code="' + esc(r.itemCode) + '" style="border:none;background:transparent;color:#7c3aed;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Physical Stock</button>'
           + '</td>'
         + '</tr>';
-      }).join('');
+      }).join('') + _itemTotalsRowHtml();
+    }
+
+    /* ── Totals row, pinned to the bottom of the Item List ────────────────────
+       Only the two columns a sum actually means something for: Current Stock
+       (the book's net position, negatives included) and On Order. MOQ and Max
+       Level are per-item thresholds, so adding them up would be a number with
+       no meaning — those cells stay blank. Reflects whatever filters are
+       applied, since _rows only ever holds what the server returned for them. */
+    function _itemTotalsRowHtml() {
+      const stock = _rows.reduce((s, r) => s + _num(r.currentStock), 0);
+      const onOrder = _rows.reduce((s, r) => s + _num(r.onOrderQty), 0);
+      const cell = 'padding:10px;font-size:12.5px;font-weight:700;color:#0f172a;background:#f8fafc;';
+      return '<tr style="border-top:2px solid #e2e8f0;">'
+        + '<td colspan="4" style="' + cell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;">' + esc('Total · ' + _rows.length + ' item' + (_rows.length === 1 ? '' : 's')) + '</td>'
+        + '<td style="' + cell + 'text-align:right;' + (stock < 0 ? 'color:#c2410c;' : '') + '">' + esc(_fmtQty(stock)) + '</td>'
+        + '<td style="' + cell + '"></td>'
+        + '<td style="' + cell + '"></td>'
+        + '<td style="' + cell + 'text-align:right;">' + esc(_fmtQty(onOrder)) + '</td>'
+        + '<td colspan="2" style="' + cell + '"></td>'
+      + '</tr>';
     }
 
     function _dateLabel(iso) {
@@ -343,7 +393,21 @@ window.Pages = window.Pages || {};
               return '<td style="padding:8px 10px;font-size:12.5px;text-align:right;' + (c ? 'background:' + c + ';' : '') + '">' + esc(v) + '</td>';
             }).join('')
         + '</tr>';
-      }).join('');
+      }).join('') + _historyTotalsRowHtml();
+    }
+
+    /* ── Totals row, pinned to the bottom of the Day-wise Stock matrix —
+       closing stock of every listed item added up, one total per day column,
+       so the book's overall position can be read across the range. No stock-
+       level colouring here: those buckets are a per-item % of that item's own
+       Max Level and don't carry over to a sum. ─────────────────────────────── */
+    function _historyTotalsRowHtml() {
+      const totals = _historyDates.map((_, i) => _historyRows.reduce((s, r) => s + _num((r.daily || [])[i]), 0));
+      const cell = 'padding:10px;font-size:12.5px;font-weight:700;color:#0f172a;background:#f8fafc;';
+      return '<tr style="border-top:2px solid #e2e8f0;">'
+        + '<td colspan="3" style="' + cell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;white-space:nowrap;position:sticky;left:0;">' + esc('Total · ' + _historyRows.length + ' item' + (_historyRows.length === 1 ? '' : 's')) + '</td>'
+        + totals.map(t => '<td style="' + cell + 'text-align:right;' + (t < 0 ? 'color:#c2410c;' : '') + '">' + esc(_fmtQty(t)) + '</td>').join('')
+      + '</tr>';
     }
 
     function _bindRowActions() {
@@ -704,6 +768,287 @@ window.Pages = window.Pages || {};
       }
     }
 
+    /* ══ Series tab (Trading only) ═══════════════════════════════════════════
+       Alloy grade isn't a stored column — it's parsed out of each item's
+       description server-side (see _imsAlloySeries in server.js), which is why
+       this reads one pre-bucketed rollup instead of grouping the item list
+       here. Current stock is always "as of now" (it's the only balance the DB
+       keeps); the date range applies to the Inward/Outward figures only, which
+       is why the two live in separate charts rather than one mixed one. ────── */
+
+    // Categorical slots 1 and 2 of the validated chart palette (blue/orange):
+    // the only pair on screen at once, and they clear the colour-blind
+    // separation floor against each other and the white card behind them.
+    const _CHART_INWARD = '#2a78d6';
+    const _CHART_OUTWARD = '#eb6834';
+    const _CHART_STOCK = '#2a78d6';
+
+    async function _loadSeries() {
+      _seriesLoaded = false;
+      _seriesLoadError = '';
+      _renderSeriesBody();
+      let rows = [], err = '';
+      try {
+        const params = new URLSearchParams({ category: _book });
+        if (_seriesFrom) params.set('from', _seriesFrom);
+        if (_seriesTo) params.set('to', _seriesTo);
+        const data = await Utils.apiFetch('/api/ims/series-summary?' + params.toString());
+        rows = (data && data.series) || [];
+      } catch (e) {
+        err = e.message || 'Failed to load the series summary';
+      }
+      _seriesRows = rows;
+      _seriesLoadError = err;
+      _seriesLoaded = true;
+      _renderSeriesBody();
+    }
+
+    /* ── Bar chart (inline SVG, no chart library) ─────────────────────────────
+       Vertical bars on a zero baseline, one group per series. Stock in this
+       book runs negative on plenty of items, so the scale always spans zero and
+       bars below it hang down from the baseline rather than being clipped to 0.
+       groups: [{ label, values: [{ key, label, value }] }]; colors: {key: hex}. */
+    function _niceStep(range, targetTicks) {
+      const raw = (range || 1) / Math.max(1, targetTicks);
+      const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+      const norm = raw / mag;
+      return (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+    }
+    function _axisLabel(v) {
+      return (Math.round(v * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    }
+    // A bar with its data-end rounded and its baseline end square, so the
+    // baseline stays a straight line across the chart.
+    function _barPath(x, y, w, h, negative) {
+      const r = Math.max(0, Math.min(4, w / 2, h));
+      if (h <= 0) return '';
+      return negative
+        ? 'M' + x + ',' + y + ' L' + x + ',' + (y + h - r) + ' Q' + x + ',' + (y + h) + ' ' + (x + r) + ',' + (y + h)
+          + ' L' + (x + w - r) + ',' + (y + h) + ' Q' + (x + w) + ',' + (y + h) + ' ' + (x + w) + ',' + (y + h - r) + ' L' + (x + w) + ',' + y + ' Z'
+        : 'M' + x + ',' + (y + h) + ' L' + x + ',' + (y + r) + ' Q' + x + ',' + y + ' ' + (x + r) + ',' + y
+          + ' L' + (x + w - r) + ',' + y + ' Q' + (x + w) + ',' + y + ' ' + (x + w) + ',' + (y + r) + ' L' + (x + w) + ',' + (y + h) + ' Z';
+    }
+    function _barChartSvg(groups, colors, unit) {
+      const W = 760, H = 280;
+      const padL = 76, padR = 16, padT = 22, padB = 42;
+      const plotW = W - padL - padR;
+      const plotH = H - padT - padB;
+
+      const all = groups.flatMap(g => g.values.map(v => _num(v.value)));
+      const lo = Math.min(0, ...all);
+      const hi = Math.max(0, ...all);
+      const step = _niceStep(hi - lo || 1, 4);
+      const dMin = Math.floor(lo / step) * step;
+      let dMax = Math.ceil(hi / step) * step;
+      if (dMax === dMin) dMax = dMin + step;
+      const yOf = (v) => padT + ((dMax - v) / (dMax - dMin)) * plotH;
+
+      const ticks = [];
+      for (let t = dMin; t <= dMax + step / 2; t += step) ticks.push(Math.round(t * 1e6) / 1e6);
+
+      const gridline = ticks.map(t => {
+        const y = yOf(t);
+        const zero = t === 0;
+        return '<line x1="' + padL + '" y1="' + y + '" x2="' + (padL + plotW) + '" y2="' + y + '" stroke="' + (zero ? '#cbd5e1' : '#eef2f7') + '" stroke-width="1" />'
+          + '<text x="' + (padL - 8) + '" y="' + (y + 4) + '" text-anchor="end" font-size="10.5" fill="#94a3b8">' + esc(_axisLabel(t)) + '</text>';
+      }).join('');
+
+      const gw = plotW / Math.max(1, groups.length);
+      const paired = !!(groups[0] && groups[0].values.length > 1);
+      // ~38% of each slot is breathing room, and bars stay thin rather than
+      // stretching to fill the slot when there are only four or five of them.
+      const inner = Math.min(gw * 0.62, paired ? 88 : 46);
+      const gap = paired ? 2 : 0;                    // 2px surface gap between paired bars
+      const bars = groups.map((g, gi) => {
+        const gx = padL + gi * gw + (gw - inner) / 2;
+        const n = g.values.length;
+        const bw = (inner - gap * (n - 1)) / n;
+        const marks = g.values.map((v, vi) => {
+          const val = _num(v.value);
+          const x = gx + vi * (bw + gap);
+          const y0 = yOf(0), y1 = yOf(val);
+          const y = Math.min(y0, y1), h = Math.abs(y1 - y0);
+          const label = _fmtQty(val);
+          const labelY = val < 0 ? y + h + 12 : y - 6;
+          return '<path d="' + _barPath(x, y, bw, h, val < 0) + '" fill="' + (colors[v.key] || _CHART_STOCK) + '">'
+              + '<title>' + esc(g.label + ' · ' + v.label + ': ' + label + (unit ? ' ' + unit : '')) + '</title></path>'
+            + '<text x="' + (x + bw / 2) + '" y="' + labelY + '" text-anchor="middle" font-size="10.5" font-weight="700" fill="#0f172a">' + esc(label) + '</text>';
+        }).join('');
+        return marks
+          + '<text x="' + (gx + inner / 2) + '" y="' + (padT + plotH + 20) + '" text-anchor="middle" font-size="12" font-weight="700" fill="#334155">' + esc(g.label) + '</text>';
+      }).join('');
+
+      // Capped rather than stretched to the card: the whole drawing scales with
+      // the SVG, so a full-width chart on a wide screen blows the axis and value
+      // labels up well past the type around them.
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" style="width:100%;max-width:' + W + 'px;height:auto;display:block;margin:0 auto;overflow:visible;">'
+        + gridline
+        + '<line x1="' + padL + '" y1="' + yOf(0) + '" x2="' + (padL + plotW) + '" y2="' + yOf(0) + '" stroke="#94a3b8" stroke-width="1" />'
+        + bars
+      + '</svg>';
+    }
+
+    function _chartCardHtml(title, subtitle, legend, svg) {
+      return '<div style="border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:16px 18px 12px;">'
+        + '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">'
+          + '<div>'
+            + '<div style="font-size:13.5px;font-weight:700;color:#0f172a;">' + esc(title) + '</div>'
+            + '<div style="font-size:11.5px;color:#64748b;margin-top:2px;">' + esc(subtitle) + '</div>'
+          + '</div>'
+          + legend
+        + '</div>'
+        + svg
+      + '</div>';
+    }
+
+    function _legendHtml(entries) {
+      return '<div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">'
+        + entries.map(([color, label]) => '<span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:#64748b;font-weight:600;">'
+          + '<span style="width:10px;height:10px;border-radius:3px;background:' + color + ';display:inline-block;"></span>' + esc(label) + '</span>').join('')
+      + '</div>';
+    }
+
+    function _seriesStatsHtml(rows) {
+      const sum = (k) => rows.reduce((s, r) => s + _num(r[k]), 0);
+      const tiles = [
+        ['Items', rows.reduce((s, r) => s + _num(r.items), 0), '#0f172a'],
+        ['Current Stock', sum('stock'), sum('stock') < 0 ? '#c2410c' : '#0f172a'],
+        ['Inward', sum('inward'), '#0f172a'],
+        ['Outward', sum('outward'), '#0f172a'],
+      ];
+      return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px;">'
+        + tiles.map(([label, value, color]) => '<div style="border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:12px 14px;">'
+          + '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;font-weight:700;">' + esc(label) + '</div>'
+          + '<div style="font-size:18px;font-weight:700;color:' + color + ';margin-top:2px;">' + esc(_fmtQty(value)) + '</div>'
+        + '</div>').join('')
+      + '</div>';
+    }
+
+    // The chart's own numbers, spelled out — the readable-without-colour view of
+    // the same data, and where the per-series totals get added up.
+    function _seriesTableHtml(rows) {
+      const head = ['Series', 'Items', 'Current Stock', 'Inward', 'Outward'];
+      const cell = 'padding:8px 10px;font-size:12.5px;';
+      const total = (k) => rows.reduce((s, r) => s + _num(r[k]), 0);
+      const totalCell = 'padding:10px;font-size:12.5px;font-weight:700;color:#0f172a;background:#f8fafc;';
+      return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+        + '<table style="width:100%;border-collapse:collapse;min-width:560px;">'
+          + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+            + head.map((h, i) => '<th style="padding:8px 10px;text-align:' + (i ? 'right' : 'left') + ';font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+          + '</tr></thead>'
+          + '<tbody>'
+            + rows.map(r => '<tr style="border-bottom:1px solid #f1f5f9;">'
+              + '<td style="' + cell + 'font-weight:700;">' + esc(r.series) + '</td>'
+              + '<td style="' + cell + 'text-align:right;">' + esc(_fmtQty(r.items)) + '</td>'
+              + '<td style="' + cell + 'text-align:right;font-weight:700;' + (_num(r.stock) < 0 ? 'color:#c2410c;' : '') + '">' + esc(_fmtQty(r.stock)) + '</td>'
+              + '<td style="' + cell + 'text-align:right;">' + esc(_fmtQty(r.inward)) + '</td>'
+              + '<td style="' + cell + 'text-align:right;">' + esc(_fmtQty(r.outward)) + '</td>'
+            + '</tr>').join('')
+            + '<tr style="border-top:2px solid #e2e8f0;">'
+              + '<td style="' + totalCell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;">Total</td>'
+              + '<td style="' + totalCell + 'text-align:right;">' + esc(_fmtQty(total('items'))) + '</td>'
+              + '<td style="' + totalCell + 'text-align:right;' + (total('stock') < 0 ? 'color:#c2410c;' : '') + '">' + esc(_fmtQty(total('stock'))) + '</td>'
+              + '<td style="' + totalCell + 'text-align:right;">' + esc(_fmtQty(total('inward'))) + '</td>'
+              + '<td style="' + totalCell + 'text-align:right;">' + esc(_fmtQty(total('outward'))) + '</td>'
+            + '</tr>'
+          + '</tbody>'
+        + '</table>'
+      + '</div>';
+    }
+
+    function _exportSeriesCSV() {
+      if (!_seriesRows.length) { Utils.showToast('Nothing to export yet', 'warning'); return; }
+      const headers = ['Series', 'Items', 'Current Stock', 'Inward', 'Outward'];
+      const rows = _seriesRows.map(r => [r.series, r.items, r.stock, r.inward, r.outward]);
+      const total = (k) => _seriesRows.reduce((s, r) => s + _num(r[k]), 0);
+      rows.push(['Total', total('items'), total('stock'), total('inward'), total('outward')]);
+      _downloadCSV('IMS_' + _bookSlug + '_SeriesWise_' + _todayStamp() + '.csv', headers, rows);
+    }
+
+    function _seriesRangeLabel() {
+      if (_seriesFrom && _seriesTo) return _dateLabel(_seriesFrom) + ' to ' + _dateLabel(_seriesTo);
+      if (_seriesFrom) return 'from ' + _dateLabel(_seriesFrom);
+      if (_seriesTo) return 'up to ' + _dateLabel(_seriesTo);
+      return 'all time';
+    }
+
+    function _renderSeriesBody() {
+      if (!_isActive()) return;
+      const el = document.getElementById('ims-series-body');
+      if (!el) return;
+
+      if (!_seriesLoaded) {
+        el.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</div>';
+        return;
+      }
+      if (_seriesLoadError) {
+        el.innerHTML = '<div style="padding:40px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_seriesLoadError) + '</div>';
+        return;
+      }
+      const rows = _seriesRows;
+      if (!rows.length) {
+        el.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:12.5px;">No ' + esc(_bookName) + ' items to chart yet</div>';
+        return;
+      }
+
+      const stockChart = _barChartSvg(
+        rows.map(r => ({ label: r.series, values: [{ key: 'stock', label: 'Current stock', value: r.stock }] })),
+        { stock: _CHART_STOCK });
+      const moveChart = _barChartSvg(
+        rows.map(r => ({ label: r.series, values: [
+          { key: 'inward', label: 'Inward', value: r.inward },
+          { key: 'outward', label: 'Outward', value: r.outward },
+        ] })),
+        { inward: _CHART_INWARD, outward: _CHART_OUTWARD });
+
+      el.innerHTML = _seriesStatsHtml(rows)
+        + '<div style="display:flex;flex-direction:column;gap:14px;">'
+          + _chartCardHtml('Current stock by series', 'Live balance as of today — bars below the line are items issued past what was received.', '', stockChart)
+          + _chartCardHtml('Inward vs Outward by series', 'Stock movement logged ' + _seriesRangeLabel() + ', cancelled entries excluded.',
+              _legendHtml([[_CHART_INWARD, 'Inward'], [_CHART_OUTWARD, 'Outward']]), moveChart)
+          + _seriesTableHtml(rows)
+        + '</div>';
+    }
+
+    function _seriesFilterBarHtml() {
+      return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+        + '<span style="font-size:12px;color:#64748b;font-weight:600;">Movement dates</span>'
+        + '<input type="date" id="ims-ser-from" value="' + esc(_seriesFrom) + '" style="' + _inputStyle + 'width:auto;" />'
+        + '<span style="color:#94a3b8;font-size:12px;">to</span>'
+        + '<input type="date" id="ims-ser-to" value="' + esc(_seriesTo) + '" style="' + _inputStyle + 'width:auto;" />'
+        + '<button type="button" id="ims-ser-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
+        + '<button type="button" id="ims-ser-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
+        + '<button type="button" id="ims-ser-export" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Export CSV</button>'
+      + '</div>';
+    }
+
+    function _bindSeriesFilterBar() {
+      // Both dates go back to the server (the rollup is a SQL aggregate, not a
+      // client-side filter over rows already on screen), so each change reloads.
+      document.getElementById('ims-ser-from').addEventListener('change', (e) => { _seriesFrom = e.target.value; _loadSeries(); });
+      document.getElementById('ims-ser-to').addEventListener('change', (e) => { _seriesTo = e.target.value; _loadSeries(); });
+      document.getElementById('ims-ser-clear').addEventListener('click', () => {
+        _seriesFrom = ''; _seriesTo = '';
+        document.getElementById('ims-ser-from').value = '';
+        document.getElementById('ims-ser-to').value = '';
+        _loadSeries();
+      });
+      document.getElementById('ims-ser-refresh').addEventListener('click', _loadSeries);
+      document.getElementById('ims-ser-export').addEventListener('click', _exportSeriesCSV);
+    }
+
+    function _renderSeries() {
+      if (!_isActive()) return;
+      const el = document.getElementById('ims-tabbody');
+      if (!el) return;
+      el.innerHTML = '<p style="font-size:12.5px;color:#64748b;margin:0 0 14px;">Alloy grade read off each item\'s description — ' + esc(SERIES_LABELS.join(', ')) + ', anything else grouped as Other.</p>'
+        + _seriesFilterBarHtml()
+        + '<div id="ims-series-body"></div>';
+      _bindSeriesFilterBar();
+      _renderSeriesBody();
+      if (!_seriesLoaded) _loadSeries();
+    }
+
     /* ── View-mode toggle (Item List vs Day-wise Stock) ─────────────────── */
     function _viewToggleHtml() {
       function tab(mode, label) {
@@ -812,10 +1157,11 @@ window.Pages = window.Pages || {};
        standalone pages (see inward.js/outward.js), just mounted into
        #ims-tabbody instead of #main-content directly, and locked to this
        book. ───────────────────────────────────────────────────────────────── */
-    let _topTab = 'inward'; // 'inward' | 'outward' | 'report'
+    let _topTab = 'inward'; // 'inward' | 'outward' | 'report' | 'series' (Trading only)
 
     function _topTabsHtml() {
-      const tabs = [['inward', 'Inward'], ['outward', 'Outward'], ['report', 'Report']];
+      const tabs = [['inward', 'Inward'], ['outward', 'Outward'], ['report', 'Report']]
+        .concat(_isTrading ? [['series', 'Series Chart']] : []);
       return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
         + tabs.map(([key, label]) => '<button type="button" class="ims-top-tab" data-tab="' + key + '" style="'
           + 'padding:9px 16px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:700;'
@@ -853,6 +1199,7 @@ window.Pages = window.Pages || {};
       const mountOpts = { containerId: 'ims-tabbody', embedded: true, category: _book, categoryLabel: _bookName };
       if (_topTab === 'inward')  { window.Pages['inward'].render(mountOpts); return; }
       if (_topTab === 'outward') { window.Pages['outward'].render(mountOpts); return; }
+      if (_topTab === 'series')  { _renderSeries(); return; }
       _renderReport();
     }
 

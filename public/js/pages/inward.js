@@ -357,6 +357,46 @@ window.Pages['inward'] = (() => {
     });
   }
 
+  // 1234.5 -> "1,234.5" — quantities are stored as decimals but are whole
+  // numbers most of the time, so trailing .00 is dropped rather than padded.
+  function _fmtQty(n) {
+    return (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  }
+
+  /* ── Totals row, pinned to the bottom of the list ─────────────────────────
+     Sums the Quantity column over whatever the filters currently show, minus
+     Cancelled entries — those were already reversed back off current stock, so
+     counting them would overstate what actually came in. Quantities can be in
+     mixed units within one book, so the UOM cell carries a per-unit breakdown
+     whenever more than one unit is on screen instead of implying a single
+     grand total is meaningful. ────────────────────────────────────────────── */
+  function _totalsRowHtml(rows) {
+    const active = rows.filter(r => r.status !== 'Cancelled');
+    const cancelled = rows.length - active.length;
+    const total = active.reduce((sum, r) => sum + _num(r.quantity), 0);
+
+    const byUom = new Map();
+    active.forEach(r => {
+      const u = (r.uom || '').trim() || '—';
+      byUom.set(u, (byUom.get(u) || 0) + _num(r.quantity));
+    });
+    const uomCell = byUom.size > 1
+      ? Array.from(byUom.entries()).map(([u, v]) => esc(_fmtQty(v) + ' ' + u)).join('<br>')
+      : esc(Array.from(byUom.keys())[0] || '');
+
+    const label = 'Total · ' + active.length + ' entr' + (active.length === 1 ? 'y' : 'ies')
+      + (cancelled ? ' (' + cancelled + ' cancelled excluded)' : '');
+    const leadSpan = 3 + (_showSize() ? 1 : 0);   // Date, Item Code, Description [, Size]
+    const tailSpan = 3 + (_showDepartment() ? 1 : 0); // [Department,] Source, Remarks, Actions
+    const cell = 'padding:10px;font-size:12.5px;font-weight:700;color:#0f172a;background:#f8fafc;';
+    return '<tr style="border-top:2px solid #e2e8f0;">'
+      + '<td colspan="' + leadSpan + '" style="' + cell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;">' + esc(label) + '</td>'
+      + '<td style="' + cell + 'text-align:right;">' + esc(_fmtQty(total)) + '</td>'
+      + '<td style="' + cell + 'font-weight:600;color:#64748b;font-size:11.5px;">' + uomCell + '</td>'
+      + '<td colspan="' + tailSpan + '" style="' + cell + '"></td>'
+    + '</tr>';
+  }
+
   function _renderTable() {
     const body = document.getElementById('inwl-body');
     const countEl = document.getElementById('inwl-count');
@@ -394,7 +434,8 @@ window.Pages['inward'] = (() => {
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
             : '<button type="button" class="inw-cancel-btn" data-id="' + esc(r.id) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
         + '</td>'
-      + '</tr>').join('');
+      + '</tr>').join('')
+      + _totalsRowHtml(rows);
   }
 
   function _bindRowActions() {
