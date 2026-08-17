@@ -79,9 +79,22 @@ window.Pages['outward'] = (() => {
     return _fieldWrap(label, '<input type="' + (opts.type || 'text') + '" id="' + id + '" value="' + esc(opts.value || '') + '" placeholder="' + esc(opts.placeholder || '') + '" style="' + _inputStyle + '" />');
   }
 
+  // Trading is Hindalco bar stock and is always weighed, so that book's UOM is
+  // fixed at KGS instead of being a choice — no other unit, no "Other…" escape
+  // hatch, and nothing to pick before an entry can be logged. Every other book
+  // keeps the full list above.
+  const TRADING_UOM = 'KGS';
+  function _uomFixed() { return _category === 'Trading'; }
+
   // UOM select + conditional "Other…" free-text fallback, used both in the
   // item rows and the "+ New Item" modal (cls prefixes the two element classes).
   function _uomFieldHtml(cls) {
+    if (_uomFixed()) {
+      // The hidden "other" input stays in the markup so the get/set/bind
+      // helpers below can keep querying for it unconditionally.
+      return '<select class="' + cls + '-select" style="' + _inputStyle + '"><option value="' + esc(TRADING_UOM) + '" selected>' + esc(TRADING_UOM) + '</option></select>'
+        + '<input type="text" class="' + cls + '-other" style="display:none;" />';
+    }
     const opts = UOM_OPTIONS.map(u => '<option value="' + esc(u) + '">' + esc(u) + '</option>').join('');
     return '<select class="' + cls + '-select" style="' + _inputStyle + '"><option value="">Select…</option>' + opts + '<option value="__other__">Other…</option></select>'
       + '<input type="text" class="' + cls + '-other" placeholder="Enter UOM" style="display:none;margin-top:6px;' + _inputStyle + '" />';
@@ -106,6 +119,9 @@ window.Pages['outward'] = (() => {
   function _setUomValue(root, cls, value) {
     const sel = root.querySelector('.' + cls + '-select');
     const other = root.querySelector('.' + cls + '-other');
+    // On Trading the catalog's own unit is ignored — plenty of those rows were
+    // imported with a blank or 'Kg' unit, and the book is standardising on KGS.
+    if (_uomFixed()) { sel.value = TRADING_UOM; other.style.display = 'none'; other.value = ''; return; }
     const match = UOM_OPTIONS.find(u => u.toLowerCase() === String(value || '').toLowerCase());
     if (match) { sel.value = match; other.style.display = 'none'; other.value = ''; }
     else if (value) { sel.value = '__other__'; other.style.display = 'block'; other.value = value; }

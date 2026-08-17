@@ -706,6 +706,15 @@ window.Pages = window.Pages || {};
     // document, so sharing the prefix made getElementById('ims-f-code') resolve
     // to whichever came first: typing an item code into the form re-ran the list
     // filter, and the filter box itself went dead while the form was open.
+    // Trading stock is weighed, always, so its catalog UOM is a one-option
+    // select rather than a free-text box — same rule the Inward/Outward forms
+    // apply (see TRADING_UOM in inward.js/outward.js). Reading it back still
+    // goes through getElementById('ims-if-uom').value, which works either way.
+    function _uomField(value) {
+      if (!_isTrading) return _textField('ims-if-uom', 'UOM', { value: value || '' });
+      return _fieldWrap('UOM', '<select id="ims-if-uom" style="' + _inputStyle + '"><option value="KGS" selected>KGS</option></select>');
+    }
+
     function _formHtml(row) {
       const isEdit = !!row;
       return '<div style="background:#fff;border:1.5px solid var(--color-primary);border-radius:12px;padding:16px;margin-bottom:16px;">'
@@ -716,7 +725,7 @@ window.Pages = window.Pages || {};
             + _textField('ims-if-code', 'Item Code', { value: isEdit ? row.itemCode : '', disabled: isEdit })
             + _textField('ims-if-desc', 'Description', { value: isEdit ? row.description : '' })
             + _textField('ims-if-size', 'Size', { value: isEdit ? row.size : '' })
-            + _textField('ims-if-uom', 'UOM', { value: isEdit ? row.uom : '' })
+            + _uomField(isEdit ? row.uom : '')
             + _textField('ims-if-moq', 'MOQ (Min Order Qty)', { value: isEdit ? row.moq : '' })
             + _textField('ims-if-maxlevel', 'Max Level', { value: isEdit ? row.maxLevel : '' })
             + _textField('ims-if-onorder', 'On Order Qty', { value: isEdit ? row.onOrderQty : '' })
