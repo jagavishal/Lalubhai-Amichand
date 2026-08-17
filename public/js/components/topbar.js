@@ -12,7 +12,6 @@ window.Topbar = {
     'profile':      'Profile',
     'leave-tracker':'Leave Tracker',
     'client-master':'',
-    'race-tracker': 'Race Tracker',
     'po-pending':   'PO Pending',
     'compliance':   'Compliance',
   },

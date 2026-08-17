@@ -68,7 +68,6 @@ window.Pages.users = (() => {
 
     { cat: 'Admin Section', key: 'fms',          label: 'FMS Master' },
     { cat: 'Admin Section', key: 'mis',          label: 'MIS Report' },
-    { cat: 'Admin Section', key: 'race-tracker', label: 'Race Tracker' },
 
     { cat: 'Accounts', key: 'client-master',     label: 'Vendor Master' },
   ];
