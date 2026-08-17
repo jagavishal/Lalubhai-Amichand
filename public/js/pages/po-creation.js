@@ -8,10 +8,26 @@ window.Pages = window.Pages || {};
 // to Drive), and logs it — the "PO List" tab (in-page, alongside the 3 format
 // tabs) shows that created-PO history with filters.
 window.Pages['po-creation'] = (() => {
-  const FORMATS = ['PurchaseOrder', 'ENR PO', 'Diamond PO'];
-  const FORMAT_LABEL = { PurchaseOrder: 'Purchase Order', 'ENR PO': 'ENR PO', 'Diamond PO': 'Diamond PO' };
-  const PARTY_LABEL  = { PurchaseOrder: 'Customer Name', 'ENR PO': 'Vendor', 'Diamond PO': 'Vendor' };
-  const ITEM_CODE_LABEL = { PurchaseOrder: 'Item Code', 'ENR PO': 'Item #', 'Diamond PO': 'Item #' };
+  const FORMATS = ['PurchaseOrder', 'ENR PO', 'Diamond PO', 'Service PO'];
+  const FORMAT_LABEL = { PurchaseOrder: 'Purchase Order', 'ENR PO': 'ENR PO', 'Diamond PO': 'Diamond PO', 'Service PO': 'Service PO' };
+  const PARTY_LABEL  = { PurchaseOrder: 'Customer Name', 'ENR PO': 'Vendor', 'Diamond PO': 'Vendor', 'Service PO': 'Vendor' };
+  const ITEM_CODE_LABEL = { PurchaseOrder: 'Item Code', 'ENR PO': 'Item #', 'Diamond PO': 'Item #', 'Service PO': 'Service Description' };
+
+  // Service PO is the one fully manual format: services aren't raised through a
+  // PR and have no ITEM_CODES catalog entry, so its first column is free text
+  // typed by hand rather than a code picked off a typeahead — which is also why
+  // it's the only format that still offers "+ Add Item" (the others get their
+  // lines from the PR they're raised against). Everything below keyed off this
+  // list rather than a hardcoded === 'Service PO' scattered through the file.
+  const MANUAL_FORMATS = ['Service PO'];
+  const SHIP_TO_FORMATS = ['PurchaseOrder', 'Service PO'];
+  const EXTRA_FORMATS = ['PurchaseOrder', 'Service PO'];   // Terms & Conditions + Comments
+  const TEST_CERT_FORMATS = ['PurchaseOrder'];             // goods-only — a service has nothing to certify
+  // Which item field is the line's identity, i.e. what the first column holds
+  // and what a row must have filled in to count as a real line.
+  const ITEM_KEY_FIELD = { PurchaseOrder: 'itemCode', 'ENR PO': 'itemCode', 'Diamond PO': 'itemCode', 'Service PO': 'description' };
+
+  function _isManual() { return MANUAL_FORMATS.includes(_format); }
 
   // Departments are the app-wide master list (Utils' shared cache, primed from
   // /api/po-creation/masters and served by GET /api/departments) — the same one
@@ -43,6 +59,14 @@ window.Pages['po-creation'] = (() => {
       { key: 'plateQty',  label: 'Plate Qty (Nos.)', numeric: true },
       { key: 'plateRate', label: 'Plate Rate (INR)', numeric: true },
     ],
+    // A service is priced as a lump sum, not qty x rate — Amount is typed
+    // directly (the sheet's own Amount column is a plain cell on this tab, not
+    // the F*G formula the goods formats use).
+    'Service PO': [
+      { key: 'sacCode', label: 'SAC Code' },
+      { key: 'gst',     label: 'GST %', numeric: true },
+      { key: 'amount',  label: 'Amount (INR)', numeric: true },
+    ],
   };
 
   // Read-only, live-computed columns — same math the sheet's own formulas do,
@@ -58,6 +82,9 @@ window.Pages['po-creation'] = (() => {
     ],
     'Diamond PO': [
       { key: 'total', label: 'Total (INR)', compute: v => _num(v.boxQty) * _num(v.boxRate) + _num(v.plateQty) * _num(v.plateRate) },
+    ],
+    'Service PO': [
+      { key: 'amountWithTax', label: 'Amount w/ Tax (INR)', compute: v => { const a = _num(v.amount); return a + a * _num(v.gst) / 100; } },
     ],
   };
 
@@ -80,6 +107,12 @@ window.Pages['po-creation'] = (() => {
       { key: 'shipping',        label: 'Shipping' },
       { key: 'other',           label: 'Other' },
       { key: 'discountPercent', label: 'Discount %' },
+    ],
+    // Freight/Packing don't apply to a service — their cells still exist on the
+    // tab (and the server zeroes them on every submit so nothing bleeds through)
+    // but there's no reason to show them here.
+    'Service PO': [
+      { key: 'discount', label: 'Discount' },
     ],
   };
 
@@ -419,6 +452,9 @@ window.Pages['po-creation'] = (() => {
         itemsSum += base + base * _num(vals.taxPercent) / 100;
       } else if (_format === 'Diamond PO') {
         itemsSum += _num(vals.boxQty) * _num(vals.boxRate) + _num(vals.plateQty) * _num(vals.plateRate);
+      } else if (_format === 'Service PO') {
+        const amt = _num(vals.amount);
+        taxInclusive += amt + amt * _num(vals.gst) / 100;
       }
     });
 
@@ -433,6 +469,8 @@ window.Pages['po-creation'] = (() => {
     } else if (_format === 'Diamond PO') {
       const gstAmt = itemsSum * _num(s.gstPercent) / 100;
       total = itemsSum + gstAmt + _num(s.shipping) + _num(s.other) - itemsSum * _num(s.discountPercent) / 100;
+    } else if (_format === 'Service PO') {
+      total = taxInclusive - _num(s.discount);
     }
     el.textContent = '₹' + _fmtMoney(total);
   }
@@ -446,6 +484,25 @@ window.Pages['po-creation'] = (() => {
   }
 
   /* ── Item rows ──────────────────────────────────────────────────────── */
+  // The first cell is the line's identity: an item-code typeahead (with the
+  // sheet-derived Description/Size preview cells beside it) on the goods
+  // formats, or a plain free-text box on a manual format, where there's no
+  // catalog to look anything up in and the text itself IS the description.
+  // Both carry .poc-item-code so everything downstream reads them the same way.
+  function _itemKeyCellHtml() {
+    if (_isManual()) {
+      return '<td style="padding:6px;min-width:320px;">'
+        + '<textarea class="poc-item-code" rows="2" placeholder="' + esc(ITEM_CODE_LABEL[_format]) + '…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;resize:vertical;font-family:inherit;"></textarea>'
+      + '</td>';
+    }
+    return '<td style="padding:6px;min-width:150px;position:relative;">'
+        + '<input type="text" class="poc-item-code" autocomplete="off" placeholder="' + esc(ITEM_CODE_LABEL[_format]) + '…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
+        + '<div class="poc-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
+      + '</td>'
+      + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="poc-item-desc">—</td>'
+      + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="poc-item-size">—</td>';
+  }
+
   function _itemRowHtml() {
     const fields = ITEM_FIELDS[_format];
     const computed = ITEM_COMPUTED[_format];
@@ -454,12 +511,7 @@ window.Pages['po-creation'] = (() => {
     ).join('');
     const computedCells = computed.map(c => '<td class="poc-item-computed" data-key="' + c.key + '" style="padding:6px 10px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;">0.00</td>').join('');
     return '<tr class="poc-item-row" style="border-bottom:1px solid #f1f5f9;">'
-      + '<td style="padding:6px;min-width:150px;position:relative;">'
-        + '<input type="text" class="poc-item-code" autocomplete="off" placeholder="' + esc(ITEM_CODE_LABEL[_format]) + '…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
-        + '<div class="poc-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
-      + '</td>'
-      + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="poc-item-desc">—</td>'
-      + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="poc-item-size">—</td>'
+      + _itemKeyCellHtml()
       + fieldCells
       + computedCells
       + '<td style="padding:6px;text-align:center;"><button type="button" class="poc-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
@@ -469,14 +521,18 @@ window.Pages['po-creation'] = (() => {
   function _itemsTableHtml() {
     const fields = ITEM_FIELDS[_format];
     const computed = ITEM_COMPUTED[_format];
-    const headCells = fields.map(f => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(f.label) + '</th>').join('');
-    const computedHeadCells = computed.map(c => '<th style="padding:8px 6px;text-align:right;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">' + esc(c.label) + '</th>').join('');
+    const th = (align, label) => '<th style="padding:8px 6px;text-align:' + align + ';font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;' + (align === 'right' ? 'white-space:nowrap;' : '') + '">' + esc(label) + '</th>';
+    const headCells = fields.map(f => th('left', f.label)).join('');
+    const computedHeadCells = computed.map(c => th('right', c.label)).join('');
+    // A manual format drops the two catalog-preview columns, so it needs far
+    // less horizontal room before the table starts scrolling.
+    const keyHeadCells = _isManual()
+      ? th('left', ITEM_CODE_LABEL[_format])
+      : th('left', ITEM_CODE_LABEL[_format]) + th('left', 'Description') + th('left', 'Size');
     return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:960px;">'
+      + '<table style="width:100%;border-collapse:collapse;min-width:' + (_isManual() ? '720px' : '960px') + ';">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-          + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(ITEM_CODE_LABEL[_format]) + '</th>'
-          + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Description</th>'
-          + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Size</th>'
+          + keyHeadCells
           + headCells
           + computedHeadCells
           + '<th></th>'
@@ -487,7 +543,9 @@ window.Pages['po-creation'] = (() => {
   }
 
   function _bindItemRow(rowEl) {
-    _bindItemCodeInput(rowEl.querySelector('.poc-item-code'));
+    // Manual formats have no catalog behind them — nothing to look up, so no
+    // typeahead to bind (and no .poc-item-dd/desc/size cells for it to drive).
+    if (!_isManual()) _bindItemCodeInput(rowEl.querySelector('.poc-item-code'));
     const removeBtn = rowEl.querySelector('.poc-item-remove');
     removeBtn.addEventListener('click', () => {
       const tbody = document.getElementById('poc-items-tbody');
@@ -667,11 +725,14 @@ window.Pages['po-creation'] = (() => {
     const common = ''
       + _textField('poc-date', 'Date', { type: 'date', value: _today() })
       + _readonlyField('poc-next-no', 'P.O. NO (auto-assigned)', _nextPoNumber != null ? _nextPoNumber : 'Loading…')
-      + _prNoField()
+      // Services are raised as a PO directly, never off a PR — the field is
+      // omitted entirely rather than shown-and-ignored, and that tab's sheet
+      // template has no P.R. NO cell either.
+      + (_isManual() ? '' : _prNoField())
       + _fieldWrap('Department', '<select id="poc-department" style="' + _inputStyle + 'background:#fff;">' + deptOptions + '</select>')
       + _partyField();
 
-    const shipTo = _format === 'PurchaseOrder'
+    const shipTo = SHIP_TO_FORMATS.includes(_format)
       ? _fieldWrap('Ship To', '<select id="poc-ship-to" style="' + _inputStyle + 'background:#fff;">' + shipToOptions + '</select>')
       : '';
 
@@ -690,12 +751,14 @@ window.Pages['po-creation'] = (() => {
      own "YES / NO" placeholder into the label itself with nowhere separate
      to write, so they don't get this section). ─────────────────────────── */
   function _extraFieldsHtml() {
-    if (_format !== 'PurchaseOrder') return '';
+    if (!EXTRA_FORMATS.includes(_format)) return '';
     return '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Additional Details</div>'
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
         + _textareaField('poc-terms', 'Terms and Conditions', { rows: 4, placeholder: 'One line per row (up to 5 lines)…' })
         + _textField('poc-comments', 'Any Comments')
-        + _selectField('poc-test-cert', 'Test Certificate Required', ['', 'Yes', 'No'])
+        // Test certificates are a goods-inspection thing — the Service PO
+        // template has no cell for it (its printed label was removed).
+        + (TEST_CERT_FORMATS.includes(_format) ? _selectField('poc-test-cert', 'Test Certificate Required', ['', 'Yes', 'No']) : '')
       + '</div>';
   }
 
@@ -717,11 +780,12 @@ window.Pages['po-creation'] = (() => {
   /* ── Submit ─────────────────────────────────────────────────────────── */
   function _collectItems() {
     const fields = ITEM_FIELDS[_format];
+    const keyField = ITEM_KEY_FIELD[_format];
     return Array.from(document.querySelectorAll('#poc-items-tbody .poc-item-row')).map(row => {
-      const item = { itemCode: row.querySelector('.poc-item-code').value.trim() };
+      const item = { [keyField]: row.querySelector('.poc-item-code').value.trim() };
       fields.forEach(f => { item[f.key] = row.querySelector('[data-field="' + f.key + '"]').value.trim(); });
       return item;
-    }).filter(it => it.itemCode);
+    }).filter(it => it[keyField]);
   }
 
   function _collectSummary() {
@@ -771,24 +835,26 @@ window.Pages['po-creation'] = (() => {
   async function _submit(e) {
     e.preventDefault();
     const date = document.getElementById('poc-date').value;
-    const prNo = document.getElementById('poc-pr-no').value.trim();
+    const prNoInput = document.getElementById('poc-pr-no'); // absent on manual formats
+    const prNo = prNoInput ? prNoInput.value.trim() : '';
     const department = document.getElementById('poc-department').value;
     const party = document.getElementById('poc-party').value.trim();
-    const shipTo = _format === 'PurchaseOrder' ? document.getElementById('poc-ship-to').value : '';
+    const shipTo = SHIP_TO_FORMATS.includes(_format) ? document.getElementById('poc-ship-to').value : '';
     const deliverySchedule = document.getElementById('poc-delivery-schedule').value;
     const poValidity = document.getElementById('poc-po-validity').value.trim();
     const paymentTerms = document.getElementById('poc-payment-terms').value.trim();
     const poMadeBy = document.getElementById('poc-po-made-by').value.trim();
     const items = _collectItems();
     const summary = _collectSummary();
-    const termsAndConditions = _format === 'PurchaseOrder' ? document.getElementById('poc-terms').value : '';
-    const comments = _format === 'PurchaseOrder' ? document.getElementById('poc-comments').value.trim() : '';
-    const testCertificateRequired = _format === 'PurchaseOrder' ? document.getElementById('poc-test-cert').value : '';
+    const hasExtras = EXTRA_FORMATS.includes(_format);
+    const termsAndConditions = hasExtras ? document.getElementById('poc-terms').value : '';
+    const comments = hasExtras ? document.getElementById('poc-comments').value.trim() : '';
+    const testCertificateRequired = TEST_CERT_FORMATS.includes(_format) ? document.getElementById('poc-test-cert').value : '';
 
     if (!date) { Utils.showToast('Date is required', 'error'); return; }
     if (!party) { Utils.showToast(PARTY_LABEL[_format] + ' is required', 'error'); return; }
     if (!poMadeBy) { Utils.showToast('PO Made By is required', 'error'); return; }
-    if (!items.length) { Utils.showToast('Add at least one item', 'error'); return; }
+    if (!items.length) { Utils.showToast(_isManual() ? 'Add at least one service line' : 'Add at least one item', 'error'); return; }
 
     const btn = document.getElementById('poc-submit-btn');
     btn.disabled = true; btn.textContent = 'Creating…';
@@ -816,11 +882,15 @@ window.Pages['po-creation'] = (() => {
       ? _polViewHtml()
       : '<form id="poc-form" style="display:flex;flex-direction:column;gap:16px;">'
         + _headerFieldsHtml()
-        + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
+        + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">' + (_isManual() ? 'Services' : 'Items') + '</div>'
         + _itemsTableHtml()
-        + '<div>'
-          + '<button type="button" id="poc-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item</button>'
-        + '</div>'
+        // Only the manual formats can grow their own line list. On the three
+        // PR-driven formats the lines come from the approved PR that was picked
+        // (see _fillPrIntoForm), so there's no "+ Add Item" to bolt extra,
+        // un-requisitioned lines onto a PO after the fact.
+        + (_isManual()
+          ? '<div><button type="button" id="poc-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Service</button></div>'
+          : '')
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Charges</div>'
         + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">' + _summaryFieldsHtml() + '</div>'
         + _extraFieldsHtml()
@@ -854,7 +924,7 @@ window.Pages['po-creation'] = (() => {
     }
 
     _bindPartyField();
-    _bindPrNoField();
+    _bindPrNoField(); // no-ops on manual formats — the field isn't rendered there
     _bindAllItemRows();
 
     // Department dropdown: bound on every render (the form is rebuilt from
@@ -863,7 +933,8 @@ window.Pages['po-creation'] = (() => {
     // you switch format or come back from the List tab.
     Utils.bindDeptSelect(document.getElementById('poc-department'));
 
-    document.getElementById('poc-add-item').addEventListener('click', () => {
+    const addItemBtn = document.getElementById('poc-add-item'); // manual formats only
+    if (addItemBtn) addItemBtn.addEventListener('click', () => {
       document.getElementById('poc-items-tbody').insertAdjacentHTML('beforeend', _itemRowHtml());
       _bindItemRow(document.getElementById('poc-items-tbody').lastElementChild);
     });
@@ -873,7 +944,9 @@ window.Pages['po-creation'] = (() => {
     form.addEventListener('input', _onFormInput);
 
     if (!_mastersLoaded) _loadMasters();
-    if (!_pendingPrsLoaded) _loadPendingPrs();
+    // Manual formats never touch PRs, so don't pay for the pending-PR fetch
+    // just because that tab happened to be the first one opened.
+    if (!_pendingPrsLoaded && !_isManual()) _loadPendingPrs();
 
     if (_pendingPrToApply) {
       const pr = _pendingPrToApply;

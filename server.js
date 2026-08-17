@@ -3005,6 +3005,33 @@ const PO_FORMAT_CONFIG = {
     items: { firstRow: 27, lastRow: 55, clearCols: ['A', 'K'], fields: { itemCode: 'A', boxQty: 'H', boxRate: 'I', plateQty: 'J', plateRate: 'K' } },
     summary: { fields: { gstPercent: 'J57', shipping: 'K58', other: 'K59', discountPercent: 'J60' }, totalCell: 'K61' },
   },
+  // Services, not goods — the one format with no PR upstream and no ITEM_CODES
+  // catalog behind it: every line is typed by hand. Its tab was built by
+  // duplicating PurchaseOrder and reworking the item band: the ITEM CODE +
+  // VLOOKUP description/size columns are gone (a service has no catalog entry
+  // to look up), replaced by a free-text SERVICE DESCRIPTION merged across
+  // B:G, with a lump-sum AMOUNT typed straight into column I instead of being
+  // derived from qty x unit price. Rows 39-58 of the original were deleted, so
+  // the whole totals/footer block sits 20 rows higher than PurchaseOrder's —
+  // hence the I39..I44 addresses below. Only column J is still a formula
+  // (amount + tax, an ARRAYFORMULA anchored at J17), so it must never be
+  // written to; keyField marks Description as the line's identity, standing in
+  // for itemCode everywhere the generic PO code expects one.
+  'Service PO': {
+    tabName: 'Service PO',
+    partyLabel: 'VENDOR',
+    hasShipTo: true,
+    header: { poNo: 'J7', date: 'J6', department: 'J9', party: 'A13', shipTo: 'G13', deliverySchedule: 'A16', poValidity: 'C16', paymentTerms: 'G16', poMadeBy: 'J16' },
+    items: { firstRow: 18, lastRow: 38, clearCols: ['A', 'J'], keyField: 'description', fields: { sacCode: 'A', description: 'B', gst: 'H', amount: 'I' } },
+    // Freight/Packing are meaningless for a service (their labels are blanked
+    // out on the tab) but their cells still feed the Total formula, so they
+    // stay configured and get zeroed on every submit — same
+    // never-let-the-last-PO's-numbers-bleed-through discipline as everywhere else.
+    summary: { fields: { freightCharges: 'I41', packingCharges: 'I42', discount: 'I43' }, totalCell: 'I44' },
+    // No testCertificateRequired: that's a goods-inspection concept, and its
+    // printed label was removed from this tab.
+    extra: { termsAndConditionsRows: ['A40', 'A41', 'A42', 'A43', 'A44'], comments: 'B46' },
+  },
 };
 
 // ITEM_CODES packs three unrelated item catalogs side by side at different
@@ -3246,7 +3273,10 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
     const { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
     if (!date || !party || !poMadeBy) return res.status(400).json({ error: 'Date, ' + cfg.partyLabel + ' and PO Made By are required' });
-    const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemCode || '').trim());
+    // A line "exists" if its identity column is filled — Item Code on the three
+    // goods formats, Description on Service PO (which has no item codes at all).
+    const keyField = cfg.items.keyField || 'itemCode';
+    const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it[keyField] || '').trim());
     if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
 
     const auth = getGoogleAuth();
@@ -3274,7 +3304,9 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     const put = (a1, value) => { if (value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
     put(cfg.header.poNo, poNoFormatted);
     put(cfg.header.date, date);
-    put(cfg.header.prNo, prNo);
+    // Service PO has no P.R. NO cell at all (services are raised as a PO
+    // directly, never off a PR) — guard rather than building an "!undefined" range.
+    if (cfg.header.prNo) put(cfg.header.prNo, prNo);
     put(cfg.header.department, department);
     put(cfg.header.party, party);
     if (cfg.hasShipTo) put(cfg.header.shipTo, shipTo);
@@ -4210,8 +4242,11 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
     }
+    // Service POs are excluded outright (column B / r[1]): there's nothing
+    // physical to receive against a service, so they'd only ever be noise in
+    // this picker. They still appear in PO Creation's own PO List.
     const list = poRows
-      .filter(r => r[0] && (r[11] || 'Active') !== 'Cancelled' && !usedPoNos.has(_seqKey(r[0])))
+      .filter(r => r[0] && r[1] !== 'Service PO' && (r[11] || 'Active') !== 'Cancelled' && !usedPoNos.has(_seqKey(r[0])))
       .map(r => {
         let items = [];
         try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
