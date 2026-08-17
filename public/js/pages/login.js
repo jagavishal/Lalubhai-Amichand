@@ -5,240 +5,487 @@ window.Pages.login = {
     const el = document.getElementById('login-page');
     if (!el) return;
 
+    // Greeting + date for the brand panel — makes the landing screen feel live.
+    const now      = new Date();
+    const hr       = now.getHours();
+    const greeting = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
+    const dateStr  = now.toLocaleDateString('en-IN', {
+      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    });
+
+    // What the ERP covers — shown as highlights on the brand side.
+    const FEATURES = [
+      {
+        title: 'Tasks & Checklists',
+        desc:  'Daily, recurring and delegated work in one place',
+        icon:  '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+      },
+      {
+        title: 'Inventory & Purchase',
+        desc:  'PR, PO, GRN, inward–outward and live stock',
+        icon:  '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05"/><path d="M12 22.08V12"/>',
+      },
+      {
+        title: 'Reports & MIS',
+        desc:  'Dashboards, approvals and performance tracking',
+        icon:  '<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>',
+      },
+    ];
+
+    const featuresHtml = FEATURES.map((f, i) => `
+      <div class="lg-feature" style="animation-delay:${0.35 + i * 0.1}s;">
+        <span class="lg-feature-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${f.icon}</svg>
+        </span>
+        <span>
+          <span class="lg-feature-title">${f.title}</span>
+          <span class="lg-feature-desc">${f.desc}</span>
+        </span>
+      </div>
+    `).join('');
+
     el.innerHTML = `
       <style>
-        @keyframes loginFloat {
-          0%, 100% { transform: translateY(0px) rotate(0deg); }
-          33%       { transform: translateY(-12px) rotate(-2deg); }
-          66%       { transform: translateY(-6px) rotate(2deg); }
+        /* ── Animations ─────────────────────────────────────────────── */
+        @keyframes lgFloat {
+          0%, 100% { transform: translateY(0) rotate(0deg); }
+          33%      { transform: translateY(-10px) rotate(-2deg); }
+          66%      { transform: translateY(-5px)  rotate(2deg); }
         }
-        @keyframes loginPulse {
-          0%, 100% { box-shadow: 0 8px 32px rgba(1,80,170,0.25); }
-          50%       { box-shadow: 0 16px 48px rgba(1,80,170,0.45); }
+        @keyframes lgDrift {
+          0%, 100% { transform: translate(0, 0) scale(1); }
+          33%      { transform: translate(40px, -30px) scale(1.12); }
+          66%      { transform: translate(-30px, 25px) scale(0.92); }
         }
-        @keyframes loginFadeSlide {
-          from { opacity: 0; transform: translateY(18px); }
+        @keyframes lgFadeUp {
+          from { opacity: 0; transform: translateY(16px); }
           to   { opacity: 1; transform: translateY(0); }
         }
-        @keyframes loginSpin {
-          to { transform: rotate(360deg); }
+        @keyframes lgFadeRight {
+          from { opacity: 0; transform: translateX(-18px); }
+          to   { opacity: 1; transform: translateX(0); }
         }
-        #login-page .login-card {
-          animation: loginFadeSlide 0.5s cubic-bezier(0.16,1,0.3,1) both;
+        @keyframes lgSpin  { to { transform: rotate(360deg); } }
+        @keyframes lgSheen { 0% { left: -60%; } 60%, 100% { left: 130%; } }
+
+        /* ── Layout ─────────────────────────────────────────────────── */
+        #login-page .lg-wrap {
+          width: 100%;
+          min-height: 100vh;
+          display: flex;
+          background: var(--surface);
         }
+
+        /* ── Brand side (always dark — reads as part of the logo palette,
+              same idea as the sidebar rail) ──────────────────────────── */
+        #login-page .lg-brand {
+          position: relative;
+          overflow: hidden;
+          flex: 1 1 54%;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          padding: 44px 52px;
+          box-sizing: border-box;
+          color: #e6edf6;
+          background: linear-gradient(150deg, #06162B 0%, #0A2647 46%, #0150AA 100%);
+        }
+        /* Soft colour blobs drifting behind the content */
+        #login-page .lg-blob {
+          position: absolute;
+          border-radius: 50%;
+          filter: blur(70px);
+          pointer-events: none;
+        }
+        #login-page .lg-blob-1 {
+          width: 340px; height: 340px; top: -80px; left: -60px;
+          background: rgba(59,138,224,.55);
+          animation: lgDrift 18s ease-in-out infinite;
+        }
+        #login-page .lg-blob-2 {
+          width: 300px; height: 300px; bottom: -70px; right: -40px;
+          background: rgba(223,4,25,.34);
+          animation: lgDrift 22s ease-in-out infinite reverse;
+        }
+        #login-page .lg-blob-3 {
+          width: 260px; height: 260px; top: 42%; left: 46%;
+          background: rgba(107,176,245,.24);
+          animation: lgDrift 26s ease-in-out infinite;
+        }
+        /* Faint grid so the panel is never a flat wash of colour */
+        #login-page .lg-grid {
+          position: absolute; inset: 0;
+          background-image:
+            linear-gradient(rgba(255,255,255,.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px);
+          background-size: 46px 46px;
+          mask-image: radial-gradient(ellipse at 30% 40%, #000 10%, transparent 72%);
+          -webkit-mask-image: radial-gradient(ellipse at 30% 40%, #000 10%, transparent 72%);
+          pointer-events: none;
+        }
+        #login-page .lg-brand > * { position: relative; z-index: 1; }
+
+        #login-page .lg-brand-top   { display: flex; align-items: center; gap: 14px;
+                                      animation: lgFadeRight .6s cubic-bezier(.16,1,.3,1) both; }
+        #login-page .lg-brand-logo  { width: 54px; height: 54px; border-radius: 15px;
+                                      object-fit: contain; background: #fff; padding: 6px;
+                                      box-sizing: border-box;
+                                      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+                                      animation: lgFloat 5s ease-in-out infinite; }
+        #login-page .lg-brand-name  { font-size: 17px; font-weight: 700; letter-spacing: .01em; }
+        #login-page .lg-brand-sub   { font-size: 11px; font-weight: 600; letter-spacing: .22em;
+                                      text-transform: uppercase; color: #8FB6E4; margin-top: 3px; }
+
+        #login-page .lg-brand-mid   { max-width: 460px; }
+        #login-page .lg-greeting    { display: inline-flex; align-items: center; gap: 8px;
+                                      font-size: 11.5px; font-weight: 600; letter-spacing: .04em;
+                                      color: #B8D3F2; background: rgba(255,255,255,.08);
+                                      border: 1px solid rgba(255,255,255,.14);
+                                      padding: 6px 12px; border-radius: 999px; margin-bottom: 18px;
+                                      animation: lgFadeUp .6s cubic-bezier(.16,1,.3,1) .1s both; }
+        #login-page .lg-dot         { width: 6px; height: 6px; border-radius: 50%;
+                                      background: #4ADE80; box-shadow: 0 0 0 3px rgba(74,222,128,.22); }
+        #login-page .lg-headline    { font-size: 34px; line-height: 1.18; font-weight: 700;
+                                      margin: 0 0 12px; letter-spacing: -.01em;
+                                      animation: lgFadeUp .6s cubic-bezier(.16,1,.3,1) .18s both; }
+        #login-page .lg-headline em { font-style: normal;
+                                      background: linear-gradient(90deg, #6BB0F5, #FF6B78);
+                                      -webkit-background-clip: text; background-clip: text;
+                                      -webkit-text-fill-color: transparent; }
+        #login-page .lg-tagline     { font-size: 13.5px; line-height: 1.65; color: #A9C4E4;
+                                      margin: 0 0 30px; max-width: 400px;
+                                      animation: lgFadeUp .6s cubic-bezier(.16,1,.3,1) .26s both; }
+
+        #login-page .lg-feature     { display: flex; align-items: flex-start; gap: 12px;
+                                      margin-bottom: 16px;
+                                      animation: lgFadeUp .6s cubic-bezier(.16,1,.3,1) both; }
+        #login-page .lg-feature-icon{ flex: none; width: 32px; height: 32px; border-radius: 10px;
+                                      display: flex; align-items: center; justify-content: center;
+                                      background: rgba(107,176,245,.16); color: #8FC4FA;
+                                      border: 1px solid rgba(107,176,245,.22); }
+        #login-page .lg-feature-title { display: block; font-size: 13px; font-weight: 600; color: #E6EDF6; }
+        #login-page .lg-feature-desc  { display: block; font-size: 11.5px; color: #8FA9C8; margin-top: 2px; }
+
+        #login-page .lg-brand-foot  { display: flex; align-items: center; gap: 10px;
+                                      font-size: 11px; color: #7E97B5;
+                                      animation: lgFadeUp .6s cubic-bezier(.16,1,.3,1) .5s both; }
+        #login-page .lg-brand-foot .lg-rule { flex: 1; height: 1px;
+                                      background: linear-gradient(90deg, rgba(255,255,255,.16), transparent); }
+
+        /* ── Form side ──────────────────────────────────────────────── */
+        #login-page .lg-panel {
+          position: relative;
+          flex: 1 1 46%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 40px 24px;
+          box-sizing: border-box;
+          background: var(--surface);
+        }
+        #login-page .lg-theme-btn {
+          position: absolute; top: 20px; right: 20px;
+          width: 34px; height: 34px; border-radius: 10px;
+          display: flex; align-items: center; justify-content: center;
+          background: var(--surface-alt); color: var(--text-secondary);
+          border: 1px solid var(--border-base); cursor: pointer;
+          transition: color .15s, border-color .15s, transform .15s;
+        }
+        #login-page .lg-theme-btn:hover { color: var(--color-primary-strong);
+                                          border-color: var(--color-primary); transform: translateY(-1px); }
+
+        #login-page .login-card { width: 100%; max-width: 24rem;
+                                  animation: lgFadeUp .55s cubic-bezier(.16,1,.3,1) .12s both; }
+        #login-page .lg-mobile-brand { display: none; }
+
+        #login-page .lg-field { animation: lgFadeUp .5s cubic-bezier(.16,1,.3,1) both; }
+        #login-page .lg-field:nth-of-type(1) { animation-delay: .20s; }
+        #login-page .lg-field:nth-of-type(2) { animation-delay: .26s; }
+        #login-page .lg-field:nth-of-type(3) { animation-delay: .32s; }
+
+        #login-page .login-input { transition: border-color .15s, box-shadow .15s, background .15s; outline: none; }
         #login-page .login-input:focus {
           border-color: var(--color-primary) !important;
           box-shadow: 0 0 0 3px var(--color-primary-ring) !important;
-          outline: none;
         }
-        #login-page .login-input {
-          outline: none;
+        /* Icon picks up the brand colour while the field is focused */
+        #login-page .lg-input-wrap:focus-within .lg-input-icon { color: var(--color-primary-strong); }
+
+        #login-page .login-submit {
+          position: relative; overflow: hidden;
+          transition: transform .15s, box-shadow .15s, opacity .15s;
         }
         #login-page .login-submit:hover:not(:disabled) {
-          opacity: 0.9;
-          box-shadow: 0 6px 28px rgba(1,80,170,0.45) !important;
+          transform: translateY(-1px);
+          box-shadow: 0 10px 30px var(--color-primary-ring) !important;
         }
-        #login-page .login-spinner {
-          animation: loginSpin 0.7s linear infinite;
+        #login-page .login-submit:active:not(:disabled) { transform: translateY(0); }
+        /* Light sweep across the button on hover */
+        #login-page .login-submit::after {
+          content: ''; position: absolute; top: 0; left: -60%; width: 45%; height: 100%;
+          background: linear-gradient(100deg, transparent, rgba(255,255,255,.28), transparent);
+          transform: skewX(-18deg); pointer-events: none;
+        }
+        #login-page .login-submit:hover:not(:disabled)::after { animation: lgSheen .9s ease-out; }
+        #login-page .login-spinner { animation: lgSpin .7s linear infinite; }
+
+        /* ── Tablet / mobile ────────────────────────────────────────── */
+        @media (max-width: 1023px) {
+          #login-page .lg-brand    { display: none; }
+          #login-page .lg-panel    {
+            flex: 1 1 100%;
+            background:
+              radial-gradient(ellipse at 20% -10%, rgba(1,80,170,.16) 0%, transparent 55%),
+              radial-gradient(ellipse at 90% 105%, rgba(223,4,25,.10) 0%, transparent 55%),
+              var(--surface);
+          }
+          #login-page .lg-mobile-brand {
+            display: flex; flex-direction: column; align-items: center;
+            gap: 10px; margin-bottom: 22px; text-align: center;
+          }
+          #login-page .lg-mobile-logo {
+            width: 62px; height: 62px; border-radius: 17px; object-fit: contain;
+            background: #fff; padding: 6px; box-sizing: border-box;
+            box-shadow: 0 10px 30px rgba(1,80,170,.28);
+            animation: lgFloat 5s ease-in-out infinite;
+          }
+        }
+        @media (max-width: 1279px) and (min-width: 1024px) {
+          #login-page .lg-brand   { padding: 36px 38px; }
+          #login-page .lg-headline{ font-size: 28px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          #login-page * { animation: none !important; transition: none !important; }
         }
       </style>
 
-      <div style="
-        width: 100%;
-        min-height: 100vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 1.5rem;
-        box-sizing: border-box;
-        background: radial-gradient(ellipse at 25% 60%, #9FC4EC 0%, #D3E3F6 35%, #EDF3FB 65%, #FAFCFF 100%);
-      ">
-        <div class="login-card" style="width: 100%; max-width: 23rem;">
+      <div class="lg-wrap">
 
-          <!-- Card -->
-          <div class="card" style="
-            background: var(--surface);
-            border-radius: var(--radius-2xl);
-            padding: 2.25rem 2rem;
-            box-shadow: var(--shadow-xl);
-            border: none;
-          ">
+        <!-- ════════ Brand side ════════ -->
+        <aside class="lg-brand">
+          <span class="lg-blob lg-blob-1"></span>
+          <span class="lg-blob lg-blob-2"></span>
+          <span class="lg-blob lg-blob-3"></span>
+          <span class="lg-grid"></span>
 
-            <!-- Header / Logo area -->
-            <div style="text-align: center; margin-bottom: 1.75rem;">
+          <div class="lg-brand-top">
+            <img src="/logo.png" alt="Lallubhai Amichand" class="lg-brand-logo"
+                 onerror="this.style.visibility='hidden';" />
+            <div>
+              <div class="lg-brand-name">Lallubhai Amichand</div>
+              <div class="lg-brand-sub">ERP Workspace</div>
+            </div>
+          </div>
 
-              <!-- Animated brand logo -->
-              <div style="display:flex;justify-content:center;margin-bottom:14px;">
-                <div style="animation: loginFloat 3.5s ease-in-out infinite;">
-                  <img src="/logo.png" alt="Logo"
-                    style="width:72px;height:72px;border-radius:18px;object-fit:contain;background:#fff;box-shadow:0 8px 32px rgba(1,80,170,0.28);"
-                    onerror="this.style.display='none';document.getElementById('login-fallback-icon').style.display='flex';"
-                  />
-                  <div id="login-fallback-icon" style="display:none;width:72px;height:72px;border-radius:18px;background:linear-gradient(135deg,#DF0419,#B30314);align-items:center;justify-content:center;box-shadow:0 8px 32px rgba(223,4,25,0.3);">
-                    <svg width="40" height="40" viewBox="0 0 28 28" fill="none">
-                      <path d="M7 20V10l7-4 7 4v10" stroke="rgba(255,255,255,0.8)" stroke-width="1.8" stroke-linejoin="round"/>
-                      <path d="M11 20v-5h6v5" stroke="rgba(255,255,255,0.8)" stroke-width="1.8" stroke-linejoin="round"/>
-                      <path d="M4 12l10-6 10 6" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
+          <div class="lg-brand-mid">
+            <div class="lg-greeting">
+              <span class="lg-dot"></span>
+              ${greeting} &middot; ${dateStr}
+            </div>
+
+            <h2 class="lg-headline">
+              Ek jagah par<br/><em>poora business</em> control.
+            </h2>
+            <p class="lg-tagline">
+              Tasks, purchase, inventory aur reports &mdash; sab kuch ek hi
+              workspace me. Sign in kijiye aur wahin se shuru kijiye jahan chhoda tha.
+            </p>
+
+            ${featuresHtml}
+          </div>
+
+          <div class="lg-brand-foot">
+            <span>Grow Your Business</span>
+            <span class="lg-rule"></span>
+            <span>&copy; ${now.getFullYear()} Lallubhai Amichand</span>
+          </div>
+        </aside>
+
+        <!-- ════════ Form side ════════ -->
+        <main class="lg-panel">
+
+          <button type="button" class="lg-theme-btn" id="login-theme-btn" aria-label="Toggle theme"></button>
+
+          <div class="login-card">
+
+            <!-- Compact brand block, mobile only (the panel above is hidden there) -->
+            <div class="lg-mobile-brand">
+              <img src="/logo.png" alt="Lallubhai Amichand" class="lg-mobile-logo"
+                   onerror="this.style.display='none';" />
+              <div>
+                <div style="font-size:15px;font-weight:700;color:var(--text-primary);">Lallubhai Amichand</div>
+                <div style="font-size:10.5px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--color-primary-strong);margin-top:3px;">ERP Workspace</div>
+              </div>
+            </div>
+
+            <div class="card" style="
+              background: var(--surface);
+              border-radius: var(--radius-2xl);
+              padding: 2rem 1.9rem;
+              box-shadow: var(--shadow-xl);
+              border: 1px solid var(--border-base);
+            ">
+
+              <!-- Header -->
+              <div style="margin-bottom: 1.5rem;">
+                <h1 style="font-size: 1.4rem; font-weight: 700; color: var(--text-primary); margin: 0 0 5px;">
+                  Welcome back &#x1F44B;
+                </h1>
+                <p style="font-size: 12.5px; color: var(--text-secondary); margin: 0;">
+                  Sign in to continue to your workspace
+                </p>
+              </div>
+
+              <!-- Form -->
+              <form id="login-form" style="display: flex; flex-direction: column; gap: 1rem;">
+
+                <!-- Email -->
+                <div class="lg-field">
+                  <label class="label" style="margin-bottom:6px;">Email Address</label>
+                  <div class="lg-input-wrap" style="position: relative;">
+                    <span class="lg-input-icon" style="
+                      position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+                      color: var(--text-muted); display: flex; pointer-events: none;
+                      transition: color .15s;
+                    ">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
+                      </svg>
+                    </span>
+                    <input
+                      id="login-email"
+                      class="input login-input"
+                      type="text"
+                      required
+                      placeholder="Enter your email or ID"
+                      autocomplete="off"
+                      readonly
+                      onfocus="this.removeAttribute('readonly')"
+                      style="padding-left: 36px; border-radius: 10px;"
+                    />
                   </div>
                 </div>
+
+                <!-- Name (only shown when the email is shared by more than one account) -->
+                <div class="lg-field" id="login-name-field" style="display:none;">
+                  <label class="label" style="margin-bottom:6px;">Full Name</label>
+                  <div class="lg-input-wrap" style="position: relative;">
+                    <span class="lg-input-icon" style="
+                      position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+                      color: var(--text-muted); display: flex; pointer-events: none;
+                      transition: color .15s;
+                    ">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+                      </svg>
+                    </span>
+                    <input
+                      id="login-name"
+                      class="input login-input"
+                      type="text"
+                      placeholder="Enter your full name"
+                      autocomplete="off"
+                      style="padding-left: 36px; border-radius: 10px;"
+                    />
+                  </div>
+                  <p style="font-size:11px;color:var(--text-muted);margin:4px 0 0;">Multiple accounts use this email — enter your name to continue.</p>
+                </div>
+
+                <!-- Password -->
+                <div class="lg-field">
+                  <label class="label" style="margin-bottom:6px;">Password</label>
+                  <div class="lg-input-wrap" style="position: relative;">
+                    <span class="lg-input-icon" style="
+                      position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+                      color: var(--text-muted); display: flex; pointer-events: none;
+                      transition: color .15s;
+                    ">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                      </svg>
+                    </span>
+                    <input
+                      id="login-password"
+                      class="input login-input"
+                      type="password"
+                      required
+                      placeholder="Enter your password"
+                      autocomplete="new-password"
+                      readonly
+                      onfocus="this.removeAttribute('readonly')"
+                      style="padding-left: 36px; padding-right: 42px; border-radius: 10px;"
+                    />
+                    <button
+                      type="button"
+                      id="login-toggle-pass"
+                      style="
+                        position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
+                        background: none; border: none; cursor: pointer; color: var(--text-muted);
+                        display: flex; padding: 2px;
+                      "
+                      aria-label="Toggle password visibility"
+                    >
+                      <!-- Eye icon (show password) — toggled by JS -->
+                      <svg id="login-eye-show" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                      </svg>
+                      <svg id="login-eye-hide" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                        <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                        <line x1="1" y1="1" x2="23" y2="23"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Error message -->
+                <p id="login-error" style="
+                  display: none;
+                  color: var(--color-danger-text); font-size: 12px; text-align: center; margin: 0;
+                  background: var(--color-danger-bg); padding: 8px 12px; border-radius: 8px;
+                "></p>
+
+                <!-- Submit -->
+                <button
+                  type="submit"
+                  id="login-submit"
+                  class="btn-primary btn-lg login-submit"
+                  style="
+                    width: 100%;
+                    box-shadow: 0 4px 20px var(--color-primary-ring);
+                    letter-spacing: 0.02em;
+                    margin-top: 4px;
+                  "
+                >
+                  <span id="login-btn-text">Sign In <span style="font-size:16px;">&#x2192;</span></span>
+                  <span id="login-btn-loading" style="display:none; align-items:center; gap:8px;">
+                    <svg class="login-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                    </svg>
+                    Signing in&hellip;
+                  </span>
+                </button>
+              </form>
+
+              <!-- Footer -->
+              <div style="text-align: center; margin-top: 1.4rem;">
+                <div style="
+                  width: 100%; height: 1px;
+                  background: linear-gradient(90deg, transparent, var(--border-base), transparent);
+                  margin-bottom: 0.9rem;
+                "></div>
+                <p style="font-size: 11px; color: var(--text-muted); margin: 0;">
+                  <span style="color: var(--color-primary-strong); font-weight: 600; letter-spacing: 0.05em;">Lallubhai Amichand</span>
+                  <span style="margin: 0 6px; color: var(--border-strong);">&middot;</span>
+                  <span>Grow Your Business</span>
+                </p>
               </div>
 
-              <!-- Brand name -->
-              <div style="font-size:11px;font-weight:700;letter-spacing:0.2em;text-transform:uppercase;color:var(--color-primary);margin-bottom:8px;">Lallubhai Amichand</div>
-
-              <h1 style="font-size: 1.35rem; font-weight: 700; color: var(--text-primary); margin: 0 0 4px;">
-                Welcome back &#x1F44B;
-              </h1>
-              <p style="font-size: 12.5px; color: var(--text-muted); margin: 0;">
-                Sign in to your account
-              </p>
             </div>
-
-            <!-- Form -->
-            <form id="login-form" style="display: flex; flex-direction: column; gap: 1rem;">
-
-              <!-- Email -->
-              <div>
-                <label class="label" style="margin-bottom:6px;">Email Address</label>
-                <div style="position: relative;">
-                  <span style="
-                    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
-                    color: var(--text-muted); display: flex; pointer-events: none;
-                  ">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
-                    </svg>
-                  </span>
-                  <input
-                    id="login-email"
-                    class="input login-input"
-                    type="text"
-                    required
-                    placeholder="Enter your email or ID"
-                    autocomplete="off"
-                    readonly
-                    onfocus="this.removeAttribute('readonly')"
-                    style="padding-left: 36px; border-radius: 10px;"
-                  />
-                </div>
-              </div>
-
-              <!-- Name (only shown when the email is shared by more than one account) -->
-              <div id="login-name-field" style="display:none;">
-                <label class="label" style="margin-bottom:6px;">Full Name</label>
-                <div style="position: relative;">
-                  <span style="
-                    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
-                    color: var(--text-muted); display: flex; pointer-events: none;
-                  ">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
-                    </svg>
-                  </span>
-                  <input
-                    id="login-name"
-                    class="input login-input"
-                    type="text"
-                    placeholder="Enter your full name"
-                    autocomplete="off"
-                    style="padding-left: 36px; border-radius: 10px;"
-                  />
-                </div>
-                <p style="font-size:11px;color:var(--text-muted);margin:4px 0 0;">Multiple accounts use this email — enter your name to continue.</p>
-              </div>
-
-              <!-- Password -->
-              <div>
-                <label class="label" style="margin-bottom:6px;">Password</label>
-                <div style="position: relative;">
-                  <span style="
-                    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
-                    color: var(--text-muted); display: flex; pointer-events: none;
-                  ">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                    </svg>
-                  </span>
-                  <input
-                    id="login-password"
-                    class="input login-input"
-                    type="password"
-                    required
-                    placeholder="Enter your password"
-                    autocomplete="new-password"
-                    readonly
-                    onfocus="this.removeAttribute('readonly')"
-                    style="padding-left: 36px; padding-right: 42px; border-radius: 10px;"
-                  />
-                  <button
-                    type="button"
-                    id="login-toggle-pass"
-                    style="
-                      position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
-                      background: none; border: none; cursor: pointer; color: var(--text-muted);
-                      display: flex; padding: 2px;
-                    "
-                    aria-label="Toggle password visibility"
-                  >
-                    <!-- Eye icon (show password) — toggled by JS -->
-                    <svg id="login-eye-show" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-                    </svg>
-                    <svg id="login-eye-hide" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
-                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
-                      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
-                      <line x1="1" y1="1" x2="23" y2="23"/>
-                    </svg>
-                  </button>
-                </div>
-              </div>
-
-              <!-- Error message -->
-              <p id="login-error" style="
-                display: none;
-                color: var(--color-danger-text); font-size: 12px; text-align: center; margin: 0;
-                background: var(--color-danger-bg); padding: 8px 12px; border-radius: 8px;
-              "></p>
-
-              <!-- Submit -->
-              <button
-                type="submit"
-                id="login-submit"
-                class="btn-primary btn-lg login-submit"
-                style="
-                  width: 100%;
-                  box-shadow: 0 4px 20px var(--color-primary-ring);
-                  letter-spacing: 0.02em;
-                  margin-top: 4px;
-                "
-              >
-                <span id="login-btn-text">Sign In <span style="font-size:16px;">&#x2192;</span></span>
-                <span id="login-btn-loading" style="display:none; align-items:center; gap:8px;">
-                  <svg class="login-spinner" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-                  </svg>
-                  Signing in&hellip;
-                </span>
-              </button>
-            </form>
-
-            <!-- Footer -->
-            <div style="text-align: center; margin-top: 1.5rem;">
-              <div style="
-                width: 100%; height: 1px;
-                background: linear-gradient(90deg, transparent, var(--border-base), transparent);
-                margin-bottom: 1rem;
-              "></div>
-              <p style="font-size: 11px; color: var(--text-muted); margin: 0;">
-                <span style="color: var(--color-primary); font-weight: 600; letter-spacing: 0.05em;">Lallubhai Amichand</span>
-                <span style="margin: 0 6px; color: var(--border-strong);">&middot;</span>
-                <span style="color: var(--text-muted);">Grow Your Business</span>
-              </p>
-            </div>
-
           </div>
-        </div>
+        </main>
       </div>
     `;
 
@@ -256,6 +503,20 @@ window.Pages.login = {
     const submitBtn   = el.querySelector('#login-submit');
     const btnText     = el.querySelector('#login-btn-text');
     const btnLoading  = el.querySelector('#login-btn-loading');
+    const themeBtn    = el.querySelector('#login-theme-btn');
+
+    // Theme toggle — same light/dark switch the topbar carries inside the app.
+    if (themeBtn && window.Theme) {
+      const paintThemeIcon = () => {
+        themeBtn.innerHTML = window.Theme.current() === 'dark'
+          ? window.Theme.SUN_ICON
+          : window.Theme.MOON_ICON;
+      };
+      paintThemeIcon();
+      themeBtn.addEventListener('click', () => { window.Theme.toggle(); paintThemeIcon(); });
+    } else if (themeBtn) {
+      themeBtn.style.display = 'none';
+    }
 
     // Force-clear fields after Chrome autofill (runs after browser fills them)
     setTimeout(() => { if (emailInput) emailInput.value = ''; if (passInput) passInput.value = ''; }, 200);
@@ -270,7 +531,6 @@ window.Pages.login = {
 
     // Helper: set loading state
     function setLoading(on) {
-      submitBtn.disabled          = on;
       submitBtn.disabled          = on;
       submitBtn.style.boxShadow   = on ? 'none' : '0 4px 20px var(--color-primary-ring)';
       btnText.style.display       = on ? 'none'  : '';
