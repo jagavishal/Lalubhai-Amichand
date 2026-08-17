@@ -874,6 +874,10 @@ window.Pages = window.Pages || {};
 
       const gw = plotW / Math.max(1, groups.length);
       const paired = !!(groups[0] && groups[0].values.length > 1);
+      // A number over every bar stops being readable once the chart is dense —
+      // past a dozen bars the values live in the hover tooltip and the table
+      // below instead.
+      const showValues = groups.reduce((n, g) => n + g.values.length, 0) <= 12;
       // ~38% of each slot is breathing room, and bars stay thin rather than
       // stretching to fill the slot when there are only four or five of them.
       const inner = Math.min(gw * 0.62, paired ? 88 : 46);
@@ -891,7 +895,7 @@ window.Pages = window.Pages || {};
           const labelY = val < 0 ? y + h + 12 : y - 6;
           return '<path d="' + _barPath(x, y, bw, h, val < 0) + '" fill="' + (colors[v.key] || _CHART_STOCK) + '">'
               + '<title>' + esc(g.label + ' · ' + v.label + ': ' + label + (unit ? ' ' + unit : '')) + '</title></path>'
-            + '<text x="' + (x + bw / 2) + '" y="' + labelY + '" text-anchor="middle" font-size="10.5" font-weight="700" fill="#0f172a">' + esc(label) + '</text>';
+            + (showValues ? '<text x="' + (x + bw / 2) + '" y="' + labelY + '" text-anchor="middle" font-size="10.5" font-weight="700" fill="#0f172a">' + esc(label) + '</text>' : '');
         }).join('');
         return marks
           + '<text x="' + (gx + inner / 2) + '" y="' + (padT + plotH + 20) + '" text-anchor="middle" font-size="12" font-weight="700" fill="#334155">' + esc(g.label) + '</text>';
@@ -919,8 +923,8 @@ window.Pages = window.Pages || {};
       return (MONTHS[parseInt(parts[1], 10) - 1] || parts[1]) + ' ' + parts[0].slice(2);
     }
     function _lineChartSvg(months, lines, unit) {
-      const W = 980, H = 300;
-      const padL = 76, padR = 96, padT = 20, padB = 40; // padR leaves room for the end labels
+      const W = 620, H = 300;
+      const padL = 72, padR = 84, padT = 20, padB = 40; // padR leaves room for the end labels
       const plotW = W - padL - padR;
       const plotH = H - padT - padB;
 
@@ -1055,15 +1059,40 @@ window.Pages = window.Pages || {};
       // reaches back years, and 40+ columns is a smear rather than a report.
       const months = all.slice(-_MONTHLY_MAX);
       const trimmed = all.length - months.length;
+      const sales = (m, name) => ((m.series || {})[name] || {}).outward || 0;
+      const trimNote = trimmed ? ' Showing the most recent ' + months.length + ' of ' + all.length + ' months — narrow the dates for the earlier ones.' : '';
+
+      // The form follows how many months there are to compare. Lines need a run
+      // of months to read as a trend; with one or two they collapse into loose
+      // dots (which is exactly what a book that has only just started logging
+      // showed), so those get bars instead — the same picture, readable.
+      if (months.length === 1) {
+        const m = months[0];
+        const chart = _barChartSvg(
+          rows.map(r => ({ label: r.series, values: [{ key: 'sales', label: 'Sales', value: sales(m, r.series) }] })),
+          { sales: _CHART_OUTWARD });
+        return _chartCardHtml('Monthly sales by alloy',
+          'Sales (Outward) per grade for ' + _monthLabel(m.month) + ' — the only month with movement in this range, so there is no trend to plot yet.' + trimNote,
+          '', chart);
+      }
+
+      if (months.length <= 3) {
+        const chart = _barChartSvg(
+          months.map(m => ({ label: _monthLabel(m.month), values: rows.map((r, i) => ({ key: r.series, label: r.series, value: sales(m, r.series) })) })),
+          Object.fromEntries(rows.map((r, i) => [r.series, _CHART_SERIES[i % _CHART_SERIES.length]])));
+        return _chartCardHtml('Monthly sales by alloy',
+          'Sales (Outward) per grade, month by month.' + trimNote,
+          _legendHtml(rows.map((r, i) => [_CHART_SERIES[i % _CHART_SERIES.length], r.series])), chart);
+      }
+
       const lines = rows.map((r, i) => ({
         key: r.series,
         label: r.series,
         color: _CHART_SERIES[i % _CHART_SERIES.length],
-        points: months.map(m => ((m.series || {})[r.series] || {}).outward || 0),
+        points: months.map(m => sales(m, r.series)),
       }));
-      const subtitle = 'Outward (sales) quantity per grade, ' + _monthLabel(months[0].month) + ' to ' + _monthLabel(months[months.length - 1].month)
-        + (trimmed ? ' — most recent ' + months.length + ' months of ' + all.length + ', narrow the dates to see the earlier ones.' : '.');
-      return _chartCardHtml('Monthly sales by alloy', subtitle,
+      return _chartCardHtml('Monthly sales by alloy',
+        'Sales (Outward) per grade, ' + _monthLabel(months[0].month) + ' to ' + _monthLabel(months[months.length - 1].month) + '.' + trimNote,
         _legendHtml(lines.map(l => [l.color, l.label])),
         _lineChartSvg(months.map(m => m.month), lines));
     }
@@ -1136,8 +1165,12 @@ window.Pages = window.Pages || {};
           + _chartCardHtml('Inward vs Outward by series', 'Stock movement logged ' + _seriesRangeLabel() + ', cancelled entries excluded.',
               _legendHtml([[_CHART_INWARD, 'Inward'], [_CHART_OUTWARD, 'Outward']]), moveChart)
         + '</div>'
-        + '<div style="margin-top:14px;">' + _monthlySalesCardHtml(rows) + '</div>'
-        + '<div style="margin-top:14px;">' + _seriesTableHtml(rows) + '</div>';
+        // Second row, same two-up grid: the monthly chart next to the numbers
+        // it is drawn from.
+        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;align-items:start;margin-top:14px;">'
+          + _monthlySalesCardHtml(rows)
+          + _seriesTableHtml(rows)
+        + '</div>';
     }
 
     function _seriesFilterBarHtml() {
