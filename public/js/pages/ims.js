@@ -829,8 +829,10 @@ window.Pages = window.Pages || {};
           + ' L' + (x + w - r) + ',' + y + ' Q' + (x + w) + ',' + y + ' ' + (x + w) + ',' + (y + r) + ' L' + (x + w) + ',' + (y + h) + ' Z';
     }
     function _barChartSvg(groups, colors, unit) {
-      const W = 760, H = 280;
-      const padL = 76, padR = 16, padT = 22, padB = 42;
+      // Sized for one half of the two-up chart row below, so the drawing renders
+      // at roughly 1:1 there and its type matches the rest of the page.
+      const W = 620, H = 280;
+      const padL = 72, padR = 14, padT = 22, padB = 42;
       const plotW = W - padL - padR;
       const plotH = H - padT - padB;
 
@@ -1001,13 +1003,16 @@ window.Pages = window.Pages || {};
         ] })),
         { inward: _CHART_INWARD, outward: _CHART_OUTWARD });
 
+      // Two-up on a wide screen, stacking below ~900px — the charts are read
+      // against each other (what's on hand vs what moved), so they belong side
+      // by side wherever there's room for both at a legible size.
       el.innerHTML = _seriesStatsHtml(rows)
-        + '<div style="display:flex;flex-direction:column;gap:14px;">'
+        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;align-items:start;">'
           + _chartCardHtml('Current stock by series', 'Live balance as of today — bars below the line are items issued past what was received.', '', stockChart)
           + _chartCardHtml('Inward vs Outward by series', 'Stock movement logged ' + _seriesRangeLabel() + ', cancelled entries excluded.',
               _legendHtml([[_CHART_INWARD, 'Inward'], [_CHART_OUTWARD, 'Outward']]), moveChart)
-          + _seriesTableHtml(rows)
-        + '</div>';
+        + '</div>'
+        + '<div style="margin-top:14px;">' + _seriesTableHtml(rows) + '</div>';
     }
 
     function _seriesFilterBarHtml() {
