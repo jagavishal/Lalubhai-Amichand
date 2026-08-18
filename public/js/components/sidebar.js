@@ -114,7 +114,12 @@ window.Sidebar = {
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
       { route: 'fms',           label: 'FMS',          icon: 'fms',          flag: 'fms' },
       { route: 'mis',           label: 'MIS Report',   icon: 'mis' },
-      { route: 'developer',     label: 'Developer',    icon: 'developer',    adminOnly: true },
+      // No entry for 'developer': it is a maintenance console (reset, restore,
+      // export) rather than day-to-day work, so it stays off the menu. The
+      // route still resolves, so #developer reaches it when it is needed --
+      // and every /api/developer route already refuses to answer without the
+      // DEVELOPER_SECRET query param (see checkSecret in server.js), so the
+      // page can do nothing on its own.
     ]},
     { title: 'Accounts', items: [
       { route: 'client-master',  label: 'Vendor Master',  icon: 'clientmaster' },
