@@ -188,7 +188,7 @@ async function sql(strings, ...values) {
 }
 
 const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS users (id VARCHAR(16) PRIMARY KEY, name VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL, phone VARCHAR(64) DEFAULT '', department VARCHAR(128) DEFAULT '', roles VARCHAR(128) DEFAULT 'User', active SMALLINT NOT NULL DEFAULT 1, password_hash VARCHAR(255) DEFAULT NULL, picture TEXT DEFAULT NULL, force_logout_after DATETIME DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(name, email)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE TABLE IF NOT EXISTS users (id VARCHAR(16) PRIMARY KEY, name VARCHAR(255) NOT NULL, email VARCHAR(255) NOT NULL, phone VARCHAR(64) DEFAULT '', department VARCHAR(128) DEFAULT '', branch VARCHAR(64) DEFAULT '', roles VARCHAR(128) DEFAULT 'User', active SMALLINT NOT NULL DEFAULT 1, password_hash VARCHAR(255) DEFAULT NULL, picture TEXT DEFAULT NULL, force_logout_after DATETIME DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(name, email)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_users_name ON users (name)`,
   `CREATE INDEX idx_users_email ON users (email)`,
   `CREATE INDEX idx_users_department ON users (department)`,
@@ -237,6 +237,11 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS dev_backups (id VARCHAR(64) PRIMARY KEY, label VARCHAR(128) NOT NULL DEFAULT '', data TEXT NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS user_sessions (sid VARCHAR(128) PRIMARY KEY, data TEXT NOT NULL, expires_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT DEFAULT NULL`,
+  // Which of the company's three sites a person belongs to. Free VARCHAR rather
+  // than an enum so a fourth site is a one-line frontend change (BRANCHES in
+  // public/js/pages/users.js) and never a migration; '' means not yet set, which
+  // is what every user carries until an Admin picks one.
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS branch VARCHAR(64) DEFAULT ''`,
   `CREATE TABLE IF NOT EXISTS payment_entries (id VARCHAR(16) PRIMARY KEY, vendor_id VARCHAR(16) NOT NULL, amount DECIMAL(15,2) NOT NULL DEFAULT 0, txn_type VARCHAR(4) DEFAULT 'N', narration VARCHAR(500) DEFAULT '', status VARCHAR(16) DEFAULT 'draft', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, exported_at DATETIME DEFAULT NULL, batch_label VARCHAR(128) DEFAULT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_pe_status ON payment_entries (status)`,
   `CREATE INDEX idx_pe_exported ON payment_entries (exported_at)`,
@@ -695,11 +700,11 @@ async function syncUsers_gs() {
     const auth = new google.auth.GoogleAuth({ credentials:{client_email:email,private_key:key}, scopes:['https://www.googleapis.com/auth/spreadsheets'] });
     const sheets = google.sheets({ version:'v4', auth });
     const rows = await sql`SELECT * FROM users ORDER BY id`;
-    const values = rows.map(u => [u.id,u.name,u.email,u.phone||'',u.department||'',(Array.isArray(u.roles)?u.roles:[u.roles]).filter(Boolean).join(', '),u.active?'Yes':'No',u.created_at?new Date(u.created_at).toLocaleString('en-IN'):'']);
+    const values = rows.map(u => [u.id,u.name,u.email,u.phone||'',u.department||'',u.branch||'',(Array.isArray(u.roles)?u.roles:[u.roles]).filter(Boolean).join(', '),u.active?'Yes':'No',u.created_at?new Date(u.created_at).toLocaleString('en-IN'):'']);
     const meta = await sheets.spreadsheets.get({ spreadsheetId:SPREADSHEET_ID });
     const exists = meta.data.sheets.some(s=>s.properties.title==='Users');
     if (!exists) await sheets.spreadsheets.batchUpdate({ spreadsheetId:SPREADSHEET_ID, requestBody:{requests:[{addSheet:{properties:{title:'Users'}}}]} });
-    await sheets.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:'Users!A1', valueInputOption:'RAW', requestBody:{values:[['ID','Name','Email','Phone','Department','Roles','Active','Created At']]} });
+    await sheets.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:'Users!A1', valueInputOption:'RAW', requestBody:{values:[['ID','Name','Email','Phone','Department','Branch','Roles','Active','Created At']]} });
     await sheets.spreadsheets.values.clear({ spreadsheetId:SPREADSHEET_ID, range:'Users!A2:Z10000' });
     if (values.length>0) await sheets.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:'Users!A2', valueInputOption:'RAW', requestBody:{values} });
   } catch (err) { console.error('[Sheets] Users sync failed:', err.message); }
@@ -2002,7 +2007,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
     const lastNum = users.reduce((max,u)=>{ const n=parseInt((u.id||'').replace('U',''))||0; return n>max?n:max; },0);
     const id = 'U'+(lastNum+1).toString().padStart(3,'0');
     const roles = body.roles?.length ? body.roles : ['User'];
-    const newUser = { id, name:body.name.trim(), email:body.email.trim(), phone:body.phone||'', department:body.department||'', roles, active:true, permissions: defaultPermissionsFor(roles), createdAt:new Date().toISOString() };
+    const newUser = { id, name:body.name.trim(), email:body.email.trim(), phone:body.phone||'', department:body.department||'', branch:body.branch||'', roles, active:true, permissions: defaultPermissionsFor(roles), createdAt:new Date().toISOString() };
     users.push(newUser); store.users=users;
     await writeStore(store);
     return res.status(201).json(newUser);
@@ -2018,7 +2023,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
     const roles = body.roles?.length ? body.roles : ['User'];
     const hash = body.password ? await bcrypt.hash(body.password, 10) : null;
     const perms = defaultPermissionsFor(roles);
-    await pool.query('INSERT INTO users (id,name,email,phone,department,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,NOW())', [id,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',body.department||'',roles.join(','),hash,perms?JSON.stringify(perms):null]);
+    await pool.query('INSERT INTO users (id,name,email,phone,department,branch,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$9,NOW())', [id,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',body.department||'',body.branch||'',roles.join(','),hash,perms?JSON.stringify(perms):null]);
     if (body.picture) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,id]);
@@ -2046,6 +2051,7 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
       if (body.email!==undefined) user.email=body.email;
       if (body.phone!==undefined) user.phone=body.phone;
       if (body.department!==undefined) user.department=body.department;
+      if (body.branch!==undefined) user.branch=body.branch;
       if (body.roles!==undefined) user.roles=Array.isArray(body.roles)?body.roles:body.roles.split(',').map(r=>r.trim());
       if (body.active!==undefined) user.active=body.active;
       if (body.permissions!==undefined) user.permissions=body.permissions;
@@ -2055,8 +2061,8 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
     await ensureSchema();
     const roles = body.roles ? (Array.isArray(body.roles)?body.roles.join(','):body.roles) : null;
     await pool.query(
-      `UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), phone=COALESCE($3,phone), department=COALESCE($4,department), roles=COALESCE($5,roles), active=COALESCE($6,active) WHERE id=$7`,
-      [body.name??null,body.email??null,body.phone??null,body.department??null,roles,body.active===undefined?null:(body.active?1:0),body.id]
+      `UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), phone=COALESCE($3,phone), department=COALESCE($4,department), branch=COALESCE($5,branch), roles=COALESCE($6,roles), active=COALESCE($7,active) WHERE id=$8`,
+      [body.name??null,body.email??null,body.phone??null,body.department??null,body.branch??null,roles,body.active===undefined?null:(body.active?1:0),body.id]
     );
     if (body.picture!==undefined) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}

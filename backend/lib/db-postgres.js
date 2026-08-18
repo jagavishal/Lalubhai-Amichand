@@ -43,6 +43,7 @@ const SCHEMA = [
     email               VARCHAR(255) NOT NULL UNIQUE,
     phone               VARCHAR(64)  DEFAULT '',
     department          VARCHAR(128) DEFAULT '',
+    branch              VARCHAR(64)  DEFAULT '',
     roles               VARCHAR(128) DEFAULT 'User',
     active              SMALLINT     NOT NULL DEFAULT 1,
     password_hash       VARCHAR(255) DEFAULT NULL,

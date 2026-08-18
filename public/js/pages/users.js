@@ -4,6 +4,11 @@ window.Pages.users = (() => {
   /* ── constants ──────────────────────────────────────────────────────── */
   const ROLES = ['Admin', 'User', 'HOD'];
 
+  // The company's three sites. Unlike Department (a live master an Admin can add
+  // to from this very dropdown) these are fixed, so they are a plain list here
+  // rather than a table -- adding a fourth site means adding one string.
+  const BRANCHES = ['Head Office Mumbai', 'Factory Ahmedabad', 'Stores'];
+
   const ROLE_STYLE = {
     Admin: 'bg-amber-50 text-amber-700 border-amber-200',
     User:  '', // rendered via inline style (brand color) — see rolesHtml
@@ -155,7 +160,7 @@ window.Pages.users = (() => {
   }
 
   function blankForm() {
-    return { name: '', email: '', phone: '', department: '', roles: ['User'], password: '', notifEmail: '' };
+    return { name: '', email: '', phone: '', department: '', branch: '', roles: ['User'], password: '', notifEmail: '' };
   }
 
   /* ── API ────────────────────────────────────────────────────────────── */
@@ -462,7 +467,7 @@ window.Pages.users = (() => {
           const u = _users.find(x => String(x.id) === String(btn.dataset.id));
           if (!u) return;
           _editingUser = u;
-          _form = { id: u.id, name: u.name || '', email: u.email || '', phone: u.phone || '', department: u.department || '', roles: normalizeRoles(u.roles), active: u.active !== false, notifEmail: u.notifEmail || '' };
+          _form = { id: u.id, name: u.name || '', email: u.email || '', phone: u.phone || '', department: u.department || '', branch: u.branch || '', roles: normalizeRoles(u.roles), active: u.active !== false, notifEmail: u.notifEmail || '' };
           _picture = u.picture || null; _pictureChanged = false; _modalOpen = true;
           renderModal();
         });
@@ -816,6 +821,15 @@ window.Pages.users = (() => {
 
     const deptOptions = _departments.map(d => `<option value="${esc(d)}" ${_form.department === d ? 'selected' : ''}>${esc(d)}</option>`).join('');
 
+    // A branch already on the user that is no longer in BRANCHES (renamed site, or a
+    // value typed in before this list existed) still gets an option of its own. Without
+    // it the select would fall back to the blank placeholder and the next save would
+    // quietly wipe a branch the Admin never touched.
+    const branchList = _form.branch && !BRANCHES.includes(_form.branch)
+      ? [...BRANCHES, _form.branch]
+      : BRANCHES;
+    const branchOptions = branchList.map(bn => `<option value="${esc(bn)}" ${_form.branch === bn ? 'selected' : ''}>${esc(bn)}</option>`).join('');
+
     const rolesHtml = ROLES.map(r => {
       const active = curRoles.includes(r);
       const isUser = r === 'User';
@@ -880,7 +894,7 @@ window.Pages.users = (() => {
               ${uFieldHtml('um-phone', 'Phone Number', 'Enter phone number', _form.phone || '', 'text')}
             </div>
 
-            <!-- Row 3: Department + Password (add only) -->
+            <!-- Row 3: Department + Branch -->
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <div class="mb-1.5">
@@ -904,8 +918,23 @@ window.Pages.users = (() => {
                   </div>
                 </div>
               </div>
-              ${passwordField}
+              <div>
+                <div class="mb-1.5">
+                  <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Branch</label>
+                </div>
+                <div class="relative">
+                  <select id="um-branch"
+                    class="w-full appearance-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-[13px] text-slate-700 outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 transition">
+                    <option value="">Select branch</option>
+                    ${branchOptions}
+                  </select>
+                  <svg class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </div>
+              </div>
             </div>
+
+            ${passwordField ? `<!-- Row 4: Password (add only) -->
+            <div class="grid grid-cols-2 gap-3">${passwordField}</div>` : ''}
 
             <!-- Roles -->
             <div>
@@ -1001,6 +1030,10 @@ window.Pages.users = (() => {
       } else {
         _form.department = e.target.value;
       }
+    });
+
+    document.getElementById('um-branch')?.addEventListener('change', e => {
+      _form.branch = e.target.value;
     });
 
     /* Department: add new via inline input */
