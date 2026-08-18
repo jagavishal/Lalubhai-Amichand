@@ -229,8 +229,6 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS checklist_completions (id VARCHAR(16) PRIMARY KEY, master_id VARCHAR(16) NOT NULL, doer VARCHAR(255) DEFAULT '', completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, date DATE NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_cc_master ON checklist_completions (master_id)`,
   `CREATE INDEX idx_cc_date ON checklist_completions (date)`,
-  `CREATE TABLE IF NOT EXISTS meetings (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, meeting_date DATE NOT NULL, start_time VARCHAR(10) DEFAULT NULL, end_time VARCHAR(10) DEFAULT NULL, attendees TEXT DEFAULT NULL, notes TEXT DEFAULT NULL, created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-  `CREATE INDEX idx_mtg_date ON meetings (meeting_date)`,
   `CREATE TABLE IF NOT EXISTS leaves (id VARCHAR(16) PRIMARY KEY, user_id VARCHAR(16), user_name VARCHAR(255) NOT NULL, type VARCHAR(64) DEFAULT 'Leave', from_date DATE NOT NULL, to_date DATE NOT NULL, reason TEXT DEFAULT NULL, status VARCHAR(32) DEFAULT 'pending', approver VARCHAR(255) DEFAULT 'HOD', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, decided_at DATETIME DEFAULT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS daily_tasks (id VARCHAR(16) PRIMARY KEY, entry_date DATE NOT NULL, doer_id VARCHAR(16), doer VARCHAR(255) NOT NULL DEFAULT '', client VARCHAR(255) DEFAULT '', department VARCHAR(128) DEFAULT '', description TEXT DEFAULT NULL, minutes INT DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_dt_doer ON daily_tasks (doer_id)`,
@@ -426,7 +424,7 @@ async function fixCollations() {
   // add new tables here the same day they're added to SCHEMA above.
   const tables = ['users','delegations','masters','clients','checklist_completions','daily_tasks','leaves','user_sessions',
     'fms_sheets','fms_sheet_steps','fms_step_doers','fms_extra_rows','fms_intake_fields',
-    'holidays','profile','app_config','meetings','dev_backups','help_tickets','announcements',
+    'holidays','profile','app_config','dev_backups','help_tickets','announcements',
     'vendor_submissions','pr_requisitions','payment_entries','ims_items','ims_transactions','departments'];
   // A couple of these tables carry a leftover FOREIGN KEY constraint from an
   // earlier schema iteration (the current schema style is FK-less, app-generated

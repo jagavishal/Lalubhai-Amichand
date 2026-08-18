@@ -47,7 +47,7 @@ if (!(env.POSTGRES_URL || env.DATABASE_URL)) { console.error('❌ No POSTGRES_UR
 // reverse so foreign keys are satisfied.
 const TABLES = [
   'users', 'delegations', 'masters', 'holidays', 'clients',
-  'app_config', 'checklist_completions', 'meetings', 'leaves',
+  'app_config', 'checklist_completions', 'leaves',
   'daily_tasks', 'profile', 'fms', 'fms_steps', 'dev_backups',
 ];
 

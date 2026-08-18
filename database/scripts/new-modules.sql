@@ -1,7 +1,7 @@
 -- =====================================================================
 --  NEW MODULES MIGRATION
 --  Run this ONCE on your Neon Postgres database (SQL editor or psql).
---  Creates tables for: Daily Task (timesheet), Leave Tracker, Meetings.
+--  Creates tables for: Daily Task (timesheet), Leave Tracker.
 --  Daily Reports needs NO new table (it reads daily_tasks + delegations).
 -- =====================================================================
 
@@ -35,17 +35,3 @@ CREATE TABLE IF NOT EXISTS leaves (
   decided_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_leaves_user ON leaves (user_id);
-
--- 3) MEETINGS --------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS meetings (
-  id            TEXT PRIMARY KEY,
-  title         TEXT NOT NULL,
-  meeting_date  DATE NOT NULL,
-  start_time    TEXT,          -- 'HH:MM'
-  end_time      TEXT,          -- 'HH:MM'
-  attendees     TEXT,          -- comma separated names
-  notes         TEXT,
-  created_by    TEXT,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_meetings_date ON meetings (meeting_date);

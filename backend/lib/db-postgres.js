@@ -127,19 +127,6 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS idx_cc_master ON checklist_completions (master_id)`,
   `CREATE INDEX IF NOT EXISTS idx_cc_date   ON checklist_completions (date)`,
 
-  `CREATE TABLE IF NOT EXISTS meetings (
-    id           VARCHAR(16)  PRIMARY KEY,
-    title        VARCHAR(255) NOT NULL,
-    meeting_date DATE         NOT NULL,
-    start_time   VARCHAR(10)  DEFAULT NULL,
-    end_time     VARCHAR(10)  DEFAULT NULL,
-    attendees    TEXT         DEFAULT NULL,
-    notes        TEXT         DEFAULT NULL,
-    created_by   VARCHAR(255) DEFAULT '',
-    created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_mtg_date ON meetings (meeting_date)`,
-
   `CREATE TABLE IF NOT EXISTS leaves (
     id         VARCHAR(16)  PRIMARY KEY,
     user_id    VARCHAR(16),
