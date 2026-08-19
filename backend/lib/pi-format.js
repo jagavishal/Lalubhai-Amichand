@@ -45,19 +45,21 @@ const LAYOUT = {
   colCount: 14,
   rowCount: 80,
 
-  // Logo occupies A1:B4; the company name and the three addresses sit to its
-  // right in C:N, so they are centred against the text block rather than the
+  // Logo occupies A1:C4; the company name and the three addresses sit to its
+  // right in D:N, so they are centred against the text block rather than the
   // whole page. The title band on row 5 still spans the full width.
   letterheadRows: { company: 1, regd: 2, admin: 3, works: 4, title: 5 },
-  logoCols: { first: 'A', last: 'B' },
-  letterheadTextCol: 'C',
+  logoCols: { first: 'A', last: 'C' },
+  letterheadTextCol: 'D',
 
   // Consignee panel on the left, shipping label/value pairs on the right.
+  // The labels span three columns because the longest of them ("Country of
+  // Origin of Goods :") has to sit on one line at 8pt.
   partyBlock: {
     firstRow: 6, lastRow: 13,
-    consigneeFirst: 'A', consigneeLast: 'F',
-    labelFirst: 'G', labelLast: 'H',
-    valueFirst: 'I',
+    consigneeFirst: 'A', consigneeLast: 'G',
+    labelFirst: 'H', labelLast: 'J',
+    valueFirst: 'K',
   },
 
   shipmentNoteRow: 14,
@@ -78,7 +80,11 @@ const LAYOUT = {
   termsLastRow: 61,                            // 10 slots
   confirmRow: 62,
   declarationRow: 63,
-  signatureRow: 65,
+  // "For, <company>" on the left and "I Accept & By, ..." on the right, each
+  // merged down to signatureLastRow so the pen space is inside the box rather
+  // than a run of loose rows under it.
+  signatureRow: 64,
+  signatureLastRow: 68,
   signatureRightCol: 'H',
   signatoryRow: 69,
   lastRow: 69,
@@ -102,22 +108,22 @@ const PARTY_LABELS = [
 ];
 
 const CELLS = {
-  // Consignee block (each merged A:F)
+  // Consignee block (each merged A:G)
   consigneeHeading: 'A6',
   buyerName: 'A7',
   buyerTrn: 'A8',
   buyerAddress1: 'A9',
   buyerAddress2: 'A10',
   buyerContact: 'A11',
-  // Shipping block values (each merged I:N), labels sit in G:H
-  piNo: 'I6',
-  date: 'I7',
-  orderNo: 'I8',
-  paymentTerms: 'I9',
-  portOfLoading: 'I10',
-  portOfDischarge: 'I11',
-  placeOfDelivery: 'I12',
-  countryOfOrigin: 'I13',
+  // Shipping block values (each merged K:N), labels sit in H:J
+  piNo: 'K6',
+  date: 'K7',
+  orderNo: 'K8',
+  paymentTerms: 'K9',
+  portOfLoading: 'K10',
+  portOfDischarge: 'K11',
+  placeOfDelivery: 'K12',
+  countryOfOrigin: 'K13',
   // Full-width lines
   shipmentNote: 'A14',
   amountInWords: 'A47',
@@ -125,7 +131,7 @@ const CELLS = {
   bankNote: 'A50',
   confirmLine: 'A62',
   declaration: 'A63',
-  acceptedBy: 'H65',
+  acceptedBy: 'H64',
 };
 
 // Item table. Column M (Amount) is a live per-row formula painted by the

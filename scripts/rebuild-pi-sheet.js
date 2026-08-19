@@ -280,15 +280,19 @@ async function run() {
   requests.push(rowHeight(sheetId, L.declarationRow + 1, L.declarationRow + 1, 6));
 
   // ── signature block
+  // Each side is one tall merged box (signatureRow..signatureLastRow) rather
+  // than a caption row with loose rows beneath it, so the pen space sits
+  // inside the bordered box. The split is the same one the party block uses,
+  // so the two line up down the page.
   const SR = L.signatureRightCol;
-  requests.push(merge(sheetId, L.signatureRow, L.signatureRow, 'A', 'F'));
-  requests.push(merge(sheetId, L.signatureRow, L.signatureRow, SR, LC));
-  requests.push(merge(sheetId, L.signatoryRow, L.signatoryRow, 'A', 'F'));
+  const SLR = L.signatureLastRow;
+  requests.push(merge(sheetId, L.signatureRow, SLR, FC, PB.consigneeLast));
+  requests.push(merge(sheetId, L.signatureRow, SLR, SR, LC));
+  requests.push(merge(sheetId, L.signatoryRow, L.signatoryRow, FC, PB.consigneeLast));
   requests.push(merge(sheetId, L.signatoryRow, L.signatoryRow, SR, LC));
-  requests.push(text(sheetId, L.signatureRow, L.signatureRow, FC, LC, { bold: true, size: 9 }));
+  requests.push(text(sheetId, L.signatureRow, SLR, FC, LC, { bold: true, size: 9 }));
   requests.push(text(sheetId, L.signatoryRow, L.signatoryRow, FC, LC, { bold: true, size: 9 }));
-  requests.push(rowHeight(sheetId, L.signatureRow, L.signatureRow, 18));
-  requests.push(rowHeight(sheetId, L.signatureRow + 1, L.signatoryRow - 1, 14));   // pen space
+  requests.push(rowHeight(sheetId, L.signatureRow, SLR, 25));
   requests.push(rowHeight(sheetId, L.signatoryRow, L.signatoryRow, 16));
 
   // ── borders: party panels, shipment strip, item grid, page box
