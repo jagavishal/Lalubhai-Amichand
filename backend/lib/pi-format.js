@@ -187,6 +187,31 @@ const PRODUCT_SOURCE = {
   cols: { modelNo: 1, itemName: 2, size: 3, swg: 4, perBoxPacking: 5, perBoxCbm: 6, perPcsWeight: 7, imageUrl: 8 },
 };
 
+// The consignee master, from the fetch_consignee tab of that same workbook —
+// the export team's own buyer list, which the app has no equivalent of (there
+// is a Vendor Master, but no Buyer/Customer one).
+//
+// The tab holds TWO blocks side by side, and neither is complete on its own:
+//   A:F  the team's own list — typed names, ports and place of delivery, with
+//        Address a VLOOKUP into the block on the right. No phone/email at all,
+//        and the Terms of Payment column is empty top to bottom. THE ONLY
+//        WRITABLE BLOCK: the Consignee Master page appends here.
+//   J:P  not data — one IMPORTRANGE in J1 pulling "Final Consignee" out of a
+//        different workbook (1iLgWmb87HO-Y9QHOcayJ83rvaHM944k4X4M-8fFTds0,
+//        which this service account cannot open). It is the only place Contact
+//        No. and Email ID live, and it still lists a few buyers the left block
+//        has dropped.
+// So both are read and merged by name: A:F wins on ports/address where it has
+// them, J:P supplies contact/email and any name missing on the left.
+const CONSIGNEE_SOURCE = {
+  spreadsheetId: '1V9N17f4S6ZgVZfxaIBsAohcU14rooN6SA1HujPsJYIQ',
+  tab: 'fetch_consignee',
+  range: 'A2:P500',
+  // Column offsets within that range.
+  left:  { name: 0, paymentTerms: 1, placeOfDelivery: 2, portOfLoading: 3, portOfDischarge: 4, address: 5 },
+  right: { name: 9, address: 10, contact: 11, placeOfDelivery: 12, portOfLoading: 13, portOfDischarge: 14, email: 15 },
+};
+
 // "Export Marketing FMS" — the follow-up tracker the export team runs the PI
 // through (add pricing, send final PDF, chase the signed copy, chase the
 // advance, and so on). Creating a PI opens its row here; every column from
@@ -253,4 +278,4 @@ function validityNote(validity) {
     + '(INCREASE IN PRICE 5% OR AS PER THE MARKET SITUATION).';
 }
 
-module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, PRODUCT_SOURCE, FMS_TRACKER, DEFAULTS, validityNote };
+module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, PRODUCT_SOURCE, CONSIGNEE_SOURCE, FMS_TRACKER, DEFAULTS, validityNote };

@@ -58,6 +58,7 @@ window.Pages.users = (() => {
     { cat: 'Basic', key: 'profile',       label: 'Profile' },
 
     { cat: 'Export Department', key: 'proforma-invoice', label: 'Proforma Invoice' },
+    { cat: 'Export Department', key: 'consignee-master', label: 'Consignee Master' },
     { cat: 'Export Department', key: 'pr-creation',   label: 'PR Creation' },
     { cat: 'Export Department', key: 'po-creation',   label: 'PO Creation' },
     { cat: 'Export Department', key: 'grn-creation',  label: 'GRN Creation' },
@@ -91,6 +92,9 @@ window.Pages.users = (() => {
     ],
     'client-master': [
       { key: 'add', label: 'Add Vendor' },
+    ],
+    'consignee-master': [
+      { key: 'add', label: 'Add Consignee' },
     ],
     'proforma-invoice': [
       { key: 'set_price', label: 'Add/Edit Price' },

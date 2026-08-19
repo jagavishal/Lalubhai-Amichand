@@ -4705,11 +4705,188 @@ async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId) {
   return { totalAmount, pdfLink };
 }
 
+// The consignee master behind the create form's Consignee Name typeahead —
+// the export team's own fetch_consignee tab (see CONSIGNEE_SOURCE in
+// backend/lib/pi-format.js). This app has no Buyer/Customer master of its own,
+// and every one of these buyers' address, phone, ports and place of delivery
+// was otherwise re-keyed by hand off an older PI.
+let _piConsigneeCache = null; // { at, rows }
+const PI_CONSIGNEE_TTL_MS = 10 * 60 * 1000;
+
+// "M/s. Al Jabr. Est." and "AL JABR EST." are one buyer to a human, and to the
+// merge below — only letters and digits are compared.
+function _piConsigneeKey(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// The sheet keeps an address on one line; the PI prints it on two (A9 and A10,
+// each merged A:G, ~90 characters at 9pt). Only long addresses are split, and
+// at the comma nearest the middle so the two lines come out even.
+function _piSplitAddress(address) {
+  const addr = String(address || '').trim();
+  if (addr.length <= 70) return [addr, ''];
+  const mid = addr.length / 2;
+  let cut = -1;
+  for (let i = 0; i < addr.length; i++) {
+    if (addr[i] === ',' && (cut < 0 || Math.abs(i - mid) < Math.abs(cut - mid))) cut = i;
+  }
+  if (cut < 0) return [addr, ''];
+  return [addr.slice(0, cut).trim(), addr.slice(cut + 1).trim()];
+}
+
+async function _loadPiConsigneeMaster() {
+  if (_piConsigneeCache && (Date.now() - _piConsigneeCache.at) < PI_CONSIGNEE_TTL_MS) return _piConsigneeCache.rows;
+  const auth = getGoogleAuth();
+  if (!auth) return [];
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const src = PI_FMT.CONSIGNEE_SOURCE;
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: src.spreadsheetId,
+    range: `'${src.tab}'!${src.range}`,
+    valueRenderOption: 'FORMATTED_VALUE',
+  });
+  const values = result.data.values || [];
+  const cell = (r, i) => String((r && r[i]) || '').trim();
+
+  // Two blocks, merged by name — see CONSIGNEE_SOURCE. A blank cell never
+  // overwrites a filled one, so the older right-hand block keeps supplying
+  // contact/email for names whose left-hand row has none.
+  const byKey = new Map();
+  const upsert = (name, fields) => {
+    const key = _piConsigneeKey(name);
+    if (!key) return;
+    const rec = byKey.get(key) || { name, address: '', contact: '', email: '', placeOfDelivery: '', portOfLoading: '', portOfDischarge: '', paymentTerms: '' };
+    rec.name = name; // the left block runs second, so its spelling is the one kept
+    for (const f of Object.keys(fields)) if (fields[f]) rec[f] = fields[f];
+    byKey.set(key, rec);
+  };
+  const R = src.right, L = src.left;
+  for (const row of values) {
+    upsert(cell(row, R.name), {
+      address: cell(row, R.address), contact: cell(row, R.contact), email: cell(row, R.email),
+      placeOfDelivery: cell(row, R.placeOfDelivery), portOfLoading: cell(row, R.portOfLoading), portOfDischarge: cell(row, R.portOfDischarge),
+    });
+  }
+  for (const row of values) {
+    upsert(cell(row, L.name), {
+      address: cell(row, L.address), paymentTerms: cell(row, L.paymentTerms),
+      placeOfDelivery: cell(row, L.placeOfDelivery), portOfLoading: cell(row, L.portOfLoading), portOfDischarge: cell(row, L.portOfDischarge),
+    });
+  }
+
+  // Shaped to the create form's fields, so picking a name is a straight
+  // field-for-field fill on the client.
+  const rows = [...byKey.values()].map(r => {
+    const [address1, address2] = _piSplitAddress(r.address);
+    return {
+      name: r.name,
+      address1, address2,
+      contact: [r.contact, r.email].filter(Boolean).join(' | '),
+      paymentTerms: r.paymentTerms,
+      portOfLoading: r.portOfLoading,
+      portOfDischarge: r.portOfDischarge,
+      placeOfDelivery: r.placeOfDelivery,
+    };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+
+  _piConsigneeCache = { at: Date.now(), rows };
+  return rows;
+}
+
+// ── Consignee Master (page: consignee-master) ───────────────────────────────
+// The same master the PI create form reads, given its own page so a new buyer
+// can be entered once instead of being re-typed into every PI.
+
+// GET /api/consignee-master — the whole list, plus whether this user may add
+// to it (the page hides the form either way; the POST below is the real gate).
+app.get('/api/consignee-master', requireAuth, async (req, res) => {
+  try {
+    const [rows, canAdd] = await Promise.all([
+      _loadPiConsigneeMaster(),
+      userCanUseFeature(req.session.user, 'consignee-master', 'add'),
+    ]);
+    return res.json({ rows, canAdd });
+  } catch (e) {
+    console.error('[consignee-master] list failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/consignee-master — appends one buyer to the export team's own
+// fetch_consignee sheet. Like the product master, this writes into the
+// customer's "PI Export (Final)" workbook rather than an app table, so it is
+// permission-gated: Admin/HOD always, anyone else only if granted 'add' from
+// Users → Access.
+//
+// Only columns A:F are writable. G:I are the gutter, and J:P are an
+// IMPORTRANGE of a different workbook ("Final Consignee") that this app has no
+// access to — which is also why the form has no Contact No. / Email ID: those
+// two columns live only in that imported master.
+app.post('/api/consignee-master', requireAuth, async (req, res) => {
+  try {
+    const allowed = await userCanUseFeature(req.session.user, 'consignee-master', 'add');
+    if (!allowed) return res.status(403).json({ error: 'You do not have permission to add a consignee' });
+
+    const b = req.body || {};
+    const val = (k) => String(b[k] || '').trim();
+    const name = val('name');
+    const placeOfDelivery = val('placeOfDelivery');
+    const portOfLoading = val('portOfLoading');
+    const portOfDischarge = val('portOfDischarge');
+    if (!name) return res.status(400).json({ error: 'Consignee Name is required' });
+    // Every buyer already on the sheet carries all three, and a PI cannot be
+    // raised without them — a row missing any is not worth adding.
+    if (!placeOfDelivery || !portOfLoading || !portOfDischarge) {
+      return res.status(400).json({ error: 'Place of Delivery, Port of Loading and Port of Discharge are required' });
+    }
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    // The master is keyed by name — a duplicate makes the PI typeahead
+    // ambiguous, and the two rows drift apart from there.
+    const existing = await _loadPiConsigneeMaster();
+    const key = _piConsigneeKey(name);
+    const clash = existing.find(c => _piConsigneeKey(c.name) === key);
+    if (clash) return res.status(409).json({ error: `"${clash.name}" is already in the consignee master` });
+
+    const address = val('address');
+    const src = PI_FMT.CONSIGNEE_SOURCE;
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: src.spreadsheetId,
+      range: `'${src.tab}'!A:F`,
+      // RAW, not USER_ENTERED: these are free-text buyer details, and a name or
+      // address that happens to start with "=" or "+" must land as text.
+      valueInputOption: 'RAW',
+      // Deliberately NOT insertDataOption: 'INSERT_ROWS' (which the product
+      // master uses) — inserting a sheet row here would shift the IMPORTRANGE
+      // block in J:P and break it. Appending over the blank rows below the
+      // A:F table leaves everything to the right alone.
+      requestBody: {
+        values: [[name, val('paymentTerms'), placeOfDelivery, portOfLoading, portOfDischarge, address]],
+      },
+    });
+    _piConsigneeCache = null;   // the next PI typeahead must see it, TTL or not
+
+    const [address1, address2] = _piSplitAddress(address);
+    return res.json({
+      success: true,
+      consignee: { name, address1, address2, contact: '', paymentTerms: val('paymentTerms'), portOfLoading, portOfDischarge, placeOfDelivery },
+    });
+  } catch (e) {
+    console.error('[consignee-master] add failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/proforma-invoice/masters?date=YYYY-MM-DD — next PI number for that
 // date's financial year, the boilerplate defaults the create form pre-fills
-// (single source: backend/lib/pi-format.js), and a lightweight recent-buyers
-// typeahead (no dedicated Buyer/Customer master exists in this app — only a
-// Vendor Master — so this is scraped straight off the log).
+// (single source: backend/lib/pi-format.js), the consignee master, and a
+// lightweight recent-buyers typeahead scraped off the log (which still catches
+// one-off buyers that never made it into the consignee sheet).
 app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
   try {
     const auth = getGoogleAuth();
@@ -4717,14 +4894,19 @@ app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
     const fy = _piFyLabel(req.query.date);
-    const [meta, buyerRes] = await Promise.all([
+    const [meta, buyerRes, consignees] = await Promise.all([
       _piSheetMeta(fy),
       sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!C2:C`, valueRenderOption: 'FORMATTED_VALUE' }).catch(() => ({ data: {} })),
+      // The consignee sheet living outside this app, an unreachable one must
+      // not take the whole create form down with it — the field stays free
+      // text either way.
+      _loadPiConsigneeMaster().catch((e) => { console.error('[proforma-invoice] consignee master load failed:', e.message); return []; }),
     ]);
     const recentBuyers = [...new Set((buyerRes.data.values || []).map(r => (r[0] || '').trim()).filter(Boolean))].slice(-50).reverse();
     return res.json({
       nextPiNumber: _piNoFormat(meta.nextSeq, fy),
       recentBuyers,
+      consignees,
       maxItems: PI_FMT.LAYOUT.itemsLastRow - PI_FMT.LAYOUT.itemsFirstRow + 1,
       defaults: PI_FMT.DEFAULTS,
       assignees: PI_FMT.FMS_TRACKER.assignees,

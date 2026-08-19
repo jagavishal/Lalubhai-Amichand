@@ -34,6 +34,7 @@ window.Pages['proforma-invoice'] = (() => {
   let _mastersLoaded = false;
   let _nextPiNumber = null;
   let _recentBuyers = [];
+  let _consignees = [];     // buyer master from the export team's fetch_consignee sheet
   let _defaults = null;     // boilerplate from backend/lib/pi-format.js
   let _maxItems = 30;
   let _assignees = [];      // who a PI can be handed to in the FMS tracker
@@ -100,6 +101,7 @@ window.Pages['proforma-invoice'] = (() => {
       if (!data) return;
       _nextPiNumber = data.nextPiNumber;
       _recentBuyers = data.recentBuyers || [];
+      _consignees = data.consignees || [];
       if (data.defaults) _defaults = data.defaults;
       if (data.maxItems) _maxItems = data.maxItems;
       if (data.assignees) _assignees = data.assignees;
@@ -121,23 +123,62 @@ window.Pages['proforma-invoice'] = (() => {
     }
   }
 
-  /* ── Consignee — free-text input + suggestion dropdown of recent buyers (no
-     dedicated Buyer/Customer master exists in this app yet) ─────────────── */
+  /* ── Consignee — free-text input + suggestion dropdown over the export
+     team's own buyer master (the fetch_consignee tab of "PI Export (Final)";
+     this app has no Buyer/Customer master of its own). Picking one fills the
+     rest of the consignee block and the ports, all of which used to be copied
+     by hand off an older PI. Buyers seen on past PIs but missing from that
+     sheet still show up underneath, name only. ─────────────────────────── */
   function _buyerField() {
     return _fieldWrap('Consignee Name', ''
       + '<input type="text" id="pic-buyer" autocomplete="off" placeholder="M/s. …" style="' + _inputStyle + '" />'
-      + '<div id="pic-buyer-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>');
+      + '<div id="pic-buyer-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:260px;overflow-y:auto;"></div>');
+  }
+
+  function _buyerKey(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+
+  // The master first, then any past-PI buyer it does not already cover.
+  function _buyerMatches(q) {
+    const hit = (name) => !q || name.toLowerCase().includes(q);
+    const inMaster = new Set(_consignees.map(c => _buyerKey(c.name)));
+    return _consignees.filter(c => hit(c.name))
+      .concat(_recentBuyers.filter(b => !inMaster.has(_buyerKey(b)) && hit(b)).map(b => ({ name: b, recent: true })));
+  }
+
+  // Address and Tel./Email belong to the buyer as one block, so they are
+  // replaced outright — otherwise switching from a two-line address to a
+  // one-line one leaves the previous buyer's second line behind. The ports,
+  // place of delivery and payment terms are only written when the master
+  // actually has them, since those fields carry form defaults worth keeping.
+  function _fillFromConsignee(c) {
+    const put = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+    const putIfAny = (id, v) => { if (v) put(id, v); };
+    put('pic-buyer-addr1', c.address1);
+    put('pic-buyer-addr2', c.address2);
+    put('pic-buyer-contact', c.contact);
+    putIfAny('pic-payment-terms', c.paymentTerms);
+    putIfAny('pic-port-loading', c.portOfLoading);
+    putIfAny('pic-port-discharge', c.portOfDischarge);
+    putIfAny('pic-place-delivery', c.placeOfDelivery);
   }
 
   function _bindBuyerField() {
     const input = document.getElementById('pic-buyer');
     const dd = document.getElementById('pic-buyer-dd');
     if (!input || !dd) return;
+    let matches = [];
     const showMatches = () => {
-      const q = input.value.trim().toLowerCase();
-      const matches = (q ? _recentBuyers.filter(b => b.toLowerCase().includes(q)) : _recentBuyers).slice(0, 30);
+      matches = _buyerMatches(input.value.trim().toLowerCase()).slice(0, 30);
       if (!matches.length) { dd.style.display = 'none'; return; }
-      dd.innerHTML = matches.map(b => '<div class="pic-buyer-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-b="' + esc(b) + '">' + esc(b) + '</div>').join('');
+      dd.innerHTML = matches.map((c, i) => {
+        // Where the goods go and how they get there — enough to tell two
+        // similarly named establishments apart at a glance.
+        const sub = c.recent ? 'From an earlier PI' : [c.placeOfDelivery, [c.portOfLoading, c.portOfDischarge].filter(Boolean).join(' → ')].filter(Boolean).join(' · ');
+        return '<div class="pic-buyer-opt" style="padding:7px 12px;cursor:pointer;" data-i="' + i + '">'
+          + '<div style="font-size:12.5px;color:#1e293b;">' + esc(c.name) + '</div>'
+          + (sub ? '<div style="font-size:11px;color:#94a3b8;margin-top:1px;">' + esc(sub) + '</div>' : '')
+        + '</div>';
+      }).join('');
       const rect = input.getBoundingClientRect();
       dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = rect.width + 'px';
       dd.style.display = 'block';
@@ -147,7 +188,10 @@ window.Pages['proforma-invoice'] = (() => {
     dd.addEventListener('mousedown', (e) => {
       const opt = e.target.closest('.pic-buyer-opt');
       if (!opt) return;
-      input.value = opt.dataset.b;
+      const c = matches[Number(opt.dataset.i)];
+      if (!c) return;
+      input.value = c.name;
+      if (!c.recent) _fillFromConsignee(c);
       dd.style.display = 'none';
     });
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
