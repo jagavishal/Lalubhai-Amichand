@@ -93,6 +93,29 @@ window.Pages.login = {
                                 4%, 22% { opacity: 1; transform: translateY(0); }
                                 26%,100%{ opacity: 0; transform: translateY(-7px); } }
 
+        /* ── Mascot animations ──────────────────────────────────────── */
+        @keyframes lgMBob     { 0%, 100% { transform: translateY(0) rotate(0deg); }
+                                50%      { transform: translateY(-3px) rotate(1.5deg); } }
+        @keyframes lgMBlink   { 0%, 90%, 100% { transform: scaleY(1); }
+                                95%           { transform: scaleY(.08); } }
+        @keyframes lgMCheer   { 0%, 100% { transform: translateY(0) rotate(0deg); }
+                                35%      { transform: translateY(-11px) rotate(-6deg); }
+                                70%      { transform: translateY(-4px) rotate(5deg); } }
+        @keyframes lgMHuff    { 0%, 100% { transform: translateX(0) rotate(0deg); }
+                                25%      { transform: translateX(-5px) rotate(-4deg); }
+                                75%      { transform: translateX(5px) rotate(4deg); } }
+        @keyframes lgBloom    { 0%   { opacity: 0; transform: translate(0,0) rotate(0deg) scale(.3); }
+                                15%, 68% { opacity: 1; }
+                                100% { opacity: 0;
+                                       transform: translate(var(--dx,0), var(--dy,-80px))
+                                                  rotate(var(--rot,0deg)) scale(1.1); } }
+        @keyframes lgVein     { 0%, 100% { transform: scale(1); }
+                                50%      { transform: scale(1.3); } }
+        @keyframes lgShake    { 10%, 90% { transform: translateX(-2px); }
+                                20%, 80% { transform: translateX(4px); }
+                                30%, 50%, 70% { transform: translateX(-7px); }
+                                40%, 60% { transform: translateX(7px); } }
+
         /* ── Layout ─────────────────────────────────────────────────── */
         #login-page .lg-wrap {
           width: 100%;
@@ -372,6 +395,89 @@ window.Pages.login = {
         #login-page .login-submit:hover:not(:disabled)::after { animation: lgSheen .9s ease-out; }
         #login-page .login-spinner { animation: lgSpin .7s linear infinite; }
 
+        /* ── Mascot ─────────────────────────────────────────────────────
+              Sits behind the card until the user starts signing in, then
+              climbs up and rests its hands on the top border. Purely
+              decorative: pointer-events are off on every piece of it, so it
+              can never sit between the user and the form. */
+        #login-page .lg-cardwrap    { position: relative; }
+        #login-page .lg-cardwrap > .card { position: relative; z-index: 1; }
+
+        #login-page .lg-mascot      { position: absolute; left: 50%; top: 0;
+                                      width: 88px; height: 88px; z-index: 0;
+                                      opacity: 0; pointer-events: none;
+                                      transform: translate(-50%, 10px) scale(.5);
+                                      transition: transform .55s cubic-bezier(.34,1.56,.64,1),
+                                                  opacity .3s ease; }
+        #login-page .lg-cardwrap.m-show .lg-mascot { opacity: 1;
+                                      transform: translate(-50%, -68px) scale(1); }
+        #login-page .lg-cardwrap.m-shy  .lg-mascot {
+                                      transform: translate(-50%, -78px) scale(1); }
+
+        #login-page .lg-face        { display: block; width: 100%; height: 100%;
+                                      filter: drop-shadow(0 10px 18px rgba(0,0,0,.28)); }
+        #login-page .lg-cardwrap.m-show   .lg-face { animation: lgMBob 3.4s ease-in-out infinite; }
+        #login-page .lg-cardwrap.m-happy  .lg-face { animation: lgMCheer .5s ease-in-out 3; }
+        #login-page .lg-cardwrap.m-angry  .lg-face { animation: lgMHuff .32s ease-in-out 4; }
+
+        /* Expressions — every face part is drawn once and cross-faded. */
+        #login-page .lg-face .m-head    { fill: #FFC83D; transition: fill .3s ease; }
+        #login-page .lg-face .m-swap    { transition: opacity .22s ease; }
+        #login-page .lg-face .m-eyes-happy,
+        #login-page .lg-face .m-mouth-happy,
+        #login-page .lg-face .m-mouth-angry,
+        #login-page .lg-face .m-brows,
+        #login-page .lg-face .m-blush   { opacity: 0; }
+        #login-page .lg-face .m-eyes-open { transform-box: fill-box; transform-origin: center;
+                                      animation: lgMBlink 4.6s ease-in-out infinite; }
+
+        #login-page .m-happy .lg-face .m-eyes-open,
+        #login-page .m-happy .lg-face .m-mouth-idle { opacity: 0; }
+        #login-page .m-happy .lg-face .m-eyes-happy,
+        #login-page .m-happy .lg-face .m-mouth-happy,
+        #login-page .m-happy .lg-face .m-blush      { opacity: 1; }
+
+        #login-page .m-angry .lg-face .m-mouth-idle { opacity: 0; }
+        #login-page .m-angry .lg-face .m-mouth-angry,
+        #login-page .m-angry .lg-face .m-brows      { opacity: 1; }
+        #login-page .m-angry .lg-face .m-head       { fill: #F6835F; }
+
+        /* Hands gripping the top border — and covering the eyes while a
+           password is being typed, because it is none of its business. */
+        #login-page .lg-hands       { position: absolute; left: 50%; top: 0;
+                                      width: 124px; height: 24px; z-index: 2;
+                                      display: flex; justify-content: space-between;
+                                      opacity: 0; pointer-events: none;
+                                      transform: translate(-50%, 8px);
+                                      transition: transform .55s cubic-bezier(.34,1.56,.64,1) .04s,
+                                                  width .45s cubic-bezier(.34,1.56,.64,1) .04s,
+                                                  opacity .3s ease .04s; }
+        #login-page .lg-cardwrap.m-show .lg-hands { opacity: 1;
+                                      transform: translate(-50%, -10px); }
+        #login-page .lg-cardwrap.m-shy  .lg-hands { width: 76px;
+                                      transform: translate(-50%, -46px); }
+        #login-page .lg-hand        { width: 34px; height: 24px; flex: none;
+                                      filter: drop-shadow(0 5px 10px rgba(0,0,0,.30));
+                                      transition: transform .45s cubic-bezier(.34,1.56,.64,1); }
+        #login-page .lg-cardwrap.m-shy .lg-hand-l { transform: rotate(16deg); }
+        #login-page .lg-cardwrap.m-shy .lg-hand-r { transform: rotate(-16deg); }
+
+        /* Flower burst on a good password. */
+        #login-page .lg-flowers     { position: absolute; left: 50%; top: 0;
+                                      width: 0; height: 0; z-index: 3; pointer-events: none; }
+        #login-page .lg-flower      { position: absolute; left: -11px; top: -74px;
+                                      font-size: 22px; line-height: 1; opacity: 0; }
+        #login-page .lg-flowers.bloom .lg-flower { animation: lgBloom 1.6s cubic-bezier(.2,.7,.35,1) forwards; }
+
+        /* Anger vein, drawn into the face so it rides along with every
+           expression change instead of floating on its own layer. */
+        #login-page .lg-face .m-vein { opacity: 0; transform-box: fill-box;
+                                      transform-origin: center; }
+        #login-page .m-angry .lg-face .m-vein { opacity: 1;
+                                      animation: lgVein .45s ease-out 3; }
+
+        #login-page .lg-shake       { animation: lgShake .55s cubic-bezier(.36,.07,.19,.97); }
+
         /* ── Tablet / mobile ────────────────────────────────────────── */
         @media (max-width: 1023px) {
           #login-page .lg-brand    { display: none; }
@@ -384,7 +490,7 @@ window.Pages.login = {
           }
           #login-page .lg-mobile-brand {
             display: flex; flex-direction: column; align-items: center;
-            gap: 10px; margin-bottom: 22px; text-align: center;
+            gap: 10px; margin-bottom: 66px; text-align: center;
           }
           #login-page .lg-mobile-logo {
             width: 62px; height: 62px; border-radius: 17px; object-fit: contain;
@@ -506,6 +612,76 @@ window.Pages.login = {
                 <div style="font-size:15px;font-weight:700;color:var(--text-primary);">Lallubhai Amichand</div>
                 <div style="font-size:10.5px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--color-primary-strong);margin-top:3px;">ERP Workspace</div>
               </div>
+            </div>
+
+            <div class="lg-cardwrap" id="login-cardwrap">
+
+            <!-- Mascot. Lives behind the card until the user starts signing in.
+                 Decorative only — aria-hidden and pointer-events: none. -->
+            <div class="lg-mascot" aria-hidden="true">
+              <svg class="lg-face" viewBox="0 0 120 120">
+                <circle class="m-head" cx="60" cy="58" r="46" stroke="rgba(0,0,0,.10)" stroke-width="2"/>
+
+                <g class="m-eyes-open m-swap" fill="#2A2118">
+                  <ellipse cx="44" cy="56" rx="6.5" ry="8"/>
+                  <ellipse cx="76" cy="56" rx="6.5" ry="8"/>
+                  <circle cx="46.4" cy="52.6" r="2.2" fill="#FFFFFF"/>
+                  <circle cx="78.4" cy="52.6" r="2.2" fill="#FFFFFF"/>
+                </g>
+                <g class="m-eyes-happy m-swap" fill="none" stroke="#2A2118"
+                   stroke-width="4.5" stroke-linecap="round">
+                  <path d="M36 59 Q44 47 52 59"/>
+                  <path d="M68 59 Q76 47 84 59"/>
+                </g>
+                <g class="m-brows m-swap" stroke="#8A5410" stroke-width="4.6" stroke-linecap="round">
+                  <path d="M34 40 L54 48"/>
+                  <path d="M86 40 L66 48"/>
+                </g>
+
+                <path class="m-mouth-idle  m-swap" d="M47 75 Q60 85 73 75"
+                      fill="none" stroke="#2A2118" stroke-width="4" stroke-linecap="round"/>
+                <path class="m-mouth-happy m-swap" d="M42 72 Q60 96 78 72 Z" fill="#2A2118"/>
+                <path class="m-mouth-angry m-swap" d="M47 85 Q60 73 73 85"
+                      fill="none" stroke="#2A2118" stroke-width="4" stroke-linecap="round"/>
+
+                <g class="m-vein m-swap" fill="none" stroke="#A70A18" stroke-width="4.5"
+                   stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M80 20 L91 31 L102 20"/>
+                  <path d="M80 42 L91 31 L102 42"/>
+                </g>
+
+                <g class="m-blush m-swap" fill="#FF7A8A" opacity="0">
+                  <ellipse cx="29" cy="70" rx="8.5" ry="5.5"/>
+                  <ellipse cx="91" cy="70" rx="8.5" ry="5.5"/>
+                </g>
+              </svg>
+            </div>
+
+            <div class="lg-hands" aria-hidden="true">
+              <svg class="lg-hand lg-hand-l" viewBox="0 0 34 24">
+                <g fill="#FFC83D" stroke="rgba(0,0,0,.10)" stroke-width="1.5">
+                  <circle cx="9" cy="9" r="4"/><circle cx="17" cy="7.5" r="4"/><circle cx="25" cy="9" r="4"/>
+                  <rect x="3" y="8" width="28" height="13" rx="6"/>
+                </g>
+              </svg>
+              <svg class="lg-hand lg-hand-r" viewBox="0 0 34 24">
+                <g fill="#FFC83D" stroke="rgba(0,0,0,.10)" stroke-width="1.5">
+                  <circle cx="9" cy="9" r="4"/><circle cx="17" cy="7.5" r="4"/><circle cx="25" cy="9" r="4"/>
+                  <rect x="3" y="8" width="28" height="13" rx="6"/>
+                </g>
+              </svg>
+            </div>
+
+            <div class="lg-flowers" id="login-flowers" aria-hidden="true">
+              <span class="lg-flower" style="--dx:-104px; --dy:-30px;  --rot:-140deg; animation-delay:.00s;">&#x1F338;</span>
+              <span class="lg-flower" style="--dx:-82px;  --dy:-74px;  --rot:-95deg;  animation-delay:.05s;">&#x1F33C;</span>
+              <span class="lg-flower" style="--dx:-50px;  --dy:-104px; --rot:-55deg;  animation-delay:.10s;">&#x1F33A;</span>
+              <span class="lg-flower" style="--dx:-18px;  --dy:-120px; --rot:-20deg;  animation-delay:.15s;">&#x1F337;</span>
+              <span class="lg-flower" style="--dx:0px;    --dy:-128px; --rot:15deg;   animation-delay:.08s;">&#x2728;</span>
+              <span class="lg-flower" style="--dx:18px;   --dy:-120px; --rot:20deg;   animation-delay:.15s;">&#x1F338;</span>
+              <span class="lg-flower" style="--dx:50px;   --dy:-104px; --rot:55deg;   animation-delay:.10s;">&#x1F490;</span>
+              <span class="lg-flower" style="--dx:82px;   --dy:-74px;  --rot:95deg;   animation-delay:.05s;">&#x1F33C;</span>
+              <span class="lg-flower" style="--dx:104px;  --dy:-30px;  --rot:140deg;  animation-delay:.00s;">&#x1F337;</span>
             </div>
 
             <div class="card" style="
@@ -671,7 +847,8 @@ window.Pages.login = {
                 </p>
               </div>
 
-            </div>
+            </div><!-- /.card -->
+            </div><!-- /.lg-cardwrap -->
           </div>
         </main>
       </div>
@@ -704,6 +881,41 @@ window.Pages.login = {
       themeBtn.addEventListener('click', () => { window.Theme.toggle(); paintThemeIcon(); });
     } else if (themeBtn) {
       themeBtn.style.display = 'none';
+    }
+
+    // ── Mascot ───────────────────────────────────────────────────────────────
+    // It climbs onto the card when the user starts signing in, hides its eyes
+    // while the password is typed, and reacts to the result. Every entry point
+    // is wrapped in safe() — a broken mascot must never break a login.
+    const cardWrap = el.querySelector('#login-cardwrap');
+    const flowerEl = el.querySelector('#login-flowers');
+    const cardEl   = el.querySelector('#login-cardwrap > .card');
+
+    const safe = (fn) => { try { fn(); } catch (_) { /* decoration only */ } };
+
+    // state: null (perched), 'shy', 'happy', 'angry'
+    function setMood(state) {
+      if (!cardWrap) return;
+      cardWrap.classList.remove('m-shy', 'm-happy', 'm-angry');
+      cardWrap.classList.add('m-show');
+      if (state) cardWrap.classList.add('m-' + state);
+    }
+    const mood = (state) => safe(() => setMood(state));
+
+    // Restart a one-shot animation by dropping the class and forcing a reflow.
+    function replay(node, cls, clearAfter) {
+      if (!node) return;
+      node.classList.remove(cls);
+      void node.offsetWidth;
+      node.classList.add(cls);
+      if (clearAfter) setTimeout(() => node.classList.remove(cls), clearAfter);
+    }
+
+    if (emailInput) emailInput.addEventListener('focus', () => mood(null));
+    if (nameInput)  nameInput.addEventListener('focus',  () => mood(null));
+    if (passInput) {
+      passInput.addEventListener('focus', () => mood('shy'));
+      passInput.addEventListener('blur',  () => mood(null));
     }
 
     // Force-clear fields after Chrome autofill (runs after browser fills them)
@@ -763,22 +975,34 @@ window.Pages.login = {
 
         window.currentUser = data.user;
 
-        // Show app shell, hide login page
-        const appShell = document.getElementById('app-shell');
-        if (appShell) appShell.style.display = 'flex';
-        el.style.display = 'none';
+        function enterApp() {
+          // Show app shell, hide login page
+          const appShell = document.getElementById('app-shell');
+          if (appShell) appShell.style.display = 'flex';
+          el.style.display = 'none';
 
-        // Bootstrap app
-        if (window.Sidebar)  window.Sidebar.render(data.user);
-        if (window.Topbar)   window.Topbar.render(data.user);
-        if (window.Router) {
-          window.Router.init();
-          window.Router.navigate('dashboard');
+          // Bootstrap app
+          if (window.Sidebar)  window.Sidebar.render(data.user);
+          if (window.Topbar)   window.Topbar.render(data.user);
+          if (window.Router) {
+            window.Router.init();
+            window.Router.navigate('dashboard');
+          }
         }
+
+        // Let the mascot celebrate for a beat, then go straight in. The timer
+        // is unconditional, so the app still opens if the flourish misfires.
+        mood('happy');
+        safe(() => replay(flowerEl, 'bloom'));
+        setTimeout(enterApp, 1150);
 
       } catch (err) {
         showError(err && err.message ? err.message : 'Invalid email or password');
         setLoading(false);
+        mood('angry');
+        safe(() => replay(cardEl, 'lg-shake', 700));
+        // Sulk for a moment, then go back to watching over the form.
+        setTimeout(() => mood(passInput === document.activeElement ? 'shy' : null), 1700);
       }
     });
   },
