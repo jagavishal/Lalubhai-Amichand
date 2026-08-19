@@ -7,9 +7,12 @@ window.Pages = window.Pages || {};
 // record: any User creates it (consignee + shipping + items — no price at all),
 // then whoever is granted the 'set_price' feature for this page (Admin/HOD
 // always, or a specific User granted it from Users → Access tab) opens that
-// same PI and fills in the C&F US$ rate per piece, which finalizes it in place.
+// same PI and fills in the rate per piece — along with the price basis (CNF /
+// CIF / FOB / Ex Fact) and the currency, which is what every money label on
+// the printed document is then built from. That finalizes it in place.
 //
-// This is the company's EXPORT PI / OCS document — priced in C&F US$, with
+// This is the company's EXPORT PI / OCS document — priced C&F in US$ by
+// default, though the basis and currency are per PI now, with
 // consignee/port/container details and CBM + weight per line. There is no
 // GST/HSN/INR anywhere: those belong to a domestic invoice, which this app
 // does not raise. The printed layout lives in backend/lib/pi-format.js.
@@ -38,6 +41,12 @@ window.Pages['proforma-invoice'] = (() => {
   // Options for the three shipping selects, from the values that master
   // already uses (see _piShippingOptions in server.js).
   let _shippingOptions = { portOfLoading: [], portOfDischarge: [], placeOfDelivery: [] };
+  // Price basis and currency — chosen on the Add Price screen, and what the
+  // whole printed PI's money labels are built from (see priceLabels in
+  // backend/lib/pi-format.js).
+  let _priceTypes = [];
+  let _currencies = [];
+  let _priceDefault = { priceType: 'CNF', currency: 'USD' };
   let _defaults = null;     // boilerplate from backend/lib/pi-format.js
   let _maxItems = 30;
 
@@ -109,6 +118,9 @@ window.Pages['proforma-invoice'] = (() => {
       _recentBuyers = data.recentBuyers || [];
       _consignees = data.consignees || [];
       if (data.shippingOptions) _shippingOptions = data.shippingOptions;
+      if (data.priceTypes) _priceTypes = data.priceTypes;
+      if (data.currencies) _currencies = data.currencies;
+      if (data.priceDefault) _priceDefault = data.priceDefault;
       if (data.defaults) _defaults = data.defaults;
       if (data.maxItems) _maxItems = data.maxItems;
       _mastersLoaded = true;
@@ -464,7 +476,7 @@ window.Pages['proforma-invoice'] = (() => {
         + '<tbody id="pic-items-tbody">' + _itemRowHtml() + '</tbody>'
       + '</table>'
     + '</div>'
-    + '<p style="font-size:11.5px;color:#94a3b8;margin:8px 2px 0;">Pick a Model No. and the name, size, SWG, packing and photo fill in from the product master; Total Box, CBM and Weight are then worked out from Qty. Type over any of them to override. C&amp;F US$ rate is added later by an authorized user.</p>';
+    + '<p style="font-size:11.5px;color:#94a3b8;margin:8px 2px 0;">Pick a Model No. and the name, size, SWG, packing and photo fill in from the product master; Total Box, CBM and Weight are then worked out from Qty. Type over any of them to override. The rate, its basis and its currency are added later by an authorized user.</p>';
   }
 
   function _bindItemRow(rowEl) {
@@ -931,7 +943,13 @@ window.Pages['proforma-invoice'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + _statusPillHtml(r.status) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + (r.status === 'Priced' ? esc(r.total) : '<span style="color:#cbd5e1;">—</span>') + '</td>'
+        // Not every PI is in the same currency any more, so the column
+        // says which one rather than assuming US$ in its header.
+        + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">'
+          + (r.status === 'Priced'
+            ? esc(r.total) + ' <span style="color:#94a3b8;font-size:11px;">' + esc(_currencyLabel((r.form && r.form.currency) || _priceDefault.currency)) + '</span>'
+            : '<span style="color:#cbd5e1;">—</span>')
+        + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           + (r.status !== 'Cancelled' && r.canSetPrice
@@ -1035,7 +1053,7 @@ window.Pages['proforma-invoice'] = (() => {
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
         + '<table style="width:100%;border-collapse:collapse;min-width:880px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['Pro. Invoice No', 'Date', 'Consignee', 'Status', 'Total C&F (US$)', 'PDF', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + ['Pro. Invoice No', 'Date', 'Consignee', 'Status', 'Total', 'PDF', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
           + '<tbody id="pil-body"><tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
@@ -1044,7 +1062,7 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   /* ── Add Price modal — lists the PI's own stored items (read-only
-     model/name/size/qty from Form JSON) with a C&F US$ per-piece input per
+     model/name/size/qty from Form JSON) with a per-piece rate input per
      row. Rows are addressed by index, not model number: an export PI can
      legitimately list the same model twice at different sizes. Submits to
      PUT /api/proforma-invoice/price ────────────────────────────────────── */
@@ -1069,6 +1087,25 @@ window.Pages['proforma-invoice'] = (() => {
     if (modal) modal.innerHTML = '';
   }
 
+  /* ── Add Price: the two things that decide how the whole PI reads ────── */
+  // "US$" is what the sheet prints for USD; the rest print their own code.
+  // Kept in step with CURRENCIES in backend/lib/pi-format.js, which is what
+  // actually writes the headers.
+  const _CURRENCY_LABELS = { INR: 'INR', USD: 'US$', GBP: 'GBP', SAR: 'SAR', KWD: 'KWD', EUR: 'EUR' };
+  function _currencyLabel(code) { return _CURRENCY_LABELS[code] || code || ''; }
+
+  function _priceSelectHtml(id, label, values, selected) {
+    // A list that has not loaded yet must still show what the PI is on, or
+    // saving would quietly change it.
+    const opts = (values && values.length ? values : [selected]).filter(Boolean);
+    return '<div>'
+      + '<div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">' + esc(label) + '</div>'
+      + '<select id="' + id + '" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;background:#fff;cursor:pointer;outline:none;">'
+        + opts.map(v => '<option value="' + esc(v) + '"' + (v === selected ? ' selected' : '') + '>' + esc(v) + '</option>').join('')
+      + '</select>'
+    + '</div>';
+  }
+
   function _renderPriceModal() {
     const modal = document.getElementById('pi-price-modal');
     if (!modal) return;
@@ -1076,6 +1113,10 @@ window.Pages['proforma-invoice'] = (() => {
     const row = _priceModalRow;
     const form = row.form || {};
     const items = Array.isArray(form.items) ? form.items : [];
+    // A PI already priced re-opens on what it was priced in; a fresh one on
+    // the house default.
+    const priceType = form.priceType || _priceDefault.priceType;
+    const currency = form.currency || _priceDefault.currency;
 
     modal.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="pipm-backdrop">'
       + '<div style="background:#fff;border-radius:18px;width:100%;max-width:820px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
@@ -1086,13 +1127,25 @@ window.Pages['proforma-invoice'] = (() => {
           + '</button>'
         + '</div>'
         + '<div style="padding:22px 24px;max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:16px;">'
+          // Basis and currency come first because everything under them is
+          // read in those terms — and because they relabel the PI itself, not
+          // just this screen.
+          + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
+            + _priceSelectHtml('pipm-price-type', 'Price Type', _priceTypes, priceType)
+            + _priceSelectHtml('pipm-currency', 'Currency', _currencies, currency)
+          + '</div>'
+          + '<div id="pipm-price-note" style="font-size:11.5px;color:#94a3b8;margin:-8px 2px 0;">The PI prints these: “' + esc(priceType + ' ' + _currencyLabel(currency)) + ' Per Pc” on the rate column, and the total and amount in words to match.</div>'
           + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
             + '<table style="width:100%;border-collapse:collapse;min-width:740px;">'
               + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
                 // Total Weight rides along for reference only — it is not
                 // printed on the PI (see printHiddenCols in pi-format.js), but
                 // it is what the rate is usually sanity-checked against.
-                + ['Photo', 'Model No.', 'Item Name', 'Size', 'Total Qty', 'Total Weight (Kgs)', 'C&F US$ Per Pc', 'Amount (US$)'].map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+                // The last two follow the dropdowns above, so this screen
+                // reads the same way the printed PI will.
+                + ['Photo', 'Model No.', 'Item Name', 'Size', 'Total Qty', 'Total Weight (Kgs)'].map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+                + '<th id="pipm-rate-head" style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(priceType + ' ' + _currencyLabel(currency) + ' Per Pc') + '</th>'
+                + '<th id="pipm-amount-head" style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc('Amount (' + _currencyLabel(currency) + ')') + '</th>'
               + '</tr></thead>'
               + '<tbody>' + items.map((it, i) => ''
                 + '<tr class="pipm-item-row" data-index="' + i + '" data-qty="' + esc(it.qty || 0) + '" style="border-bottom:1px solid #f1f5f9;">'
@@ -1113,7 +1166,7 @@ window.Pages['proforma-invoice'] = (() => {
             + '</table>'
           + '</div>'
           + '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
-            + '<div><span style="font-size:12.5px;font-weight:700;color:#64748b;">Total C&amp;F US$ </span><span style="font-size:17px;font-weight:800;color:#0f172a;"><span id="pipm-total">0.00</span></span></div>'
+            + '<div><span id="pipm-total-cap" style="font-size:12.5px;font-weight:700;color:#64748b;">' + esc('Total ' + priceType + ' ' + _currencyLabel(currency)) + ' </span><span style="font-size:17px;font-weight:800;color:#0f172a;"><span id="pipm-total">0.00</span></span></div>'
             + '<div style="font-size:11.5px;color:#94a3b8;">Shown for confirmation — the printed total is the sheet\'s own formula.</div>'
           + '</div>'
         + '</div>'
@@ -1128,6 +1181,21 @@ window.Pages['proforma-invoice'] = (() => {
     document.getElementById('pipm-close').addEventListener('click', _closePriceModal);
     document.getElementById('pipm-cancel').addEventListener('click', _closePriceModal);
     modal.querySelectorAll('.pipm-rate').forEach(inp => inp.addEventListener('input', _priceRecompute));
+    // Relabel in place rather than re-rendering — a re-render would throw away
+    // the rates already typed in.
+    const relabel = () => {
+      const t = document.getElementById('pipm-price-type').value;
+      const c = _currencyLabel(document.getElementById('pipm-currency').value);
+      const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+      set('pipm-rate-head', t + ' ' + c + ' Per Pc');
+      set('pipm-amount-head', 'Amount (' + c + ')');
+      set('pipm-total-cap', 'Total ' + t + ' ' + c + ' ');
+      set('pipm-price-note', 'The PI prints these: “' + t + ' ' + c + ' Per Pc” on the rate column, and the total and amount in words to match.');
+    };
+    ['pipm-price-type', 'pipm-currency'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('change', relabel);
+    });
     document.getElementById('pipm-save').addEventListener('click', _submitPrice);
     _priceRecompute();
   }
@@ -1147,7 +1215,11 @@ window.Pages['proforma-invoice'] = (() => {
     try {
       const result = await Utils.apiFetch('/api/proforma-invoice/price?piNo=' + encodeURIComponent(piNo), {
         method: 'PUT',
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({
+          items,
+          priceType: document.getElementById('pipm-price-type').value,
+          currency: document.getElementById('pipm-currency').value,
+        }),
       });
       // The server closes the tracker's "Add Pricing" step as part of this
       // save, so say so — that step is why the user is on this screen at all.
@@ -1199,7 +1271,7 @@ window.Pages['proforma-invoice'] = (() => {
     el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '1180px') + ';margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Proforma Invoice / OCS</h1>'
-        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Export PI in C&amp;F US$. Create captures consignee, shipping &amp; items only — the rate is added afterward by an authorized user.</p>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Export PI. Create captures consignee, shipping &amp; items only — the rate, its basis and its currency are added afterward by an authorized user.</p>'
       + '</div>'
       + _tabsHtml()
       + bodyHtml

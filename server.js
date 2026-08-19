@@ -762,6 +762,13 @@ class DbSessionStore extends session.Store {
   destroyByUser(userId) {
     return pool.query('DELETE FROM user_sessions WHERE user_id = $1', [String(userId)]);
   }
+
+  // Everyone except one session. Used for the bulk sign-out, where keeping the
+  // caller signed in is the difference between a usable button and one that
+  // locks the admin out of the page they just clicked it on.
+  destroyAllExcept(keepSid) {
+    return pool.query('DELETE FROM user_sessions WHERE sid <> $1', [String(keepSid || '')]);
+  }
   get(sid, cb) {
     pool.query('SELECT data, expires_at FROM user_sessions WHERE sid = $1', [sid])
       .then(({ rows }) => {
@@ -2183,14 +2190,19 @@ app.post('/api/users/set-password', requireAuth, requireAdmin, async (req, res) 
 // them out on every device the moment their next request lands. Hiding the
 // button in the UI is cosmetic — requireSuperAdmin is the actual gate.
 app.post('/api/users/signout-all', requireAuth, requireSuperAdmin, async (req, res) => {
-  const userId = String(req.body?.userId || '').trim();
-  if (!userId) return res.status(400).json({ error: 'userId required' });
+  const everyone = req.body?.all === true;
+  const userId   = String(req.body?.userId || '').trim();
+  if (!everyone && !userId) return res.status(400).json({ error: 'userId required' });
   if (!sessionStore) return res.status(503).json({ error: 'Sessions are not stored in the database on this deployment' });
   try {
     // Catch any session row still missing its user_id before deleting by it.
     await sessionStore.backfillUserIds().catch(() => {});
-    const { rowCount } = await sessionStore.destroyByUser(userId);
-    console.log('[signout-all]', userId, 'sessions dropped:', rowCount || 0,
+    // The bulk case deliberately spares req.sessionID: the caller stays signed
+    // in on this tab, and signs themselves out from their own row if they want.
+    const { rowCount } = everyone
+      ? await sessionStore.destroyAllExcept(req.sessionID)
+      : await sessionStore.destroyByUser(userId);
+    console.log('[signout-all]', everyone ? 'EVERYONE' : userId, 'sessions dropped:', rowCount || 0,
                 'by', req.session.user?.email || '');
     return res.json({ success: true, sessions: rowCount || 0 });
   } catch (err) { return res.status(500).json({ error: err.message }); }
@@ -4651,12 +4663,13 @@ function _piWordsInt(n) {
   return parts.join(' ');
 }
 
-function _piAmountInWords(amount) {
+function _piAmountInWords(amount, labels) {
+  const L = labels || PI_FMT.priceLabels();
   const n = Math.round((Number(amount) || 0) * 100) / 100;
   const whole = Math.floor(n);
   const cents = Math.round((n - whole) * 100);
-  let s = '(C&F US DOLLAR ' + _piWordsInt(whole);
-  if (cents > 0) s += ' AND ' + _piWordsInt(cents) + ' CENTS';
+  let s = '(' + L.type + ' ' + L.words + ' ' + _piWordsInt(whole);
+  if (cents > 0) s += ' AND ' + _piWordsInt(cents) + ' ' + L.subunit;
   return s + ' ONLY)';
 }
 
@@ -4823,6 +4836,15 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
   const terms = Array.isArray(form.terms) && form.terms.length ? form.terms : D.terms;
   for (let r = L.termsFirstRow; r <= L.termsLastRow; r++) put(`A${r}`, terms[r - L.termsFirstRow] || '');
 
+  // The three money labels, rewritten from this PI's own price basis and
+  // currency. The template is painted with the defaults, so a PI that has not
+  // been priced yet (and every PI raised before these were selectable) reads
+  // exactly as it always did.
+  const money = PI_FMT.priceLabels(form.priceType, form.currency);
+  put(`${IT.fields.rate}${L.itemHeaderRow}`, money.rateHeader);
+  put(`${IT.amountCol}${L.itemHeaderRow}`, money.amountHeader);
+  put(`${L.totalCapFirst}${L.wordsRow}`, money.totalCaption);
+
   items.forEach((it, i) => {
     const row = L.itemsFirstRow + i;
     if (row > L.itemsLastRow) return;   // beyond template capacity — see the cap enforced in POST
@@ -4912,7 +4934,7 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
 // formulas to settle, read back the computed Total, stamp the amount in words
 // (which can only be built once that Total exists), then export + upload the
 // PDF. Never lets a Drive/export hiccup block the actual data write.
-async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId) {
+async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId, labels) {
   await _sleep(2000);
   let totalAmount = null;
   try {
@@ -4924,7 +4946,7 @@ async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId) {
       spreadsheetId: PI_CREATION_SHEET_ID,
       range: `'${PI_TEMPLATE_TAB}'!${PI_FMT.CELLS.amountInWords}`,
       valueInputOption: 'RAW',
-      requestBody: { values: [[totalAmount ? _piAmountInWords(totalAmount) : '']] },
+      requestBody: { values: [[totalAmount ? _piAmountInWords(totalAmount, labels) : '']] },
     });
     await _sleep(600);
   } catch (e) { console.error('[proforma-invoice] amount-in-words write failed:', e.message); }
@@ -5178,6 +5200,10 @@ app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
       shippingOptions: _piShippingOptions(consignees),
       maxItems: PI_FMT.LAYOUT.itemsLastRow - PI_FMT.LAYOUT.itemsFirstRow + 1,
       defaults: PI_FMT.DEFAULTS,
+      // For the Add Price screen's two dropdowns.
+      priceTypes: PI_FMT.PRICE_TYPES,
+      currencies: Object.keys(PI_FMT.CURRENCIES),
+      priceDefault: PI_FMT.PRICE_DEFAULT,
     });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -5436,7 +5462,7 @@ app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
     const form = _piFormFromBody(b, req.session.user, cleanItems);
 
     await _fillPiTemplate(sheets, { ...form, piNo: piNoFormatted }, templateSheetId);
-    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNoFormatted, templateSheetId);
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNoFormatted, templateSheetId, PI_FMT.priceLabels(form.priceType, form.currency));
 
     await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, PI_LOG_HEADER);
     await appendLogRow(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, [
@@ -5589,7 +5615,7 @@ app.post('/api/proforma-invoice/revise', requireAuth, async (req, res) => {
 
     const { templateSheetId } = await _piSheetMeta(_piFyLabel(b.date));
     await _fillPiTemplate(sheets, { ...form, piNo: newPiNo }, templateSheetId);
-    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, newPiNo, templateSheetId);
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, newPiNo, templateSheetId, PI_FMT.priceLabels(form.priceType, form.currency));
 
     await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, PI_LOG_HEADER);
     await appendLogRow(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, [
@@ -5704,14 +5730,33 @@ app.put('/api/proforma-invoice/price', requireAuth, async (req, res) => {
       rate: rateByIndex[i] ?? it.rate,
     }));
 
-    const { templateSheetId } = await _piSheetMeta(_piFyLabel(existingForm.date));
-    await _fillPiTemplate(sheets, { ...existingForm, piNo, items: mergedItems }, templateSheetId);
-    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNo, templateSheetId);
+    // Price basis and currency are chosen here, alongside the rates — the two
+    // labels the whole printed document is built from. Only values off the
+    // known lists are accepted: a typo would otherwise print on the PI as the
+    // buyer's price basis. Re-pricing without sending them keeps what the PI
+    // already had.
+    const wantType = String(req.body?.priceType || '').trim();
+    const wantCurrency = String(req.body?.currency || '').trim().toUpperCase();
+    if (wantType && !PI_FMT.PRICE_TYPES.includes(wantType)) {
+      return res.status(400).json({ error: `Price type must be one of ${PI_FMT.PRICE_TYPES.join(', ')}` });
+    }
+    if (wantCurrency && !PI_FMT.CURRENCIES[wantCurrency]) {
+      return res.status(400).json({ error: `Currency must be one of ${Object.keys(PI_FMT.CURRENCIES).join(', ')}` });
+    }
+    const pricedForm = {
+      ...existingForm,
+      items: mergedItems,
+      priceType: wantType || existingForm.priceType || PI_FMT.PRICE_DEFAULT.priceType,
+      currency: wantCurrency || existingForm.currency || PI_FMT.PRICE_DEFAULT.currency,
+    };
 
-    const mergedForm = { ...existingForm, items: mergedItems };
+    const { templateSheetId } = await _piSheetMeta(_piFyLabel(existingForm.date));
+    await _fillPiTemplate(sheets, { ...pricedForm, piNo }, templateSheetId);
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNo, templateSheetId, PI_FMT.priceLabels(pricedForm.priceType, pricedForm.currency));
+
     await _updateLogRowCells(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo, {
       D: totalAmount ?? '', E: pdfLink || rowVals[4] || '', H: req.session.user.name || '', I: _timestampForSheet(),
-      J: JSON.stringify(mergedForm), K: 'Priced',
+      J: JSON.stringify(pricedForm), K: 'Priced',
     });
 
     // Pricing the PI IS the export tracker's "Add Pricing" step, so close it

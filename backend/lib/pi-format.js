@@ -70,7 +70,7 @@ const LAYOUT = {
   totalLabelFirst: 'A', totalLabelLast: 'G',   // merged "TOTAL" cell
   wordsRow: 47,
   wordsFirst: 'A', wordsLast: 'I',             // amount in words
-  totalCapFirst: 'J', totalCapLast: 'L',       // "Total C&F US$" caption
+  totalCapFirst: 'J', totalCapLast: 'L',       // total caption — see priceLabels()
   totalValFirst: 'M',                          // the figure itself
 
   validityRow: 49,
@@ -166,7 +166,10 @@ const ITEMS = {
   headers: [
     'Sr No', 'Photo', 'Model No.', 'Item Name', 'Size', 'SWG', 'Per Box Dozen Packing',
     'Total Qty (Pcs / Set)', 'Total Box', 'Total CBM', 'Total Weight (Kgs)',
-    'C&F US$ Per Pc', 'Amount (US$)', 'Remarks',
+    // The last two money headers are rewritten per PI from its price type
+    // and currency (see priceLabels); these are what the template is painted
+    // with and what an unpriced PI shows.
+    'CNF US$ Per Pc', 'Amount (US$)', 'Remarks',
   ],
   // px widths, A..N — sums to 1065px. That is the printable width of an A4
   // LANDSCAPE page at the 0.3" margins _exportSheetTabPdf() uses; the PDF now
@@ -180,6 +183,47 @@ const ITEMS = {
 };
 
 const TOTAL_CELL = 'M46';
+
+// ── Price basis and currency ────────────────────────────────────────────────
+// Both are chosen on the Add Price screen, not at create time — until a rate
+// exists there is nothing to label. Everything the printed PI says about money
+// is built from these two: the two item-table headers, the total caption and
+// the amount in words. The template is painted with the defaults; each fill
+// overwrites those three cells, so a PI quoted FOB in EUR prints that way
+// without the template being touched.
+const PRICE_TYPES = ['CNF', 'CIF', 'FOB', 'Ex Fact'];
+
+const CURRENCIES = {
+  INR: { label: 'INR', words: 'RUPEES',         subunit: 'PAISE' },
+  USD: { label: 'US$', words: 'US DOLLARS',     subunit: 'CENTS' },
+  GBP: { label: 'GBP', words: 'POUNDS',         subunit: 'PENCE' },
+  SAR: { label: 'SAR', words: 'SAUDI RIYALS',   subunit: 'HALALAS' },
+  // The dinar is actually divided into 1000 fils, not 100. The amount in words
+  // reads the two decimal places the sheet holds, so a KWD PI says the fils in
+  // hundredths — right to two places, and the figure itself is unaffected.
+  KWD: { label: 'KWD', words: 'KUWAITI DINARS', subunit: 'FILS' },
+  EUR: { label: 'EUR', words: 'EUROS',          subunit: 'CENTS' },
+};
+
+// What a PI is quoted in until someone says otherwise — matches what every PI
+// printed before the two were selectable ("C&F US$", spelled CNF here).
+const PRICE_DEFAULT = { priceType: 'CNF', currency: 'USD' };
+
+// The four money labels for one PI, from its stored priceType/currency. Falls
+// back to the default for a PI raised before these existed, so an old draft
+// re-prints exactly as it always did.
+function priceLabels(priceType, currency) {
+  const c = CURRENCIES[String(currency || '').toUpperCase()] || CURRENCIES[PRICE_DEFAULT.currency];
+  const type = String(priceType || '').trim() || PRICE_DEFAULT.priceType;
+  return {
+    type,
+    rateHeader: `${type} ${c.label} Per Pc`,
+    amountHeader: `Amount (${c.label})`,
+    totalCaption: `Total ${type} ${c.label}`,
+    words: c.words,
+    subunit: c.subunit,
+  };
+}
 
 // The product master the item typeahead and the photos come from — the
 // customer's own "PI Export (Final)" workbook, not this app's sheet. Its
@@ -306,4 +350,4 @@ function validityNote(validity) {
     + '(INCREASE IN PRICE 5% OR AS PER THE MARKET SITUATION).';
 }
 
-module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, PRODUCT_SOURCE, CONSIGNEE_SOURCE, FMS_TRACKER, DEFAULTS, SHIPMENT_DAYS_RE, validityNote };
+module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, PRODUCT_SOURCE, CONSIGNEE_SOURCE, FMS_TRACKER, DEFAULTS, SHIPMENT_DAYS_RE, PRICE_TYPES, CURRENCIES, PRICE_DEFAULT, priceLabels, validityNote };
