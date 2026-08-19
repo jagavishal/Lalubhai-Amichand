@@ -13,36 +13,18 @@ window.Pages.login = {
       weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
     });
 
-    // What the ERP covers — shown as highlights on the brand side.
-    const FEATURES = [
-      {
-        title: 'Tasks & Checklists',
-        desc:  'Daily, recurring and delegated work in one place',
-        icon:  '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
-      },
-      {
-        title: 'Inventory & Purchase',
-        desc:  'PR, PO, GRN, inward–outward and live stock',
-        icon:  '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05"/><path d="M12 22.08V12"/>',
-      },
-      {
-        title: 'Reports & MIS',
-        desc:  'Dashboards, approvals and performance tracking',
-        icon:  '<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>',
-      },
+    // One line at a time under the animation, rotating — keeps the panel warm
+    // without turning it back into a wall of feature copy.
+    const QUIPS = [
+      'Chai thandi ho rahi hai &mdash; login kar lijiye. &#x2615;',
+      'Stock apne aap toh count hoga nahi. &#x1F4E6;',
+      'Approvals aaj bhi pending hain. Hamesha ki tarah. &#x1F4DD;',
+      'Boss ne dashboard khol liya hai. &#x1F440;',
     ];
+    const QUIP_CYCLE = 14; // seconds for the full rotation — shared with the CSS below
 
-    const featuresHtml = FEATURES.map((f, i) => `
-      <div class="lg-feature" style="animation-delay:${0.35 + i * 0.1}s;">
-        <span class="lg-feature-icon">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${f.icon}</svg>
-        </span>
-        <span>
-          <span class="lg-feature-title">${f.title}</span>
-          <span class="lg-feature-desc">${f.desc}</span>
-        </span>
-      </div>
+    const quipsHtml = QUIPS.map((q, i) => `
+      <span style="animation-delay:${(i * QUIP_CYCLE / QUIPS.length).toFixed(2)}s;">${q}</span>
     `).join('');
 
     el.innerHTML = `
@@ -68,6 +50,48 @@ window.Pages.login = {
         }
         @keyframes lgSpin  { to { transform: rotate(360deg); } }
         @keyframes lgSheen { 0% { left: -60%; } 60%, 100% { left: 130%; } }
+        @keyframes lgFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        /* ── Scene animations ───────────────────────────────────────── */
+        /* The mock dashboard breathes so the panel is never dead still. */
+        @keyframes lgBob      { 0%, 100% { transform: translateY(0); }
+                                50%      { transform: translateY(-7px); } }
+        /* Title placeholder in the mock's title bar loads forever, as they do. */
+        @keyframes lgShimmer  { from { background-position-x: 100%; }
+                                to   { background-position-x: -120%; } }
+        /* Chart bars keep re-reporting. */
+        @keyframes lgBarGrow  { 0%, 100% { transform: scaleY(.35); }
+                                50%      { transform: scaleY(1); } }
+        /* Trend line redraws itself, then holds. */
+        @keyframes lgDraw     { 0%       { stroke-dashoffset: 260; }
+                                55%, 100%{ stroke-dashoffset: 0; } }
+        /* Each vertex pops in behind the line as it passes. */
+        @keyframes lgPop      { 0%, 22%  { transform: scale(0); opacity: 0; }
+                                34%      { transform: scale(1.6); opacity: 1; }
+                                44%, 100%{ transform: scale(1);   opacity: 1; } }
+        /* Status pills drift up and out, one after another. */
+        @keyframes lgChip     { 0%       { opacity: 0; transform: translateY(12px) scale(.92); }
+                                14%, 68% { opacity: 1; transform: translateY(0) scale(1); }
+                                100%     { opacity: 0; transform: translateY(-12px) scale(.96); } }
+        /* Conveyor tread. */
+        @keyframes lgBelt     { from { background-position-x: 0; }
+                                to   { background-position-x: -26px; } }
+        /* A crate rides the belt from off-screen left to off-screen right. */
+        @keyframes lgRide     { from { transform: translateX(0); }
+                                to   { transform: translateX(520px); } }
+        /* …and gets stamped cleared right about the middle of the run. */
+        @keyframes lgStamp    { 0%, 44% { transform: scale(0) rotate(-20deg); opacity: 0; }
+                                51%     { transform: scale(1.45) rotate(8deg); opacity: 1; }
+                                58%, 88%{ transform: scale(1) rotate(0deg);    opacity: 1; }
+                                100%    { transform: scale(1) rotate(0deg);    opacity: 0; } }
+        /* Steam off the mug that somehow got onto the conveyor. */
+        @keyframes lgSteam    { 0%   { opacity: 0; transform: translateY(0) scaleX(1); }
+                                25%  { opacity: .7; }
+                                100% { opacity: 0; transform: translateY(-15px) scaleX(1.7); } }
+        /* One-liner in, one-liner out. */
+        @keyframes lgQuip     { 0%      { opacity: 0; transform: translateY(7px); }
+                                4%, 22% { opacity: 1; transform: translateY(0); }
+                                26%,100%{ opacity: 0; transform: translateY(-7px); } }
 
         /* ── Layout ─────────────────────────────────────────────────── */
         #login-page .lg-wrap {
@@ -124,7 +148,12 @@ window.Pages.login = {
           -webkit-mask-image: radial-gradient(ellipse at 30% 40%, #000 10%, transparent 72%);
           pointer-events: none;
         }
-        #login-page .lg-brand > * { position: relative; z-index: 1; }
+        /* Content sits above the blobs/grid. Named one by one rather than with a
+           universal child selector — that would tie on specificity with the
+           .lg-blob / .lg-grid rules above and drop them back into the flow. */
+        #login-page .lg-brand > .lg-brand-top,
+        #login-page .lg-brand > .lg-brand-mid,
+        #login-page .lg-brand > .lg-brand-foot { position: relative; z-index: 1; }
 
         #login-page .lg-brand-top   { display: flex; align-items: center; gap: 14px;
                                       animation: lgFadeRight .6s cubic-bezier(.16,1,.3,1) both; }
@@ -153,19 +182,132 @@ window.Pages.login = {
                                       background: linear-gradient(90deg, #6BB0F5, #FF6B78);
                                       -webkit-background-clip: text; background-clip: text;
                                       -webkit-text-fill-color: transparent; }
-        #login-page .lg-tagline     { font-size: 13.5px; line-height: 1.65; color: #A9C4E4;
-                                      margin: 0 0 30px; max-width: 400px;
-                                      animation: lgFadeUp .6s cubic-bezier(.16,1,.3,1) .26s both; }
+        /* ── Animated scene ─────────────────────────────────────────────
+              A mini dashboard that keeps re-reporting itself, a column of
+              status pills, and a conveyor clearing stock underneath. Carries
+              the panel on its own, so there is no feature copy to read. */
+        #login-page .lg-stage       { max-width: 460px; margin: 26px 0 18px;
+                                      animation: lgFadeIn .7s ease-out .32s both; }
+        #login-page .lg-stage-top   { display: flex; align-items: center; gap: 16px; }
 
-        #login-page .lg-feature     { display: flex; align-items: flex-start; gap: 12px;
-                                      margin-bottom: 16px;
-                                      animation: lgFadeUp .6s cubic-bezier(.16,1,.3,1) both; }
-        #login-page .lg-feature-icon{ flex: none; width: 32px; height: 32px; border-radius: 10px;
+        #login-page .lg-mock        { flex: 1 1 262px; max-width: 278px; border-radius: 14px;
+                                      overflow: hidden; background: rgba(8,26,50,.72);
+                                      border: 1px solid rgba(143,196,250,.20);
+                                      box-shadow: 0 22px 48px rgba(0,0,0,.40);
+                                      animation: lgBob 6.5s ease-in-out infinite; }
+        #login-page .lg-mock-bar    { display: flex; align-items: center; gap: 5px;
+                                      padding: 10px 12px; background: rgba(255,255,255,.05);
+                                      border-bottom: 1px solid rgba(143,196,250,.14); }
+        #login-page .lg-mock-bar i  { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+        #login-page .lg-mock-bar i:nth-child(1) { background: #FF6B78; }
+        #login-page .lg-mock-bar i:nth-child(2) { background: #F5C24B; }
+        #login-page .lg-mock-bar i:nth-child(3) { background: #4ADE80; }
+        #login-page .lg-mock-bar b  { flex: 1; height: 6px; margin-left: 6px; border-radius: 3px;
+                                      background: linear-gradient(90deg, rgba(143,196,250,.10),
+                                        rgba(143,196,250,.45) 45%, rgba(143,196,250,.10));
+                                      background-size: 220% 100%;
+                                      animation: lgShimmer 2.6s linear infinite; }
+
+        #login-page .lg-trend       { display: block; width: 100%; height: 62px; }
+        #login-page .lg-trend-line  { fill: none; stroke: #6BB0F5; stroke-width: 2.4;
+                                      stroke-linecap: round; stroke-linejoin: round;
+                                      stroke-dasharray: 260;
+                                      filter: drop-shadow(0 0 6px rgba(107,176,245,.55));
+                                      animation: lgDraw 5.6s ease-in-out infinite; }
+        #login-page .lg-trend circle{ fill: #FF6B78; opacity: 0;
+                                      transform-box: fill-box; transform-origin: center;
+                                      animation: lgPop 5.6s ease-in-out infinite; }
+        #login-page .lg-trend circle:nth-of-type(1) { animation-delay: .35s; }
+        #login-page .lg-trend circle:nth-of-type(2) { animation-delay: .70s; }
+        #login-page .lg-trend circle:nth-of-type(3) { animation-delay: 1.05s; }
+        #login-page .lg-trend circle:nth-of-type(4) { animation-delay: 1.40s; }
+        #login-page .lg-trend circle:nth-of-type(5) { animation-delay: 1.75s; }
+
+        #login-page .lg-bars        { display: flex; align-items: flex-end; gap: 6px;
+                                      height: 46px; padding: 0 12px 12px; }
+        #login-page .lg-bars i      { flex: 1; height: 100%; border-radius: 4px 4px 2px 2px;
+                                      transform: scaleY(.55); transform-origin: bottom;
+                                      background: linear-gradient(180deg, #6BB0F5, #0150AA);
+                                      animation: lgBarGrow 3.4s ease-in-out infinite; }
+        #login-page .lg-bars i:nth-child(1) { animation-delay: 0s; }
+        #login-page .lg-bars i:nth-child(2) { animation-delay: .16s; }
+        #login-page .lg-bars i:nth-child(3) { animation-delay: .32s; }
+        #login-page .lg-bars i:nth-child(4) { animation-delay: .48s; }
+        #login-page .lg-bars i:nth-child(5) { animation-delay: .64s; }
+        #login-page .lg-bars i:nth-child(6) { animation-delay: .80s; }
+        #login-page .lg-bars i:nth-child(7) { animation-delay: .96s; }
+
+        #login-page .lg-chips       { display: flex; flex-direction: column; gap: 9px; }
+        #login-page .lg-chip        { display: inline-flex; align-items: center; gap: 8px;
+                                      padding: 7px 12px; border-radius: 999px; white-space: nowrap;
+                                      font-size: 11.5px; font-weight: 600; color: #E6EDF6;
+                                      background: rgba(255,255,255,.09);
+                                      border: 1px solid rgba(255,255,255,.15);
+                                      box-shadow: 0 10px 24px rgba(0,0,0,.28);
+                                      opacity: 0; animation: lgChip 5.4s ease-in-out infinite; }
+        #login-page .lg-chip i      { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+        #login-page .lg-chip:nth-child(1) { animation-delay: .5s; }
+        #login-page .lg-chip:nth-child(2) { animation-delay: 2.3s; }
+        #login-page .lg-chip:nth-child(3) { animation-delay: 4.1s; }
+
+        #login-page .lg-belt        { position: relative; height: 58px; margin-top: 20px;
+                                      overflow: hidden; }
+        #login-page .lg-belt-line   { position: absolute; left: 0; right: 0; bottom: 10px;
+                                      height: 3px; border-radius: 3px;
+                                      background: repeating-linear-gradient(90deg,
+                                        rgba(143,196,250,.50) 0 13px, transparent 13px 26px);
+                                      /* Fade both ends so the belt reads as running past
+                                         the panel rather than stopping mid-air. */
+                                      mask-image: linear-gradient(90deg, transparent, #000 12%, #000 82%, transparent);
+                                      -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 82%, transparent);
+                                      animation: lgBelt .85s linear infinite; }
+        #login-page .lg-crate       { position: absolute; bottom: 13px; left: -52px;
+                                      width: 36px; height: 32px; border-radius: 6px;
+                                      background: linear-gradient(155deg, #D0975A, #A96F35 55%, #8A5828);
+                                      border: 1px solid rgba(0,0,0,.28);
+                                      box-shadow: 0 7px 16px rgba(0,0,0,.38);
+                                      animation: lgRide 7.8s linear infinite; }
+        #login-page .lg-crate::after{ content: ''; position: absolute; left: 50%; top: 0; bottom: 0;
+                                      width: 5px; margin-left: -2.5px;
+                                      background: rgba(255,255,255,.22); }
+        #login-page .lg-crate-2     { animation-delay: 2.6s; }
+        #login-page .lg-crate-3     { animation-delay: 5.2s; }
+        #login-page .lg-tick        { position: absolute; top: -12px; right: -10px;
+                                      width: 21px; height: 21px; border-radius: 50%;
                                       display: flex; align-items: center; justify-content: center;
-                                      background: rgba(107,176,245,.16); color: #8FC4FA;
-                                      border: 1px solid rgba(107,176,245,.22); }
-        #login-page .lg-feature-title { display: block; font-size: 13px; font-weight: 600; color: #E6EDF6; }
-        #login-page .lg-feature-desc  { display: block; font-size: 11.5px; color: #8FA9C8; margin-top: 2px; }
+                                      background: #22C55E; color: #06280F;
+                                      font-size: 12px; font-weight: 800; font-style: normal;
+                                      box-shadow: 0 5px 14px rgba(34,197,94,.55);
+                                      opacity: 0; animation: lgStamp 7.8s ease-in-out infinite; }
+        #login-page .lg-crate-2 .lg-tick { animation-delay: 2.6s; }
+        #login-page .lg-crate-3 .lg-tick { animation-delay: 5.2s; }
+
+        /* The third "crate" is a mug — the one item on the belt nobody logged. */
+        #login-page .lg-mug         { width: 30px; height: 30px; border-radius: 5px 5px 11px 11px;
+                                      background: linear-gradient(160deg, #FFFFFF, #D6E2F0);
+                                      border: 1px solid rgba(255,255,255,.55); }
+        #login-page .lg-mug::before { content: ''; position: absolute; left: 4px; right: 4px; top: 4px;
+                                      height: 6px; border-radius: 3px; background: #5A3A22; }
+        #login-page .lg-mug::after  { content: ''; position: absolute;
+                                      left: auto; right: -9px; top: 8px; bottom: auto;
+                                      width: 11px; height: 13px; margin: 0; background: none;
+                                      border: 2.5px solid #E4ECF6; border-left: none;
+                                      border-radius: 0 8px 8px 0; }
+        #login-page .lg-mug .lg-tick{ left: -11px; right: auto; }
+        #login-page .lg-steam       { position: absolute; bottom: 31px; width: 3px; height: 11px;
+                                      border-radius: 3px; background: rgba(255,255,255,.6);
+                                      filter: blur(1.5px); opacity: 0;
+                                      animation: lgSteam 2.4s ease-in-out infinite; }
+        #login-page .lg-steam:nth-of-type(1) { left: 5px;  animation-delay: 0s; }
+        #login-page .lg-steam:nth-of-type(2) { left: 12px; animation-delay: .45s; }
+        #login-page .lg-steam:nth-of-type(3) { left: 19px; animation-delay: .90s; }
+
+        #login-page .lg-quip        { position: relative; height: 22px; margin: 0 0 30px;
+                                      font-size: 13px; color: #A9C4E4; }
+        #login-page .lg-quip span   { position: absolute; left: 0; top: 0; white-space: nowrap;
+                                      opacity: 0;
+                                      animation: lgQuip ${QUIP_CYCLE}s ease-in-out infinite; }
+        #login-page .lg-quip span:first-child { opacity: 1; }
 
         #login-page .lg-brand-foot  { display: flex; align-items: center; gap: 10px;
                                       font-size: 11px; color: #7E97B5;
@@ -256,8 +398,20 @@ window.Pages.login = {
           #login-page .lg-headline{ font-size: 28px; }
         }
 
+        /* With motion off the scene still has to read as a scene, so everything
+           the keyframes would have revealed gets a sane resting state. */
         @media (prefers-reduced-motion: reduce) {
           #login-page * { animation: none !important; transition: none !important; }
+          #login-page .lg-chip,
+          #login-page .lg-tick,
+          #login-page .lg-trend circle { opacity: 1; }
+          #login-page .lg-steam        { display: none; }
+          #login-page .lg-trend-line   { stroke-dasharray: none; }
+          #login-page .lg-bars i       { transform: scaleY(.7); }
+          #login-page .lg-bars i:nth-child(even) { transform: scaleY(.95); }
+          #login-page .lg-crate-1      { left: 6%; }
+          #login-page .lg-crate-2      { left: 42%; }
+          #login-page .lg-crate-3      { left: 76%; }
         }
       </style>
 
@@ -288,12 +442,46 @@ window.Pages.login = {
             <h2 class="lg-headline">
               Ek jagah par<br/><em>poora business</em> control.
             </h2>
-            <p class="lg-tagline">
-              Tasks, purchase, inventory aur reports &mdash; sab kuch ek hi
-              workspace me. Sign in kijiye aur wahin se shuru kijiye jahan chhoda tha.
-            </p>
 
-            ${featuresHtml}
+            <!-- Decorative only — the screen reader gets the headline and the form. -->
+            <div class="lg-stage" aria-hidden="true">
+              <div class="lg-stage-top">
+
+                <div class="lg-mock">
+                  <div class="lg-mock-bar"><i></i><i></i><i></i><b></b></div>
+                  <svg class="lg-trend" viewBox="0 0 260 62">
+                    <path class="lg-trend-line" d="M10 50 L60 38 L110 44 L160 22 L210 28 L250 8"/>
+                    <circle cx="60"  cy="38" r="3.2"/>
+                    <circle cx="110" cy="44" r="3.2"/>
+                    <circle cx="160" cy="22" r="3.2"/>
+                    <circle cx="210" cy="28" r="3.2"/>
+                    <circle cx="250" cy="8"  r="3.2"/>
+                  </svg>
+                  <div class="lg-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                </div>
+
+                <div class="lg-chips">
+                  <span class="lg-chip"><i style="background:#4ADE80;"></i>Task closed</span>
+                  <span class="lg-chip"><i style="background:#6BB0F5;"></i>GRN posted</span>
+                  <span class="lg-chip"><i style="background:#FF6B78;"></i>PI approved</span>
+                </div>
+
+              </div>
+
+              <div class="lg-belt">
+                <span class="lg-belt-line"></span>
+                <span class="lg-crate lg-crate-1"><i class="lg-tick">&#x2713;</i></span>
+                <span class="lg-crate lg-crate-2"><i class="lg-tick">&#x2713;</i></span>
+                <span class="lg-crate lg-crate-3 lg-mug">
+                  <span class="lg-steam"></span>
+                  <span class="lg-steam"></span>
+                  <span class="lg-steam"></span>
+                  <i class="lg-tick">&#x2713;</i>
+                </span>
+              </div>
+            </div>
+
+            <p class="lg-quip">${quipsHtml}</p>
           </div>
 
           <div class="lg-brand-foot">
