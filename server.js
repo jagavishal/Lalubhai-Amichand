@@ -734,9 +734,33 @@ class DbSessionStore extends session.Store {
   constructor() {
     super();
     // create table immediately so it exists before first session read/write
-    pool.query(
-      `CREATE TABLE IF NOT EXISTS user_sessions (sid VARCHAR(128) PRIMARY KEY, data TEXT NOT NULL, expires_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
-    ).catch(() => {});
+    // Sequential, not fire-and-forget: the ALTER has to land after the CREATE
+    // and the backfill after the ALTER, or each one fails on a column/table
+    // that does not exist yet and gets silently swallowed.
+    this.ready = (async () => {
+      await pool.query(
+        `CREATE TABLE IF NOT EXISTS user_sessions (sid VARCHAR(128) PRIMARY KEY, data TEXT NOT NULL, expires_at DATETIME NOT NULL, user_id VARCHAR(64) NULL, INDEX idx_user_sessions_user (user_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`
+      ).catch(() => {});
+      // Rows written before user_id existed carry the owner only inside the
+      // JSON blob, so add the column and backfill it — otherwise "sign out
+      // everywhere" would quietly miss every session predating this deploy.
+      await pool.query(`ALTER TABLE user_sessions ADD COLUMN user_id VARCHAR(64) NULL`).catch(() => {});
+      await pool.query(`CREATE INDEX idx_user_sessions_user ON user_sessions (user_id)`).catch(() => {});
+      await this.backfillUserIds().catch(() => {});
+    })();
+  }
+
+  // Cheap: only ever touches rows that have no user_id yet.
+  backfillUserIds() {
+    return pool.query(
+      `UPDATE user_sessions SET user_id = JSON_UNQUOTE(JSON_EXTRACT(data, '$.user.id'))
+        WHERE user_id IS NULL AND data LIKE '%"user"%'`
+    );
+  }
+
+  // Every stored session for one user — this is what signs them out everywhere.
+  destroyByUser(userId) {
+    return pool.query('DELETE FROM user_sessions WHERE user_id = $1', [String(userId)]);
   }
   get(sid, cb) {
     pool.query('SELECT data, expires_at FROM user_sessions WHERE sid = $1', [sid])
@@ -749,13 +773,26 @@ class DbSessionStore extends session.Store {
         try { cb(null, JSON.parse(rows[0].data)); } catch { cb(null, null); }
       }).catch(() => cb(null, null));
   }
+  // Every authenticated request lands here (via touch), so this is the one
+  // method that must not get more fragile. Two guards: wait for the migration
+  // so the first write after a deploy can't race the ALTER, and fall back to
+  // the original user_id-less write if that column is unavailable for any
+  // reason — a session that stores without user_id still logs the user in.
   set(sid, sess, cb) {
     const exp = new Date(Date.now() + SESSION_TTL_MS);
     const data = JSON.stringify(sess);
-    pool.query(
+    const uid = sess?.user?.id ? String(sess.user.id) : null;
+    const legacy = () => pool.query(
       `INSERT INTO user_sessions (sid, data, expires_at) VALUES ($1,$2,$3) ON CONFLICT (sid) DO UPDATE SET data=$4, expires_at=$5`,
       [sid, data, exp, data, exp]
-    ).then(() => cb(null)).catch(() => cb(null));
+    );
+    Promise.resolve(this.ready)
+      .catch(() => {})
+      .then(() => pool.query(
+        `INSERT INTO user_sessions (sid, data, expires_at, user_id) VALUES ($1,$2,$3,$4) ON CONFLICT (sid) DO UPDATE SET data=$5, expires_at=$6, user_id=$7`,
+        [sid, data, exp, uid, data, exp, uid]
+      ).catch(legacy))
+      .then(() => cb(null)).catch(() => cb(null));
   }
   destroy(sid, cb) {
     pool.query('DELETE FROM user_sessions WHERE sid = $1', [sid])
@@ -769,8 +806,9 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.set('trust proxy', 1);
+const sessionStore = USE_DB ? new DbSessionStore() : null;
 app.use(session({
-  store: USE_DB ? new DbSessionStore() : undefined,
+  store: sessionStore || undefined,
   secret: process.env.NEXTAUTH_SECRET || 'fallback-secret-change-me',
   resave: false,
   saveUninitialized: false,
@@ -2139,6 +2177,23 @@ app.post('/api/users/set-password', requireAuth, requireAdmin, async (req, res) 
   await ensureSchema();
   await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash,userId]);
   return res.json({ success:true });
+});
+
+// Super-admin only: drop every stored session belonging to a user, which signs
+// them out on every device the moment their next request lands. Hiding the
+// button in the UI is cosmetic — requireSuperAdmin is the actual gate.
+app.post('/api/users/signout-all', requireAuth, requireSuperAdmin, async (req, res) => {
+  const userId = String(req.body?.userId || '').trim();
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  if (!sessionStore) return res.status(503).json({ error: 'Sessions are not stored in the database on this deployment' });
+  try {
+    // Catch any session row still missing its user_id before deleting by it.
+    await sessionStore.backfillUserIds().catch(() => {});
+    const { rowCount } = await sessionStore.destroyByUser(userId);
+    console.log('[signout-all]', userId, 'sessions dropped:', rowCount || 0,
+                'by', req.session.user?.email || '');
+    return res.json({ success: true, sessions: rowCount || 0 });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
 // ── Holidays ──────────────────────────────────────────────────────────────────

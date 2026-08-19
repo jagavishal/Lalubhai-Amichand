@@ -201,6 +201,35 @@ window.Pages.users = (() => {
     }
   }
 
+  async function signOutEverywhere(id) {
+    const u = _users.find(x => String(x.id) === String(id));
+    const who = u?.name || 'this user';
+    const self = String(window.currentUser?.id) === String(id);
+    const ok = await Utils.showConfirm(
+      self
+        ? 'Every one of your sessions ends, including this tab. You will have to sign in again.'
+        : `Every device ${who} is signed in on is logged out immediately. They will have to sign in again.`,
+      { title: self ? 'Sign yourself out everywhere' : `Sign out ${who}`,
+        confirmText: 'Sign out', danger: true },
+    );
+    if (!ok) return;
+    try {
+      const r = await Utils.apiFetch('/api/users/signout-all', {
+        method: 'POST',
+        body: JSON.stringify({ userId: id }),
+      });
+      const n = r && typeof r.sessions === 'number' ? r.sessions : null;
+      Utils.showToast(
+        n === 0 ? `${who} had no active sessions`
+                : `${who} signed out from ${n === null ? 'all devices' : n + (n === 1 ? ' device' : ' devices')}`
+      );
+      // Signing yourself out means this tab's session is gone too.
+      if (self) setTimeout(() => window.location.reload(), 900);
+    } catch (e) {
+      Utils.showToast(e.message || 'Failed to sign the user out', 'error');
+    }
+  }
+
   async function toggleAccess(id, currentActive) {
     try {
       await Utils.apiFetch('/api/users', {
@@ -491,6 +520,10 @@ window.Pages.users = (() => {
         btn.addEventListener('click', () => deleteUser(btn.dataset.id));
       });
 
+      el.querySelectorAll('[data-action="signout"]').forEach(btn => {
+        btn.addEventListener('click', () => signOutEverywhere(btn.dataset.id));
+      });
+
       el.querySelectorAll('[data-action="access"]').forEach(btn => {
         btn.addEventListener('click', () => {
           const u = _users.find(x => String(x.id) === String(btn.dataset.id));
@@ -580,6 +613,11 @@ window.Pages.users = (() => {
       ? `<tr><td colspan="${_isAdmin ? 7 : 6}" class="table-td text-center text-slate-400 py-10">No users found</td></tr>`
       : rows.map(u => {
           const isAdminOrHod = normalizeRoles(u.roles).some(r => r === 'Admin' || r === 'HOD');
+          // Forcing someone out of every device is owner-only, same as the
+          // destructive deletes elsewhere. The server enforces it regardless.
+          const signOutBtn = Utils.isOwner()
+            ? `<button data-action="signout" data-id="${esc(u.id)}" title="Sign this user out from all devices" class="pill bg-amber-50 text-amber-700 hover:bg-amber-100 cursor-pointer">Sign Out All</button>`
+            : '';
           const accessBtn = !isAdminOrHod
             ? `<button data-action="access" data-id="${esc(u.id)}" class="pill bg-indigo-50 text-indigo-700 hover:bg-indigo-100 cursor-pointer">${_expandedUserId === u.id ? 'Close' : 'Access'}</button>`
             : '';
@@ -588,6 +626,7 @@ window.Pages.users = (() => {
               <div class="flex gap-1.5 flex-wrap">
                 <button data-action="edit"   data-id="${esc(u.id)}" class="pill pill-brand cursor-pointer" style="border:none;" onmouseenter="this.style.opacity='0.8'" onmouseleave="this.style.opacity='1'">Edit</button>
                 <button data-action="setpwd" data-id="${esc(u.id)}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer">Set Password</button>
+                ${signOutBtn}
                 ${accessBtn}
                 <button data-action="delete" data-id="${esc(u.id)}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer">Delete</button>
               </div>
