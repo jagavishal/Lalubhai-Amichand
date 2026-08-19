@@ -381,6 +381,7 @@ window.Pages['grn-creation'] = (() => {
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
             : '<button type="button" class="grnc-cancel-btn" data-gr="' + esc(r.grNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
+          + Utils.ownerDeleteBtn('grnc-delete-btn', 'gr', r.grNo)
         + '</td>'
       + '</tr>').join('');
   }
@@ -390,6 +391,19 @@ window.Pages['grn-creation'] = (() => {
     if (!body || body.dataset.actionsBound) return;
     body.dataset.actionsBound = '1';
     body.addEventListener('click', async (e) => {
+      const delBtn = e.target.closest('.grnc-delete-btn');
+      if (delBtn) {
+        const key = delBtn.dataset.gr;
+        if (!(await Utils.ownerDeleteConfirm('GR #' + key))) return;
+        try {
+          await Utils.apiFetch('/api/grn-creation?grNo=' + encodeURIComponent(key), { method: 'DELETE' });
+          Utils.showToast('GR #' + key + ' deleted', 'success');
+          await _grlLoad();
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to delete', 'error');
+        }
+        return;
+      }
       const cancelBtn = e.target.closest('.grnc-cancel-btn');
       if (cancelBtn) {
         const ok = await Utils.showConfirm('GR #' + cancelBtn.dataset.gr + ' will be marked Cancelled. This can\'t be undone.', { title: 'Cancel GRN', confirmText: 'Cancel GRN', danger: true });

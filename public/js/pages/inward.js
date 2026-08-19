@@ -487,6 +487,7 @@ window.Pages['inward'] = (() => {
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
             : '<button type="button" class="inw-cancel-btn" data-id="' + esc(r.id) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
+          + Utils.ownerDeleteBtn('inw-delete-btn', 'id', r.id)
         + '</td>'
       + '</tr>';
 
@@ -501,6 +502,20 @@ window.Pages['inward'] = (() => {
     if (!body || body.dataset.actionsBound) return;
     body.dataset.actionsBound = '1';
     body.addEventListener('click', async (e) => {
+      const delBtn = e.target.closest('.inw-delete-btn');
+      if (delBtn) {
+        // A live entry still counts toward current stock, so the server
+        // backs its quantity out before removing the row.
+        if (!(await Utils.ownerDeleteConfirm('This Inward entry'))) return;
+        try {
+          await Utils.apiFetch('/api/ims/inward?id=' + encodeURIComponent(delBtn.dataset.id), { method: 'DELETE' });
+          Utils.showToast('Entry deleted', 'success');
+          await _load();
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to delete', 'error');
+        }
+        return;
+      }
       const cancelBtn = e.target.closest('.inw-cancel-btn');
       if (cancelBtn) {
         const ok = await Utils.showConfirm('This Inward entry will be marked Cancelled and the quantity removed back off current stock. This can\'t be undone.', { title: 'Cancel Inward Entry', confirmText: 'Cancel Entry', danger: true });

@@ -634,6 +634,7 @@ window.Pages['po-creation'] = (() => {
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
             : '<button type="button" class="poc-cancel-btn" data-po="' + esc(r.poNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
+          + Utils.ownerDeleteBtn('poc-delete-btn', 'po', r.poNo)
         + '</td>'
       + '</tr>').join('');
   }
@@ -643,6 +644,19 @@ window.Pages['po-creation'] = (() => {
     if (!body || body.dataset.actionsBound) return;
     body.dataset.actionsBound = '1';
     body.addEventListener('click', async (e) => {
+      const delBtn = e.target.closest('.poc-delete-btn');
+      if (delBtn) {
+        const key = delBtn.dataset.po;
+        if (!(await Utils.ownerDeleteConfirm('PO #' + key))) return;
+        try {
+          await Utils.apiFetch('/api/po-creation?poNo=' + encodeURIComponent(key), { method: 'DELETE' });
+          Utils.showToast('PO #' + key + ' deleted', 'success');
+          await _polLoad();
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to delete', 'error');
+        }
+        return;
+      }
       const cancelBtn = e.target.closest('.poc-cancel-btn');
       if (cancelBtn) {
         const ok = await Utils.showConfirm('PO #' + cancelBtn.dataset.po + ' will be marked Cancelled and excluded from future GRN creation. This can\'t be undone.', { title: 'Cancel PO', confirmText: 'Cancel PO', danger: true });

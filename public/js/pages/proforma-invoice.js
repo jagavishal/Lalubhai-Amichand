@@ -35,6 +35,9 @@ window.Pages['proforma-invoice'] = (() => {
   let _nextPiNumber = null;
   let _recentBuyers = [];
   let _consignees = [];     // buyer master from the export team's fetch_consignee sheet
+  // Options for the three shipping selects, from the values that master
+  // already uses (see _piShippingOptions in server.js).
+  let _shippingOptions = { portOfLoading: [], portOfDischarge: [], placeOfDelivery: [] };
   let _defaults = null;     // boilerplate from backend/lib/pi-format.js
   let _maxItems = 30;
   let _assignees = [];      // who a PI can be handed to in the FMS tracker
@@ -58,6 +61,10 @@ window.Pages['proforma-invoice'] = (() => {
   // into. Without it, a price modal the user walked away from instead of
   // closing would pop up again the next time they opened this page.
   let _priceQueued = false;
+
+  // Revision state — set while the Create tab is being used to re-issue an
+  // existing PI rather than raise a new one. { piNo, status } of the parent.
+  let _reviseOf = null;
 
   // New Product modal state.
   let _newProductOpen = false;
@@ -102,16 +109,16 @@ window.Pages['proforma-invoice'] = (() => {
       _nextPiNumber = data.nextPiNumber;
       _recentBuyers = data.recentBuyers || [];
       _consignees = data.consignees || [];
+      if (data.shippingOptions) _shippingOptions = data.shippingOptions;
       if (data.defaults) _defaults = data.defaults;
       if (data.maxItems) _maxItems = data.maxItems;
       if (data.assignees) _assignees = data.assignees;
       _mastersLoaded = true;
       const el = document.getElementById('pic-next-no');
-      if (el) el.textContent = _nextPiNumber || 'Loading…';
+      if (el) el.textContent = _piNoDisplay();
       const terms = document.getElementById('pic-terms');
       if (terms && !terms.value && _defaults) terms.value = (_defaults.terms || []).join('\n');
-      const load = document.getElementById('pic-port-loading');
-      if (load && !load.value && _defaults) load.value = _defaults.portOfLoading || '';
+      _applyShippingOptions();
       const origin = document.getElementById('pic-origin');
       if (origin && !origin.value && _defaults) origin.value = _defaults.countryOfOrigin || '';
       const validity = document.getElementById('pic-validity');
@@ -147,19 +154,137 @@ window.Pages['proforma-invoice'] = (() => {
 
   // Address and Tel./Email belong to the buyer as one block, so they are
   // replaced outright — otherwise switching from a two-line address to a
-  // one-line one leaves the previous buyer's second line behind. The ports,
-  // place of delivery and payment terms are only written when the master
-  // actually has them, since those fields carry form defaults worth keeping.
+  // one-line one leaves the previous buyer's second line behind.
+  //
+  // Port of Discharge DOES come from the buyer — it is where their goods land,
+  // and it barely changes shipment to shipment. Port of Loading and Place of
+  // Delivery deliberately do not: those belong to the shipment, and are picked
+  // from their dropdowns.
   function _fillFromConsignee(c) {
     const put = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
-    const putIfAny = (id, v) => { if (v) put(id, v); };
     put('pic-buyer-addr1', c.address1);
     put('pic-buyer-addr2', c.address2);
     put('pic-buyer-contact', c.contact);
-    putIfAny('pic-payment-terms', c.paymentTerms);
-    putIfAny('pic-port-loading', c.portOfLoading);
-    putIfAny('pic-port-discharge', c.portOfDischarge);
-    putIfAny('pic-place-delivery', c.placeOfDelivery);
+    if (c.portOfDischarge) put('pic-port-discharge', c.portOfDischarge);
+    // Terms of Payment is a dropdown now, so a value has to go in as a forced
+    // selection rather than an assignment. (The master's own column is empty
+    // top to bottom today; this is here for the day it is not.)
+    if (c.paymentTerms) _fillShippingSelect('pic-payment-terms', _optionsFor('paymentTerms'), '', c.paymentTerms);
+  }
+
+  /* ── The three shipping fields — dropdowns over the values the consignee
+     master already uses, so a PI cannot invent a 4th spelling of DAMMAM.
+     "Other…" is still there for a destination the company has not shipped to
+     before; it reveals a text box beside the select. ──────────────────── */
+  const _OTHER = '__other__';
+  // The fields the buyer wants picked from a list rather than typed. Port of
+  // Discharge is NOT one of them — it fills in from the consignee and stays a
+  // plain text box with suggestions, because it is the one that genuinely
+  // varies per shipment (see _dischargeField below).
+  const _SHIP_FIELDS = [
+    { id: 'pic-payment-terms', key: 'paymentTerms' },
+    { id: 'pic-port-loading',  key: 'portOfLoading' },
+    { id: 'pic-place-delivery', key: 'placeOfDelivery' },
+  ];
+
+  // Free text with suggestions, not a dropdown: this one is filled in from the
+  // consignee when a buyer is picked, and still has to be typeable over for a
+  // shipment going somewhere the buyer does not normally receive at.
+  function _dischargeField() {
+    return _fieldWrap('Port of Discharge',
+      '<input type="text" id="pic-port-discharge" list="pic-port-discharge-list" autocomplete="off" placeholder="e.g. JEBEL ALI" style="' + _inputStyle + '" />'
+      + '<datalist id="pic-port-discharge-list"></datalist>'
+      + '<div style="font-size:11px;color:#94a3b8;margin-top:5px;">Fills in from the consignee — type over it for a one-off destination.</div>');
+  }
+
+  function _selectField(id, label) {
+    return _fieldWrap(label,
+      '<select id="' + id + '" style="' + _inputStyle + 'background:#fff;cursor:pointer;">'
+        + '<option value="">Select…</option>'
+      + '</select>'
+      + '<input type="text" id="' + id + '-other" placeholder="Type the new one" style="' + _inputStyle + 'margin-top:8px;display:none;" />');
+  }
+
+  // Options arrive with the masters, i.e. after the form is already on screen,
+  // so the selects are (re)filled rather than rendered complete. Whatever is
+  // already chosen survives the refill — a date change reloads the masters and
+  // must not reset a half-filled form.
+  // `forced` is for a revision loading the parent's own choice: without it the
+  // Port of Loading default already sitting in the select would win, since a
+  // refill otherwise keeps whatever is selected.
+  function _fillShippingSelect(id, values, fallback, forced) {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const keep = forced || ((sel.value && sel.value !== _OTHER) ? sel.value : (fallback || ''));
+    const all = (keep && !values.includes(keep)) ? values.concat([keep]) : values;
+    sel.innerHTML = '<option value="">Select…</option>'
+      + all.map(v => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('')
+      + '<option value="' + _OTHER + '">Other…</option>';
+    sel.value = keep;
+  }
+
+  // Payment terms come straight off the boilerplate (pi-format.js), the two
+  // location lists off the consignee master — see _piShippingOptions.
+  function _optionsFor(key) {
+    if (key === 'paymentTerms') return (_defaults && _defaults.paymentTermsOptions) || [];
+    return _shippingOptions[key] || [];
+  }
+
+  function _applyShippingOptions() {
+    _SHIP_FIELDS.forEach(f => _fillShippingSelect(
+      f.id,
+      _optionsFor(f.key),
+      // Port of Loading is the one with a house default ("Mundra Port").
+      f.key === 'portOfLoading' && _defaults ? _defaults.portOfLoading : '',
+    ));
+    _fillDischargeList();
+  }
+
+  /* ── Term 3's dispatch-days blank ───────────────────────────────────────
+     Matches the blank AND whatever was put in it last, so the number can be
+     changed as often as the user likes. Kept in step with SHIPMENT_DAYS_RE in
+     backend/lib/pi-format.js, which is where the sentence itself lives. */
+  const _SHIPMENT_DAYS_RE = /(SHIPMENT TO BE DISPATCHED\s+)(\S+)(\s+DAYS\b)/i;
+
+  function _applyShipmentDays() {
+    const daysEl = document.getElementById('pic-shipment-days');
+    const termsEl = document.getElementById('pic-terms');
+    if (!daysEl || !termsEl) return;
+    const days = daysEl.value.trim();
+    termsEl.value = termsEl.value.split('\n').map(line => (
+      _SHIPMENT_DAYS_RE.test(line) ? line.replace(_SHIPMENT_DAYS_RE, '$1' + (days || '____') + '$3') : line
+    )).join('\n');
+  }
+
+  // Port of Discharge stays a text input; the master's values just ride along
+  // as a datalist so the common ones are one keystroke away.
+  function _fillDischargeList() {
+    const list = document.getElementById('pic-port-discharge-list');
+    if (!list) return;
+    list.innerHTML = (_shippingOptions.portOfDischarge || [])
+      .map(v => '<option value="' + esc(v) + '"></option>').join('');
+  }
+
+  function _bindShippingSelects() {
+    _SHIP_FIELDS.forEach(f => {
+      const sel = document.getElementById(f.id);
+      const other = document.getElementById(f.id + '-other');
+      if (!sel || !other) return;
+      sel.addEventListener('change', () => {
+        const on = sel.value === _OTHER;
+        other.style.display = on ? 'block' : 'none';
+        if (on) other.focus(); else other.value = '';
+      });
+    });
+  }
+
+  // "Other…" hands the value over to the text box beside the select.
+  function _shippingVal(id) {
+    const sel = document.getElementById(id);
+    if (!sel) return '';
+    if (sel.value !== _OTHER) return sel.value.trim();
+    const other = document.getElementById(id + '-other');
+    return other ? other.value.trim() : '';
   }
 
   function _bindBuyerField() {
@@ -462,6 +587,112 @@ window.Pages['proforma-invoice'] = (() => {
     }
   }
 
+  /* ── Revision — the Create tab, pre-filled from the PI being re-issued ──
+     The buyer asked for changes, so everything starts as it was and only what
+     they asked about gets touched. ────────────────────────────────────── */
+  // What the auto-assigned number field shows. While revising, the next NEW
+  // PI number is the wrong answer — the revision keeps its parent's number.
+  // A preview either way: the server assigns the real one at submit.
+  function _piNoDisplay() {
+    if (!_reviseOf) return _nextPiNumber || 'Loading…';
+    const m = /^(.*?)\s+R(\d+)$/i.exec(_reviseOf.piNo);
+    return m ? m[1] + ' R' + (parseInt(m[2], 10) + 1) : _reviseOf.piNo + ' R1';
+  }
+
+  function _startRevise(row) {
+    _reviseOf = { piNo: row.piNo, status: row.status };
+    _view = 'create';
+    renderPage();
+    _prefillForm(row.form || {});
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function _cancelRevise() {
+    _reviseOf = null;
+    _view = 'create';
+    renderPage();
+  }
+
+  function _prefillForm(form) {
+    const put = (id, v) => { const el = document.getElementById(id); if (el) el.value = v ?? ''; };
+    put('pic-date', form.date || _today());
+    put('pic-order-no', form.orderNo);
+    put('pic-port-discharge', form.portOfDischarge);
+    put('pic-assigned-to', form.assignedTo);
+    put('pic-target-date', form.targetDate);
+    put('pic-buyer', form.buyerName);
+    put('pic-buyer-trn', form.buyerTrn);
+    put('pic-buyer-addr1', form.buyerAddress1);
+    put('pic-buyer-addr2', form.buyerAddress2);
+    put('pic-buyer-contact', form.buyerContact);
+    put('pic-origin', form.countryOfOrigin);
+    put('pic-shipment-note', form.shipmentNote);
+    put('pic-validity', form.validity);
+    put('pic-terms', (form.terms || []).join('\n'));
+    // Lift the parent's dispatch days back into their own box, so changing
+    // them on the revision is one edit rather than a hunt through the terms.
+    const daysEl = document.getElementById('pic-shipment-days');
+    const daysMatch = _SHIPMENT_DAYS_RE.exec((form.terms || []).join('\n'));
+    if (daysEl && daysMatch && !/^_+$/.test(daysMatch[2])) daysEl.value = daysMatch[2];
+    const decl = document.getElementById('pic-declaration');
+    if (decl) decl.checked = form.includeDeclaration !== false;
+
+    // The parent's ports may pre-date the dropdowns (or be spelled a way the
+    // master no longer lists), so they are passed as the value to keep —
+    // _fillShippingSelect adds an option for anything it does not already have.
+    _SHIP_FIELDS.forEach(f => _fillShippingSelect(f.id, _optionsFor(f.key), '', form[f.key] || ''));
+    _fillDischargeList();
+
+    const noEl = document.getElementById('pic-next-no');
+    if (noEl) noEl.textContent = _piNoDisplay();
+
+    _prefillItems(Array.isArray(form.items) ? form.items : []);
+  }
+
+  function _prefillItems(items) {
+    const tbody = document.getElementById('pic-items-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = (items.length ? items : [null]).map(() => _itemRowHtml()).join('');
+    Array.from(tbody.querySelectorAll('.pic-item-row')).forEach((row, i) => {
+      const it = items[i];
+      if (it) {
+        _ITEM_COLS.forEach(c => {
+          const el = row.querySelector('[data-field="' + c.field + '"]');
+          if (el) el.value = it[c.field] ?? '';
+        });
+        row.querySelector('[data-field="imageUrl"]').value = it.imageUrl || '';
+        const thumb = row.querySelector('.pic-item-thumb');
+        if (thumb) {
+          thumb.innerHTML = it.imageUrl
+            ? '<img src="' + esc(it.imageUrl) + '" alt="" onerror="this.remove()" style="max-width:44px;max-height:40px;object-fit:contain;border-radius:4px;" />'
+            : '<span style="font-size:10px;color:#cbd5e1;">no photo</span>';
+        }
+        // Back out the per-box CBM and per-piece weight the parent's own
+        // numbers imply, so changing Qty — far and away the commonest reason a
+        // buyer asks for a revision — still re-derives Box/CBM/Weight instead
+        // of leaving the old PI's figures behind.
+        const qty = _num(it.qty), boxes = _num(it.boxes), cbm = _num(it.cbm), weight = _num(it.weight);
+        if (boxes > 0 && cbm > 0) row.dataset.cbmPerBox = String(cbm / boxes);
+        if (qty > 0 && weight > 0) row.dataset.weightPerPc = String(weight / qty);
+      }
+      _bindItemRow(row);
+    });
+  }
+
+  function _reviseBannerHtml() {
+    if (!_reviseOf) return '';
+    return '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;">'
+      + '<div style="flex:1;">'
+        + '<div style="font-size:13px;font-weight:700;color:#1e40af;">Revising ' + esc(_reviseOf.piNo) + '</div>'
+        + '<div style="font-size:12px;color:#3b6fc4;margin-top:2px;">Saving issues the next revision of this same number. '
+          + esc(_reviseOf.piNo) + ' is marked Superseded and keeps its own PDF as the record of what was first offered'
+          + (_reviseOf.status === 'Priced' ? '. Rates carry over for every line you leave unchanged; a new or re-specced line comes through unpriced.' : '.')
+        + '</div>'
+      + '</div>'
+      + '<button type="button" id="pic-revise-cancel" style="padding:6px 12px;border-radius:8px;background:#fff;border:1.5px solid #bfdbfe;color:#1e40af;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Start a new PI instead</button>'
+    + '</div>';
+  }
+
   function _useProductOnFirstFreeRow(product) {
     const tbody = document.getElementById('pic-items-tbody');
     if (!tbody) return;
@@ -487,9 +718,9 @@ window.Pages['proforma-invoice'] = (() => {
     const assigneeOpts = (_assignees || []).map(a => '<option value="' + esc(a) + '"></option>').join('');
     return '<div style="' + _grid + '">'
       + _textField('pic-date', 'PI Date', { type: 'date', value: _today() })
-      + _readonlyField('pic-next-no', 'Pro. Invoice No. (auto-assigned)', _nextPiNumber || 'Loading…')
+      + _readonlyField('pic-next-no', _reviseOf ? 'Pro. Invoice No. (revision)' : 'Pro. Invoice No. (auto-assigned)', _piNoDisplay())
       + _textField('pic-order-no', 'Order No.', { placeholder: 'Buyer order reference' })
-      + _textField('pic-payment-terms', 'Terms of Payment', { placeholder: 'e.g. 30% ADVANCE AND BALANCE AGT. B/L COPY' })
+      + _selectField('pic-payment-terms', 'Terms of Payment')
       + _fieldWrap('Assigned To',
           '<input type="text" id="pic-assigned-to" list="pic-assignee-list" autocomplete="off" placeholder="Who follows this PI up" style="' + _inputStyle + '" />'
           + '<datalist id="pic-assignee-list">' + assigneeOpts + '</datalist>')
@@ -509,9 +740,9 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _shippingFieldsHtml() {
     return '<div style="' + _grid + '">'
-      + _textField('pic-port-loading', 'Port of Loading', { value: _defaults ? _defaults.portOfLoading : '' })
-      + _textField('pic-port-discharge', 'Port of Discharge', { placeholder: 'e.g. JEBEL ALI' })
-      + _textField('pic-place-delivery', 'Place of Delivery', { placeholder: 'e.g. JEBEL ALI' })
+      + _selectField('pic-port-loading', 'Port of Loading')
+      + _dischargeField()
+      + _selectField('pic-place-delivery', 'Place of Delivery')
       + _textField('pic-origin', 'Country of Origin of Goods', { value: _defaults ? _defaults.countryOfOrigin : '' })
       + _textField('pic-shipment-note', 'Shipment / Container Note', { value: _defaults ? _defaults.shipmentNote : '' })
     + '</div>';
@@ -520,6 +751,13 @@ window.Pages['proforma-invoice'] = (() => {
   function _footerFieldsHtml() {
     return '<div style="' + _grid + '">'
       + _textField('pic-validity', 'Price Validity', { value: _defaults ? _defaults.validity : '', placeholder: 'e.g. 03 WORKING DAYS' })
+      // Term 3 reads "…DISPATCHED ____ DAYS FROM RECEIPT OF CONFIRMATION AND
+      // ADVANCE PAYMENT." — this box is what fills the blank. It writes
+      // straight into the terms below rather than being spliced in at submit,
+      // so the textarea stays exactly what the buyer will read.
+      + _fieldWrap('Shipment in (days)',
+          '<input type="text" id="pic-shipment-days" inputmode="numeric" autocomplete="off" placeholder="e.g. 45" style="' + _inputStyle + '" />'
+          + '<div style="font-size:11px;color:#94a3b8;margin-top:5px;">Fills the blank in term 3 below.</div>')
       + _fieldWrap('Declaration', '<label style="display:flex;align-items:flex-start;gap:9px;font-size:12.5px;color:#475569;cursor:pointer;line-height:1.45;">'
           + '<input type="checkbox" id="pic-declaration" checked style="margin-top:2px;" />'
           + '<span>Print the non-Israeli origin / material declaration (required by most Gulf buyers).</span>'
@@ -567,20 +805,28 @@ window.Pages['proforma-invoice'] = (() => {
 
     if (!date) { Utils.showToast('PI Date is required', 'error'); return; }
     if (!buyerName) { Utils.showToast('Consignee Name is required', 'error'); return; }
+    // "SHIPMENT TO BE DISPATCHED ____ DAYS" going out to a buyer as-is is a
+    // visible defect, so the blank has to be filled or the line removed.
+    const termsText = val('pic-terms');
+    if (/SHIPMENT TO BE DISPATCHED\s+_+\s+DAYS/i.test(termsText)) {
+      Utils.showToast('Fill in Shipment in (days) — term 3 still has a blank in it', 'error');
+      document.getElementById('pic-shipment-days')?.focus();
+      return;
+    }
     if (!items.length) { Utils.showToast('Add at least one item', 'error'); return; }
     if (items.length > _maxItems) { Utils.showToast('The PI template holds ' + _maxItems + ' item rows — this PI has ' + items.length, 'error'); return; }
 
     const payload = {
       date, buyerName, items,
       orderNo: val('pic-order-no'),
-      paymentTerms: val('pic-payment-terms'),
+      paymentTerms: _shippingVal('pic-payment-terms'),
       buyerTrn: val('pic-buyer-trn'),
       buyerAddress1: val('pic-buyer-addr1'),
       buyerAddress2: val('pic-buyer-addr2'),
       buyerContact: val('pic-buyer-contact'),
-      portOfLoading: val('pic-port-loading'),
+      portOfLoading: _shippingVal('pic-port-loading'),
       portOfDischarge: val('pic-port-discharge'),
-      placeOfDelivery: val('pic-place-delivery'),
+      placeOfDelivery: _shippingVal('pic-place-delivery'),
       countryOfOrigin: val('pic-origin'),
       shipmentNote: val('pic-shipment-note'),
       validity: val('pic-validity'),
@@ -590,21 +836,37 @@ window.Pages['proforma-invoice'] = (() => {
       includeDeclaration: document.getElementById('pic-declaration').checked,
     };
 
+    const revising = _reviseOf;
+    const url = revising
+      ? '/api/proforma-invoice/revise?piNo=' + encodeURIComponent(revising.piNo)
+      : '/api/proforma-invoice';
+
     const btn = document.getElementById('pic-submit-btn');
-    btn.disabled = true; btn.textContent = 'Creating…';
+    btn.disabled = true; btn.textContent = revising ? 'Issuing revision…' : 'Creating…';
     try {
-      const result = await Utils.apiFetch('/api/proforma-invoice', { method: 'POST', body: JSON.stringify(payload) });
+      const result = await Utils.apiFetch(url, { method: 'POST', body: JSON.stringify(payload) });
       const warnings = [];
       if (!result.pdfLink) warnings.push('PDF export failed');
       if (result.fmsTracked === false) warnings.push('Export Marketing FMS row not added');
-      Utils.showToast('PI ' + result.piNumber + ' created'
-        + (warnings.length ? ' — ' + warnings.join('; ') + ' (PI itself is saved)' : ' — PDF saved to Drive, FMS row opened'),
-        warnings.length ? 'warning' : 'success');
+      if (revising) {
+        // Whether the rates survived decides what happens next, so it is said
+        // outright rather than left to be discovered on the list.
+        Utils.showToast('PI ' + result.piNumber + ' issued — ' + revising.piNo + ' is now Superseded'
+          + (warnings.length ? ' (' + warnings.join('; ') + ')' : '')
+          + (result.status === 'Priced' ? '. Rates carried over.' : '. Needs pricing.'),
+          warnings.length ? 'warning' : 'success');
+        _reviseOf = null;
+        _view = 'list';
+      } else {
+        Utils.showToast('PI ' + result.piNumber + ' created'
+          + (warnings.length ? ' — ' + warnings.join('; ') + ' (PI itself is saved)' : ' — PDF saved to Drive, FMS row opened'),
+          warnings.length ? 'warning' : 'success');
+      }
       await _loadMasters(date);
       renderPage();
     } catch (err) {
-      Utils.showToast(err.message || 'Failed to create Proforma Invoice', 'error');
-      btn.disabled = false; btn.textContent = 'Create Proforma Invoice';
+      Utils.showToast(err.message || (revising ? 'Failed to issue the revision' : 'Failed to create Proforma Invoice'), 'error');
+      btn.disabled = false; btn.textContent = revising ? 'Issue Revision' : 'Create Proforma Invoice';
     }
   }
 
@@ -637,6 +899,9 @@ window.Pages['proforma-invoice'] = (() => {
       Draft: 'background:#fffbeb;color:#b45309;',
       Priced: 'background:#f0fdf4;color:#15803d;',
       Cancelled: 'background:#f1f5f9;color:#64748b;',
+      // Not dead like a cancelled PI — replaced by its own revision, and still
+      // the record of what was offered before that.
+      Superseded: 'background:#eff6ff;color:#1e40af;',
     };
     return '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;' + (styles[status] || styles.Draft) + '">' + esc(status || 'Draft') + '</span>';
   }
@@ -674,9 +939,17 @@ window.Pages['proforma-invoice'] = (() => {
           + (r.status !== 'Cancelled' && r.canSetPrice
             ? '<button type="button" class="pic-price-btn" data-pi="' + esc(r.piNo) + '" style="border:1.5px solid var(--color-primary);background:#fff;color:var(--color-primary);cursor:pointer;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:7px;margin-right:6px;">' + (r.status === 'Priced' ? 'Edit Price' : 'Add Price') + '</button>'
             : '')
+          // The buyer came back with changes: re-issue as R1, R2… rather than
+          // editing a PI they already hold a copy of.
+          + (r.canRevise && r.form
+            ? '<button type="button" class="pic-revise-btn" data-pi="' + esc(r.piNo) + '" style="border:1.5px solid #bfdbfe;background:#fff;color:#1e40af;cursor:pointer;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:7px;margin-right:6px;">Revise</button>'
+            : '')
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
+            : r.status === 'Superseded'
+            ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#eff6ff;color:#1e40af;font-size:11px;font-weight:600;">Revised</span>'
             : '<button type="button" class="pic-cancel-btn" data-pi="' + esc(r.piNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
+          + Utils.ownerDeleteBtn('pic-delete-btn', 'pi', r.piNo)
         + '</td>'
       + '</tr>').join('');
   }
@@ -697,6 +970,29 @@ window.Pages['proforma-invoice'] = (() => {
         } catch (err) {
           Utils.showToast(err.message || 'Failed to cancel', 'error');
         }
+        return;
+      }
+      const delBtn = e.target.closest('.pic-delete-btn');
+      if (delBtn) {
+        const piNo = delBtn.dataset.pi;
+        // Worth spelling out here: the next PI number comes off the highest
+        // one still on the log, so deleting the latest hands its number to the
+        // next PI raised — while its PDF may already be with the buyer.
+        if (!(await Utils.ownerDeleteConfirm('PI ' + piNo + ' (its number can then be re-issued to a new PI)'))) return;
+        try {
+          await Utils.apiFetch('/api/proforma-invoice?piNo=' + encodeURIComponent(piNo), { method: 'DELETE' });
+          Utils.showToast('PI ' + piNo + ' deleted', 'success');
+          await _pilLoad();
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to delete', 'error');
+        }
+        return;
+      }
+      const reviseBtn = e.target.closest('.pic-revise-btn');
+      if (reviseBtn) {
+        const row = _pilRows.find(r => String(r.piNo) === reviseBtn.dataset.pi);
+        if (!row || !row.form) { Utils.showToast('This PI has no saved detail to revise from', 'error'); return; }
+        _startRevise(row);
         return;
       }
       const priceBtn = e.target.closest('.pic-price-btn');
@@ -793,9 +1089,12 @@ window.Pages['proforma-invoice'] = (() => {
         + '</div>'
         + '<div style="padding:22px 24px;max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:16px;">'
           + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-            + '<table style="width:100%;border-collapse:collapse;min-width:640px;">'
+            + '<table style="width:100%;border-collapse:collapse;min-width:740px;">'
               + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-                + ['Photo', 'Model No.', 'Item Name', 'Size', 'Total Qty', 'C&F US$ Per Pc', 'Amount (US$)'].map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+                // Total Weight rides along for reference only — it is not
+                // printed on the PI (see printHiddenCols in pi-format.js), but
+                // it is what the rate is usually sanity-checked against.
+                + ['Photo', 'Model No.', 'Item Name', 'Size', 'Total Qty', 'Total Weight (Kgs)', 'C&F US$ Per Pc', 'Amount (US$)'].map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
               + '</tr></thead>'
               + '<tbody>' + items.map((it, i) => ''
                 + '<tr class="pipm-item-row" data-index="' + i + '" data-qty="' + esc(it.qty || 0) + '" style="border-bottom:1px solid #f1f5f9;">'
@@ -808,6 +1107,7 @@ window.Pages['proforma-invoice'] = (() => {
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.itemName || it.description || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.size || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;text-align:right;">' + esc(it.qty || '') + '</td>'
+                  + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;">' + esc(it.weight || '—') + '</td>'
                   + '<td style="padding:6px 8px;"><input type="text" inputmode="decimal" class="pipm-rate" value="' + esc(it.rate || '') + '" placeholder="0.000" style="width:110px;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" /></td>'
                   + '<td class="pipm-amount" style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;">0.00</td>'
                 + '</tr>').join('')
@@ -877,6 +1177,7 @@ window.Pages['proforma-invoice'] = (() => {
     const bodyHtml = isList
       ? _pilViewHtml()
       : '<form id="pic-form" style="display:flex;flex-direction:column;gap:16px;">'
+        + _reviseBannerHtml()
         + _sectionTitle('Invoice Details')
         + _invoiceFieldsHtml()
         + _sectionTitle('Consignee')
@@ -894,7 +1195,7 @@ window.Pages['proforma-invoice'] = (() => {
         + '<div id="pi-product-modal"></div>'
         + _sectionTitle('Validity & Terms')
         + _footerFieldsHtml()
-        + '<button type="submit" id="pic-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Proforma Invoice</button>'
+        + '<button type="submit" id="pic-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">' + (_reviseOf ? 'Issue Revision' : 'Create Proforma Invoice') + '</button>'
       + '</form>';
 
     el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '1180px') + ';margin:0 auto;padding:4px 0 40px;">'
@@ -906,7 +1207,9 @@ window.Pages['proforma-invoice'] = (() => {
       + bodyHtml
     + '</div>';
 
-    document.querySelector('.pic-create-tab').addEventListener('click', () => { _view = 'create'; renderPage(); });
+    // Switching to Create by hand means a NEW PI — a half-finished revision
+    // must not silently ride along on the tab the user thinks is blank.
+    document.querySelector('.pic-create-tab').addEventListener('click', () => { _reviseOf = null; _view = 'create'; renderPage(); });
     document.querySelector('.pic-list-tab').addEventListener('click', () => { _view = 'list'; renderPage(); });
 
     if (isList) {
@@ -921,7 +1224,17 @@ window.Pages['proforma-invoice'] = (() => {
       return;
     }
 
+    const shipDays = document.getElementById('pic-shipment-days');
+    if (shipDays) shipDays.addEventListener('input', _applyShipmentDays);
+
+    const reviseCancel = document.getElementById('pic-revise-cancel');
+    if (reviseCancel) reviseCancel.addEventListener('click', _cancelRevise);
+
     _bindBuyerField();
+    _bindShippingSelects();
+    // The masters may already be in hand from an earlier render, in which case
+    // _loadMasters() below does not run and these selects would stay empty.
+    _applyShippingOptions();
     _bindAllItemRows();
 
     document.getElementById('pic-add-item').addEventListener('click', () => {

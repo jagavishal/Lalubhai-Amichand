@@ -419,6 +419,31 @@ window.Utils = {
     });
   },
 
+  /* ── Owner-only Delete ─────────────────────────────────────────────
+     Every module's list shows a Delete alongside its Cancel, but only for
+     the one account SUPER_ADMIN_EMAIL names in server.js — not Admin, not
+     HOD, and not grantable from Users → Access. isSuperAdmin rides on the
+     session response; the routes check it again server-side, so hiding the
+     button here is presentation, never the actual protection. */
+  isOwner() { return !!window.currentUser?.isSuperAdmin; },
+
+  // Returns '' for everyone else, so a row can concatenate it unconditionally.
+  ownerDeleteBtn(cls, dataName, value) {
+    if (!this.isOwner()) return '';
+    const safe = String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return '<button type="button" class="' + cls + '" data-' + dataName + '="' + safe + '"'
+      + ' style="border:none;background:transparent;color:#b91c1c;cursor:pointer;font-size:12.5px;font-weight:700;padding:2px 6px;margin-left:2px;">Delete</button>';
+  },
+
+  // Cancel keeps the record and its trail; this takes the row out for good, so
+  // the wording says so rather than reusing the Cancel copy.
+  ownerDeleteConfirm(what) {
+    return this.showConfirm(
+      what + ' will be deleted outright — the row is removed, not marked Cancelled. This cannot be undone.',
+      { title: 'Delete permanently', confirmText: 'Delete', danger: true },
+    );
+  },
+
   /* ── Legacy (kept for backward compat) ─────────────────────────── */
   confirm(msg) { return window.confirm(msg); },
 };

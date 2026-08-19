@@ -145,6 +145,12 @@ const ITEMS = {
   amountCol: 'M',
   remarksCol: 'N',
   clearRanges: [['A', 'L'], ['N', 'N']],
+  // Columns the export team works with but the buyer's copy does not show.
+  // Total Weight is a loading/costing figure, not something the PI states, so
+  // it is still written and still visible on the create form and the Add Price
+  // screen — it is only hidden on the sheet, which drops it from the PDF the
+  // same way the unused item rows are dropped.
+  printHiddenCols: ['K'],   // fields.weight — Total Weight (Kgs)
   fields: {
     modelNo: 'C',
     itemName: 'D',
@@ -250,7 +256,20 @@ const FMS_TRACKER = {
 // Boilerplate the form pre-fills and the buyer sees verbatim. Editable per PI
 // on the create form — these are only the defaults.
 const DEFAULTS = {
-  portOfLoading: 'Mundra / India',
+  // The buyer's own list, given verbatim. The create form offers these as a
+  // dropdown; "Other…" is still there for a one-off, but a PI should almost
+  // always print one of these four word for word.
+  paymentTermsOptions: [
+    '10% ADVANCE AND BALANCE AGAINST COPY OF BL',
+    '30% ADVANCE AND BALANCE AGAINST COPY OF BL',
+    '50% ADVANCE AND BALANCE AGAINST COPY OF BL',
+    '50% AGAINST COPY OF BL AND BALANCE IN 15 DAYS OF DELIVERY AT PORT.',
+  ],
+  // The three ports the company actually ships out of. Replaces the free-text
+  // field (and the list scraped off the consignee master, which carried
+  // NHAVASHEVA, NSICT, JNPT and GTI as four spellings of two places).
+  portOfLoadingOptions: ['Mundra Port', 'Kandla Port', 'Nhava Sheva Port'],
+  portOfLoading: 'Mundra Port',
   countryOfOrigin: 'INDIA',
   validity: '03 WORKING DAYS',
   shipmentNote: "Total 01 Container (20' FCL Container) Order",
@@ -260,7 +279,10 @@ const DEFAULTS = {
   terms: [
     '1) WEIGHT & CBM VARIATION +/- 5% WILL BE ALLOWED.',
     '2) PACKING IN PACKAGES.',
-    '3) SHIPMENT AS PER THE AGREED DELIVERY SCHEDULE, SUBJECT TO TIMELY RECEIPT OF CONFIRMATION AND ADVANCE PAYMENT.',
+    // The blank is filled per PI from the create form's "Shipment in (days)"
+    // box — see SHIPMENT_DAYS_RE below, which is what finds it. A PI must
+    // never print with the blank still in it.
+    '3) SHIPMENT TO BE DISPATCHED ____ DAYS FROM RECEIPT OF CONFIRMATION AND ADVANCE PAYMENT.',
     '4) INSURANCE / LEGALISATION / SGS CHARGES WILL BE EXTRA AS ACTUAL.',
     "5) FOREIGN BANK CHARGES WILL BE ON BUYER'S ACCOUNT.",
     '6) THIS PROFORMA INVOICE IS SUBJECT TO OUR FINAL CONFIRMATION.',
@@ -268,6 +290,11 @@ const DEFAULTS = {
     '8) IMPORTANT NOTE : IF WE RECEIVE ANY ADVANCE PAYMENT OR INVOICE PAYMENT OTHER THAN THE NAME MENTIONED IN THIS PROFORMA INVOICE, YOU HAVE TO GIVE US A THIRD PARTY RELATIONSHIP CERTIFICATE FOR THE SAME.',
   ],
 };
+
+// Finds the dispatch-days slot in term 3 — matching the blank AND whatever was
+// last put in it, so the form can rewrite the number as often as the user
+// changes their mind. Group 1 is the bit that gets replaced.
+const SHIPMENT_DAYS_RE = /(?:^|\b)(?:SHIPMENT TO BE DISPATCHED)\s+(\S+)\s+DAYS\b/i;
 
 // The validity line is one sentence with the validity period spliced in, so
 // changing "03 WORKING DAYS" on the form rewrites the whole warning.
@@ -278,4 +305,4 @@ function validityNote(validity) {
     + '(INCREASE IN PRICE 5% OR AS PER THE MARKET SITUATION).';
 }
 
-module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, PRODUCT_SOURCE, CONSIGNEE_SOURCE, FMS_TRACKER, DEFAULTS, validityNote };
+module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, PRODUCT_SOURCE, CONSIGNEE_SOURCE, FMS_TRACKER, DEFAULTS, SHIPMENT_DAYS_RE, validityNote };

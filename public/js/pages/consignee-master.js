@@ -116,7 +116,8 @@ window.Pages['consignee-master'] = (() => {
 
   function _tableHtml() {
     const rows = _filtered();
-    const head = ['Consignee', 'Place of Delivery', 'Port of Loading', 'Port of Discharge', 'Address', 'Contact / Email']
+    const owner = Utils.isOwner();
+    const head = ['Consignee', 'Place of Delivery', 'Port of Loading', 'Port of Discharge', 'Address', 'Contact / Email'].concat(owner ? [''] : [])
       .map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">' + esc(h) + '</th>').join('');
 
     const body = rows.length
@@ -127,8 +128,9 @@ window.Pages['consignee-master'] = (() => {
           + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;white-space:nowrap;">' + esc(r.portOfDischarge) + '</td>'
           + '<td style="padding:8px 10px;font-size:12px;color:#64748b;">' + esc([r.address1, r.address2].filter(Boolean).join(', ')) + '</td>'
           + '<td style="padding:8px 10px;font-size:12px;color:#64748b;">' + esc(r.contact) + '</td>'
+          + (owner ? '<td style="padding:8px 10px;white-space:nowrap;">' + Utils.ownerDeleteBtn('cm-delete-btn', 'name', r.name) + '</td>' : '')
         + '</tr>').join('')
-      : '<tr><td colspan="6" style="padding:26px;text-align:center;font-size:13px;color:#94a3b8;">No consignee matches “' + esc(_q) + '”.</td></tr>';
+      : '<tr><td colspan="' + (owner ? 7 : 6) + '" style="padding:26px;text-align:center;font-size:13px;color:#94a3b8;">No consignee matches “' + esc(_q) + '”.</td></tr>';
 
     return '<div id="cm-table" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;">'
         + '<table style="width:100%;border-collapse:collapse;min-width:900px;"><thead><tr style="background:#f8fafc;">' + head + '</tr></thead>'
@@ -211,6 +213,27 @@ window.Pages['consignee-master'] = (() => {
 
     const form = document.getElementById('cm-form');
     if (form) form.addEventListener('submit', _submit);
+
+    // Bound to the wrapper render() just created — a fresh element every time,
+    // so there is nothing to de-duplicate — and delegated, so it survives the
+    // table being swapped out on every keystroke of the search box.
+    const page = mc.firstElementChild;
+    if (Utils.isOwner() && page) {
+      page.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.cm-delete-btn');
+        if (!btn) return;
+        const name = btn.dataset.name;
+        if (!(await Utils.ownerDeleteConfirm(name))) return;
+        try {
+          await Utils.apiFetch('/api/consignee-master?name=' + encodeURIComponent(name), { method: 'DELETE' });
+          Utils.showToast(name + ' deleted', 'success');
+          _rows = _rows.filter(r => r.name !== name);
+          render();
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to delete', 'error');
+        }
+      });
+    }
 
     const search = document.getElementById('cm-search');
     if (search) {

@@ -838,6 +838,31 @@ function isAdminUser(user) {
   return rolesArr.includes('Admin') || rolesArr.includes('HOD');
 }
 
+// ── Owner-only delete ────────────────────────────────────────────────────────
+// One person can delete records outright from every module's list. This is NOT
+// a role and NOT a permission: Admin and HOD do not get it, and it cannot be
+// granted from Users → Access. Every other destructive action in this app is a
+// Cancel that keeps the row and its paper trail; this one removes the record,
+// so it is deliberately hard-coded where no screen can hand it out by mistake.
+//
+// The owner's ERP LOGIN email. Blank it and the delete goes dead everywhere:
+// no button renders and every delete route answers 403. Matched
+// case-insensitively, so the login's own capitalisation does not matter.
+const SUPER_ADMIN_EMAIL = 'Admin@lal.com';
+
+function isSuperAdmin(user) {
+  const want = String(SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
+  if (!want) return false;
+  return String(user?.email || '').trim().toLowerCase() === want;
+}
+
+// The real gate. Hiding the button in the UI is cosmetic — without this guard
+// anyone could still call the route by hand.
+function requireSuperAdmin(req, res, next) {
+  if (!isSuperAdmin(req.session?.user)) return res.status(403).json({ error: 'Not allowed' });
+  next();
+}
+
 // Distinguishes "sees the whole company" (Admin) from "sees their own department's
 // team" (HOD) — isAdminUser() above intentionally treats them the same for feature
 // gating (edit/delete/etc.), but task VISIBILITY must not: only true Admin sees
@@ -983,7 +1008,7 @@ app.post('/api/auth/login', async (req, res) => {
     // it, so without permissions a restricted user sees the FULL menu until a
     // hard reload (which re-bootstraps via /api/auth/session). parsePermissions
     // handles the raw JSON-string (DB) / object (store) / null cases alike.
-    return res.json({ user: { ...req.session.user, picture: user.picture || null, permissions: parsePermissions(user.permissions), featureFlags: { fms: FMS_ENABLED } } });
+    return res.json({ user: { ...req.session.user, picture: user.picture || null, permissions: parsePermissions(user.permissions), featureFlags: { fms: FMS_ENABLED }, isSuperAdmin: isSuperAdmin(req.session.user) } });
   } catch (err) {
     console.error('[auth/login]', err.message);
     return res.status(500).json({ error: err.message });
@@ -1009,9 +1034,9 @@ app.get('/api/auth/session', async (req, res) => {
       picture = su?.picture || null;
       permissions = su?.permissions || null;
     }
-    return res.json({ user: { ...u, picture, permissions, featureFlags: { fms: FMS_ENABLED } } });
+    return res.json({ user: { ...u, picture, permissions, featureFlags: { fms: FMS_ENABLED }, isSuperAdmin: isSuperAdmin(u) } });
   } catch {
-    return res.json({ user: { ...u, featureFlags: { fms: FMS_ENABLED } } });
+    return res.json({ user: { ...u, featureFlags: { fms: FMS_ENABLED }, isSuperAdmin: isSuperAdmin(u) } });
   }
 });
 
@@ -3084,6 +3109,27 @@ async function _setLogRowStatus(spreadsheetId, tabName, key, statusColLetter, st
   });
 }
 
+// Removes the whole row a log key sits on. Every other list action in this
+// codebase is a Cancel that flips a Status cell and keeps the row; this one
+// takes the record out of the sheet and cannot be undone, which is why the
+// only routes that call it are behind requireSuperAdmin.
+async function _deleteLogRowByKey(spreadsheetId, tabName, key) {
+  const { google } = require('googleapis');
+  const auth = getGoogleAuth();
+  if (!auth) throw new Error('Google Sheets is not configured on this server');
+  const sheets = google.sheets({ version: 'v4', auth });
+  // 0-indexed into the values array, where 0 is the header row — which is also
+  // exactly the 0-based grid index deleteDimension wants.
+  const rowIndex = await _findRowIndexByKey(spreadsheetId, tabName, key);
+  const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(sheetId,title))' });
+  const tab = meta.data.sheets.find(s => s.properties.title === tabName);
+  if (!tab) { const e = new Error('Log tab not found'); e.notFound = true; throw e; }
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests: [{ deleteDimension: { range: { sheetId: tab.properties.sheetId, dimension: 'ROWS', startIndex: rowIndex, endIndex: rowIndex + 1 } } }] },
+  });
+}
+
 // Generalizes _setLogRowStatus from "write one column" to "write several
 // columns of the same found row in one batch" — needed by Proforma
 // Invoice's "Add Price" step, which updates Total/PDF Link/Form JSON/Priced
@@ -3396,6 +3442,17 @@ app.put('/api/po-creation/cancel', requireAuth, async (req, res) => {
     const poNo = req.query.poNo;
     if (!poNo) return res.status(400).json({ error: 'poNo is required' });
     await _setLogRowStatus(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, poNo, 'L', 'Cancelled');
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
+});
+
+// Owner-only. Cancel above keeps the PO on the log; this takes the row out
+// of the sheet altogether. See SUPER_ADMIN_EMAIL.
+app.delete('/api/po-creation', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const poNo = req.query.poNo;
+    if (!poNo) return res.status(400).json({ error: 'poNo is required' });
+    await _deleteLogRowByKey(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, poNo);
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });
@@ -3830,6 +3887,16 @@ app.put('/api/pr-creation/cancel', requireAuth, async (req, res) => {
     const prNo = req.query.prNo;
     if (!prNo) return res.status(400).json({ error: 'prNo is required' });
     await _setLogRowStatus(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, prNo, 'L', 'Cancelled');
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
+});
+
+// Owner-only — see SUPER_ADMIN_EMAIL.
+app.delete('/api/pr-creation', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const prNo = req.query.prNo;
+    if (!prNo) return res.status(400).json({ error: 'prNo is required' });
+    await _deleteLogRowByKey(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, prNo);
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });
@@ -4408,6 +4475,16 @@ app.put('/api/grn-creation/cancel', requireAuth, async (req, res) => {
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });
 
+// Owner-only — see SUPER_ADMIN_EMAIL.
+app.delete('/api/grn-creation', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const grNo = req.query.grNo;
+    if (!grNo) return res.status(400).json({ error: 'grNo is required' });
+    await _deleteLogRowByKey(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, grNo);
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
+});
+
 // ── Proforma Invoice (PI) Creation — a brand-new, dedicated Google Sheet
 // ("ERP - Proforma Invoice", created by scripts/create-pi-sheet.js) with the
 // same "sheet IS the database" shape PO/PR/GRN use, but with one deliberate
@@ -4458,12 +4535,29 @@ function _piNoFormat(seq, fy) {
 // legacy "PI052" one the old domestic template used, so numbering keeps
 // climbing across the format change instead of restarting at 1 mid-year.
 // Current-form numbers only count toward their OWN financial year.
+// A revision shares its parent's sequence — "VTV/052/25-26 R1" is still PI 52,
+// so it must neither push the next new PI to 53 twice nor be read as a number
+// of its own.
 function _piSeqOf(raw, fy) {
   const s = String(raw ?? '').trim();
-  const m = /^[A-Za-z]+\/(\d+)\/(\d{2}-\d{2})$/.exec(s);
+  const m = /^[A-Za-z]+\/(\d+)\/(\d{2}-\d{2})(?:\s+R\d+)?$/i.exec(s);
   if (m) return m[2] === fy ? parseInt(m[1], 10) : 0;
   const legacy = parseInt(s.replace(/^[A-Za-z]+/, ''), 10);
   return isNaN(legacy) ? 0 : legacy;
+}
+
+// A buyer who asks for changes gets the SAME PI amended, not a second
+// unrelated offer — so a revision keeps the number and adds R1, R2, …
+// ("VTV/052/25-26 R1"). The parent row is marked Superseded and keeps its own
+// PDF, so what was originally offered stays provable.
+const _PI_REV_RE = /^(.*?)\s+R(\d+)$/i;
+function _piBaseNo(piNo) {
+  const m = _PI_REV_RE.exec(String(piNo ?? '').trim());
+  return m ? m[1].trim() : String(piNo ?? '').trim();
+}
+function _piRevNo(piNo) {
+  const m = _PI_REV_RE.exec(String(piNo ?? '').trim());
+  return m ? parseInt(m[2], 10) : 0;
 }
 
 // dd.mm.yyyy, the form the buyer's copy has always used. Written as text (see
@@ -4580,6 +4674,35 @@ function _piPhotoFormula(url) {
   return `=IMAGE("${u}", 1)`;
 }
 
+// One item in four sizes is four lines but one product, and the buyer should
+// see its picture once, not four times down the column. The product master
+// backs this up: every one of the 85 multi-size items in fetch_product carries
+// a single image URL across all of its size rows.
+//
+// So consecutive lines that are the same item AND the same photo become one
+// photo group: the picture is written into the group's first row and the Photo
+// cells are merged down it. Both halves of the key matter — matching on the
+// photo alone would fuse two different products that happen to share a stock
+// image, and on the name alone would hide a genuinely different picture. A
+// line with no photo is always its own group, so nothing changes for those.
+function _piPhotoGroups(items) {
+  const groups = [];
+  items.forEach((it, i) => {
+    const photo = String(it.imageUrl || '').trim();
+    const name = String(it.itemName || '').trim().toLowerCase();
+    const prev = groups[groups.length - 1];
+    if (prev && photo && prev.photo === photo && prev.name === name) { prev.count++; return; }
+    groups.push({ start: i, count: 1, photo, name });
+  });
+  return groups;
+}
+
+// 'A' -> 0, 'N' -> 13. The PI's columns are all single letters, but the loop
+// costs nothing and stops this being a trap if the table ever reaches AA.
+function _piColIndex(letter) {
+  return String(letter).toUpperCase().split('').reduce((n, ch) => n * 26 + (ch.charCodeAt(0) - 64), 0) - 1;
+}
+
 async function _fillPiTemplate(sheets, form, templateSheetId) {
   const tab = PI_TEMPLATE_TAB;
   const { LAYOUT: L, CELLS: C, ITEMS: IT, DEFAULTS: D } = PI_FMT;
@@ -4591,6 +4714,30 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
     spreadsheetId: PI_CREATION_SHEET_ID,
     requestBody: { ranges: IT.clearRanges.map(([a, b]) => `'${tab}'!${a}${L.itemsFirstRow}:${b}${L.itemsLastRow}`) },
   });
+
+  // Photo merges left behind by the PREVIOUS PI have to go before anything is
+  // written: a value aimed at a cell swallowed by a merge never lands. Safe to
+  // fire unconditionally — unmerging a range that holds no merges is a no-op,
+  // and the template's other 54 merges are all outside this column.
+  const canGroupPhotos = templateSheetId != null;
+  const photoColIdx = _piColIndex(IT.photoCol);
+  const itemRowsRange = {
+    sheetId: templateSheetId,
+    startRowIndex: L.itemsFirstRow - 1, endRowIndex: L.itemsLastRow,
+    startColumnIndex: photoColIdx, endColumnIndex: photoColIdx + 1,
+  };
+  if (canGroupPhotos) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: PI_CREATION_SHEET_ID,
+      requestBody: { requests: [{ unmergeCells: { range: itemRowsRange } }] },
+    });
+  }
+
+  const capacity = L.itemsLastRow - L.itemsFirstRow + 1;
+  const photoGroups = _piPhotoGroups(items.slice(0, capacity));
+  // Without a sheet id there is nothing to merge into, so every line keeps its
+  // own picture rather than losing three of four.
+  const photoRows = new Set(canGroupPhotos ? photoGroups.map(g => g.start) : items.map((_, i) => i));
 
   const data = [];
   const put = (a1, value) => data.push({ range: `'${tab}'!${a1}`, values: [[value ?? '']] });
@@ -4630,8 +4777,10 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
     // The product photo is a formula, not a value — Sheets has no way to place
     // a real image in a cell through the API. See LETTERHEAD.logoUrl for why
     // this resolves at all from a service account. An item with no photo gets
-    // a blank cell rather than a broken =IMAGE().
-    put(`${IT.photoCol}${row}`, _piPhotoFormula(it.imageUrl));
+    // a blank cell rather than a broken =IMAGE(), and so does every line after
+    // the first of a photo group — the merge below spreads the first one's
+    // picture over all of them.
+    put(`${IT.photoCol}${row}`, photoRows.has(i) ? _piPhotoFormula(it.imageUrl) : '');
   });
 
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
@@ -4652,15 +4801,54 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
     });
     const requests = [rowRange(firstIdx, usedEnd, false)];
     if (usedEnd < endIdx) requests.push(rowRange(usedEnd, endIdx, true));
-    // A photo needs a row it can actually be seen in, but giving every line
-    // that height would waste a third of the page on a PI whose items have no
-    // picture — so each used row is sized to its own content.
-    items.slice(0, endIdx - firstIdx).forEach((it, i) => {
+    // A photo needs room it can actually be seen in, but giving every line that
+    // height would waste a third of the page on a PI whose items have no
+    // picture — so each used row is sized to its own content. What has to be
+    // tall enough is the photo GROUP, not each row in it: four size lines at
+    // the normal height already leave the picture more room than a single
+    // photo row gets, so only the shortfall is added, and only to the first
+    // row of the group. A lone photo line still comes out at exactly the
+    // height it always did.
+    const heights = items.slice(0, endIdx - firstIdx).map(() => L.itemRowHeight);
+    photoGroups.forEach(g => {
+      if (!g.photo || g.start >= heights.length) return;
+      const shortfall = L.itemRowHeightWithPhoto - (g.count * L.itemRowHeight);
+      if (shortfall > 0) heights[g.start] += shortfall;
+    });
+    heights.forEach((px, i) => {
       requests.push({
         updateDimensionProperties: {
           range: { sheetId: templateSheetId, dimension: 'ROWS', startIndex: firstIdx + i, endIndex: firstIdx + i + 1 },
-          properties: { pixelSize: it.imageUrl ? L.itemRowHeightWithPhoto : L.itemRowHeight },
+          properties: { pixelSize: px },
           fields: 'pixelSize',
+        },
+      });
+    });
+
+    // Working columns the buyer's copy leaves out (Total Weight). Re-applied
+    // on every fill rather than baked into the template, so re-running
+    // scripts/rebuild-pi-sheet.js cannot quietly put them back on the PDF.
+    (IT.printHiddenCols || []).forEach(col => {
+      const idx = _piColIndex(col);
+      requests.push({
+        updateDimensionProperties: {
+          range: { sheetId: templateSheetId, dimension: 'COLUMNS', startIndex: idx, endIndex: idx + 1 },
+          properties: { hiddenByUser: true }, fields: 'hiddenByUser',
+        },
+      });
+    });
+
+    // One Photo cell per product, spanning that product's size lines.
+    photoGroups.forEach(g => {
+      if (g.count < 2) return;
+      requests.push({
+        mergeCells: {
+          range: {
+            sheetId: templateSheetId,
+            startRowIndex: firstIdx + g.start, endRowIndex: firstIdx + g.start + g.count,
+            startColumnIndex: photoColIdx, endColumnIndex: photoColIdx + 1,
+          },
+          mergeType: 'MERGE_ALL',
         },
       });
     });
@@ -4794,6 +4982,34 @@ async function _loadPiConsigneeMaster() {
   return rows;
 }
 
+// The PI's three shipping fields are picked from a list rather than typed.
+// The sheet already carries DAMMAN beside DAMMAM, JADDAH beside JEDDAH and
+// JABEL ALI beside JEBEL ALI — every hand-typed PI is another chance to add a
+// fourth spelling, and the consignee master is keyed on these values.
+//
+// Options are whatever the master already uses, most-used first (MUNDRA,
+// RIYADH and DAMMAM alone cover most PIs) and the long tail alphabetical.
+function _piShippingOptions(rows) {
+  const pick = (field) => {
+    const counts = new Map();
+    for (const r of rows) {
+      const v = String(r[field] || '').trim();
+      if (v) counts.set(v, (counts.get(v) || 0) + 1);
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([v]) => v);
+  };
+  return {
+    // Not from the master: the company ships out of three ports, and the
+    // master's own column spelled two of them four ways (NHAVASHEVA, NSICT,
+    // JNPT, GTI). The buyer's list wins here.
+    portOfLoading: PI_FMT.DEFAULTS.portOfLoadingOptions.slice(),
+    portOfDischarge: pick('portOfDischarge'),
+    placeOfDelivery: pick('placeOfDelivery'),
+  };
+}
+
 // ── Consignee Master (page: consignee-master) ───────────────────────────────
 // The same master the PI create form reads, given its own page so a new buyer
 // can be entered once instead of being re-typed into every PI.
@@ -4907,6 +5123,7 @@ app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
       nextPiNumber: _piNoFormat(meta.nextSeq, fy),
       recentBuyers,
       consignees,
+      shippingOptions: _piShippingOptions(consignees),
       maxItems: PI_FMT.LAYOUT.itemsLastRow - PI_FMT.LAYOUT.itemsFirstRow + 1,
       defaults: PI_FMT.DEFAULTS,
       assignees: PI_FMT.FMS_TRACKER.assignees,
@@ -5085,6 +5302,64 @@ app.post('/api/proforma-invoice/products', requireAuth, async (req, res) => {
   }
 });
 
+// Shared by create and revise, so a revision is validated and shaped exactly
+// like a first issue rather than by a second, drifting copy of this logic.
+//
+// A row counts as an item once it names the goods either way round — the model
+// number alone is meaningless to the buyer, the item name alone is still a
+// valid line.
+function _piCleanItems(b) {
+  const items = (Array.isArray(b.items) ? b.items : [])
+    .filter(it => it && (String(it.modelNo || '').trim() || String(it.itemName || '').trim()))
+    .map(it => ({
+      modelNo: String(it.modelNo || '').trim(),
+      itemName: String(it.itemName || '').trim(),
+      size: String(it.size || '').trim(),
+      swg: String(it.swg || '').trim(),
+      packing: String(it.packing || '').trim(),
+      qty: it.qty, boxes: it.boxes, cbm: it.cbm, weight: it.weight,
+      remarks: String(it.remarks || '').trim(),
+      // Comes from the product master via the form, so the PDF shows the
+      // photo without the server having to look the item up again.
+      imageUrl: String(it.imageUrl || '').trim(),
+    }));
+  if (!items.length) return { items, error: 'Add at least one item' };
+  const maxItems = PI_FMT.LAYOUT.itemsLastRow - PI_FMT.LAYOUT.itemsFirstRow + 1;
+  // The old template silently dropped anything past its last row. Refuse
+  // instead — a PI missing lines the user typed is worse than an error.
+  if (items.length > maxItems) return { items, error: `The Proforma Invoice template holds ${maxItems} item rows — this PI has ${items.length}` };
+  return { items, error: null };
+}
+
+// Everything the printed PI needs, kept together so the price step (and any
+// later revision) can re-render the exact same document from this one blob.
+function _piFormFromBody(b, user, cleanItems) {
+  return {
+    date: b.date,
+    orderNo: String(b.orderNo || '').trim(),
+    buyerName: String(b.buyerName).trim(),
+    buyerTrn: String(b.buyerTrn || '').trim(),
+    buyerAddress1: String(b.buyerAddress1 || '').trim(),
+    buyerAddress2: String(b.buyerAddress2 || '').trim(),
+    buyerContact: String(b.buyerContact || '').trim(),
+    paymentTerms: String(b.paymentTerms || '').trim(),
+    portOfLoading: String(b.portOfLoading || PI_FMT.DEFAULTS.portOfLoading).trim(),
+    portOfDischarge: String(b.portOfDischarge || '').trim(),
+    placeOfDelivery: String(b.placeOfDelivery || '').trim(),
+    countryOfOrigin: String(b.countryOfOrigin || PI_FMT.DEFAULTS.countryOfOrigin).trim(),
+    shipmentNote: String(b.shipmentNote || PI_FMT.DEFAULTS.shipmentNote).trim(),
+    validity: String(b.validity || PI_FMT.DEFAULTS.validity).trim(),
+    terms: (Array.isArray(b.terms) ? b.terms : PI_FMT.DEFAULTS.terms).map(t => String(t || '').trim()).filter(Boolean),
+    includeDeclaration: b.includeDeclaration !== false,
+    piMadeBy: user.name || '',
+    // Not printed on the PI — these two exist for the export team's
+    // follow-up tracker, which needs an owner and a date per PI.
+    assignedTo: String(b.assignedTo || '').trim(),
+    targetDate: String(b.targetDate || '').trim(),
+    items: cleanItems,
+  };
+}
+
 // POST /api/proforma-invoice — User stage. No rate/price field is ever read
 // from the body here, by design: pricing is a separate, permission-gated
 // step (PUT /price below).
@@ -5093,28 +5368,8 @@ app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
     const b = req.body || {};
     if (!b.date || !String(b.buyerName || '').trim()) return res.status(400).json({ error: 'Date and Consignee Name are required' });
 
-    // A row counts as an item once it names the goods either way round — the
-    // model number alone is meaningless to the buyer, the item name alone is
-    // still a valid line.
-    const cleanItems = (Array.isArray(b.items) ? b.items : [])
-      .filter(it => it && (String(it.modelNo || '').trim() || String(it.itemName || '').trim()))
-      .map(it => ({
-        modelNo: String(it.modelNo || '').trim(),
-        itemName: String(it.itemName || '').trim(),
-        size: String(it.size || '').trim(),
-        swg: String(it.swg || '').trim(),
-        packing: String(it.packing || '').trim(),
-        qty: it.qty, boxes: it.boxes, cbm: it.cbm, weight: it.weight,
-        remarks: String(it.remarks || '').trim(),
-        // Comes from the product master via the form, so the PDF shows the
-        // photo without the server having to look the item up again.
-        imageUrl: String(it.imageUrl || '').trim(),
-      }));
-    if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
-    const maxItems = PI_FMT.LAYOUT.itemsLastRow - PI_FMT.LAYOUT.itemsFirstRow + 1;
-    // The old template silently dropped anything past its last row. Refuse
-    // instead — a PI missing lines the user typed is worse than an error.
-    if (cleanItems.length > maxItems) return res.status(400).json({ error: `The Proforma Invoice template holds ${maxItems} item rows — this PI has ${cleanItems.length}` });
+    const { items: cleanItems, error: itemsError } = _piCleanItems(b);
+    if (itemsError) return res.status(400).json({ error: itemsError });
 
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
@@ -5125,32 +5380,7 @@ app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
     const { nextSeq, templateSheetId } = await _piSheetMeta(fy);
     const piNoFormatted = _piNoFormat(nextSeq, fy);
 
-    // Everything the printed PI needs, kept together so the price step can
-    // re-render the exact same document later from this one JSON blob.
-    const form = {
-      date: b.date,
-      orderNo: String(b.orderNo || '').trim(),
-      buyerName: String(b.buyerName).trim(),
-      buyerTrn: String(b.buyerTrn || '').trim(),
-      buyerAddress1: String(b.buyerAddress1 || '').trim(),
-      buyerAddress2: String(b.buyerAddress2 || '').trim(),
-      buyerContact: String(b.buyerContact || '').trim(),
-      paymentTerms: String(b.paymentTerms || '').trim(),
-      portOfLoading: String(b.portOfLoading || PI_FMT.DEFAULTS.portOfLoading).trim(),
-      portOfDischarge: String(b.portOfDischarge || '').trim(),
-      placeOfDelivery: String(b.placeOfDelivery || '').trim(),
-      countryOfOrigin: String(b.countryOfOrigin || PI_FMT.DEFAULTS.countryOfOrigin).trim(),
-      shipmentNote: String(b.shipmentNote || PI_FMT.DEFAULTS.shipmentNote).trim(),
-      validity: String(b.validity || PI_FMT.DEFAULTS.validity).trim(),
-      terms: (Array.isArray(b.terms) ? b.terms : PI_FMT.DEFAULTS.terms).map(t => String(t || '').trim()).filter(Boolean),
-      includeDeclaration: b.includeDeclaration !== false,
-      piMadeBy: req.session.user.name || '',
-      // Not printed on the PI — these two exist for the export team's
-      // follow-up tracker, which needs an owner and a date per PI.
-      assignedTo: String(b.assignedTo || '').trim(),
-      targetDate: String(b.targetDate || '').trim(),
-      items: cleanItems,
-    };
+    const form = _piFormFromBody(b, req.session.user, cleanItems);
 
     await _fillPiTemplate(sheets, { ...form, piNo: piNoFormatted }, templateSheetId);
     const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNoFormatted, templateSheetId);
@@ -5184,6 +5414,153 @@ app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
   } catch (e) { console.error('[proforma-invoice] create failed:', e.message); return res.status(500).json({ error: e.message }); }
 });
 
+// DELETE /api/consignee-master?name=... — owner-only, see SUPER_ADMIN_EMAIL.
+// Only the writable A:F block can be touched, so this removes the buyer from
+// the export team's own list. Anything the imported J:P master still holds for
+// that name keeps coming through — that block belongs to another workbook.
+app.delete('/api/consignee-master', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const name = String(req.query.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const src = PI_FMT.CONSIGNEE_SOURCE;
+
+    const colRes = await sheets.spreadsheets.values.get({
+      spreadsheetId: src.spreadsheetId,
+      range: `'${src.tab}'!A:A`,
+      valueRenderOption: 'FORMATTED_VALUE',
+    });
+    const values = colRes.data.values || [];
+    const want = _piConsigneeKey(name);
+    const rowIndex = values.findIndex((r, i) => i > 0 && _piConsigneeKey(r[0]) === want);
+    if (rowIndex === -1) return res.status(404).json({ error: `"${name}" is not in the writable part of the consignee sheet` });
+
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: src.spreadsheetId, fields: 'sheets(properties(sheetId,title))' });
+    const tab = meta.data.sheets.find(s => s.properties.title === src.tab);
+    if (!tab) return res.status(500).json({ error: 'fetch_consignee tab not found' });
+
+    // Only A:F — deleting the whole sheet row would drag the IMPORTRANGE block
+    // in J:P up with it and break the import. Clearing then shifting the cells
+    // below up keeps the left block tight without touching anything to the
+    // right of it.
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: src.spreadsheetId,
+      requestBody: {
+        requests: [{
+          deleteRange: {
+            range: {
+              sheetId: tab.properties.sheetId,
+              startRowIndex: rowIndex, endRowIndex: rowIndex + 1,
+              startColumnIndex: _piColIndex('A'), endColumnIndex: _piColIndex('F') + 1,
+            },
+            shiftDimension: 'ROWS',
+          },
+        }],
+      },
+    });
+    _piConsigneeCache = null;
+
+    return res.json({ success: true });
+  } catch (e) {
+    console.error('[consignee-master] delete failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/proforma-invoice/revise?piNo=... — the buyer came back asking for
+// changes. Editing the PI in place would leave the copy already sitting in the
+// buyer's inbox unaccounted for, and cancelling to start again burns a number
+// and loses the thread. So this issues the NEXT REVISION of the same number
+// ("VTV/052/25-26" -> "VTV/052/25-26 R1"), marks the parent Superseded, and
+// leaves the parent's own PDF in place as the record of what was first offered.
+app.post('/api/proforma-invoice/revise', requireAuth, async (req, res) => {
+  try {
+    const piNo = String(req.query.piNo || '').trim();
+    if (!piNo) return res.status(400).json({ error: 'piNo is required' });
+    const b = req.body || {};
+    if (!b.date || !String(b.buyerName || '').trim()) return res.status(400).json({ error: 'Date and Consignee Name are required' });
+
+    const { items: cleanItems, error: itemsError } = _piCleanItems(b);
+    if (itemsError) return res.status(400).json({ error: itemsError });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const logRows = logRes.data.values || [];
+    const parent = logRows.find(r => String(r[0] || '').trim() === piNo);
+    if (!parent) return res.status(404).json({ error: `Proforma Invoice ${piNo} was not found` });
+    const parentStatus = parent[10] || 'Draft';
+    if (parentStatus === 'Cancelled') return res.status(400).json({ error: `${piNo} has been cancelled — a cancelled PI cannot be revised` });
+    if (parentStatus === 'Superseded') return res.status(400).json({ error: `${piNo} has already been revised — revise its latest revision instead` });
+
+    let parentForm = {};
+    try { parentForm = parent[9] ? JSON.parse(parent[9]) : {}; } catch {}
+
+    // R1 for a first issue, R(n+1) for a PI already revised n times. Counted
+    // across the whole family so a gap can never re-issue a number.
+    const base = _piBaseNo(piNo);
+    const nextRev = logRows.reduce((n, r) => Math.max(n, _piBaseNo(r[0]) === base ? _piRevNo(r[0]) : 0), 0) + 1;
+    const newPiNo = `${base} R${nextRev}`;
+
+    // The rate is decided on a permission-gated screen, so a revision must not
+    // become a back door for typing one in: rates are read off the PARENT's
+    // stored form, never off this request. A line keeps its rate only when its
+    // model + size + name matches exactly one line of the parent — anything
+    // added, ambiguous or re-specced comes through unpriced and goes back
+    // through Add Price.
+    const rateKey = (it) => [it.modelNo, it.size, it.itemName].map(v => String(v || '').trim().toLowerCase()).join('|');
+    const parentRates = new Map();
+    (Array.isArray(parentForm.items) ? parentForm.items : []).forEach(it => {
+      const k = rateKey(it);
+      parentRates.set(k, parentRates.has(k) ? null : (it.rate ?? ''));
+    });
+    let allPriced = true;
+    cleanItems.forEach(it => {
+      const carried = parentRates.get(rateKey(it));
+      it.rate = (carried == null ? '' : carried);
+      if (!String(it.rate).trim()) allPriced = false;
+    });
+    const status = (allPriced && parentStatus === 'Priced') ? 'Priced' : 'Draft';
+
+    const form = _piFormFromBody(b, req.session.user, cleanItems);
+    form.revisionOf = piNo;
+    form.revisionNo = nextRev;
+    form.revisionNote = String(b.revisionNote || '').trim();
+
+    const { templateSheetId } = await _piSheetMeta(_piFyLabel(b.date));
+    await _fillPiTemplate(sheets, { ...form, piNo: newPiNo }, templateSheetId);
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, newPiNo, templateSheetId);
+
+    await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, PI_LOG_HEADER);
+    await appendLogRow(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, [
+      "'" + newPiNo, "'" + b.date, form.buyerName, totalAmount ?? '', pdfLink || '', req.session.user.name || '', _timestampForSheet(),
+      // Whoever priced the parent priced these lines too — the revision only
+      // carried their figures over.
+      status === 'Priced' ? (parent[7] || '') : '', status === 'Priced' ? (parent[8] || '') : '',
+      JSON.stringify(form),
+      status,
+    ]);
+
+    // Only after the revision is safely logged — a failure above must leave
+    // the parent live rather than superseded by a PI that does not exist.
+    await _setLogRowStatus(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo, 'K', 'Superseded');
+
+    // No new Export Marketing FMS row: the parent PI already opened one and
+    // the export team follows the deal, not each revision of the paperwork.
+    return res.json({ success: true, piNumber: newPiNo, pdfLink, status, revisedFrom: piNo, ratesCarried: status === 'Priced' });
+  } catch (e) {
+    console.error('[proforma-invoice] revise failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/proforma-invoice/list — recent PIs, newest first, capped at 200 —
 // same shape as PO/PR/GRN's own /list routes. `canSetPrice` is computed
 // server-side (per current user + Draft-only) so the frontend never has to
@@ -5204,6 +5581,9 @@ app.get('/api/proforma-invoice/list', requireAuth, async (req, res) => {
         piNo: r[0] || '', date: _sheetDateToIso(r[1]), buyer: r[2] || '', total: r[3] || '', pdfLink: r[4] || '',
         createdBy: r[5] || '', createdAt: r[6] || '', pricedBy: r[7] || '', pricedAt: r[8] || '',
         form, status, canSetPrice: canSetPrice && status === 'Draft',
+        // Only the live copy of a PI can be revised — not a cancelled one, and
+        // not one that has already been superseded by its own revision.
+        canRevise: status === 'Draft' || status === 'Priced',
       };
     }).reverse().slice(0, 200);
     return res.json(rows);
@@ -5303,6 +5683,20 @@ app.put('/api/proforma-invoice/cancel', requireAuth, async (req, res) => {
     const piNo = req.query.piNo;
     if (!piNo) return res.status(400).json({ error: 'piNo is required' });
     await _setLogRowStatus(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo, 'K', 'Cancelled');
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
+});
+
+// Owner-only — see SUPER_ADMIN_EMAIL. Worth knowing before using it on a PI:
+// the next PI number is the highest one on this log plus one, so deleting the
+// most recent PI hands its number to the next one raised — while the PDF of
+// the deleted one may already be with the buyer. Cancel (which keeps the row
+// and burns the number) is the safer move in almost every case.
+app.delete('/api/proforma-invoice', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const piNo = req.query.piNo;
+    if (!piNo) return res.status(400).json({ error: 'piNo is required' });
+    await _deleteLogRowByKey(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo);
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });
@@ -5798,6 +6192,24 @@ async function _imsCancelTxn(id, direction) {
   await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, row.item_code]);
 }
 
+// Owner-only delete of one ledger entry — see SUPER_ADMIN_EMAIL.
+//
+// current_stock is a stored running balance, not something recomputed from the
+// ledger, so a live row's effect has to be backed out before the row goes —
+// exactly as Cancel does. A row that is ALREADY Cancelled was reversed at
+// cancel time and must not be reversed a second time, or the stock swings the
+// wrong way by that quantity.
+async function _imsDeleteTxn(id) {
+  const rows = await q('SELECT * FROM ims_transactions WHERE id=$1', [id]);
+  if (!rows.length) throw Object.assign(new Error('Not found'), { status: 404 });
+  const row = rows[0];
+  if (row.status !== 'Cancelled') {
+    const delta = row.direction === 'OUT' ? Number(row.quantity) : -Number(row.quantity);
+    await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, row.item_code]);
+  }
+  await pool.query('DELETE FROM ims_transactions WHERE id=$1', [id]);
+}
+
 // Physical Stock update — reconciles current_stock against what store staff
 // physically counted. Unlike Inward/Outward this doesn't add a fixed unsigned
 // quantity in a known direction: it computes the signed variance itself
@@ -5882,6 +6294,18 @@ app.put('/api/ims/inward/cancel', requireAuth, async (req, res) => {
   } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
 });
 
+// Owner-only — see SUPER_ADMIN_EMAIL. Cancel keeps the entry in the ledger;
+// this removes it, reversing its stock effect first if it is still live.
+app.delete('/api/ims/inward', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    await _imsDeleteTxn(id);
+    return res.json({ success: true });
+  } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
+});
+
 app.get('/api/ims/outward/list', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
@@ -5906,6 +6330,18 @@ app.put('/api/ims/outward/cancel', requireAuth, async (req, res) => {
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: 'id is required' });
     await _imsCancelTxn(id, 'OUT');
+    return res.json({ success: true });
+  } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
+});
+
+// Owner-only — see SUPER_ADMIN_EMAIL. Cancel keeps the entry in the ledger;
+// this removes it, reversing its stock effect first if it is still live.
+app.delete('/api/ims/outward', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    await _imsDeleteTxn(id);
     return res.json({ success: true });
   } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
 });

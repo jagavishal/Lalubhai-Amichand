@@ -645,6 +645,7 @@ window.Pages['pr-creation'] = (() => {
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
             : '<button type="button" class="pcr-cancel-btn" data-pr="' + esc(r.prNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
+          + Utils.ownerDeleteBtn('pcr-delete-btn', 'pr', r.prNo)
         + '</td>'
       + '</tr>').join('');
   }
@@ -654,6 +655,19 @@ window.Pages['pr-creation'] = (() => {
     if (!body || body.dataset.actionsBound) return;
     body.dataset.actionsBound = '1';
     body.addEventListener('click', async (e) => {
+      const delBtn = e.target.closest('.pcr-delete-btn');
+      if (delBtn) {
+        const key = delBtn.dataset.pr;
+        if (!(await Utils.ownerDeleteConfirm('PR #' + key))) return;
+        try {
+          await Utils.apiFetch('/api/pr-creation?prNo=' + encodeURIComponent(key), { method: 'DELETE' });
+          Utils.showToast('PR #' + key + ' deleted', 'success');
+          await _sumLoad();
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to delete', 'error');
+        }
+        return;
+      }
       const cancelBtn = e.target.closest('.pcr-cancel-btn');
       if (cancelBtn) {
         const ok = await Utils.showConfirm('PR #' + cancelBtn.dataset.pr + ' will be marked Cancelled and excluded from future PO creation. This can\'t be undone.', { title: 'Cancel PR', confirmText: 'Cancel PR', danger: true });
