@@ -40,7 +40,6 @@ window.Pages['proforma-invoice'] = (() => {
   let _shippingOptions = { portOfLoading: [], portOfDischarge: [], placeOfDelivery: [] };
   let _defaults = null;     // boilerplate from backend/lib/pi-format.js
   let _maxItems = 30;
-  let _assignees = [];      // who a PI can be handed to in the FMS tracker
 
   // PI List (in-page tab) state — read-only history from the ERP PI Log tab.
   let _pilRows = [];
@@ -112,7 +111,6 @@ window.Pages['proforma-invoice'] = (() => {
       if (data.shippingOptions) _shippingOptions = data.shippingOptions;
       if (data.defaults) _defaults = data.defaults;
       if (data.maxItems) _maxItems = data.maxItems;
-      if (data.assignees) _assignees = data.assignees;
       _mastersLoaded = true;
       const el = document.getElementById('pic-next-no');
       if (el) el.textContent = _piNoDisplay();
@@ -156,16 +154,20 @@ window.Pages['proforma-invoice'] = (() => {
   // replaced outright — otherwise switching from a two-line address to a
   // one-line one leaves the previous buyer's second line behind.
   //
-  // Port of Discharge DOES come from the buyer — it is where their goods land,
-  // and it barely changes shipment to shipment. Port of Loading and Place of
-  // Delivery deliberately do not: those belong to the shipment, and are picked
-  // from their dropdowns.
+  // Port of Discharge and Place of Delivery both come from the buyer — that is
+  // where their goods land and where they take delivery, and neither changes
+  // much shipment to shipment. Port of Loading deliberately does not: that is
+  // ours to choose, and it stays on its own dropdown.
   function _fillFromConsignee(c) {
     const put = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
     put('pic-buyer-addr1', c.address1);
     put('pic-buyer-addr2', c.address2);
     put('pic-buyer-contact', c.contact);
     if (c.portOfDischarge) put('pic-port-discharge', c.portOfDischarge);
+    // A dropdown, so it takes a forced selection rather than an assignment —
+    // and _fillShippingSelect adds an option for a value the master's own list
+    // does not already carry.
+    if (c.placeOfDelivery) _fillShippingSelect('pic-place-delivery', _optionsFor('placeOfDelivery'), '', c.placeOfDelivery);
     // Terms of Payment is a dropdown now, so a value has to go in as a forced
     // selection rather than an assignment. (The master's own column is empty
     // top to bottom today; this is here for the day it is not.)
@@ -618,7 +620,6 @@ window.Pages['proforma-invoice'] = (() => {
     put('pic-date', form.date || _today());
     put('pic-order-no', form.orderNo);
     put('pic-port-discharge', form.portOfDischarge);
-    put('pic-assigned-to', form.assignedTo);
     put('pic-target-date', form.targetDate);
     put('pic-buyer', form.buyerName);
     put('pic-buyer-trn', form.buyerTrn);
@@ -712,18 +713,16 @@ window.Pages['proforma-invoice'] = (() => {
   const _grid = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;';
 
   function _invoiceFieldsHtml() {
-    // Assigned To and Target Date are not printed on the PI — they open the
-    // row in the export team's follow-up tracker, which needs an owner and a
-    // date. Both optional; blank just leaves those cells for the team.
-    const assigneeOpts = (_assignees || []).map(a => '<option value="' + esc(a) + '"></option>').join('');
+    // Target Date is not printed on the PI — it goes to the export team's
+    // follow-up tracker, which wants a date to chase against. Optional; blank
+    // just leaves that cell for the team. The tracker's owner column is no
+    // longer asked for either: every PI opens against FMS_TRACKER's
+    // defaultAssignee (see backend/lib/pi-format.js).
     return '<div style="' + _grid + '">'
       + _textField('pic-date', 'PI Date', { type: 'date', value: _today() })
       + _readonlyField('pic-next-no', _reviseOf ? 'Pro. Invoice No. (revision)' : 'Pro. Invoice No. (auto-assigned)', _piNoDisplay())
       + _textField('pic-order-no', 'Order No.', { placeholder: 'Buyer order reference' })
       + _selectField('pic-payment-terms', 'Terms of Payment')
-      + _fieldWrap('Assigned To',
-          '<input type="text" id="pic-assigned-to" list="pic-assignee-list" autocomplete="off" placeholder="Who follows this PI up" style="' + _inputStyle + '" />'
-          + '<datalist id="pic-assignee-list">' + assigneeOpts + '</datalist>')
       + _textField('pic-target-date', 'Target Date', { type: 'date' })
     + '</div>';
   }
@@ -830,7 +829,6 @@ window.Pages['proforma-invoice'] = (() => {
       countryOfOrigin: val('pic-origin'),
       shipmentNote: val('pic-shipment-note'),
       validity: val('pic-validity'),
-      assignedTo: val('pic-assigned-to'),
       targetDate: document.getElementById('pic-target-date').value,
       terms: val('pic-terms').split('\n').map(t => t.trim()).filter(Boolean),
       includeDeclaration: document.getElementById('pic-declaration').checked,

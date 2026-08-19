@@ -5181,7 +5181,6 @@ app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
       shippingOptions: _piShippingOptions(consignees),
       maxItems: PI_FMT.LAYOUT.itemsLastRow - PI_FMT.LAYOUT.itemsFirstRow + 1,
       defaults: PI_FMT.DEFAULTS,
-      assignees: PI_FMT.FMS_TRACKER.assignees,
     });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -5409,7 +5408,9 @@ function _piFormFromBody(b, user, cleanItems) {
     piMadeBy: user.name || '',
     // Not printed on the PI — these two exist for the export team's
     // follow-up tracker, which needs an owner and a date per PI.
-    assignedTo: String(b.assignedTo || '').trim(),
+    // Not asked for on the form any more — every PI's tracker row goes to
+    // the same person, and re-assigning is done in the tracker itself.
+    assignedTo: PI_FMT.FMS_TRACKER.defaultAssignee,
     targetDate: String(b.targetDate || '').trim(),
     items: cleanItems,
   };

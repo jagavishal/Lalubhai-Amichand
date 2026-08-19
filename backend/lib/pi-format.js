@@ -232,10 +232,11 @@ const FMS_TRACKER = {
   headerRow: 6,
   firstDataRow: 7,
   cols: { timestamp: 'A', piNo: 'B', assignedTo: 'C', customerName: 'D', quantity: 'E', targetDate: 'F' },
-  // Row 3 of the tracker names who a PI can be assigned to. Kept here so the
-  // create form's dropdown and the sheet stay in step; the field is free text
-  // as well, so an unlisted name still goes through.
-  assignees: ['Shival', 'Paresh', 'Obaid'],
+  // Every PI opens its tracker row against the same person, so the create form
+  // does not ask — it used to, and the answer was always this. Row 3 of the
+  // tracker still lists the others (Paresh, Obaid); re-assigning a PI to one
+  // of them is done in the tracker itself, which is where that call is made.
+  defaultAssignee: 'Shival',
   // The one tracker step this app completes on the doer's behalf. Clicking
   // Done on it does not open the generic Mark-as-Done modal: it opens the PI's
   // own Add Price screen, and saving the price is what fills the step's Actual
