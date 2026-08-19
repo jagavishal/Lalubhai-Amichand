@@ -81,7 +81,16 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     });
   }
 
-  // DD-MM-YYYY / DD/MM/YYYY / YYYY-MM-DD (+ optional trailing time) -> 'YYYY-MM-DD', else null.
+  // DD-MM-YYYY / DD/MM/YYYY / MM/DD/YYYY / YYYY-MM-DD (+ optional trailing
+  // time) -> 'YYYY-MM-DD', else null.
+  //
+  // Cells are read with FORMATTED_VALUE, so a real date arrives in whatever
+  // format its column is set to — day-first in one column of a sheet and
+  // month-first in the next, as the Export Marketing tracker actually is. Where
+  // one of the two numbers is over 12 it can only be the day, so read the pair
+  // that way round; where both are 12 or under nothing in the string can settle
+  // it, and day-first is assumed, which is this app's convention everywhere the
+  // user types a date.
   function parsePlanDate(val) {
     if (!val) return null;
     const s = stripZW(val);
@@ -90,23 +99,42 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     const datePart = (spaceIdx > -1 ? s.slice(0, spaceIdx) : s).trim();
     let m;
     if ((m = datePart.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/))) {
-      return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+      return isoDate(m[1], m[2], m[3]);
     }
     if ((m = datePart.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/))) {
-      return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+      const a = parseInt(m[1], 10), b = parseInt(m[2], 10);
+      return a > 12 && b <= 12 ? isoDate(m[3], m[2], m[1])   // 19/08 — day first
+        : b > 12 && a <= 12 ? isoDate(m[3], m[1], m[2])      // 08/19 — month first
+        : isoDate(m[3], m[2], m[1]);                         // ambiguous — day first
     }
     return null;
   }
 
-  // Matches server.js's own _timestampForSheet() convention (IST, regardless of
-  // server timezone) in a DD/MM/YYYY form so parsePlanDate() can round-trip it.
-  // Slashes, not dashes: Google Sheets' USER_ENTERED auto-detection reliably
-  // recognizes "DD/MM/YYYY HH:MM:SS" as a real date/time (same as
-  // _timestampForSheet()'s own slash-separated format elsewhere in this app),
-  // but does not reliably recognize the dash-separated form — that previously
-  // landed as plain text, which is why any date formula reading this column
-  // failed. parsePlanDate() already accepts either separator, so this is a
-  // safe change with no round-trip-parsing side effect.
+  function isoDate(y, mo, d) {
+    const month = parseInt(mo, 10), day = parseInt(d, 10);
+    if (!(month >= 1 && month <= 12 && day >= 1 && day <= 31)) return null;
+    return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+
+  // IST wall-clock time regardless of the server's own timezone, written
+  // ISO-first as "YYYY-MM-DD HH:MM:SS".
+  //
+  // The ordering matters more than the separator. Whether USER_ENTERED reads
+  // "19/08/2026" as the 19th of August or as an error depends on the
+  // SPREADSHEET's locale, which this app does not control and cannot see: a
+  // day-first string in a US-locale sheet has no 19th month, so Sheets gives up
+  // and stores the whole thing as text. A tracker column whose date formulas
+  // then read that cell fails with "Function IF parameter 1 expects boolean
+  // values. But '19/08/2026 10:10:07' is a text" — the step looks done in the
+  // app while the sheet's own Time Delay / Status columns break.
+  //
+  // ISO is the one form every locale reads the same way, so it is a real
+  // datetime in the cell whatever the sheet is set to, and the sheet's own
+  // number format decides how it is displayed. Note this is deliberately NOT
+  // _timestampForSheet()'s format in server.js — that one is month-first
+  // (en-US), the exact opposite of what this used to write, which is how the
+  // same tracker ended up with a parseable Timestamp column and an unparseable
+  // Actual one.
   function nowIST() {
     const fmt = new Intl.DateTimeFormat('en-GB', {
       timeZone: 'Asia/Kolkata',
@@ -115,7 +143,7 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     });
     const parts = fmt.formatToParts(new Date());
     const get = (t) => parts.find(p => p.type === t).value;
-    return `${get('day')}/${get('month')}/${get('year')} ${get('hour')}:${get('minute')}:${get('second')}`;
+    return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
   }
 
   // An open-ended range (e.g. 'Tab'!A3:ZZ) pulls every row Sheets considers part
