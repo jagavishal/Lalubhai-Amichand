@@ -4856,20 +4856,17 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
     });
     const requests = [rowRange(firstIdx, usedEnd, false)];
     if (usedEnd < endIdx) requests.push(rowRange(usedEnd, endIdx, true));
-    // A photo needs room it can actually be seen in, but giving every line that
-    // height would waste a third of the page on a PI whose items have no
-    // picture — so each used row is sized to its own content. What has to be
-    // tall enough is the photo GROUP, not each row in it: four size lines at
-    // the normal height already leave the picture more room than a single
-    // photo row gets, so only the shortfall is added, and only to the first
-    // row of the group. A lone photo line still comes out at exactly the
-    // height it always did.
-    const heights = items.slice(0, endIdx - firstIdx).map(() => L.itemRowHeight);
-    photoGroups.forEach(g => {
-      if (!g.photo || g.start >= heights.length) return;
-      const shortfall = L.itemRowHeightWithPhoto - (g.count * L.itemRowHeight);
-      if (shortfall > 0) heights[g.start] += shortfall;
-    });
+    // Every used line gets the SAME height: sizing each row to its own content
+    // left a merged pair sitting squashed beside full-height single lines, and
+    // the table has to read as one block. A PI whose items carry no picture at
+    // all still gets the compact height — there is nothing to make room for.
+    //
+    // A group's photo cell ends up taller than one row (2 sizes = 2x), but the
+    // picture does not grow to match: the Photo column is 72px wide and
+    // =IMAGE(url, 1) keeps the aspect ratio, so the image is width-limited and
+    // simply centres in the taller cell.
+    const rowPx = photoGroups.some(g => g.photo) ? L.itemRowHeightWithPhoto : L.itemRowHeight;
+    const heights = items.slice(0, endIdx - firstIdx).map(() => rowPx);
     heights.forEach((px, i) => {
       requests.push({
         updateDimensionProperties: {
