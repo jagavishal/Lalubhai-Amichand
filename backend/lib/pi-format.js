@@ -162,11 +162,13 @@ const ITEMS = {
     'Total Qty (Pcs / Set)', 'Total Box', 'Total CBM', 'Total Weight (Kgs)',
     'C&F US$ Per Pc', 'Amount (US$)', 'Remarks',
   ],
-  // px widths, A..N — sums to 1065px, exactly the printable width of an A4
-  // landscape page at the 0.3" margins _exportSheetTabPdf() uses, so the
-  // export neither scales the sheet up nor leaves a bare strip down the right.
+  // px widths, A..N — sums to 1065px. That is the printable width of an A4
+  // LANDSCAPE page at the 0.3" margins _exportSheetTabPdf() uses; the PDF now
+  // prints portrait, whose printable width is ~735px, so the export's scale=4
+  // shrinks the sheet to about 68% to fit. Widening a column therefore costs
+  // every column a little sharpness, rather than running off the page.
   // G and H are wider than the item table alone needs because the party
-  // block's labels sit in G:H, and the longest of them ("Country of Origin of
+  // block's labels sit in H:J, and the longest of them ("Country of Origin of
   // Goods :") wraps to two lines below ~148px, dragging that row out of line.
   colWidths: [34, 72, 96, 170, 44, 40, 68, 84, 58, 60, 70, 70, 86, 113],
 };

@@ -3207,8 +3207,9 @@ async function _exportSheetTabPdf(spreadsheetId, sourceSheetId, colRange) {
   // them are the invoice, and the trailing blanks otherwise spill a second,
   // empty page into the PDF.
   const rowParams = colRange && colRange.r2 != null ? `&r1=${colRange.r1 || 0}&r2=${colRange.r2}` : '';
-  // Portrait unless the caller opts out — only the Proforma Invoice does, its
-  // export table is 13 columns wide and will not fit an A4 portrait page.
+  // Portrait unless the caller opts out. Nothing opts out today; the Proforma
+  // Invoice used to, on the assumption its 14-column table could not fit an A4
+  // portrait page. With scale=4 it does — see the note on its own export call.
   const portrait = !colRange || colRange.portrait !== false;
   // fitw=true fits to WIDTH — which scales a narrow sheet UP, making a page
   // that was 6px too tall overflow onto a second sheet. scale=4 is Sheets'
@@ -4689,8 +4690,14 @@ async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId) {
   } catch (e) { console.error('[proforma-invoice] amount-in-words write failed:', e.message); }
   let pdfLink = null;
   try {
+    // Portrait, like every other document this app prints. The 14-column table
+    // is wider than an A4 portrait page, but scale=4 ("fit to page") shrinks it
+    // to fit, and it costs almost nothing: landscape was ALREADY being scaled
+    // to 73.7% because the invoice is taller than a landscape page is deep, so
+    // portrait's 68.3% is only ~7% smaller on the page — and it fills the sheet
+    // rather than leaving a deep band of white below the signatures.
     const pdfBuffer = await _exportSheetTabPdf(PI_CREATION_SHEET_ID, templateSheetId, {
-      c1: 0, c2: PI_FMT.LAYOUT.colCount, r1: 0, r2: PI_FMT.LAYOUT.lastRow, portrait: false, scale: 4,
+      c1: 0, c2: PI_FMT.LAYOUT.colCount, r1: 0, r2: PI_FMT.LAYOUT.lastRow, portrait: true, scale: 4,
     });
     // "VTV/052/25-26" has slashes in it — a Drive filename must not.
     pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${piNoFormatted.replace(/\//g, '-')} - Proforma Invoice.pdf`, PI_PDF_DRIVE_FOLDER_ID);
