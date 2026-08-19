@@ -197,6 +197,21 @@ const FMS_TRACKER = {
   // create form's dropdown and the sheet stay in step; the field is free text
   // as well, so an unlisted name still goes through.
   assignees: ['Shival', 'Paresh', 'Obaid'],
+  // The one tracker step this app completes on the doer's behalf. Clicking
+  // Done on it does not open the generic Mark-as-Done modal: it opens the PI's
+  // own Add Price screen, and saving the price is what fills the step's Actual
+  // cell (see completePiPricingStep() in backend/lib/fmsSheet.js). Matched
+  // case-insensitively against the step name configured in FMS, so renaming it
+  // to "Add Pricing (US$)" or "Price Update" keeps working. Deliberately not a
+  // bare /pric/ — a tracker step like "Price Confirmation from Buyer" is
+  // ordinary follow-up work and must keep its normal Mark-as-Done modal.
+  pricingStepRe: /^\s*(add\s*pric|pric(e|ing)\s*update)/i,
+  // Which of the flow's columns holds the PI number. `cols.piNo` above is only
+  // the column THIS app writes when it opens the row; the step is matched by
+  // header instead, so a tracker kept in a different (or copied) spreadsheet,
+  // or with its columns rearranged, still resolves — the spreadsheet id is not
+  // part of the test.
+  piNoHeaderRe: /^\s*(p\.?\s*i\.?|(pro\.?\s*(forma)?\s*)?invoice)\s*(no\.?|number|#)?\s*$/i,
 };
 
 // Boilerplate the form pre-fills and the buyer sees verbatim. Editable per PI

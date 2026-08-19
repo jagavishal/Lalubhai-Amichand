@@ -8,6 +8,10 @@
 // up a second DB connection or Google auth client.
 module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
 
+  // Only for the Proforma Invoice tracker below — the one FMS flow this app
+  // knows something about beyond its column config.
+  const PI_FMT = require('./pi-format.js');
+
   /* ── id generation ──────────────────────────────────────────────────── */
   function genId(prefix) {
     return prefix + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
@@ -149,9 +153,34 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     return ids.map((_, i) => `$${i + 1}`).join(',');
   }
 
+  // An "Add Pricing" step is the one kind of step whose work happens on another
+  // page of this app (Proforma Invoice → Add Price) rather than in the
+  // Mark-as-Done modal, so it is flagged for the frontend. Matched on the step
+  // NAME alone, deliberately: keying it to the tracker's spreadsheet id meant a
+  // flow pointed at a copied or moved sheet silently fell back to the ordinary
+  // modal, with nothing on screen to say why. The flag only ever matters once a
+  // PI number can also be found on the row (piNoIndex below) — a pricing-named
+  // step on a sheet with no PI column resolves to nothing and behaves exactly
+  // as it did before.
+  function isPiPricingStep(step) {
+    return !!step && PI_FMT.FMS_TRACKER.pricingStepRe.test(step.step_name || '');
+  }
+
+  // Which column of an already-fetched sheet holds the PI number: the header
+  // the tracker actually uses, falling back to the column this app writes when
+  // it opens the row (only meaningful for the tracker itself, whose header
+  // block may leave that cell blank).
+  function piNoIndex(headers, step) {
+    if (!step || !step.piPricing) return -1;
+    const byHeader = (headers || []).findIndex(h => PI_FMT.FMS_TRACKER.piNoHeaderRe.test(h || ''));
+    if (byHeader >= 0) return byHeader;
+    return step.pi_no_col ? colToIdx(step.pi_no_col) : -1;
+  }
+
   async function getFullSteps(fmsId) {
     const steps = await q('SELECT * FROM fms_sheet_steps WHERE fms_id = $1 ORDER BY step_order ASC, id ASC', [fmsId]);
     if (!steps.length) return [];
+    const sheet = await getFmsSheet(fmsId);
     const stepIds = steps.map(s => s.id);
     const ph = await inClausePlaceholders(stepIds);
     const [doerRows, extraRows] = await Promise.all([
@@ -167,6 +196,16 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
       show_cols: safeParseJson(s.show_cols, []),
       doers: doersByStep[s.id] || [],
       extraRows: extrasByStep[s.id] || [],
+      ...(isPiPricingStep(s)
+        ? {
+            piPricing: true,
+            // Only a hint for the flow this app opens rows in itself; every
+            // other sheet resolves its PI column by header, see piNoIndex().
+            ...(extractSpreadsheetId(sheet && sheet.sheet_id) === PI_FMT.FMS_TRACKER.spreadsheetId
+              ? { pi_no_col: PI_FMT.FMS_TRACKER.cols.piNo }
+              : {}),
+          }
+        : {}),
     }));
   }
 
@@ -351,6 +390,10 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     const actualIdx = colToIdx(step.actual_col);
     const hasDoerCol = !!step.doer_name_col;
     const doerIdx = hasDoerCol ? colToIdx(step.doer_name_col) : -1;
+    // Set only on a pricing step (see isPiPricingStep) — the frontend needs the
+    // PI number to open the right Add Price screen, and show_cols may well not
+    // include that column.
+    const piNoIdx = piNoIndex(headers, step);
     let showCols = Array.isArray(step.show_cols) && step.show_cols.length ? step.show_cols.slice() : headers.map((_, i) => i);
     if (!showCols.includes(planIdx)) showCols = [...showCols, planIdx];
 
@@ -374,6 +417,7 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
         rowDoerName,
         isMine,
         data,
+        ...(piNoIdx >= 0 ? { piNo: stripZW(row[piNoIdx]) } : {}),
       });
     });
 
@@ -457,6 +501,7 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
             client: '',
             overdue, isLate: overdue,
             status: 'pending',
+            ...(step.piPricing ? { piPricing: true, piNo: r.piNo || '' } : {}),
           });
         });
       });
@@ -524,6 +569,44 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     if (doerName && step.doer_name_col) {
       await writeCell(sheet.sheet_id, sheet.sheet_name, step.doer_name_col, rowNumber, doerName);
     }
+  }
+
+  // The other half of the pricing step: called right after a PI's price is
+  // saved on the Proforma Invoice page, it finds that PI's row in whichever
+  // flow tracks it and stamps the "Add Pricing" step's Actual cell — so the
+  // step closes itself the moment the work it tracks is actually done, however
+  // the pricing was reached (from the FMS Done button or straight from the PI
+  // List). Returns null when there is nothing to close: no such flow
+  // configured, no such step, or no row for that PI.
+  async function completePiPricingStep({ piNo, userName }) {
+    const key = stripZW(piNo);
+    if (!key) return null;
+
+    // Which flows even have a pricing step is a DB-only question, so settle it
+    // before spending a Sheets round-trip on any of them.
+    const candidates = [];
+    for (const sheet of await listFmsSheets()) {
+      const step = (await getFullSteps(sheet.id)).find(s => s.piPricing);
+      if (step) candidates.push({ sheet, step });
+    }
+
+    for (const { sheet, step } of candidates) {
+      const { headers, dataRows, headerRow } = await fetchSheetData(sheet);
+      const piIdx = piNoIndex(headers, step);
+      if (piIdx < 0) continue;   // pricing-named step, but no PI column to match on
+      const actualIdx = colToIdx(step.actual_col);
+      const i = dataRows.findIndex(r => stripZW(r[piIdx]) === key);
+      if (i === -1) continue;
+
+      const rowNumber = headerRow + 1 + i;
+      // Re-pricing an already-priced PI must not overwrite the original
+      // completion timestamp — the step was closed the first time round.
+      if (stripZW(dataRows[i][actualIdx])) return { sheet, step, rowNumber, alreadyDone: true };
+
+      await writeStepDone({ sheet, step, rowNumber, doerName: userName });
+      return { sheet, step, rowNumber, alreadyDone: false };
+    }
+    return null;
   }
 
   /* ── next-step notification ──────────────────────────────────────────── */
@@ -684,7 +767,7 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     getIntakeFields, saveIntakeFields, saveIntakeSheetConfig, effectiveIntakeSheet, sheetColumnValues,
     getFmsSheetsForUser, getFmsSheetsWithStats, getStepsForTaskView,
     computePendingRows, getPendingRowsForStep, getPendingRowsForFmsSteps, getPendingAcrossSteps, getMyFmsPendingRows,
-    submitIntakeRow, writeStepDone, getNextStepNotification,
+    submitIntakeRow, writeStepDone, getNextStepNotification, completePiPricingStep,
     getFmsMisRows, getFmsMisDetailRows, getFmsPendingGroupedByDoer,
   };
 };

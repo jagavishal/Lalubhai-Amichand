@@ -5024,6 +5024,23 @@ app.get('/api/proforma-invoice/list', requireAuth, async (req, res) => {
   }
 });
 
+// Marks the Export Marketing FMS tracker's "Add Pricing" step done for one PI,
+// with the same next-step email the manual Mark-as-Done path sends. Returns
+// true only when this call is what actually closed the step.
+async function _closePiPricingStep(piNo, userName) {
+  if (!FMS_ENABLED) return false;
+  try {
+    const done = await fmsSheet.completePiPricingStep({ piNo, userName });
+    if (!done || done.alreadyDone) return false;
+    sendFmsNextStepEmail({ sheet: done.sheet, step: done.step, rowNumber: done.rowNumber, doneByName: userName })
+      .catch(e => console.error('[fms-mail] next-step notification failed:', e.message));
+    return true;
+  } catch (e) {
+    console.error('[proforma-invoice] could not close the FMS pricing step for', piNo + ':', e.message);
+    return false;
+  }
+}
+
 // PUT /api/proforma-invoice/price?piNo=... — Admin (or a User explicitly
 // granted the 'set_price' feature via Users → Access tab) stage. Loads the
 // PI's own stored Form JSON for buyer/item/qty details (the template tab may
@@ -5075,7 +5092,14 @@ app.put('/api/proforma-invoice/price', requireAuth, async (req, res) => {
       J: JSON.stringify(mergedForm), K: 'Priced',
     });
 
-    return res.json({ success: true, piNo, totalAmount, pdfLink });
+    // Pricing the PI IS the export tracker's "Add Pricing" step, so close it
+    // here rather than making the same person go back and tick it off. Never
+    // fatal: the price is already saved by this point, and a tracker that is
+    // unreachable (or simply not configured) must not turn a successful
+    // pricing into an error.
+    const fmsStepDone = await _closePiPricingStep(piNo, req.session.user.name || '');
+
+    return res.json({ success: true, piNo, totalAmount, pdfLink, fmsStepDone });
   } catch (e) {
     console.error('[proforma-invoice] price update failed:', e.message);
     return res.status(e.notFound ? 404 : 500).json({ error: e.message });

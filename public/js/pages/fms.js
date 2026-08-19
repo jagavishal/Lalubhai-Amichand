@@ -284,7 +284,73 @@ window.FmsDoneModal = (function () {
     _fmsId = null; _step = null; _row = null; _onSaved = null; _saving = false; _delayReason = ''; _extra = {};
   }
 
+  /* ── the Proforma Invoice "Add Pricing" step ──────────────────────────
+     Flagged by the server (step.piPricing — see isPiPricingStep() in
+     backend/lib/fmsSheet.js). Its work is not "type something into this
+     modal", it is "go and price that PI", so Done sends the doer to the PI's
+     own Add Price screen; saving the price there is what fills this step's
+     Actual cell. Anything that would leave them stranded there — no PI
+     number, PI already priced, no set_price permission — falls back to the
+     normal modal so the step can still be completed by hand. ─────────── */
+
+  // The tracker's PI column is not necessarily one of the step's shown
+  // columns, so take the server's value first and only then go looking through
+  // the row for a "VTV/052/25-26"-shaped one.
+  const PI_NO_RE = /^[A-Za-z]{2,6}\/\d{1,5}\/\d{2}-\d{2}$/;
+
+  // step.piPricing from the server is what normally decides this; the same
+  // rule is repeated here (it is FMS_TRACKER.pricingStepRe in
+  // backend/lib/pi-format.js) only so a browser holding this file still routes
+  // to the price screen against a server that has not been restarted yet.
+  // Either way nothing happens without a PI number on the row.
+  const PRICING_STEP_RE = /^\s*(add\s*pric|pric(e|ing)\s*update)/i;
+
+  function isPricingStep(step) {
+    return !!(step && (step.piPricing || PRICING_STEP_RE.test(step.step_name || '')));
+  }
+
+  function piNoForRow(step, row) {
+    if (row?.piNo) return String(row.piNo).trim();
+    const pending = (step?.pending || []).find(r => r.sheetRowNumber === row?.rowNumber);
+    if (pending?.piNo) return String(pending.piNo).trim();
+    for (const d of normalizeDetails(row?.data)) {
+      const v = String(d.value ?? '').trim();
+      if (PI_NO_RE.test(v)) return v;
+    }
+    return '';
+  }
+
+  async function openPricingStep({ step, row, fallback }) {
+    const pi = window.Pages?.['proforma-invoice'];
+    const piNo = piNoForRow(step, row);
+    // Nothing to price — a step named like a pricing step but with no PI
+    // number on the row is just an ordinary step. Fall back silently; there is
+    // no failure here to report.
+    if (!pi?.openPriceFor || !piNo) { fallback(); return; }
+    let result;
+    try {
+      result = await pi.openPriceFor(piNo, {
+        returnTo: (window.location.hash || '').replace('#', ''),
+      });
+    } catch (e) {
+      result = { ok: false, reason: e.message || 'Could not open the price screen' };
+    }
+    if (result.ok) {
+      window.Utils.showToast('Add the C&F price to finish this step');
+      return;
+    }
+    window.Utils.showToast(result.reason, 'error');
+    fallback();
+  }
+
   function open({ fmsId, step, row, onSaved }) {
+    if (isPricingStep(step)) {
+      openPricingStep({
+        step, row,
+        fallback: () => { _fmsId = fmsId; _step = step; _row = row; _onSaved = onSaved; _saving = false; _delayReason = ''; _extra = {}; render(); },
+      });
+      return;
+    }
     _fmsId = fmsId; _step = step; _row = row; _onSaved = onSaved;
     _saving = false; _delayReason = ''; _extra = {};
     render();

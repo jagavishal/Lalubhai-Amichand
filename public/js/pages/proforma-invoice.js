@@ -49,6 +49,14 @@ window.Pages['proforma-invoice'] = (() => {
   // Add Price modal state.
   let _priceModalRow = null; // the PI row (from _pilRows) currently being priced, or null
   let _priceSaving = false;
+  // Set only when the Add Price screen was reached from an FMS "Add Pricing"
+  // step (see openPriceFor below) — the hash to send the user back to once the
+  // price is saved, so they land where they clicked Done, not on the PI List.
+  let _priceReturnHash = '';
+  // True for exactly one router render: the one openPriceFor() is navigating
+  // into. Without it, a price modal the user walked away from instead of
+  // closing would pop up again the next time they opened this page.
+  let _priceQueued = false;
 
   // New Product modal state.
   let _newProductOpen = false;
@@ -718,6 +726,7 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _closePriceModal() {
     _priceModalRow = null;
+    _priceReturnHash = '';
     const modal = document.getElementById('pi-price-modal');
     if (modal) modal.innerHTML = '';
   }
@@ -798,8 +807,14 @@ window.Pages['proforma-invoice'] = (() => {
         method: 'PUT',
         body: JSON.stringify({ items }),
       });
-      Utils.showToast('PI ' + piNo + ' priced' + (result.pdfLink ? ' — PDF updated on Drive' : ''), 'success');
+      // The server closes the tracker's "Add Pricing" step as part of this
+      // save, so say so — that step is why the user is on this screen at all.
+      Utils.showToast('PI ' + piNo + ' priced'
+        + (result.pdfLink ? ' — PDF updated on Drive' : '')
+        + (result.fmsStepDone ? ' · Add Pricing step marked done' : ''), 'success');
+      const returnTo = _priceReturnHash;
       _closePriceModal();
+      if (returnTo) { window.Router.navigate(returnTo); return; }
       await _pilLoad();
     } catch (err) {
       Utils.showToast(err.message || 'Failed to save price', 'error');
@@ -853,6 +868,11 @@ window.Pages['proforma-invoice'] = (() => {
     if (isList) {
       _pilBindFilterBar();
       _pilBindRowActions();
+      // renderPage() rebuilt the list's markup, #pi-price-modal included, so a
+      // modal that was already open (or one openPriceFor() queued up before
+      // navigating here) has to be painted again. _pilLoad() only ever touches
+      // #pil-body, so it will not wipe it back out.
+      _renderPriceModal();
       _pilLoad();
       return;
     }
@@ -883,7 +903,59 @@ window.Pages['proforma-invoice'] = (() => {
     if (!_mastersLoaded) _loadMasters(_today());
   }
 
+  /* ── entry point for the FMS "Add Pricing" step ───────────────────────
+     Clicking Done on that step does not open a Mark-as-Done modal — it lands
+     the doer straight on this PI's Add Price screen, because saving the price
+     is what completes the step (server-side, in PUT /price). Resolves to
+     { ok: false, reason } instead of navigating when this PI can't be priced
+     by this user, so the caller can fall back to the normal modal rather than
+     stranding them on a page with nothing to do. ───────────────────────── */
+  async function openPriceFor(piNo, opts) {
+    const wanted = String(piNo || '').trim();
+    if (!wanted) return { ok: false, reason: 'No PI number on this row' };
+
+    let rows;
+    try {
+      rows = await Utils.apiFetch('/api/proforma-invoice/list') || [];
+    } catch (e) {
+      return { ok: false, reason: e.message || 'Could not load Proforma Invoices' };
+    }
+    const row = rows.find(r => String(r.piNo || '').trim() === wanted);
+    if (!row) return { ok: false, reason: 'PI ' + wanted + ' is not in the PI log' };
+    if (row.status === 'Cancelled') return { ok: false, reason: 'PI ' + wanted + ' has been cancelled' };
+    // canSetPrice is the server's own verdict — the 'set_price' feature AND
+    // still-a-Draft. Anything else and the PUT would come back 403 or 400.
+    if (!row.canSetPrice) {
+      return {
+        ok: false,
+        reason: row.status === 'Priced'
+          ? 'PI ' + wanted + ' is already priced'
+          : 'You do not have permission to price a Proforma Invoice',
+      };
+    }
+
+    _pilRows = rows;
+    _pilLoaded = true;
+    _pilLoadError = '';
+    _view = 'list';
+    _priceModalRow = row;
+    _priceReturnHash = String((opts && opts.returnTo) || '').replace('#', '');
+
+    // Navigating fires the router, which calls render() — and renderPage()
+    // paints the queued modal. Already here, and nothing would fire, so paint
+    // it directly.
+    const here = (window.location.hash || '').replace('#', '') === 'proforma-invoice';
+    _priceQueued = !here;
+    if (here) renderPage(); else window.Router.navigate('proforma-invoice');
+    return { ok: true };
+  }
+
   return {
-    render() { renderPage(); },
+    render() {
+      if (!_priceQueued) { _priceModalRow = null; _priceReturnHash = ''; }
+      _priceQueued = false;
+      renderPage();
+    },
+    openPriceFor,
   };
 })();
