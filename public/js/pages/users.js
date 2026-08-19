@@ -154,7 +154,8 @@ window.Pages.users = (() => {
           (u.name       || '').toLowerCase().includes(s) ||
           (u.email      || '').toLowerCase().includes(s) ||
           (u.phone      || '').toLowerCase().includes(s) ||
-          (u.department || '').toLowerCase().includes(s)
+          (u.department || '').toLowerCase().includes(s) ||
+          (u.branch     || '').toLowerCase().includes(s)
         );
       });
   }
@@ -572,7 +573,7 @@ window.Pages.users = (() => {
   function renderUsersTab() {
     const rows = filtered();
     const tableRows = rows.length === 0
-      ? `<tr><td colspan="${_isAdmin ? 6 : 5}" class="table-td text-center text-slate-400 py-10">No users found</td></tr>`
+      ? `<tr><td colspan="${_isAdmin ? 7 : 6}" class="table-td text-center text-slate-400 py-10">No users found</td></tr>`
       : rows.map(u => {
           const isAdminOrHod = normalizeRoles(u.roles).some(r => r === 'Admin' || r === 'HOD');
           const accessBtn = !isAdminOrHod
@@ -601,13 +602,14 @@ window.Pages.users = (() => {
               <td class="table-td text-slate-600">${esc(u.email || '—')}</td>
               <td class="table-td text-slate-600">${esc(u.phone || '—')}</td>
               <td class="table-td text-slate-600">${esc(u.department || '—')}</td>
+              <td class="table-td text-slate-600">${esc(u.branch || '—')}</td>
               <td class="table-td"><div class="flex flex-wrap gap-1">${rolePillsHtml(u.roles)}</div></td>
               ${actionCells}
             </tr>`;
 
           const expandRow = _expandedUserId === u.id ? `
             <tr>
-              <td colspan="${_isAdmin ? 6 : 5}" style="padding:0;border-bottom:1px solid #f1f5f9;">
+              <td colspan="${_isAdmin ? 7 : 6}" style="padding:0;border-bottom:1px solid #f1f5f9;">
                 <div style="background:#fafbfc;border-top:1px dashed #e2e8f0;padding:16px 20px;">
                   <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">
                     Page &amp; Feature Access — ${esc(u.name || '')}
@@ -634,6 +636,7 @@ window.Pages.users = (() => {
                 <th class="table-th">Email</th>
                 <th class="table-th">Phone</th>
                 <th class="table-th">Department</th>
+                <th class="table-th">Branch</th>
                 <th class="table-th">Roles</th>
                 ${_isAdmin ? '<th class="table-th">Action</th>' : ''}
               </tr>
