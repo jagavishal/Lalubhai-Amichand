@@ -230,6 +230,28 @@ window.Pages.users = (() => {
     }
   }
 
+  async function signOutEveryone() {
+    const ok = await Utils.showConfirm(
+      'Every user is logged out of every device they are signed in on and will have to sign in again. '
+      + 'Your session in this tab is kept so you are not locked out — sign yourself out from your own row if you want that too.',
+      { title: 'Sign out everyone', confirmText: 'Sign out everyone', danger: true },
+    );
+    if (!ok) return;
+    try {
+      const r = await Utils.apiFetch('/api/users/signout-all', {
+        method: 'POST',
+        body: JSON.stringify({ all: true }),
+      });
+      const n = r && typeof r.sessions === 'number' ? r.sessions : null;
+      Utils.showToast(
+        n === 0 ? 'Nobody else was signed in'
+                : `Signed out ${n === null ? 'everyone' : n + (n === 1 ? ' session' : ' sessions')}`
+      );
+    } catch (e) {
+      Utils.showToast(e.message || 'Failed to sign everyone out', 'error');
+    }
+  }
+
   async function toggleAccess(id, currentActive) {
     try {
       await Utils.apiFetch('/api/users', {
@@ -478,6 +500,11 @@ window.Pages.users = (() => {
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
             Add User
           </button>` : ''}
+          ${Utils.isOwner() ? `<button id="users-signout-everyone-btn" title="Sign every user out from all their devices"
+            class="flex items-center gap-1.5 shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[13px] font-semibold text-amber-700 shadow-sm hover:bg-amber-100 cursor-pointer">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>
+            Sign Out Everyone
+          </button>` : ''}
         ` : ''}
       </div>`;
 
@@ -519,6 +546,8 @@ window.Pages.users = (() => {
       el.querySelectorAll('[data-action="delete"]').forEach(btn => {
         btn.addEventListener('click', () => deleteUser(btn.dataset.id));
       });
+
+      document.getElementById('users-signout-everyone-btn')?.addEventListener('click', signOutEveryone);
 
       el.querySelectorAll('[data-action="signout"]').forEach(btn => {
         btn.addEventListener('click', () => signOutEverywhere(btn.dataset.id));
