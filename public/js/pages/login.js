@@ -335,6 +335,12 @@ window.Pages.login = {
         #login-page .lg-brand-foot  { display: flex; align-items: center; gap: 10px;
                                       font-size: 11px; color: #7E97B5;
                                       animation: lgFadeUp .6s cubic-bezier(.16,1,.3,1) .5s both; }
+        #login-page .lg-foot-sep    { color: #5B7A99; }
+        #login-page .lg-powered     { color: #8FB6E4; }
+        #login-page .lg-powered b   { font-weight: 700; color: #C6DDF7; }
+        #login-page .lg-powered-sm  { margin: 6px 0 0; font-size: 10.5px;
+                                      color: var(--text-muted); letter-spacing: .02em; }
+        #login-page .lg-powered-sm b{ font-weight: 700; color: var(--text-secondary); }
         #login-page .lg-brand-foot .lg-rule { flex: 1; height: 1px;
                                       background: linear-gradient(90deg, rgba(255,255,255,.16), transparent); }
 
@@ -546,7 +552,7 @@ window.Pages.login = {
             </div>
 
             <h2 class="lg-headline">
-              Ek jagah par<br/><em>poora business</em> control.
+              One place for<br/><em>complete business</em> control.
             </h2>
 
             <!-- Decorative only — the screen reader gets the headline and the form. -->
@@ -594,6 +600,8 @@ window.Pages.login = {
             <span>Grow Your Business</span>
             <span class="lg-rule"></span>
             <span>&copy; ${now.getFullYear()} Lallubhai Amichand</span>
+            <span class="lg-foot-sep">&middot;</span>
+            <span class="lg-powered">Powered by <b>E-Marketing</b></span>
           </div>
         </aside>
 
@@ -845,6 +853,7 @@ window.Pages.login = {
                   <span style="margin: 0 6px; color: var(--border-strong);">&middot;</span>
                   <span>Grow Your Business</span>
                 </p>
+                <p class="lg-powered-sm">Powered by <b>E-Marketing</b></p>
               </div>
 
             </div><!-- /.card -->
