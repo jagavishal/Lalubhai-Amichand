@@ -129,6 +129,10 @@ window.Pages['proforma-invoice'] = (() => {
       const terms = document.getElementById('pic-terms');
       if (terms && !terms.value && _defaults) terms.value = (_defaults.terms || []).join('\n');
       _applyShippingOptions();
+      // The Add Price screen may already be open and waiting on these two
+      // lists. Refill the selects in place rather than re-rendering it — a
+      // re-render would throw away any rate already typed.
+      _refreshPriceSelects();
       const origin = document.getElementById('pic-origin');
       if (origin && !origin.value && _defaults) origin.value = _defaults.countryOfOrigin || '';
       const validity = document.getElementById('pic-validity');
@@ -1094,6 +1098,18 @@ window.Pages['proforma-invoice'] = (() => {
   const _CURRENCY_LABELS = { INR: 'INR', USD: 'US$', GBP: 'GBP', SAR: 'SAR', KWD: 'KWD', EUR: 'EUR' };
   function _currencyLabel(code) { return _CURRENCY_LABELS[code] || code || ''; }
 
+  // Repopulates the two selects once the lists arrive, keeping whatever is
+  // selected. A no-op when the modal is closed or the options are already in.
+  function _refreshPriceSelects() {
+    [['pipm-price-type', _priceTypes], ['pipm-currency', _currencies]].forEach(([id, values]) => {
+      const sel = document.getElementById(id);
+      if (!sel || !values.length || sel.options.length === values.length) return;
+      const keep = sel.value;
+      sel.innerHTML = values.map(v => '<option value="' + esc(v) + '"' + (v === keep ? ' selected' : '') + '>' + esc(v) + '</option>').join('');
+      sel.value = keep;
+    });
+  }
+
   function _priceSelectHtml(id, label, values, selected) {
     // A list that has not loaded yet must still show what the PI is on, or
     // saving would quietly change it.
@@ -1282,6 +1298,13 @@ window.Pages['proforma-invoice'] = (() => {
     document.querySelector('.pic-create-tab').addEventListener('click', () => { _reviseOf = null; _view = 'create'; renderPage(); });
     document.querySelector('.pic-list-tab').addEventListener('click', () => { _view = 'list'; renderPage(); });
 
+    // Both views need the masters, not just Create: the Add Price screen opens
+    // off the LIST, and its Price Type / Currency dropdowns are filled from
+    // them. Loading it only on Create left both dropdowns showing nothing but
+    // the value the PI already had. Every field _loadMasters() touches is
+    // looked up by id and skipped when absent, so it is safe on either view.
+    if (!_mastersLoaded) _loadMasters(_today());
+
     if (isList) {
       _pilBindFilterBar();
       _pilBindRowActions();
@@ -1326,8 +1349,6 @@ window.Pages['proforma-invoice'] = (() => {
     document.getElementById('pic-date').addEventListener('change', (e) => { _loadMasters(e.target.value); });
 
     document.getElementById('pic-form').addEventListener('submit', _submit);
-
-    if (!_mastersLoaded) _loadMasters(_today());
   }
 
   /* ── entry point for the FMS "Add Pricing" step ───────────────────────
