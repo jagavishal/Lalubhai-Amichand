@@ -6478,6 +6478,18 @@ app.put('/api/ims/physical-stock/cancel', requireAuth, async (req, res) => {
 
 // ── MIS ───────────────────────────────────────────────────────────────────────
 const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-IN', {day:'2-digit',month:'2-digit',year:'numeric'}) : '—';
+// A masters row is one dated occurrence of a recurring checklist, never a template
+// (see the comment above addChecklistInterval) — so a checklist MIS has to scope to
+// the occurrences that actually land in the report window. Counting the series
+// instead made a one-week report list the whole year: 365 rows behind a daily task,
+// none of them completable inside the window, so every score read -100%. Undated
+// legacy rows fall back to created_at, the way the delegation branches already do.
+const inChecklistWindow = (m, from, to) => {
+  const on = m.startDate ?? m.start_date ?? null;
+  if (on) { const d = new Date(on); return d >= from && d <= to; }
+  const made = m.createdAt ?? m.created_at ?? null;
+  return made ? (new Date(made) >= from && new Date(made) <= to) : false;
+};
 
 app.get('/api/mis', requireAuth, async (req, res) => {
   const { start, end, employee } = req.query;
@@ -6549,12 +6561,12 @@ app.get('/api/mis', requireAuth, async (req, res) => {
         return res.json({ rows, summary, view:'employee' });
       }
       if (employee&&type==='Checklist MIS') {
-        const mine=(store.masters||[]).filter(m=>(m.assignedTo||'').trim().toLowerCase()===String(employee).trim().toLowerCase());
-        const rows=mine.map((m,i)=>({'#':i+1,'Description':(m.task||'').substring(0,100),'Assigned By':'—','Due Date':m.frequency||'—','Status':'pending'}));
+        const mine=(store.masters||[]).filter(m=>(m.assignedTo||'').trim().toLowerCase()===String(employee).trim().toLowerCase()&&inChecklistWindow(m,from,to));
+        const rows=mine.map((m,i)=>({'#':i+1,'Description':(m.task||'').substring(0,100),'Assigned By':'—','Due Date':m.startDate?fmtDate(m.startDate):(m.frequency||'—'),'Status':'pending'}));
         return res.json({ rows, summary:{} });
       }
       if (type==='Checklist MIS') {
-        const masters=store.masters||[]; const empMap={};
+        const masters=(store.masters||[]).filter(m=>inChecklistWindow(m,from,to)); const empMap={};
         for (const m of masters) { const name=m.assignedTo||'Unknown'; if(!empMap[name]) empMap[name]={name,total:0,completed:0,pending:0,revised:0,delayed:0}; empMap[name].total++; empMap[name].pending++; }
         const rows=Object.values(empMap).map(e=>({...e,score:e.total>0?Math.round(((e.completed/e.total)-1)*100):0}));
         const summary={'Total Checklists':masters.length,'Employees':rows.length,'Completions':0,'Period':`${fmtDate(fromISO)} – ${fmtDate(toISO)}`};
@@ -6586,19 +6598,20 @@ app.get('/api/mis', requireAuth, async (req, res) => {
     }
     // Row-level drill-down for a single employee. Without this, clicking a name
     // on the Checklist tab fell through to the aggregate branch below and the
-    // modal rendered one blank row per employee.
+    // modal rendered one blank row per employee. The date window matters as much
+    // as the branch does — see inChecklistWindow.
     if (employee&&type==='Checklist MIS') {
       const [masters, completions] = await Promise.all([
-        q('SELECT id, task, frequency FROM masters WHERE LOWER(TRIM(assigned_to))=LOWER(TRIM($1)) ORDER BY id', [employee]),
+        q('SELECT id, task, frequency, start_date FROM masters WHERE LOWER(TRIM(assigned_to))=LOWER(TRIM($1)) AND ((start_date IS NOT NULL AND start_date BETWEEN $2 AND $3) OR (start_date IS NULL AND created_at BETWEEN $4 AND $5)) ORDER BY start_date, id', [employee,start,end,fromDT,toDT]),
         q('SELECT master_id FROM checklist_completions WHERE date BETWEEN $1 AND $2', [start,end]).catch(()=>[]),
       ]);
       const doneSet = new Set(completions.map(c=>c.master_id));
-      const rows = masters.map((m,i) => ({'#':i+1,'Description':(m.task||'').substring(0,100),'Assigned By':'—','Due Date':m.frequency||'—','Status':doneSet.has(m.id)?'done':'pending'}));
+      const rows = masters.map((m,i) => ({'#':i+1,'Description':(m.task||'').substring(0,100),'Assigned By':'—','Due Date':m.start_date?fmtDate(m.start_date):(m.frequency||'—'),'Status':doneSet.has(m.id)?'done':'pending'}));
       return res.json({ rows, summary:{} });
     }
     if (type==='Checklist MIS') {
       const [masters, completions] = await Promise.all([
-        q('SELECT id, task, assigned_to, frequency FROM masters ORDER BY assigned_to, id'),
+        q('SELECT id, task, assigned_to, frequency FROM masters WHERE (start_date IS NOT NULL AND start_date BETWEEN $1 AND $2) OR (start_date IS NULL AND created_at BETWEEN $3 AND $4) ORDER BY assigned_to, start_date, id', [start,end,fromDT,toDT]),
         q('SELECT master_id FROM checklist_completions WHERE date BETWEEN $1 AND $2', [start,end]).catch(()=>[]),
       ]);
       const doneSet={};
