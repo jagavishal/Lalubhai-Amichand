@@ -57,6 +57,10 @@ window.Pages['proforma-invoice'] = (() => {
   let _pilFBuyer = '';
   let _pilFFrom = '';
   let _pilFTo = '';
+  // PI-number families (a PI plus its R1, R2… revisions) the user has opened
+  // up. Collapsed is the default: the list shows the PI currently in force,
+  // not the paperwork it replaced.
+  let _pilOpenFamilies = new Set();
 
   // Add Price modal state.
   let _priceModalRow = null; // the PI row (from _pilRows) currently being priced, or null
@@ -899,6 +903,54 @@ window.Pages['proforma-invoice'] = (() => {
     _pilRenderTable();
   }
 
+  // "VTV/001/26-27 R2" and "VTV/001/26-27" are one PI's paper trail, keyed by
+  // the number without its revision suffix — the same shape _piNoDisplay()
+  // builds a revision number from.
+  function _piFamilyOf(piNo) {
+    const m = /^(.*?)\s+R\d+$/i.exec(String(piNo || ''));
+    return m ? m[1] : String(piNo || '');
+  }
+  function _piRevisionOf(piNo) {
+    const m = /^.*?\s+R(\d+)$/i.exec(String(piNo || ''));
+    return m ? parseInt(m[1], 10) : 0;
+  }
+
+  // The filtered list as it is actually drawn: each family's superseded PIs
+  // fold in under the live one that replaced them, hidden until its number is
+  // clicked. A superseded PI is history — still reachable, still holding its
+  // own PDF, but no longer sitting in the list beside the PI now in force.
+  function _pilVisibleRows() {
+    const filtered = _pilFilteredRows();
+
+    const kidsBy = new Map();
+    const hasLiveHead = new Set();
+    filtered.forEach(r => {
+      const fam = _piFamilyOf(r.piNo);
+      if (r.status !== 'Superseded') { hasLiveHead.add(fam); return; }
+      if (!kidsBy.has(fam)) kidsBy.set(fam, []);
+      kidsBy.get(fam).push(r);
+    });
+    // Newest revision first, so opening a family reads backwards in time.
+    kidsBy.forEach(list => list.sort((a, b) => _piRevisionOf(b.piNo) - _piRevisionOf(a.piNo)));
+
+    const out = [];
+    filtered.forEach(r => {
+      const fam = _piFamilyOf(r.piNo);
+      if (r.status === 'Superseded') {
+        // Its live sibling is filtered out, or was deleted — nothing to fold
+        // under, so it is listed in its own right rather than lost.
+        if (!hasLiveHead.has(fam)) out.push({ r, fam, child: false, kids: 0 });
+        return;
+      }
+      const kids = kidsBy.get(fam) || [];
+      out.push({ r, fam, child: false, kids: kids.length });
+      if (kids.length && _pilOpenFamilies.has(fam)) {
+        kids.forEach(k => out.push({ r: k, fam, child: true, kids: 0 }));
+      }
+    });
+    return out;
+  }
+
   function _pilFilteredRows() {
     return _pilRows.filter(r => {
       if (_pilFBuyer && !(r.buyer || '').toLowerCase().includes(_pilFBuyer.toLowerCase())) return false;
@@ -935,15 +987,30 @@ window.Pages['proforma-invoice'] = (() => {
       if (countEl) countEl.textContent = '';
       return;
     }
-    const rows = _pilFilteredRows();
+    const rows = _pilVisibleRows();
     if (countEl) countEl.textContent = rows.length + ' of ' + _pilRows.length;
     if (!rows.length) {
       body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_pilRows.length ? 'No Proforma Invoices match these filters' : 'No Proforma Invoices created yet') + '</td></tr>';
       return;
     }
-    body.innerHTML = rows.map(r => ''
-      + '<tr style="border-bottom:1px solid #f1f5f9;">'
-        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.piNo) + '</td>'
+    body.innerHTML = rows.map(v => {
+      const r = v.r;
+      const open = _pilOpenFamilies.has(v.fam);
+      return ''
+      + '<tr style="border-bottom:1px solid #f1f5f9;' + (v.child ? 'background:#fafbfd;' : '') + '">'
+        // The number is the fold handle: click the PI in force to see the ones
+        // it replaced. Rows with nothing folded under them stay plain text.
+        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;' + (v.child ? 'padding-left:30px;' : '') + '">'
+          + (v.kids
+            ? '<span class="pic-fam-toggle" data-fam="' + esc(v.fam) + '" role="button" tabindex="0"'
+              + ' title="' + (open ? 'Hide the' : 'Show the') + ' ' + v.kids + ' earlier ' + (v.kids === 1 ? 'version' : 'versions') + ' of this PI"'
+              + ' style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">'
+              + '<span style="display:inline-block;width:9px;color:#94a3b8;font-size:10px;transform:rotate(' + (open ? '90deg' : '0deg') + ');transition:transform .12s;">▶</span>'
+              + esc(r.piNo)
+              + '<span style="font-weight:600;font-size:10.5px;color:#1e40af;background:#eff6ff;border-radius:9px;padding:1px 7px;">+' + v.kids + '</span>'
+            + '</span>'
+            : (v.child ? '<span style="color:#94a3b8;font-weight:400;margin-right:5px;">↳</span>' : '') + esc(r.piNo))
+        + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + _statusPillHtml(r.status) + '</td>'
@@ -971,7 +1038,8 @@ window.Pages['proforma-invoice'] = (() => {
             : '<button type="button" class="pic-cancel-btn" data-pi="' + esc(r.piNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
           + Utils.ownerDeleteBtn('pic-delete-btn', 'pi', r.piNo)
         + '</td>'
-      + '</tr>').join('');
+      + '</tr>';
+    }).join('');
   }
 
   function _pilBindRowActions() {
@@ -979,6 +1047,14 @@ window.Pages['proforma-invoice'] = (() => {
     if (!body || body.dataset.actionsBound) return;
     body.dataset.actionsBound = '1';
     body.addEventListener('click', async (e) => {
+      const famToggle = e.target.closest('.pic-fam-toggle');
+      if (famToggle) {
+        const fam = famToggle.dataset.fam;
+        if (_pilOpenFamilies.has(fam)) _pilOpenFamilies.delete(fam);
+        else _pilOpenFamilies.add(fam);
+        _pilRenderTable();
+        return;
+      }
       const cancelBtn = e.target.closest('.pic-cancel-btn');
       if (cancelBtn) {
         const ok = await Utils.showConfirm('PI ' + cancelBtn.dataset.pi + ' will be marked Cancelled. This can\'t be undone.', { title: 'Cancel Proforma Invoice', confirmText: 'Cancel PI', danger: true });
@@ -1020,6 +1096,15 @@ window.Pages['proforma-invoice'] = (() => {
         const row = _pilRows.find(r => String(r.piNo) === priceBtn.dataset.pi);
         if (row) { _priceModalRow = row; _renderPriceModal(); }
       }
+    });
+    // The fold handle is a span, so it only answers the keyboard because this
+    // says so — and it advertises itself as a button either way.
+    body.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const famToggle = e.target.closest('.pic-fam-toggle');
+      if (!famToggle) return;
+      e.preventDefault();
+      famToggle.click();
     });
   }
 
