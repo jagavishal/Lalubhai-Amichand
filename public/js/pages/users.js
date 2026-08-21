@@ -75,6 +75,12 @@ window.Pages.users = (() => {
     { cat: 'Admin Section', key: 'fms',          label: 'FMS Master' },
     { cat: 'Admin Section', key: 'mis',          label: 'MIS Report' },
 
+    { cat: 'HR Section', key: 'hr-employees',  label: 'Employee Master' },
+    { cat: 'HR Section', key: 'hr-attendance', label: 'Attendance' },
+    { cat: 'HR Section', key: 'hr-leave',      label: 'Leave Management' },
+    { cat: 'HR Section', key: 'hr-payroll',    label: 'Payroll' },
+    { cat: 'HR Section', key: 'hr-reports',    label: 'HR Reports' },
+
     { cat: 'Accounts', key: 'client-master',     label: 'Vendor Master' },
   ];
 

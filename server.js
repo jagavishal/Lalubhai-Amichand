@@ -298,6 +298,16 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS departments (id VARCHAR(16) PRIMARY KEY, name VARCHAR(128) NOT NULL, sort_order INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(name)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 ];
 
+// ── HRMS ──────────────────────────────────────────────────────────────────────
+// The HR module (employee master, attendance, leave, payroll, HR MIS) lives in
+// its own file so the feature reads as one thing rather than another few
+// thousand lines here — but its tables are appended to SCHEMA above, so they are
+// created and migrated by exactly the same bootstrap as every other table, and
+// its routes are handed this file's own pool and guards (see the mount call
+// further down, search "mountHrms"). See backend/hrms.js.
+const { HR_SCHEMA, mountHrms } = require('./backend/hrms.js');
+SCHEMA.push(...HR_SCHEMA);
+
 // The factory's own department list (the numbered list the plant keeps on
 // paper), used to seed the `departments` table on a fresh DB and as the
 // fallback whenever that table can't be read. Not the live list — once seeded,
@@ -430,7 +440,9 @@ async function fixCollations() {
   const tables = ['users','delegations','masters','clients','checklist_completions','daily_tasks','leaves','user_sessions',
     'fms_sheets','fms_sheet_steps','fms_step_doers','fms_extra_rows','fms_intake_fields',
     'holidays','profile','app_config','dev_backups','help_tickets','announcements',
-    'vendor_submissions','pr_requisitions','payment_entries','ims_items','ims_transactions','departments'];
+    'vendor_submissions','pr_requisitions','payment_entries','ims_items','ims_transactions','departments',
+    'hr_employees','hr_salary_structure','hr_leave_types','hr_leave_balances','hr_attendance',
+    'hr_payroll_runs','hr_payslips','hr_onboarding','hr_exits','hr_documents'];
   // A couple of these tables carry a leftover FOREIGN KEY constraint from an
   // earlier schema iteration (the current schema style is FK-less, app-generated
   // string ids) that blocks ALTER ... CONVERT TO CHARACTER SET on either side of
@@ -2276,15 +2288,28 @@ app.post('/api/leaves', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
+// Deciding a leave from the older Leave Tracker page. The status update itself
+// is trivial, but approving also has to book the days against the employee's
+// leave balance — and that arithmetic belongs to the HRMS, which owns the
+// balances. Delegating keeps one rule: whichever screen a leave is approved on,
+// the balance moves the same way. See applyLeaveDecision in backend/hrms.js.
 app.patch('/api/leaves', requireAuth, requireAdmin, async (req, res) => {
   try {
     await ensureSchema();
     const body = req.body;
     if (!body.id||!body.status) return res.status(400).json({ error:'id and status required' });
-    await pool.query('UPDATE leaves SET status=$1, decided_at=NOW() WHERE id=$2', [body.status,body.id]);
-    return res.json({ success:true });
+    const decision = await hrms.applyLeaveDecision(body.id, body.status, req.session?.user?.name || '');
+    if (!decision) return res.status(404).json({ error:'Leave request not found' });
+    return res.json({ success:true, balanceAfter: decision.balanceAfter });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
+
+// ── HRMS routes ───────────────────────────────────────────────────────────────
+// Mounted here, after the auth guards and the leave routes it extends: the HR
+// module gets this file's pool, its schema bootstrap and its guards, so there is
+// one database connection and one definition of "Admin" across the whole app.
+// Everything it serves lives under /api/hr/. See backend/hrms.js.
+const hrms = mountHrms(app, { pool, q, ensureSchema, requireAuth, requireAdmin, requireSuperAdmin, isAdminUser });
 
 // ── FMS (Flow Management System) API — see fmsSheet.js wiring further down,
 // registered once getGoogleAuth()/ensureLogTab() etc. exist (search "FMS routes").

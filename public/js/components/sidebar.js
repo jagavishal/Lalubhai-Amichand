@@ -38,6 +38,14 @@ window.Sidebar = {
     imsaccess:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M19.1 4.9l-2.2 2.2M7.1 16.9l-2.2 2.2"/></svg>',
     imstrading:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h13l-3-3"/><path d="M21 16H8l3 3"/></svg>',
     developer:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+    // HR module — the Leave entry reuses the existing calendar icon, so these
+    // three only cover what the sidebar did not already have a mark for:
+    // an ID card (Employee Master), a clock-in (Attendance), a rupee note
+    // (Payroll) and a person-with-chart (HR Reports).
+    hremployees:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="9" cy="10" r="2.2"/><path d="M5.5 16a3.6 3.6 0 0 1 7 0"/><path d="M15 9h4M15 13h4"/></svg>',
+    hrattendance: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 1.8"/></svg>',
+    hrpayroll:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M9 10h6M9 13h4M11 10v6"/><path d="m13.5 13 2.5 3"/></svg>',
+    hrreports:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="1"/><rect x="12" y="8" width="3" height="10" rx="1"/><rect x="17" y="5" width="3" height="13" rx="1"/></svg>',
     // Section open/close arrow — drawn pointing right and rotated 90° when the
     // section is open, so one icon covers both states.
     chevron:      '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
@@ -122,6 +130,17 @@ window.Sidebar = {
       // and every /api/developer route already refuses to answer without the
       // DEVELOPER_SECRET query param (see checkSecret in server.js), so the
       // page can do nothing on its own.
+    ]},
+    // The HR module. 'hr-attendance' and 'hr-payroll' are deliberately not
+    // adminOnly: both open on the person's own view (their punch card, their
+    // payslips) and show the company-wide tabs only to Admin/HOD, so an
+    // ordinary employee still has somewhere to check in and collect a slip.
+    { title: 'HR Section', items: [
+      { route: 'hr-employees',  label: 'Employee Master', icon: 'hremployees', adminOnly: true },
+      { route: 'hr-attendance', label: 'Attendance',      icon: 'hrattendance' },
+      { route: 'hr-leave',      label: 'Leave Management', icon: 'leave' },
+      { route: 'hr-payroll',    label: 'Payroll',         icon: 'hrpayroll' },
+      { route: 'hr-reports',    label: 'HR Reports',      icon: 'hrreports',  adminOnly: true },
     ]},
     { title: 'Accounts', items: [
       { route: 'client-master',  label: 'Vendor Master',  icon: 'clientmaster' },
