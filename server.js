@@ -1085,17 +1085,28 @@ function _leaveMailHtml({ heading, colour, lead, rows, footer }) {
     </div>`;
 }
 
+// The office inbox is copied on every leave request, so HR has the whole
+// year's requests in one place regardless of who approved what. Overridable
+// per deployment, and skipped when it is already the approver's own address so
+// nobody gets the same mail twice.
+const LEAVE_REQUEST_CC = (process.env.LEAVE_REQUEST_CC || 'inquiry@laltd.in').trim();
+
 // Sent to the approver the moment a request is raised.
 async function sendLeaveRequestEmail({ toEmail, toName, applicantName, leaveType, fromDate, toDate, days, halfDay, reason, balanceNote }) {
   const mailer = getMailer();
-  if (!mailer || !toEmail) {
+  // The copy is the point of record, so a request with no approver address
+  // still goes out — to the office inbox alone rather than nowhere at all.
+  const cc = LEAVE_REQUEST_CC && LEAVE_REQUEST_CC.toLowerCase() !== String(toEmail || '').toLowerCase()
+    ? LEAVE_REQUEST_CC : '';
+  if (!mailer || (!toEmail && !cc)) {
     console.log('[email] leave request not sent — mailer:', !!mailer, '| to:', toEmail || '(none)');
     return;
   }
   try {
     await mailer.sendMail({
       from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
-      to: toEmail,
+      to: toEmail || cc,
+      ...(toEmail && cc ? { cc } : {}),
       subject: `Leave Request from ${applicantName} — ${leaveType} ${fromDate}${toDate && toDate !== fromDate ? ' to ' + toDate : ''}`,
       html: _leaveMailHtml({
         heading: 'Leave Request Awaiting Your Approval',
@@ -1113,7 +1124,7 @@ async function sendLeaveRequestEmail({ toEmail, toName, applicantName, leaveType
         footer: 'Open <b>Leave Management</b> in the ERP to approve or reject it.',
       }),
     });
-    console.log('[email] Leave request notification sent to:', toEmail);
+    console.log('[email] Leave request notification sent to:', toEmail || cc, cc && toEmail ? '| cc: ' + cc : '');
   } catch (e) {
     console.error('[email] Failed to send leave request notification:', e.message);
   }

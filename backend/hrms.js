@@ -1467,11 +1467,27 @@ function mountHrms(app, ctx) {
         const params = [];
         const user = req.session?.user;
 
-        if (!isAdminUser(user)) {
-          const me = await selfEmployee(user);
-          params.push(me?.id || NO_MATCH);   // a sentinel that matches nothing
+        /* forApprover=me is the Approvals page asking for the requests this
+           person has to decide — never their own, which they cannot approve. */
+        if (String(req.query.forApprover || '') === 'me') {
+          params.push(user?.name || NO_MATCH);
+          params.push(user?.email || NO_MATCH);
           params.push(user?.id || NO_MATCH);
-          where.push(`(l.employee_id = $${params.length - 1} OR l.user_id = $${params.length})`);
+          where.push(`(LOWER(l.approver_name) = LOWER($${params.length - 2})`
+            + ` OR LOWER(l.approver_email) = LOWER($${params.length - 1}))`
+            + ` AND (l.user_id IS NULL OR l.user_id <> $${params.length})`);
+        } else if (!isAdminUser(user)) {
+          // Their own requests, plus anything naming them as the approver —
+          // an approver is often not an Admin, and would otherwise be unable to
+          // see the very requests they were emailed about.
+          const me = await selfEmployee(user);
+          params.push(me?.id || NO_MATCH);
+          params.push(user?.id || NO_MATCH);
+          params.push(user?.name || NO_MATCH);
+          params.push(user?.email || NO_MATCH);
+          where.push(`(l.employee_id = $${params.length - 3} OR l.user_id = $${params.length - 2}`
+            + ` OR LOWER(l.approver_name) = LOWER($${params.length - 1})`
+            + ` OR LOWER(l.approver_email) = LOWER($${params.length}))`);
         } else if (req.query.employeeId) {
           params.push(req.query.employeeId);
           where.push(`l.employee_id = $${params.length}`);
@@ -1604,12 +1620,29 @@ function mountHrms(app, ctx) {
        approval books the days, and un-approving a request that was already
        approved hands them back. Doing the arithmetic anywhere else is how a
        balance and its history drift apart. */
-    app.patch('/api/hr/leaves', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    /* Deciding a request. Admin and HOD can decide anything, as before — and so
+       can the person actually named as its approver, who is frequently neither.
+       Naming somebody as approver and then refusing them the button would make
+       the whole setting decorative. requireAdmin is therefore not used here;
+       the check below is the gate. */
+    app.patch('/api/hr/leaves', requireAuth, hrReady, async (req, res) => {
       try {
         const b = req.body || {};
         const id = String(b.id || '').trim();
         const status = String(b.status || '').trim();
         if (!id || !status) return res.status(400).json({ error: 'id and status are required' });
+
+        const user = req.session?.user;
+        if (!isAdminUser(user)) {
+          const row = (await q(`SELECT approver_name, approver_email, user_id FROM leaves WHERE id = $1`, [id]))[0];
+          if (!row) return res.status(404).json({ error: 'Leave request not found' });
+          const named = String(row.approver_name || '').trim().toLowerCase() === String(user?.name || '').trim().toLowerCase()
+            || (row.approver_email && String(row.approver_email).trim().toLowerCase() === String(user?.email || '').trim().toLowerCase());
+          // Nobody decides their own leave, whoever they are named as.
+          if (!named || row.user_id === user?.id) {
+            return res.status(403).json({ error: 'Only this request\'s approver, or an Admin, can decide it' });
+          }
+        }
         const decision = await applyLeaveDecision(id, status, req.session?.user?.name || '');
         if (!decision) return res.status(404).json({ error: 'Leave request not found' });
         if (b.comments != null) {

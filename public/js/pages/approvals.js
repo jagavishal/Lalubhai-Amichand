@@ -6,6 +6,11 @@ window.Pages.approvals = {
   _reviseRequests: [],
   _taskApprovals: [],
   _myRequests: [],
+  // Leave requests waiting on THIS person — never their own. Fetched with
+  // forApprover=me, so the server decides whose queue this is rather than the
+  // page filtering a wider list it should not have been given.
+  _leaveRequests: [],
+  _leaveBusy: '',
   _seenRevise: new Set(),
   _seenApprovals: new Set(),
   _grantTask: null,
@@ -142,6 +147,97 @@ window.Pages.approvals = {
     this._renderContent();
   },
 
+
+  /* ── Leave requests addressed to me ─────────────────────────────────── */
+  async _fetchLeaves() {
+    try {
+      const rows = await Utils.apiFetch('/api/hr/leaves?forApprover=me&status=Pending');
+      this._leaveRequests = Array.isArray(rows) ? rows : [];
+    } catch {
+      // The HR module may not be reachable on an older deployment; the rest of
+      // the Approvals page must still work.
+      this._leaveRequests = [];
+    }
+  },
+
+  async _decideLeave(id, status) {
+    this._leaveBusy = id;
+    this._renderContent();
+    try {
+      const r = await Utils.apiFetch('/api/hr/leaves', {
+        method: 'PATCH', body: JSON.stringify({ id, status }),
+      });
+      Utils.showToast(status === 'Approved'
+        ? `Approved${r && r.balanceAfter != null ? ` — ${r.balanceAfter} day(s) left` : ''}`
+        : 'Request rejected');
+      this._leaveRequests = this._leaveRequests.filter(l => l.id !== id);
+    } catch (e) {
+      Utils.showToast(e.message || 'Could not record the decision', 'error');
+    }
+    this._leaveBusy = '';
+    this._renderContent();
+  },
+
+  _buildLeaveTable() {
+    const items = this._leaveRequests;
+    if (items.length === 0) {
+      return this._emptyState(this._leaveIconSvg('w-8 h-8 text-primary-400'),
+        'No leave requests waiting on you',
+        'Requests naming you as the approver appear here, and you are emailed when one is raised.');
+    }
+    const esc = (v) => String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const rows = items.map(l => {
+      const busy = this._leaveBusy === l.id;
+      const half = l.half_day && l.half_day !== 'full' ? ` <span class="text-[10px] text-amber-600">(${esc(l.half_day)} half)</span>` : '';
+      return `<tr class="border-b border-slate-100 hover:bg-slate-50/60">
+        <td class="px-4 py-3">
+          <div class="text-[13px] font-semibold text-slate-900">${esc(l.employee_name || l.user_name || '—')}</div>
+          <div class="text-[11px] text-slate-400">${esc(l.employee_id || '')}${l.department ? ' · ' + esc(l.department) : ''}</div>
+        </td>
+        <td class="px-4 py-3 text-[13px] font-semibold text-slate-700">${esc(l.leave_type || '—')}</td>
+        <td class="px-4 py-3 text-[13px] text-slate-700 whitespace-nowrap">
+          ${this._fmt(l.from_date)}<div class="text-[11px] text-slate-400">to ${this._fmt(l.to_date)}</div>
+        </td>
+        <td class="px-4 py-3 text-[13px] text-slate-700 text-right">${Number(l.total_days || 0)}${half}</td>
+        <td class="px-4 py-3 text-[13px] text-slate-600 max-w-[240px]">${esc(l.reason || '—')}</td>
+        <td class="px-4 py-3 whitespace-nowrap">
+          <div class="flex gap-2">
+            <button data-leave-ok="${esc(l.id)}" class="btn-success !py-1 text-xs" ${busy ? 'disabled' : ''}>${busy ? '…' : 'Approve'}</button>
+            <button data-leave-no="${esc(l.id)}" class="btn-danger !py-1 text-xs" ${busy ? 'disabled' : ''}>Reject</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+
+    return `<div class="card overflow-hidden">
+      <div class="overflow-x-auto"><table class="w-full">
+        <thead><tr class="border-b border-slate-200 bg-slate-50">
+          <th class="px-4 py-2.5 text-left text-[10px] uppercase tracking-wider font-bold text-slate-500">Employee</th>
+          <th class="px-4 py-2.5 text-left text-[10px] uppercase tracking-wider font-bold text-slate-500">Type</th>
+          <th class="px-4 py-2.5 text-left text-[10px] uppercase tracking-wider font-bold text-slate-500">Period</th>
+          <th class="px-4 py-2.5 text-right text-[10px] uppercase tracking-wider font-bold text-slate-500">Days</th>
+          <th class="px-4 py-2.5 text-left text-[10px] uppercase tracking-wider font-bold text-slate-500">Reason</th>
+          <th class="px-4 py-2.5 text-left text-[10px] uppercase tracking-wider font-bold text-slate-500">Decision</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>`;
+  },
+
+  _bindLeaveEvents() {
+    const root = document.getElementById('approvals-root');
+    if (!root) return;
+    root.querySelectorAll('[data-leave-ok]').forEach(b =>
+      b.addEventListener('click', () => this._decideLeave(b.dataset.leaveOk, 'Approved')));
+    root.querySelectorAll('[data-leave-no]').forEach(b =>
+      b.addEventListener('click', () => this._decideLeave(b.dataset.leaveNo, 'Rejected')));
+  },
+
+  _leaveIconSvg(cls) {
+    return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="m9 16 2 2 4-4"/></svg>`;
+  },
+
   /* ── render entry ──────────────────────────────────────── */
   async render() {
     const el = document.getElementById('main-content');
@@ -161,11 +257,11 @@ window.Pages.approvals = {
     el.innerHTML = '<div class="space-y-5 animate-fade-in" id="approvals-root"><div style="display:flex;align-items:center;justify-content:center;min-height:60vh;"><div style="text-align:center;"><div style="width:40px;height:40px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 14px;"></div><div style="font-size:13px;color:#94a3b8;font-weight:500;">Loading…</div></div></div></div>';
 
     // Fetch
-    if (isAdmin) {
-      await this._fetchAdmin();
-    } else {
-      await this._fetchUser();
-    }
+    // Both roles need this: an approver is frequently not an Admin.
+    await Promise.all([
+      isAdmin ? this._fetchAdmin() : this._fetchUser(),
+      this._fetchLeaves(),
+    ]);
 
     this._renderContent();
   },
@@ -182,10 +278,36 @@ window.Pages.approvals = {
       root.innerHTML = this._buildAdminView();
       this._bindAdminEvents();
       this._startSeenTimer();
+    } else if (this._leaveRequests.length) {
+      /* A non-admin with leave to decide. Their own revise requests are
+         read-only, so the page grows a two-tab shell only for the people who
+         actually have somebody's leave waiting on them — everyone else keeps
+         the plain single table it has always been. */
+      const tab = (key, count) => {
+        const on = this._tab === key;
+        const cls = on ? 'bg-white border-slate-200 text-slate-900 shadow-card'
+                       : 'bg-transparent border-transparent text-slate-600 hover:bg-white/60 hover:border-slate-200';
+        const pill = count > 0 ? 'bg-red-50 text-red-600' : 'bg-slate-100 text-slate-500';
+        return `<button data-tab="${key}" class="approvals-tab flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition border ${cls}">
+          ${key}<span class="pill ${pill}">${count}</span></button>`;
+      };
+      if (this._tab !== 'My Requests' && this._tab !== 'Leave Requests') this._tab = 'Leave Requests';
+      root.innerHTML = `
+        <div class="flex gap-2 flex-wrap">
+          ${tab('Leave Requests', this._leaveRequests.length)}
+          ${tab('My Requests', this._myRequests.length)}
+        </div>
+        <div id="approvals-content">${this._tab === 'My Requests' ? this._buildUserView() : this._buildLeaveTable()}</div>`;
+      root.querySelectorAll('.approvals-tab').forEach(btn => {
+        btn.addEventListener('click', () => { this._tab = btn.dataset.tab; this._renderContent(); });
+      });
     } else {
       root.innerHTML = this._buildUserView();
       // no events needed for user view (read-only table)
     }
+
+    // Approve/Reject live in both shells, so they are bound once here.
+    this._bindLeaveEvents();
 
     // Re-attach grant modal if open
     if (this._grantTask) {
@@ -198,6 +320,7 @@ window.Pages.approvals = {
     const tabs = [
       { key: 'Shift Requests', count: this._reviseRequests.length, icon: 'revise' },
       { key: 'Task Approvals',  count: this._taskApprovals.length,  icon: 'task'   },
+      { key: 'Leave Requests',  count: this._leaveRequests.length,  icon: 'leave'  },
     ];
 
     const tabHtml = tabs.map(({ key, count, icon }) => {
@@ -206,7 +329,9 @@ window.Pages.approvals = {
       const btnCls = active
         ? 'bg-white border-slate-200 text-slate-900 shadow-card'
         : 'bg-transparent border-transparent text-slate-600 hover:bg-white/60 hover:border-slate-200';
-      const iconHtml = icon === 'revise' ? this._reviseIconSvg('w-4 h-4') : this._taskIconSvg('w-4 h-4');
+      const iconHtml = icon === 'revise' ? this._reviseIconSvg('w-4 h-4')
+        : icon === 'leave' ? this._leaveIconSvg('w-4 h-4')
+        : this._taskIconSvg('w-4 h-4');
       const iconColorCls = active ? 'text-primary-600' : 'text-slate-400';
       return `<button data-tab="${key}" class="approvals-tab flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition border ${btnCls}">
         <span class="${iconColorCls}">${iconHtml}</span>
@@ -218,6 +343,8 @@ window.Pages.approvals = {
     let contentHtml = '';
     if (this._tab === 'Shift Requests') {
       contentHtml = this._buildReviseTable();
+    } else if (this._tab === 'Leave Requests') {
+      contentHtml = this._buildLeaveTable();
     } else {
       contentHtml = this._buildTaskApprovalsTable();
     }
