@@ -927,6 +927,29 @@ function requireSuperAdmin(req, res, next) {
   next();
 }
 
+/* The signed-in user as the browser should see them.
+   ---------------------------------------------------------------------
+   Server-side, the owner already counts as an Admin (see isAdminUser). The
+   frontend has to reach the same conclusion or it hides screens the API
+   would happily serve — and roughly twenty places across the older pages
+   (Approvals, All Tasks, FMS, PI, the masters) each read
+   `currentUser.roles` and test for 'Admin'/'HOD' themselves.
+
+   Rather than edit every one of those, the owner is handed 'Admin' among
+   its roles on the way out. One place, so the two sides cannot drift, and
+   no page needs to know the owner exists.
+
+   This is a view of the user, not the user: the roles column in the
+   database is untouched, nothing writes this back, and `isSuperAdmin` on
+   the same object stays the real answer to "is this the owner". */
+function clientUser(user, extra = {}) {
+  const roles = Array.isArray(user?.roles)
+    ? user.roles.slice()
+    : String(user?.roles || '').split(',').map(r => r.trim()).filter(Boolean);
+  if (isSuperAdmin(user) && !roles.includes('Admin')) roles.push('Admin');
+  return { ...user, roles, featureFlags: { fms: FMS_ENABLED }, isSuperAdmin: isSuperAdmin(user), ...extra };
+}
+
 // Distinguishes "sees the whole company" (Admin) from "sees their own department's
 // team" (HOD) — isAdminUser() above intentionally treats them the same for feature
 // gating (edit/delete/etc.), but task VISIBILITY must not: only true Admin sees
@@ -1072,7 +1095,7 @@ app.post('/api/auth/login', async (req, res) => {
     // it, so without permissions a restricted user sees the FULL menu until a
     // hard reload (which re-bootstraps via /api/auth/session). parsePermissions
     // handles the raw JSON-string (DB) / object (store) / null cases alike.
-    return res.json({ user: { ...req.session.user, picture: user.picture || null, permissions: parsePermissions(user.permissions), featureFlags: { fms: FMS_ENABLED }, isSuperAdmin: isSuperAdmin(req.session.user) } });
+    return res.json({ user: clientUser(req.session.user, { picture: user.picture || null, permissions: parsePermissions(user.permissions) }) });
   } catch (err) {
     console.error('[auth/login]', err.message);
     return res.status(500).json({ error: err.message });
@@ -1098,9 +1121,9 @@ app.get('/api/auth/session', async (req, res) => {
       picture = su?.picture || null;
       permissions = su?.permissions || null;
     }
-    return res.json({ user: { ...u, picture, permissions, featureFlags: { fms: FMS_ENABLED }, isSuperAdmin: isSuperAdmin(u) } });
+    return res.json({ user: clientUser(u, { picture, permissions }) });
   } catch {
-    return res.json({ user: { ...u, featureFlags: { fms: FMS_ENABLED }, isSuperAdmin: isSuperAdmin(u) } });
+    return res.json({ user: clientUser(u) });
   }
 });
 
@@ -7143,10 +7166,10 @@ app.get('/api/mis', requireAuth, async (req, res) => {
 
 // ── Approvals pending count ───────────────────────────────────────────────────
 app.get('/api/approvals/pending-count', requireAuth, async (req, res) => {
-  const roles = req.session?.user?.roles||[];
-  const rolesArr = Array.isArray(roles)?roles:String(roles).split(',').map(r=>r.trim());
-  const isAdmin = rolesArr.includes('Admin')||rolesArr.includes('HOD');
-  if (!isAdmin) return res.json({ count:0 });
+  // Via isAdminUser rather than re-reading roles here, so the owner gets the
+  // badge too — the sidebar shows it, and a count of 0 would have told the
+  // one account that can approve anything that there is nothing to approve.
+  if (!isAdminUser(req.session?.user)) return res.json({ count:0 });
   try {
     if (USE_DB) {
       const [revise, tasks] = await Promise.all([
