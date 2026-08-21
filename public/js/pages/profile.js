@@ -7,6 +7,9 @@ window.Pages.profile = {
   _picSaving: false,
   _saving: false,
   _form: {},
+  // undefined = not fetched yet (the section shows a loading line),
+  // null = fetched and there is no HR record behind this login.
+  _hr: undefined,
 
   /* ── helpers ───────────────────────────────────────────── */
   _esc(str) {
@@ -63,6 +66,10 @@ window.Pages.profile = {
     };
 
     this._renderContent();
+    // Not awaited: the profile form is usable straight away and the
+    // Employment section fills itself in when the HR query comes back.
+    this._hr = undefined;
+    this._loadHr();
   },
 
   /* ── main render ───────────────────────────────────────── */
@@ -156,11 +163,216 @@ window.Pages.profile = {
               ${this._saving ? 'Saving…' : 'Save Changes'}
             </button>
           </div>
+
+          <!-- Employment (from the HR module) -->
+          <div id="profile-hr">${this._hrHtml()}</div>
         </div>
       </div>
     `;
 
     this._bindEvents();
+  },
+
+  /* ── Employment ──────────────────────────────────────────
+     The HR module's view of the same person: their job, their reporting
+     line, what leave they have left, this month's attendance, their salary
+     and their payslips. It lives here because Profile is where somebody
+     looks for their own details — previously this page knew only what the
+     login table held (name, email, phone), and everything that actually
+     describes the job was somewhere else entirely. ──────────────────── */
+  _hrHtml() {
+    const hr = this._hr;
+    if (hr === undefined) {
+      return `<div class="card p-5"><div class="text-sm text-slate-400">Loading employment details…</div></div>`;
+    }
+    // An account with no employee record is the normal state of a brand-new
+    // login, so it explains itself instead of showing a row of dashes.
+    if (!hr || !hr.linked) {
+      return `<div class="card p-5">
+        <h3 class="text-[15px] font-semibold text-slate-900">Employment</h3>
+        <p class="text-xs text-slate-500 mt-1 leading-relaxed">
+          No employee record is linked to this login yet, so there is nothing to show here.
+          HR links accounts from Employee Master → Link Logins; once that is done your designation,
+          leave balance, attendance and payslips all appear on this page.
+        </p>
+      </div>`;
+    }
+
+    const e = hr.employee || {};
+    const esc = (s) => this._esc(s);
+    const money = (n) => Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+    const date = (iso) => {
+      if (!iso) return '—';
+      const d = new Date(String(iso).slice(0, 10) + 'T00:00:00');
+      return isNaN(d.getTime()) ? '—'
+        : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    };
+    const years = (iso) => {
+      if (!iso) return null;
+      const d = new Date(String(iso).slice(0, 10));
+      return isNaN(d.getTime()) ? null : Math.floor((Date.now() - d.getTime()) / (365.25 * 864e5));
+    };
+    const row = (label, value) => `
+      <div class="flex justify-between gap-3 py-1.5 border-b border-dotted border-slate-200">
+        <span class="text-xs text-slate-400">${esc(label)}</span>
+        <span class="text-[13px] font-semibold text-slate-800 text-right break-words">${value == null || value === '' ? '—' : esc(value)}</span>
+      </div>`;
+    const heading = (t) => `<div class="text-[11px] font-bold uppercase tracking-wider text-primary-600 mb-2 mt-4 first:mt-0">${esc(t)}</div>`;
+
+    const tenure = years(e.doj);
+    const a = hr.attendance || {};
+
+    const balanceCards = (hr.balances || []).map((b) => {
+      const tone = !b.paid ? 'text-slate-500' : (b.balance > 0 ? 'text-green-700' : 'text-red-700');
+      return `<div class="rounded-xl border border-slate-200 p-3">
+        <div class="flex items-baseline justify-between gap-2">
+          <span class="text-xs font-bold text-slate-900">${esc(b.code)}</span>
+          <span class="text-[10px] text-slate-400">${esc(b.name)}</span>
+        </div>
+        <div class="text-xl font-bold ${tone} mt-1">${b.paid ? b.balance : b.used}</div>
+        <div class="text-[10px] text-slate-400">${b.paid ? `left of ${b.entitled}` : 'days taken'}</div>
+      </div>`;
+    }).join('');
+
+    const payslipRows = (hr.payslips || []).map((s) => `
+      <tr class="border-b border-slate-100">
+        <td class="py-2 text-[13px] font-medium text-slate-800">${esc(this._monthName(s.month))} ${s.year}</td>
+        <td class="py-2 text-xs text-slate-500">${esc(s.id)}</td>
+        <td class="py-2 text-[13px] text-right text-slate-700">${money(s.total_gross)}</td>
+        <td class="py-2 text-[13px] text-right text-red-700">${money(s.total_deductions)}</td>
+        <td class="py-2 text-[13px] text-right font-semibold text-green-700">${money(s.net_salary)}</td>
+        <td class="py-2 text-right">
+          <a href="/api/hr/payslip/${encodeURIComponent(s.id)}/print" target="_blank" rel="noopener"
+             class="btn-ghost btn-xs no-underline">Slip</a>
+        </td>
+      </tr>`).join('');
+
+    const salary = hr.salary;
+    const salaryBlock = salary ? `
+      ${heading('Salary')}
+      <div class="grid grid-cols-3 gap-3 mb-2">
+        <div class="rounded-xl border border-slate-200 p-3">
+          <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Gross / month</div>
+          <div class="text-lg font-bold text-slate-900 mt-0.5">₹ ${money(salary.gross)}</div>
+        </div>
+        <div class="rounded-xl border border-slate-200 p-3">
+          <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Deductions</div>
+          <div class="text-lg font-bold text-red-700 mt-0.5">₹ ${money(salary.deductions)}</div>
+        </div>
+        <div class="rounded-xl border border-slate-200 p-3">
+          <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Net / month</div>
+          <div class="text-lg font-bold text-green-700 mt-0.5">₹ ${money(salary.net)}</div>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+        ${salary.earnings.filter((x) => x.amount).map((x) => row(x.label, '₹ ' + money(x.amount))).join('')}
+        ${salary.deductionLines.filter((x) => x.amount).map((x) => row(x.label, '− ₹ ' + money(x.amount))).join('')}
+      </div>
+      <div class="text-[11px] text-slate-400 mt-2">In force since ${esc(date(salary.effective_from))}. What you are actually paid each month also depends on that month's attendance and leave.</div>
+    ` : `${heading('Salary')}<div class="text-[13px] text-slate-500">No salary structure has been recorded against your employee record yet.</div>`;
+
+    return `
+      <div class="card p-5">
+        <div class="flex items-start justify-between gap-3 mb-1">
+          <div>
+            <h3 class="text-[15px] font-semibold text-slate-900">Employment</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Your record in the HR system</p>
+          </div>
+          <span class="pill pill-brand pill-sm">${esc(e.id)}</span>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+          <div>
+            ${heading('Job')}
+            ${row('Designation', e.designation)}
+            ${row('Department', e.department)}
+            ${row('Branch', e.branch)}
+            ${row('Employment Type', e.emp_type)}
+            ${row('Date of Joining', date(e.doj))}
+            ${row('Tenure', tenure == null ? '—' : tenure + ' year' + (tenure === 1 ? '' : 's'))}
+            ${row('Reports To', hr.reportingTo)}
+            ${hr.team && hr.team.length ? row('Team Size', hr.team.length + ' reporting') : ''}
+            ${e.dol ? row('Last Working Day', date(e.dol)) : ''}
+          </div>
+          <div>
+            ${heading('Personal & Statutory')}
+            ${row('Date of Birth', date(e.dob))}
+            ${row('Blood Group', e.blood_group)}
+            ${row('Emergency Contact', [e.emergency_name, e.emergency_phone].filter(Boolean).join(' · '))}
+            ${row('PAN', e.pan_no)}
+            ${row('UAN', e.uan)}
+            ${row('Bank', e.bank_name)}
+            ${row('Account No', e.account_no)}
+            ${row('IFSC', e.ifsc)}
+          </div>
+        </div>
+
+        ${heading(`Leave Balance — ${hr.year}`)}
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-2">${balanceCards}</div>
+
+        ${heading(`Attendance — ${esc(hr.monthName)} ${hr.year}`)}
+        <div class="grid grid-cols-3 md:grid-cols-6 gap-2">
+          ${[['Present', a.present, 'text-green-700'], ['Remote', a.remote, 'text-sky-700'],
+             ['Half Day', a.halfDay, 'text-amber-700'], ['Absent', a.absent, 'text-red-700'],
+             ['Late Marks', a.late, 'text-amber-700'], ['Hours', a.hours, 'text-slate-800']]
+            .map(([label, val, tone]) => `
+              <div class="rounded-xl border border-slate-200 p-3 text-center">
+                <div class="text-lg font-bold ${tone}">${val || 0}</div>
+                <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold mt-0.5">${esc(label)}</div>
+              </div>`).join('')}
+        </div>
+
+        ${salaryBlock}
+
+        ${heading('Payslips')}
+        ${payslipRows ? `<div class="overflow-x-auto"><table class="w-full">
+            <thead><tr class="border-b border-slate-200">
+              <th class="py-2 text-left text-[10px] uppercase tracking-wider text-slate-400 font-bold">Period</th>
+              <th class="py-2 text-left text-[10px] uppercase tracking-wider text-slate-400 font-bold">Slip No</th>
+              <th class="py-2 text-right text-[10px] uppercase tracking-wider text-slate-400 font-bold">Gross</th>
+              <th class="py-2 text-right text-[10px] uppercase tracking-wider text-slate-400 font-bold">Deductions</th>
+              <th class="py-2 text-right text-[10px] uppercase tracking-wider text-slate-400 font-bold">Net</th>
+              <th></th>
+            </tr></thead>
+            <tbody>${payslipRows}</tbody>
+          </table></div>`
+          : '<div class="text-[13px] text-slate-500">No payslips yet. They appear here once HR finalises the month.</div>'}
+
+        ${(hr.documents || []).length ? `${heading('Documents')}
+          <div class="flex flex-wrap gap-2">
+            ${hr.documents.map((d) => (d.url
+              ? `<a href="${esc(d.url)}" target="_blank" rel="noopener" class="pill pill-neutral pill-sm no-underline">${esc(d.doc_type)}</a>`
+              : `<span class="pill pill-neutral pill-sm">${esc(d.doc_type)}</span>`)).join('')}
+          </div>` : ''}
+
+        <div class="flex flex-wrap gap-2 mt-5 pt-4 border-t border-slate-100">
+          <button class="btn-secondary btn-sm" data-profile-go="hr-leave">Apply for Leave</button>
+          <button class="btn-secondary btn-sm" data-profile-go="hr-attendance">My Attendance</button>
+          <button class="btn-secondary btn-sm" data-profile-go="hr-payroll">My Payslips</button>
+        </div>
+      </div>`;
+  },
+
+  _monthName(m) {
+    return ['January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'][(Number(m) || 1) - 1] || '';
+  },
+
+  /* Fetched after the page has already painted, so the profile form is
+     usable immediately and a slow HR query never holds it up. */
+  async _loadHr() {
+    try {
+      const res = await fetch('/api/hr/me');
+      this._hr = res.ok ? await res.json() : null;
+    } catch {
+      this._hr = null;
+    }
+    const box = document.getElementById('profile-hr');
+    if (box) {
+      box.innerHTML = this._hrHtml();
+      box.querySelectorAll('[data-profile-go]').forEach((b) =>
+        b.addEventListener('click', () => window.Router.navigate(b.dataset.profileGo)));
+    }
   },
 
   /* ── field HTML helper ─────────────────────────────────── */
@@ -212,6 +424,12 @@ window.Pages.profile = {
   _bindEvents() {
     const root = document.getElementById('profile-root');
     if (!root) return;
+
+    /* Employment shortcuts. Bound here as well as after the HR fetch, so
+       they survive a re-render of the whole page (saving the form, changing
+       the photo) rather than going dead the first time somebody saves. */
+    root.querySelectorAll('[data-profile-go]').forEach((b) =>
+      b.addEventListener('click', () => window.Router.navigate(b.dataset.profileGo)));
 
     /* photo buttons */
     const fileInput = document.getElementById('profile-file-input');

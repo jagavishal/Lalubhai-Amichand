@@ -20,6 +20,7 @@ window.Pages['hr-employees'] = (() => {
   let _filters = { status: 'Active', branch: 'All', department: 'All', q: '' };
   let _profile = null;      // the loaded 360° view of one employee
   let _profileTab = 'overview';
+  let _pendingCode = null;  // an employee to open as soon as the list is up — see openFor()
 
   const STATUSES = ['Active', 'Inactive', 'Probation', 'Notice Period'];
   const EMP_TYPES = ['Staff', 'Worker', 'Director', 'Contract', 'Intern'];
@@ -795,8 +796,32 @@ window.Pages['hr-employees'] = (() => {
     async render() {
       const el = document.getElementById('main-content');
       if (el) el.innerHTML = H.spinner('Loading employees…');
-      try { await load(); render(); }
-      catch (e) { if (el) el.innerHTML = H.empty('Could not load employees', e.message); }
+      try {
+        await load();
+        render();
+        // Arrived here from somewhere that already knows whose record it
+        // wants (the Users list, say) — open it straight away rather than
+        // making them find the row again. Cleared either way, so a later
+        // visit to the page opens on the list as normal.
+        if (_pendingCode) {
+          const code = _pendingCode;
+          _pendingCode = null;
+          await openProfile(code);
+        }
+      } catch (e) {
+        if (el) el.innerHTML = H.empty('Could not load employees', e.message);
+      }
+    },
+
+    /* Open one employee's record from another page. If we are already on
+       this page the profile opens immediately; otherwise the code is parked
+       and picked up by the render that follows the navigation. */
+    openFor(code) {
+      if (!code) return;
+      const here = (window.location.hash || '').replace('#', '') === 'hr-employees';
+      if (here) { openProfile(code); return; }
+      _pendingCode = code;
+      window.Router.navigate('hr-employees');
     },
   };
 })();

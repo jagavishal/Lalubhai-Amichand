@@ -620,6 +620,25 @@ function mountHrms(app, ctx) {
 
   const balanceOf = (b) => money(num(b.opening) + num(b.accrued) - num(b.used));
 
+  /* The employee record behind a login.
+     ---------------------------------------------------------------------
+     Matched by the explicit link first, then by email, then by name, so
+     punching in and "my payslips" work before HR has mapped anybody — and
+     keep working after, on the mapping rather than a guess. Every route that
+     scopes to "me" goes through this one function; there used to be two
+     near-identical copies, which is how the three self-service screens end
+     up disagreeing about who you are. */
+  async function selfEmployee(user) {
+    if (!user) return null;
+    const rows = await q(
+      `SELECT * FROM hr_employees
+        WHERE user_id = $1 OR (email <> '' AND LOWER(email) = LOWER($2)) OR LOWER(name) = LOWER($3)
+        ORDER BY CASE WHEN user_id = $4 THEN 0 ELSE 1 END LIMIT 1`,
+      [user.id || '', user.email || '', user.name || '', user.id || ''],
+    ).catch(() => []);
+    return rows[0] || null;
+  }
+
   async function bumpUsed(employeeId, year, code, delta) {
     if (!employeeId || !code || !delta) return;
     await ensureBalance(employeeId, year, code);
@@ -707,7 +726,10 @@ function mountHrms(app, ctx) {
     app.get('/api/hr/masters', requireAuth, hrReady, async (req, res) => {
       try {
         const [emps, types, settings] = await Promise.all([
-          q(`SELECT id, name, designation, department, branch, status FROM hr_employees ORDER BY name ASC`),
+          // user_id rides along so the Users list can show which login each
+          // employee record belongs to. Names and departments only — the
+          // salary-bearing columns stay behind /api/hr/employees.
+          q(`SELECT id, user_id, name, designation, department, branch, status FROM hr_employees ORDER BY name ASC`),
           leaveTypes(),
           getSettings(),
         ]);
@@ -756,6 +778,103 @@ function mountHrms(app, ctx) {
     // The whole 360° view of one person, in one request: the master record,
     // every salary revision, this year's leave balances, their leave history,
     // documents, joining checklist and exit record.
+    /* ── My record ────────────────────────────────────────────────────
+       Everything the Profile page shows about a person's employment, in one
+       call and with no id to pass: the subject is whoever is signed in, so
+       this route cannot be pointed at somebody else. Salary appears because
+       it is their own — the same figures already printed on their payslips.
+
+       `linked: false` is a normal answer, not an error: an account with no
+       employee record behind it is what every new login looks like until HR
+       runs Link Logins, and the page says so rather than showing blanks. ── */
+    app.get('/api/hr/me', requireAuth, hrReady, async (req, res) => {
+      try {
+        const user = req.session?.user;
+        const e = await selfEmployee(user);
+        if (!e) return res.json({ linked: false });
+
+        const now = new Date();
+        const year = now.getFullYear();
+        const monthStart = `${year}-${pad(now.getMonth() + 1, 2)}-01`;
+        const today = isoDate(now);
+
+        const [types, structure, att, slips, docs, team, exits] = await Promise.all([
+          leaveTypes(),
+          structureOn(e.id, today),
+          q(`SELECT status, late_mark, working_hours FROM hr_attendance
+              WHERE employee_id = $1 AND att_date BETWEEN $2 AND $3`, [e.id, monthStart, today]).catch(() => []),
+          q(`SELECT p.id, p.month, p.year, p.total_gross, p.total_deductions, p.leave_deduction, p.net_salary
+               FROM hr_payslips p JOIN hr_payroll_runs r ON r.id = p.run_id
+              WHERE p.employee_id = $1 AND r.status = 'finalised'
+              ORDER BY p.year DESC, p.month DESC LIMIT 12`, [e.id]).catch(() => []),
+          q(`SELECT id, doc_type, doc_no, url, expires_on FROM hr_documents
+              WHERE employee_id = $1 ORDER BY created_at DESC`, [e.id]).catch(() => []),
+          // Who reports to this person — the half of the reporting line that
+          // is invisible from their own record.
+          q(`SELECT id, name, designation FROM hr_employees
+              WHERE status = 'Active' AND reporting_to <> '' AND (reporting_to = $1 OR LOWER(reporting_to) = LOWER($2))
+              ORDER BY name ASC`, [e.id, e.name]).catch(() => []),
+          q(`SELECT * FROM hr_exits WHERE employee_id = $1`, [e.id]).catch(() => []),
+        ]);
+
+        const balances = [];
+        for (const t of types) {
+          const b = await ensureBalance(e.id, year, t.code);
+          balances.push({
+            code: t.code, name: t.name, paid: num(t.paid),
+            entitled: money(num(b.opening) + num(b.accrued)),
+            used: money(num(b.used)), balance: balanceOf(b),
+          });
+        }
+
+        const tally = { present: 0, absent: 0, halfDay: 0, remote: 0, leave: 0, late: 0, hours: 0 };
+        for (const a of att) {
+          if (a.status === 'Present') tally.present += 1;
+          else if (a.status === 'Absent') tally.absent += 1;
+          else if (a.status === 'Half Day') tally.halfDay += 1;
+          else if (a.status === 'Remote') tally.remote += 1;
+          else if (a.status === 'Leave') tally.leave += 1;
+          if (a.late_mark) tally.late += 1;
+          tally.hours += num(a.working_hours);
+        }
+        tally.hours = money(tally.hours);
+
+        // reporting_to holds a code on records this app created and a plain
+        // name on the ones imported from the sheet — resolve either to a name.
+        let reportingTo = e.reporting_to || '';
+        if (reportingTo) {
+          const m = await q(
+            `SELECT name FROM hr_employees WHERE id = $1 OR LOWER(name) = LOWER($2) LIMIT 1`,
+            [reportingTo, reportingTo],
+          ).catch(() => []);
+          if (m[0]) reportingTo = m[0].name;
+        }
+
+        res.json({
+          linked: true,
+          employee: shapeEmployee(e),
+          reportingTo,
+          team,
+          year,
+          month: now.getMonth() + 1,
+          monthName: MONTHS[now.getMonth()],
+          salary: structure ? {
+            effective_from: isoDate(structure.effective_from),
+            earnings: EARNINGS.map((x) => ({ ...x, amount: money(structure[x.key]) })),
+            deductionLines: DEDUCTIONS.map((x) => ({ ...x, amount: money(structure[x.key]) })),
+            gross: grossOf(structure),
+            deductions: deductionsOf(structure),
+            net: money(grossOf(structure) - deductionsOf(structure)),
+          } : null,
+          balances,
+          attendance: tally,
+          payslips: slips,
+          documents: docs.map((d) => ({ ...d, expires_on: isoDate(d.expires_on) })),
+          exit: exits[0] ? { last_working_day: isoDate(exits[0].last_working_day), exit_type: exits[0].exit_type } : null,
+        });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // Admin, or your own record — the same rule the payslip print uses. This
     // response carries salary history and bank details, so "the page never
     // links there" is not protection.
@@ -1070,20 +1189,6 @@ function mountHrms(app, ctx) {
      =================================================================== */
   function mountAttendanceRoutes() {
 
-    // Which employee record belongs to the person making the request. The
-    // link is hr_employees.user_id where it has been set, falling back to an
-    // exact name or email match so punching works before HR maps anybody.
-    async function selfEmployee(user) {
-      if (!user) return null;
-      const rows = await q(
-        `SELECT * FROM hr_employees
-          WHERE user_id = $1 OR (email <> '' AND LOWER(email) = LOWER($2)) OR LOWER(name) = LOWER($3)
-          ORDER BY CASE WHEN user_id = $4 THEN 0 ELSE 1 END LIMIT 1`,
-        [user.id || '', user.email || '', user.name || '', user.id || ''],
-      ).catch(() => []);
-      return rows[0] || null;
-    }
-
     function hhmmToMinutes(hhmm) {
       const m = String(hhmm || '').match(/^(\d{1,2}):(\d{2})/);
       return m ? (+m[1]) * 60 + (+m[2]) : 0;
@@ -1280,19 +1385,6 @@ function mountHrms(app, ctx) {
 
     const yearOf = (iso) => Number(String(iso || '').slice(0, 4)) || new Date().getFullYear();
 
-    // The employee record behind a login, by explicit link first and then by
-    // email or name. Used to scope everything a non-Admin can see or do here.
-    async function ownEmployee(user) {
-      if (!user) return null;
-      const rows = await q(
-        `SELECT id, name, branch FROM hr_employees
-          WHERE user_id = $1 OR (email <> '' AND LOWER(email) = LOWER($2)) OR LOWER(name) = LOWER($3)
-          ORDER BY CASE WHEN user_id = $4 THEN 0 ELSE 1 END LIMIT 1`,
-        [user.id || '', user.email || '', user.name || '', user.id || ''],
-      ).catch(() => []);
-      return rows[0] || null;
-    }
-
     /* Leave reasons are personal — illness, bereavement, family trouble. An
        Admin or HOD sees the whole company because approving is their job;
        everyone else sees only their own requests, whatever they ask for.
@@ -1305,7 +1397,7 @@ function mountHrms(app, ctx) {
         const user = req.session?.user;
 
         if (!isAdminUser(user)) {
-          const me = await ownEmployee(user);
+          const me = await selfEmployee(user);
           params.push(me?.id || NO_MATCH);   // a sentinel that matches nothing
           params.push(user?.id || NO_MATCH);
           where.push(`(l.employee_id = $${params.length - 1} OR l.user_id = $${params.length})`);
@@ -1346,7 +1438,7 @@ function mountHrms(app, ctx) {
         const user = req.session?.user;
         const employeeId = isAdminUser(user)
           ? String(b.employeeId || b.employee_id || '').trim()
-          : ((await ownEmployee(user))?.id || '');
+          : ((await selfEmployee(user))?.id || '');
         const emp = employeeId ? (await q(`SELECT * FROM hr_employees WHERE id = $1`, [employeeId]))[0] : null;
         const code = String(b.leave_type || b.leaveType || 'CL').toUpperCase();
         const halfDay = ['full', 'first', 'second'].includes(b.half_day) ? b.half_day : 'full';
@@ -1407,7 +1499,7 @@ function mountHrms(app, ctx) {
         // the one who approves leave.
         const scopedId = isAdminUser(req.session?.user)
           ? String(req.query.employeeId || '')
-          : ((await ownEmployee(req.session?.user))?.id || NO_MATCH);
+          : ((await selfEmployee(req.session?.user))?.id || NO_MATCH);
         const emps = scopedId
           ? await q(`SELECT id, name, department, branch FROM hr_employees WHERE id = $1`, [scopedId])
           : await q(`SELECT id, name, department, branch FROM hr_employees WHERE status = 'Active' ORDER BY id ASC`);

@@ -17,6 +17,8 @@ window.Pages.users = (() => {
 
   /* ── state ──────────────────────────────────────────────────────────── */
   let _users       = [];
+  // hr_employees rows keyed later by user_id — see employeeFor().
+  let _employees   = [];
   let _departments = [];
   let _search      = '';
   let _isAdmin     = false;
@@ -129,6 +131,46 @@ window.Pages.users = (() => {
       .replace(/"/g, '&quot;');
   }
 
+  /* The employee record behind a login, matched the same way the server does
+     it (see selfEmployee in backend/hrms.js): the explicit link first, then
+     email, then name. Matching on more than user_id matters because the link
+     is only filled in once HR has run Link Logins -- before that the Users
+     page would show everybody as unlinked even though the HR module already
+     resolves them perfectly well. */
+  function employeeFor(u) {
+    if (!u) return null;
+    const email = String(u.email || '').trim().toLowerCase();
+    const name  = String(u.name  || '').trim().toLowerCase();
+    return _employees.find(e => e.user_id && e.user_id === u.id)
+        || (email && _employees.find(e => String(e.email || '').trim().toLowerCase() === email))
+        || (name  && _employees.find(e => String(e.name  || '').trim().toLowerCase() === name))
+        || null;
+  }
+
+  // The Employee column: the HR code and designation for a login that has a
+  // record, and an honest blank for one that does not -- an unlinked account
+  // is exactly what HR needs to see in order to fix it.
+  function employeeCellHtml(u) {
+    const e = employeeFor(u);
+    if (!e) return '<span class="text-[11px] text-slate-400">Not linked</span>';
+    const linked = e.user_id === u.id;
+    return '<button class="user-emp-btn text-left" data-emp="' + esc(e.id) + '"'
+      + ' title="Open this employee record in Employee Master"'
+      + ' style="border:none;background:none;cursor:pointer;padding:0;">'
+      + '<div class="text-[12.5px] font-semibold" style="color:var(--color-primary);">' + esc(e.id) + '</div>'
+      + '<div class="text-[10.5px] text-slate-400">' + esc(e.designation || '')
+      + (linked ? '' : ' &middot; match by name/email') + '</div>'
+      + '</button>';
+  }
+
+  // Opens that person's record in Employee Master. The page picks the code up
+  // on its next render -- see openFor() in hr-employees.js.
+  function openEmployeeRecord(code) {
+    const page = window.Pages && window.Pages['hr-employees'];
+    if (page && typeof page.openFor === 'function') page.openFor(code);
+    else window.Router.navigate('hr-employees');
+  }
+
   function normalizeRoles(roles) {
     if (Array.isArray(roles)) return roles;
     if (typeof roles === 'string') return roles.split(',').map(r => r.trim()).filter(Boolean);
@@ -184,10 +226,17 @@ window.Pages.users = (() => {
       // / GET /api/departments) — the same one every other Department dropdown
       // uses. Only if that can't be read do we fall back to whatever departments
       // the existing users happen to be filed under.
-      const [usersData, deptsData] = await Promise.all([
+      // The HR employee list rides along so each login can show which
+      // employee record it belongs to. It is the light directory
+      // (/api/hr/masters), not the full master — no salary or bank details.
+      // A failure here must not take the Users page down with it, hence the
+      // catch: the Employee column simply reads 'Not linked' instead.
+      const [usersData, deptsData, hrData] = await Promise.all([
         Utils.apiFetch('/api/users'),
         Utils.getDepartments(true).catch(() => null),
+        Utils.apiFetch('/api/hr/masters').catch(() => null),
       ]);
+      _employees   = (hrData && Array.isArray(hrData.employees)) ? hrData.employees : [];
       _users       = Array.isArray(usersData) ? usersData : [];
       _departments = (Array.isArray(deptsData) && deptsData.length)
         ? deptsData
@@ -195,6 +244,7 @@ window.Pages.users = (() => {
     } catch {
       _users       = [];
       _departments = [];
+      _employees   = [];
     }
   }
 
@@ -556,6 +606,11 @@ window.Pages.users = (() => {
         btn.addEventListener('click', () => deleteUser(btn.dataset.id));
       });
 
+      // Employee code in the Employee column → that person's HR record.
+      el.querySelectorAll('.user-emp-btn').forEach(btn => {
+        btn.addEventListener('click', () => openEmployeeRecord(btn.dataset.emp));
+      });
+
       document.getElementById('users-signout-everyone-btn')?.addEventListener('click', signOutEveryone);
 
       el.querySelectorAll('[data-action="signout"]').forEach(btn => {
@@ -648,7 +703,7 @@ window.Pages.users = (() => {
   function renderUsersTab() {
     const rows = filtered();
     const tableRows = rows.length === 0
-      ? `<tr><td colspan="${_isAdmin ? 7 : 6}" class="table-td text-center text-slate-400 py-10">No users found</td></tr>`
+      ? `<tr><td colspan="${_isAdmin ? 8 : 7}" class="table-td text-center text-slate-400 py-10">No users found</td></tr>`
       : rows.map(u => {
           const isAdminOrHod = normalizeRoles(u.roles).some(r => r === 'Admin' || r === 'HOD');
           // Forcing someone out of every device is owner-only, same as the
@@ -684,6 +739,7 @@ window.Pages.users = (() => {
               <td class="table-td text-slate-600">${esc(u.phone || '—')}</td>
               <td class="table-td text-slate-600">${esc(u.department || '—')}</td>
               <td class="table-td text-slate-600">${esc(u.branch || '—')}</td>
+              <td class="table-td">${employeeCellHtml(u)}</td>
               <td class="table-td"><div class="flex flex-wrap gap-1">${rolePillsHtml(u.roles)}</div></td>
               ${actionCells}
             </tr>`;
@@ -718,6 +774,7 @@ window.Pages.users = (() => {
                 <th class="table-th">Phone</th>
                 <th class="table-th">Department</th>
                 <th class="table-th">Branch</th>
+                <th class="table-th">Employee</th>
                 <th class="table-th">Roles</th>
                 ${_isAdmin ? '<th class="table-th">Action</th>' : ''}
               </tr>
