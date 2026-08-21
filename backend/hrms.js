@@ -708,6 +708,37 @@ function mountHrms(app, ctx) {
       `UPDATE leaves SET status = $1, decided_at = NOW(), decided_by = $2, balance_after = $3 WHERE id = $4`,
       [status, decidedBy || '', balanceAfter, leaveId],
     );
+
+    /* Tell the applicant what was decided. Fire-and-forget for the same reason
+       as the request mail: the decision is already recorded, and a slow or
+       unreachable SMTP server must not hold up the person clicking Approve.
+       It lives here rather than in the route so that a decision made from the
+       older Leave Tracker page sends the same mail. */
+    if (ctx.sendLeaveDecisionEmail) {
+      (async () => {
+        const applicant = lv.user_id
+          ? (await q(`SELECT id, name, email FROM users WHERE id = $1`, [lv.user_id]).catch(() => []))[0]
+          : (await q(`SELECT id, name, email FROM users WHERE LOWER(name) = LOWER($1) LIMIT 1`, [lv.user_name || ''])
+              .catch(() => []))[0];
+        const loginEmail = applicant?.email || '';
+        const address = ctx.notifyAddressFor
+          ? await ctx.notifyAddressFor(applicant?.id, loginEmail)
+          : loginEmail;
+        await ctx.sendLeaveDecisionEmail({
+          toEmail: address,
+          toName: applicant?.name || lv.user_name || '',
+          status,
+          decidedBy: decidedBy || '',
+          leaveType: code,
+          fromDate: isoDate(lv.from_date),
+          toDate: isoDate(lv.to_date) === isoDate(lv.from_date) ? '' : isoDate(lv.to_date),
+          days,
+          comments: lv.approver_comments || '',
+          balanceAfter,
+        });
+      })().catch((e) => console.error('[hrms] leave decision mail failed:', e.message));
+    }
+
     return { balanceAfter, days, code };
   }
 
@@ -1535,6 +1566,36 @@ function mountHrms(app, ctx) {
            employeeId || null, 'Leave', code, halfDay, days, from, to, b.reason || '',
            approverName || b.approver || 'HOD', approverEmail, approverName],
         );
+        /* Tell the approver. Fire-and-forget on purpose: SMTP is somebody
+           else's server and can be slow or down, and a leave request that is
+           already safely stored must not fail — or make the applicant wait —
+           because a mail did not go out. Failures are logged, not raised. */
+        if (approverName && ctx.sendLeaveRequestEmail) {
+          (async () => {
+            // The approver's login row, so their Notification Email can be
+            // preferred over the login address (see notifyAddressFor).
+            const approverUser = (await q(
+              `SELECT id, email FROM users WHERE ${approverEmail ? 'LOWER(email) = LOWER($1)' : 'LOWER(name) = LOWER($1)'} LIMIT 1`,
+              [approverEmail || approverName],
+            ).catch(() => []))[0];
+            const loginEmail = approverEmail || approverUser?.email || '';
+            const address = ctx.notifyAddressFor
+              ? await ctx.notifyAddressFor(approverUser?.id, loginEmail)
+              : loginEmail;
+            await ctx.sendLeaveRequestEmail({
+              toEmail: address,
+              toName: approverName,
+              applicantName: emp?.name || b.userName || req.session?.user?.name || 'An employee',
+              leaveType: code,
+              fromDate: from,
+              toDate: to === from ? '' : to,
+              days, halfDay,
+              reason: b.reason || '',
+              balanceNote: warning || '',
+            });
+          })().catch((e) => console.error('[hrms] leave request mail failed:', e.message));
+        }
+
         res.json({ success: true, id, days, warning });
       } catch (e) { res.status(500).json({ error: e.message }); }
     });

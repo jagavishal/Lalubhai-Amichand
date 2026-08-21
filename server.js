@@ -1041,6 +1041,118 @@ app.use(express.static(path.join(__dirname, 'public'), {
   },
 }));
 
+
+/* ── Leave notifications ──────────────────────────────────────────────────────
+   Leave was the one thing the app never emailed about: a request sat in the
+   Leave Management list until somebody happened to look, and the applicant
+   found out the decision the same way. Both ends now get told.
+
+   Where the mail goes is worth stating. Profile has a "Notification Email"
+   field described as "Real Gmail/Outlook for task notifications" — it has been
+   collected since the profile page existed and never once been used to send
+   anything; every mail in the app went to the login address. Some of those
+   logins are shared department inboxes, which is exactly the case that field
+   was added for. So leave mail prefers it and falls back to the login address,
+   and nothing is sent at all when neither is a real address. */
+
+async function notifyAddressFor(userId, fallbackEmail) {
+  const fallback = String(fallbackEmail || '').trim();
+  if (!userId || !USE_DB) return fallback;
+  try {
+    const rows = await q('SELECT notification_email FROM profile WHERE user_id = $1', [userId]);
+    return String(rows[0]?.notification_email || '').trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+// Shared shell so the two mails below read as one family and neither has to
+// carry its own table markup.
+function _leaveMailHtml({ heading, colour, lead, rows, footer }) {
+  const cells = rows
+    .filter(([, v]) => v !== undefined && v !== null && String(v) !== '')
+    .map(([k, v]) => `<tr>
+        <td style="padding:8px;background:#f8fafc;font-weight:600;color:#374151;width:150px">${k}</td>
+        <td style="padding:8px;color:#374151">${v}</td>
+      </tr>`).join('');
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:520px;padding:24px;border:1px solid #e2e8f0;border-radius:8px">
+      <h2 style="color:${colour};margin:0 0 16px">${heading}</h2>
+      <p style="color:#374151">${lead}</p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0">${cells}</table>
+      ${footer ? `<p style="color:#374151">${footer}</p>` : ''}
+      <p style="color:#94a3b8;font-size:12px;margin-top:24px">This is an automated notification from the Lallubhai Amichand ERP.</p>
+    </div>`;
+}
+
+// Sent to the approver the moment a request is raised.
+async function sendLeaveRequestEmail({ toEmail, toName, applicantName, leaveType, fromDate, toDate, days, halfDay, reason, balanceNote }) {
+  const mailer = getMailer();
+  if (!mailer || !toEmail) {
+    console.log('[email] leave request not sent — mailer:', !!mailer, '| to:', toEmail || '(none)');
+    return;
+  }
+  try {
+    await mailer.sendMail({
+      from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+      to: toEmail,
+      subject: `Leave Request from ${applicantName} — ${leaveType} ${fromDate}${toDate && toDate !== fromDate ? ' to ' + toDate : ''}`,
+      html: _leaveMailHtml({
+        heading: 'Leave Request Awaiting Your Approval',
+        colour: '#0150AA',
+        lead: `Hi <b>${toName || 'there'}</b>, <b>${applicantName}</b> has applied for leave and named you as the approver.`,
+        rows: [
+          ['Employee', applicantName],
+          ['Leave Type', leaveType],
+          ['From', fromDate],
+          ['To', toDate],
+          ['Days', String(days) + (halfDay && halfDay !== 'full' ? ` (half day — ${halfDay} half)` : '')],
+          ['Reason', reason],
+          ['Balance', balanceNote],
+        ],
+        footer: 'Open <b>Leave Management</b> in the ERP to approve or reject it.',
+      }),
+    });
+    console.log('[email] Leave request notification sent to:', toEmail);
+  } catch (e) {
+    console.error('[email] Failed to send leave request notification:', e.message);
+  }
+}
+
+// Sent back to the applicant once somebody decides.
+async function sendLeaveDecisionEmail({ toEmail, toName, status, decidedBy, leaveType, fromDate, toDate, days, comments, balanceAfter }) {
+  const mailer = getMailer();
+  if (!mailer || !toEmail) {
+    console.log('[email] leave decision not sent — mailer:', !!mailer, '| to:', toEmail || '(none)');
+    return;
+  }
+  const approved = /^approved$/i.test(String(status || ''));
+  try {
+    await mailer.sendMail({
+      from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+      to: toEmail,
+      subject: `Leave ${status}: ${leaveType} ${fromDate}${toDate && toDate !== fromDate ? ' to ' + toDate : ''}`,
+      html: _leaveMailHtml({
+        heading: `Leave ${status}`,
+        colour: approved ? '#15803d' : '#b91c1c',
+        lead: `Hi <b>${toName || 'there'}</b>, your leave request has been <b>${String(status).toLowerCase()}</b>${decidedBy ? ` by <b>${decidedBy}</b>` : ''}.`,
+        rows: [
+          ['Leave Type', leaveType],
+          ['From', fromDate],
+          ['To', toDate],
+          ['Days', days],
+          ['Comments', comments],
+          ['Balance Left', balanceAfter == null ? '' : String(balanceAfter)],
+        ],
+        footer: approved ? '' : 'Speak to your approver if you need this reconsidered.',
+      }),
+    });
+    console.log('[email] Leave decision notification sent to:', toEmail);
+  } catch (e) {
+    console.error('[email] Failed to send leave decision notification:', e.message);
+  }
+}
+
 // ── Middleware ────────────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
   if (!req.session?.user) return res.status(401).json({ error: 'Not authenticated' });
@@ -2539,6 +2651,10 @@ app.patch('/api/leaves', requireAuth, requireAdmin, async (req, res) => {
 // deployment stores its private key — see the note above _normalizeGooglePrivateKey.
 const hrms = mountHrms(app, {
   pool, q, ensureSchema, requireAuth, requireAdmin, requireSuperAdmin, isAdminUser, getGoogleAuth,
+  // Leave mail lives here with the app's other notifications rather than in the
+  // HR module, so there is one mailer and one house style for every email the
+  // app sends. See sendLeaveRequestEmail.
+  notifyAddressFor, sendLeaveRequestEmail, sendLeaveDecisionEmail,
   // The HR module stores departments in its own tables (hr_employees, hr_payslips)
   // but must spell them the way the rest of the app does — so it shares this
   // file's canonicaliser and the departments master behind it, rather than
