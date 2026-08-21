@@ -203,8 +203,15 @@ window.HR = (function () {
      Built and torn down per open rather than kept hidden in the DOM, so a
      stale value from a previous open can never leak into the next one. ── */
 
-  function openModal({ id, title, subtitle = '', bodyHTML, width = 560, confirmText = 'Save',
+  function openModal({ id, title, subtitle = '', bodyHTML = '', width = 560, confirmText = 'Save',
                        cancelText = 'Cancel', onConfirm, onOpen, saving = false, hideConfirm = false }) {
+    // A caller that forgets bodyHTML used to interpolate the literal string
+    // "undefined" into the dialog, which is what a user then read. Default it,
+    // and say so in the console so the mistake surfaces to whoever made it
+    // rather than to whoever opened the form.
+    if (arguments[0] && arguments[0].bodyHTML === undefined) {
+      console.error('[HR] openModal("' + id + '") was given no bodyHTML — rendering an empty dialog.');
+    }
     closeModal(id);
     const html = `
       <div id="${id}" style="position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(4px);

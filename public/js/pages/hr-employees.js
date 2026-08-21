@@ -224,6 +224,7 @@ window.Pages['hr-employees'] = (() => {
       title: isNew ? 'Add Employee' : `Edit ${e.name}`,
       subtitle: isNew ? 'A code is generated from the branch unless you set one' : `Employee code ${e.id}`,
       width: 720,
+      bodyHTML: body,
       confirmText: isNew ? 'Add Employee' : 'Save Changes',
       onConfirm: async () => {
         const payload = Object.fromEntries(FIELDS.map((f) => [f, H.val('hre-' + f)]));
