@@ -10,10 +10,14 @@ window.Topbar = {
     'masters':      'Checklists',
     'fms':          'FMS Master',
     'profile':      'Profile',
-    'leave-tracker':'Leave Tracker',
     'client-master':'',
     'po-pending':   'PO Pending',
     'compliance':   'Compliance',
+    'hr-employees': 'Employee Master',
+    'hr-attendance':'Attendance',
+    'hr-leave':     'Leave Management',
+    'hr-payroll':   'Payroll',
+    'hr-reports':   'HR Reports',
   },
 
   _calendarIcon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;color:var(--border-strong);flex-shrink:0;">

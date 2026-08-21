@@ -2265,13 +2265,23 @@ app.delete('/api/holidays', requireAuth, async (req, res) => {
 });
 
 // ── Leaves ────────────────────────────────────────────────────────────────────
+// Leave reasons are personal — illness, bereavement, family trouble. Admins and
+// HODs see everyone because approving is their job; everyone else sees their own
+// rows and nothing else, whatever they ask for. This used to trust the caller:
+// `?userId=` was honoured for any id, and omitting it returned the whole
+// company's leave to anyone signed in. The scope is decided here now, from the
+// session, so it cannot be asked around.
 app.get('/api/leaves', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    const userId = req.query.userId;
-    const rows = userId
-      ? await q(`SELECT id, user_id AS userId, user_name AS userName, type, from_date AS fromDate, to_date AS toDate, reason, status, approver, created_at AS createdAt, decided_at AS decidedAt FROM leaves WHERE user_id=$1 ORDER BY created_at DESC`, [userId])
-      : await q(`SELECT id, user_id AS userId, user_name AS userName, type, from_date AS fromDate, to_date AS toDate, reason, status, approver, created_at AS createdAt, decided_at AS decidedAt FROM leaves ORDER BY created_at DESC`);
+    const cols = `id, user_id AS userId, user_name AS userName, type, leave_type AS leaveType, half_day AS halfDay,
+                  total_days AS totalDays, from_date AS fromDate, to_date AS toDate, reason, status, approver,
+                  created_at AS createdAt, decided_at AS decidedAt`;
+    const me = req.session?.user;
+    const scopedId = isAdminUser(me) ? req.query.userId : (me?.id || '-no-such-user');
+    const rows = scopedId
+      ? await q(`SELECT ${cols} FROM leaves WHERE user_id=$1 ORDER BY created_at DESC`, [scopedId])
+      : await q(`SELECT ${cols} FROM leaves ORDER BY created_at DESC`);
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });

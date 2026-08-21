@@ -94,7 +94,11 @@ window.Sidebar = {
       { route: 'dashboard',     label: 'Dashboard',      icon: 'dashboard',     alwaysShow: true },
       { route: 'all-tasks',     label: 'All Tasks',      icon: 'tasks' },
       { route: 'approvals',     label: 'Approvals',      icon: 'approve',       badge: true },
-      { route: 'leave-tracker', label: 'Leave Tracker',  icon: 'leave' },
+      // No entry for 'leave-tracker': the HR module's Leave Management page
+      // replaced it and does everything it did (plus balances, half days, leave
+      // types and the holiday calendar), so keeping both meant two menu entries
+      // for one job. The old route still resolves and redirects there, so
+      // bookmarks keep working — see hr-leave.js.
       { route: 'announcements', label: 'Announcements',  icon: 'announcements' },
       { route: 'help-ticket',   label: 'Help Ticket',    icon: 'helpticket' },
       { route: 'profile',       label: 'Profile',        icon: 'profile' },
@@ -169,8 +173,14 @@ window.Sidebar = {
     // user permissioned before either change only has those old keys saved,
     // so honor any of them as access to every IMS book rather than letting
     // the grant silently disappear.
+    // 'hr-leave' replaced the retired 'leave-tracker' page. Anybody who was
+    // permissioned for the old one is permissioned for its replacement —
+    // otherwise retiring the page would silently take leave away from every
+    // user who has an explicit permission record.
     const routeAliases = item.route.startsWith('ims')
       ? [item.route, 'ims', 'inward', 'outward']
+      : item.route === 'hr-leave'
+      ? ['hr-leave', 'leave-tracker']
       : [item.route];
     if (!item.alwaysShow && permissions && permissions.pages && !routeAliases.some(r => permissions.pages.includes(r))) return '';
 

@@ -85,6 +85,42 @@ window.Pages['hr-leave'] = (() => {
 
   /* ── Requests ─────────────────────────────────────────────────────── */
 
+  /* An employee's own entitlements, as a strip of cards above their requests.
+     The company-wide grid on the Balances tab is an HR tool and stays behind
+     requireAdmin; this is the one number every employee actually wants —
+     how much leave they have left — and it is their own row, which the server
+     scopes for them. */
+  function myBalanceStrip() {
+    const row = (_balances?.rows || [])[0];
+    if (!row) return '';
+    const types = _balances.types || [];
+    return `<div style="margin-bottom:16px;">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
+           color:var(--color-primary);margin-bottom:9px;">My Leave Balance — ${_balances.year}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;">
+        ${types.map((t) => {
+          const c = row.cells[t.code] || { opening: 0, accrued: 0, used: 0, balance: 0 };
+          const entitled = H.num(c.opening) + H.num(c.accrued);
+          const left = H.num(c.balance);
+          // An unpaid type has no entitlement to run down, so showing it a
+          // "balance" would be misleading — it reports what has been taken.
+          const unpaid = !H.num(t.paid);
+          const tone = unpaid ? '#64748b' : (left > 0 ? '#15803d' : '#b91c1c');
+          return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:12px 14px;">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;">
+              <span style="font-size:12px;font-weight:700;color:#0f172a;">${H.esc(t.code)}</span>
+              <span style="font-size:10px;color:#94a3b8;">${H.esc(t.name)}</span>
+            </div>
+            <div style="font-size:22px;font-weight:700;color:${tone};margin-top:4px;letter-spacing:-.02em;">
+              ${unpaid ? H.num(c.used) : left}</div>
+            <div style="font-size:10.5px;color:#94a3b8;margin-top:1px;">
+              ${unpaid ? 'days taken' : `left of ${entitled} · ${H.num(c.used)} used`}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
   function requestsView(admin) {
     const rows = _leaves.map((l) => {
       const pending = /pending/i.test(l.status);
@@ -108,19 +144,24 @@ window.Pages['hr-leave'] = (() => {
       ];
     });
 
+    // An employee's own list does not need a column repeating their own name,
+    // and has nothing to approve — so it drops the first and last columns.
     const cols = ['Employee', 'Type', 'Period', { label: 'Days', align: 'right' }, 'Reason', 'Status',
       { label: 'Balance After', align: 'right' }];
     if (admin) cols.push({ label: 'Action', nowrap: true });
+    const shownCols = admin ? cols : cols.slice(1);
+    const shownRows = rows.map((r) => (admin ? r : r.slice(1, 7)));
 
     return `
+      ${admin ? '' : myBalanceStrip()}
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px;align-items:end;">
         ${H.select('hrl-f-status', 'Status', _statusFilter, ['All', ...STATUSES])}
         ${H.select('hrl-f-year', 'Year', _year, yearList())}
         <div><button id="hrl-export" class="btn-secondary btn-sm" style="width:100%;">Export CSV</button></div>
       </div>
-      ${H.table(cols, rows.map((r) => (admin ? r : r.slice(0, 7))),
-        { empty: 'No leave requests for these filters' })}`;
+      ${H.table(shownCols, shownRows,
+        { empty: admin ? 'No leave requests for these filters' : 'You have not applied for any leave in this period' })}`;
   }
 
   const yearList = () => {
@@ -245,7 +286,17 @@ window.Pages['hr-leave'] = (() => {
 
     on('hrl-apply', 'click', openApply);
     on('hrl-f-status', 'change', (e) => { _statusFilter = e.target.value; reload(loadRequests); });
-    on('hrl-f-year', 'change', (e) => { _year = Number(e.target.value); _balances = null; _holidays = []; reload(loadRequests); });
+    // An employee's balance strip sits on the Requests tab, so changing the
+    // year has to refetch it here too — not only on the admin Balances tab.
+    on('hrl-f-year', 'change', (e) => {
+      _year = Number(e.target.value);
+      _balances = null;
+      _holidays = [];
+      reload(async () => {
+        await loadRequests();
+        if (!H.isAdmin()) await loadBalances();
+      });
+    });
     on('hrl-b-year', 'change', (e) => { _year = Number(e.target.value); reload(loadBalances); });
     on('hrl-h-year', 'change', (e) => { _year = Number(e.target.value); reload(loadHolidays); });
     on('hrl-export', 'click', exportRequests);
@@ -499,6 +550,11 @@ window.Pages['hr-leave'] = (() => {
       try {
         await loadMasters();
         await loadRequests();
+        // An employee sees their own entitlements above their requests, so the
+        // balances come along on the first load rather than behind a tab they
+        // do not get. For an Admin this is the company-wide grid and stays on
+        // its own tab, fetched only when they open it.
+        if (!H.isAdmin()) await loadBalances();
         render();
       } catch (e) {
         if (el) el.innerHTML = H.empty('Could not load leave', e.message);
@@ -506,3 +562,13 @@ window.Pages['hr-leave'] = (() => {
     },
   };
 })();
+
+/* The retired Leave Tracker's route.
+   ---------------------------------------------------------------------
+   Leave Management replaced that page and does everything it did, so it is
+   gone from the menu — but #leave-tracker is in people's bookmarks and in
+   older emails. Rather than leave a second, lesser leave page alive to
+   drift out of step, the old route resolves to a redirect. */
+window.Pages['leave-tracker'] = {
+  render() { window.Router.navigate('hr-leave'); },
+};
