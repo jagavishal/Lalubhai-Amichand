@@ -357,6 +357,24 @@ window.Pages['hr-leave'] = (() => {
 
   // onDone fires after a request is submitted, so a caller outside this
   // page (the Dashboard strip) can refresh what it shows.
+  /* Balances for the Apply form, cached per employee for as long as the page
+     is open. The form is the moment somebody actually needs this number —
+     deciding whether to take three days is exactly when "how many have I got"
+     matters — so it is on screen there rather than a tab away. */
+  const _balCache = {};
+  async function balancesFor(employeeId) {
+    const key = employeeId || 'me';
+    if (_balCache[key]) return _balCache[key];
+    const url = `/api/hr/leave-balances?year=${new Date().getFullYear()}`
+      + (employeeId ? `&employeeId=${encodeURIComponent(employeeId)}` : '');
+    const data = await H.api(url).catch(() => null);
+    // The server scopes a non-admin to themselves and ignores the id, so the
+    // single row that comes back is the right one either way.
+    const row = (data && data.rows || [])[0] || null;
+    _balCache[key] = row;
+    return row;
+  }
+
   function openApply(onDone) {
     const admin = H.isAdmin();
     const emps = (_masters.employees || []).filter((e) => e.status === 'Active')
@@ -371,6 +389,7 @@ window.Pages['hr-leave'] = (() => {
       ${H.field('hrla-from', 'From', H.todayISO(), { type: 'date', required: true })}
       ${H.field('hrla-to', 'To', H.todayISO(), { type: 'date', required: true })}
       ${H.textarea('hrla-reason', 'Reason', '', { rows: 3 })}
+      <div id="hrla-bal" style="grid-column:1/-1;"></div>
       <div id="hrla-hint" style="grid-column:1/-1;font-size:12px;color:#64748b;"></div>
     `);
     H.openModal({
@@ -381,6 +400,66 @@ window.Pages['hr-leave'] = (() => {
         const from = document.getElementById('hrla-from');
         const to = document.getElementById('hrla-to');
         const hint = document.getElementById('hrla-hint');
+        const type = document.getElementById('hrla-type');
+        const empSel = document.getElementById('hrla-emp');
+        const balBox = document.getElementById('hrla-bal');
+
+        const requestedDays = () => {
+          const isHalf = half.value !== 'full';
+          if (isHalf) return 0.5;
+          return Math.max(0, Math.round((new Date(to.value) - new Date(from.value)) / 864e5) + 1);
+        };
+
+        /* Every type's balance, with the one being applied for picked out and
+           the effect of this request spelled out under it. Showing all of them
+           matters: somebody out of CL can see at a glance that they still have
+           PL, which is the actual decision being made here. */
+        async function paintBalances() {
+          if (!balBox) return;
+          const row = await balancesFor(admin ? (empSel && empSel.value) : null);
+          if (!row) { balBox.innerHTML = ''; return; }
+          const code = type ? type.value : '';
+          const days = requestedDays();
+          const chips = _types.map((t) => {
+            const c = row.cells[t.code] || { opening: 0, accrued: 0, used: 0, balance: 0 };
+            const unpaid = !H.num(t.paid);
+            const left = H.num(c.balance);
+            const on = t.code === code;
+            const tone = unpaid ? '#64748b' : (left > 0 ? '#15803d' : '#b91c1c');
+            return `<div style="flex:1;min-width:78px;text-align:center;padding:7px 6px;border-radius:9px;
+                 border:1.5px solid ${on ? 'var(--color-primary)' : '#e2e8f0'};
+                 background:${on ? 'var(--color-primary-light)' : '#fff'};">
+              <div style="font-size:16px;font-weight:700;color:${tone};line-height:1.1;">
+                ${unpaid ? H.num(c.used) : left}</div>
+              <div style="font-size:9.5px;font-weight:700;letter-spacing:.05em;color:#94a3b8;margin-top:2px;">
+                ${H.esc(t.code)}</div>
+            </div>`;
+          }).join('');
+
+          let after = '';
+          if (code && days) {
+            const c = row.cells[code] || { balance: 0 };
+            const t = _types.find((x) => x.code === code);
+            if (t && !H.num(t.paid)) {
+              after = `<div style="font-size:11.5px;color:#64748b;margin-top:7px;">
+                ${H.esc(code)} is unpaid — these ${days} day(s) become loss of pay in that month's payroll.</div>`;
+            } else {
+              const left = H.num(c.balance);
+              const remaining = H.num(left - days);
+              after = remaining < 0
+                ? `<div style="font-size:11.5px;color:#b45309;margin-top:7px;">
+                    Only ${left} ${H.esc(code)} left — ${H.num(days - left)} of these ${days} day(s) will be loss of pay.
+                    You can still apply.</div>`
+                : `<div style="font-size:11.5px;color:#64748b;margin-top:7px;">
+                    ${left} ${H.esc(code)} available — ${remaining} would remain after this request.</div>`;
+            }
+          }
+          balBox.innerHTML = `
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+                 color:#94a3b8;margin-bottom:6px;">Leave Balance ${row.name ? '\u00b7 ' + H.esc(row.name) : ''}</div>
+            <div style="display:flex;gap:7px;flex-wrap:wrap;">${chips}</div>${after}`;
+        }
+
         const sync = () => {
           // A half day is a single date by definition, so the To field follows
           // From and locks rather than silently producing a nonsense span.
@@ -388,11 +467,11 @@ window.Pages['hr-leave'] = (() => {
           if (isHalf) { to.value = from.value; to.readOnly = true; to.style.background = '#f8fafc'; }
           else { to.readOnly = false; to.style.background = '#fff'; }
           if (to.value < from.value) to.value = from.value;
-          const days = isHalf ? 0.5
-            : Math.max(0, Math.round((new Date(to.value) - new Date(from.value)) / 864e5) + 1);
+          const days = requestedDays();
           hint.textContent = days ? `${days} day${days === 1 ? '' : 's'} will be requested.` : '';
+          paintBalances();
         };
-        [half, from, to].forEach((x) => x?.addEventListener('change', sync));
+        [half, from, to, type, empSel].forEach((x) => x && x.addEventListener('change', sync));
         sync();
       },
       onConfirm: async () => {
@@ -403,6 +482,8 @@ window.Pages['hr-leave'] = (() => {
         };
         if (admin && !payload.employeeId) { H.toast('Pick an employee', 'error'); throw new Error('validation'); }
         const r = await H.post('/api/hr/leaves', payload);
+        // The next open must not show a stale balance.
+        Object.keys(_balCache).forEach((k) => delete _balCache[k]);
         H.closeModal('hrla');
         H.toast(r.warning || `Leave requested — ${r.days} day(s)`, r.warning ? 'warning' : 'success');
         if (typeof onDone === 'function') { onDone(); return; }

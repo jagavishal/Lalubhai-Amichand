@@ -88,47 +88,52 @@ window.Pages.profile = {
       : `<div class="w-24 h-24 rounded-2xl bg-gradient-to-br from-amber-400 to-pink-500 grid place-items-center text-white text-2xl font-bold shadow-elevated ring-4 ring-white" id="profile-avatar-initials">${this._esc(initials)}</div>`;
 
     root.innerHTML = `
-      <div class="grid grid-cols-1 lg:grid-cols-[1fr_2fr] gap-6">
+      <!-- Two columns that both start at the top: everything you can change on
+           the left, your employment record on the right, so the whole profile
+           reads on one screen instead of the HR half sitting below the fold.
+           items-start stops the shorter column being stretched to match the
+           taller one. -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
 
-        <!-- Identity card -->
-        <div class="card overflow-hidden">
-          <div class="h-24 bg-gradient-to-br from-primary-500 via-primary-600 to-violet-600"></div>
-          <div class="px-6 pb-6 -mt-12">
-            <div class="relative w-24 h-24" id="profile-avatar-wrap">
-              ${avatarHtml}
-            </div>
-            <div class="mt-4">
-              <div class="text-lg font-semibold text-slate-900" id="profile-display-name">${this._esc(f.name || '—')}</div>
-              <div class="text-sm text-slate-500" id="profile-display-email">${this._esc(f.email || '—')}</div>
-              <span class="pill bg-amber-50 text-amber-700 border border-amber-100 mt-2 inline-flex items-center gap-1">
-                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7Z"/></svg>
-                ${this._esc(role)}
-              </span>
-            </div>
-            <div class="flex gap-2 mt-4">
-              <button id="profile-change-photo-btn" class="btn-secondary !py-1.5 text-xs flex-1" ${this._picSaving ? 'disabled' : ''}>
-                ${this._picSaving ? 'Saving…' : 'Change Photo'}
-              </button>
-              <button id="profile-remove-photo-btn" class="btn-ghost !py-1.5 text-xs text-red-600 hover:bg-red-50 flex-1" ${this._picSaving ? 'disabled' : ''}>
-                Remove
-              </button>
-              <input id="profile-file-input" type="file" accept="image/*" class="hidden" />
-            </div>
-            <div class="mt-5 pt-5 border-t border-slate-100 grid grid-cols-2 gap-3 text-center">
-              <div>
-                <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Department</div>
-                <div class="text-sm font-medium text-slate-800 mt-0.5">${this._esc(dept)}</div>
+        <!-- LEFT: who you are, and the two things you can edit -->
+        <div class="space-y-6">
+
+          <!-- Identity card -->
+          <div class="card overflow-hidden">
+            <div class="h-24 bg-gradient-to-br from-primary-500 via-primary-600 to-violet-600"></div>
+            <div class="px-6 pb-6 -mt-12">
+              <div class="relative w-24 h-24" id="profile-avatar-wrap">
+                ${avatarHtml}
               </div>
-              <div>
-                <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Phone</div>
-                <div class="text-sm font-medium text-slate-800 mt-0.5" id="profile-display-phone">${this._esc(f.phone || '—')}</div>
+              <div class="mt-4">
+                <div class="text-lg font-semibold text-slate-900" id="profile-display-name">${this._esc(f.name || '—')}</div>
+                <div class="text-sm text-slate-500" id="profile-display-email">${this._esc(f.email || '—')}</div>
+                <span class="pill bg-amber-50 text-amber-700 border border-amber-100 mt-2 inline-flex items-center gap-1">
+                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7Z"/></svg>
+                  ${this._esc(role)}
+                </span>
+              </div>
+              <div class="flex gap-2 mt-4">
+                <button id="profile-change-photo-btn" class="btn-secondary !py-1.5 text-xs flex-1" ${this._picSaving ? 'disabled' : ''}>
+                  ${this._picSaving ? 'Saving…' : 'Change Photo'}
+                </button>
+                <button id="profile-remove-photo-btn" class="btn-ghost !py-1.5 text-xs text-red-600 hover:bg-red-50 flex-1" ${this._picSaving ? 'disabled' : ''}>
+                  Remove
+                </button>
+                <input id="profile-file-input" type="file" accept="image/*" class="hidden" />
+              </div>
+              <div class="mt-5 pt-5 border-t border-slate-100 grid grid-cols-2 gap-3 text-center">
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Department</div>
+                  <div class="text-sm font-medium text-slate-800 mt-0.5">${this._esc(dept)}</div>
+                </div>
+                <div>
+                  <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Phone</div>
+                  <div class="text-sm font-medium text-slate-800 mt-0.5" id="profile-display-phone">${this._esc(f.phone || '—')}</div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-
-        <!-- Forms -->
-        <div class="space-y-6">
 
           <!-- Personal Information -->
           <div class="card p-5">
@@ -163,10 +168,11 @@ window.Pages.profile = {
               ${this._saving ? 'Saving…' : 'Save Changes'}
             </button>
           </div>
-
-          <!-- Employment (from the HR module) -->
-          <div id="profile-hr">${this._hrHtml()}</div>
         </div>
+
+        <!-- RIGHT: the HR module's record of the same person. Read-only, so it
+             sits opposite the editable half rather than underneath it. -->
+        <div id="profile-hr">${this._hrHtml()}</div>
       </div>
     `;
 
@@ -264,7 +270,7 @@ window.Pages.profile = {
           <div class="text-lg font-bold text-green-700 mt-0.5">₹ ${money(salary.net)}</div>
         </div>
       </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+      <div class="grid grid-cols-1 xl:grid-cols-2 gap-x-6">
         ${salary.earnings.filter((x) => x.amount).map((x) => row(x.label, '₹ ' + money(x.amount))).join('')}
         ${salary.deductionLines.filter((x) => x.amount).map((x) => row(x.label, '− ₹ ' + money(x.amount))).join('')}
       </div>
@@ -281,7 +287,7 @@ window.Pages.profile = {
           <span class="pill pill-brand pill-sm">${esc(e.id)}</span>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-x-6">
           <div>
             ${heading('Job')}
             ${row('Designation', e.designation)}

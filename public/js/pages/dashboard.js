@@ -202,126 +202,17 @@ window.Pages.dashboard = (function () {
   }
 
 
-  /* ── My HR strip ───────────────────────────────────────────────────────
-     The point of this block is that an ordinary employee should never have
-     to go looking for the HR pages: checking in, seeing what leave is left
-     and booking a day off are the three things they do, and they all happen
-     here on the page they already land on.
+  /* Apply Leave lives on the Dashboard because booking a day off is one of
+     the few HR things everybody does, and it should not need a trip into the
+     HR section. It opens the very same form Leave Management uses rather than
+     a second copy — see applyLeave() in hr-leave.js — so the half-day rule and
+     the balance warning can never drift between the two ways in.
 
-     Everything comes from one call, GET /api/hr/me, which is scoped to
-     whoever is signed in — there is no id to pass and nothing to get wrong.
-     It is fetched after the dashboard has painted, so a slow HR query never
-     delays the tasks people came for. ─────────────────────────────────── */
-  let _hr = null;
-
-  function _hrTime(v) {
-    if (!v) return null;
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? null
-      : d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-  }
-
-  function _hrStripHtml() {
-    if (!_hr || !_hr.linked) return '';
-    const e = _hr.employee || {};
-    const t = _hr.today || {};
-    const inAt = _hrTime(t.check_in);
-    const outAt = _hrTime(t.check_out);
-    const esc = (x) => String(x == null ? '' : x)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-    const punch = !inAt
-      ? '<button id="db-hr-punch" data-type="in" style="padding:8px 18px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:700;background:var(--color-primary);color:var(--color-primary-text);">Check In</button>'
-      : (!outAt
-        ? '<button id="db-hr-punch" data-type="out" style="padding:8px 18px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:700;background:#059669;color:#fff;">Check Out</button>'
-        : '<span style="font-size:12.5px;font-weight:600;color:#15803d;">Day complete &middot; ' + (t.working_hours || 0) + ' hrs</span>');
-
-    // Unpaid types have no entitlement to run down, so they are left out of a
-    // strip whose whole job is to answer "how much have I got left".
-    const chips = (_hr.balances || []).filter((b) => b.paid).map((b) => {
-      const tone = b.balance > 0 ? '#15803d' : '#b91c1c';
-      return '<div style="text-align:center;padding:0 12px;border-left:1px solid #e2e8f0;">'
-        + '<div style="font-size:17px;font-weight:700;color:' + tone + ';line-height:1.1;">' + b.balance + '</div>'
-        + '<div style="font-size:10px;font-weight:700;letter-spacing:.05em;color:#94a3b8;">' + esc(b.code) + '</div></div>';
-    }).join('');
-
-    return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin-bottom:20px;'
-      + 'display:flex;align-items:center;gap:16px;flex-wrap:wrap;">'
-      + '<div style="flex:1;min-width:170px;">'
-      +   '<div style="font-size:14px;font-weight:700;color:#0f172a;">' + esc(e.name) + '</div>'
-      +   '<div style="font-size:11.5px;color:#94a3b8;">' + esc(e.id) + (e.designation ? ' &middot; ' + esc(e.designation) : '') + '</div>'
-      + '</div>'
-      + '<div style="display:flex;align-items:center;gap:18px;">'
-      +   '<div style="text-align:center;"><div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:#94a3b8;">IN</div>'
-      +     '<div style="font-size:14px;font-weight:700;color:' + (inAt ? '#0f172a' : '#cbd5e1') + ';">' + (inAt || '—') + '</div></div>'
-      +   '<div style="text-align:center;"><div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:#94a3b8;">OUT</div>'
-      +     '<div style="font-size:14px;font-weight:700;color:' + (outAt ? '#0f172a' : '#cbd5e1') + ';">' + (outAt || '—') + '</div></div>'
-      +   punch
-      + '</div>'
-      + (chips ? '<div style="display:flex;align-items:center;">' + chips + '</div>' : '')
-      + '<div style="display:flex;gap:7px;flex-wrap:wrap;margin-left:auto;">'
-      +   '<button class="db-hr-go" data-go="hr-attendance" style="padding:6px 12px;border-radius:7px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:12px;font-weight:600;cursor:pointer;">My Attendance</button>'
-      +   '<button class="db-hr-go" data-go="hr-payroll" style="padding:6px 12px;border-radius:7px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:12px;font-weight:600;cursor:pointer;">My Payslips</button>'
-      + '</div>'
-      + (t.late ? '<div style="width:100%;font-size:11.5px;color:#b45309;">Marked late today — shift starts at ' + esc(_hr.shift && _hr.shift.start) + '.</div>' : '')
-      + '</div>';
-  }
-
-  function _bindHrStrip() {
-    const box = document.getElementById('db-hr-strip');
-    if (!box) return;
-    box.querySelectorAll('.db-hr-go').forEach((b) =>
-      b.addEventListener('click', () => window.Router.navigate(b.dataset.go)));
-    const punch = document.getElementById('db-hr-punch');
-    if (punch) punch.addEventListener('click', () => _punch(punch.dataset.type, punch));
-  }
-
-  async function _loadHrStrip() {
-    try {
-      const res = await fetch('/api/hr/me');
-      _hr = res.ok ? await res.json() : null;
-    } catch { _hr = null; }
-    const box = document.getElementById('db-hr-strip');
-    if (!box) return;
-    box.innerHTML = _hrStripHtml();
-    _bindHrStrip();
-  }
-
-  /* Location is offered, never required: a refused permission or a device
-     with no fix must not leave somebody unable to mark their own attendance. */
-  function _hrCoords() {
-    return new Promise((resolve) => {
-      if (!navigator.geolocation) return resolve({});
-      const done = (v) => resolve(v);
-      const timer = setTimeout(() => done({}), 6000);
-      navigator.geolocation.getCurrentPosition(
-        (pos) => { clearTimeout(timer); done({ lat: String(pos.coords.latitude), lon: String(pos.coords.longitude) }); },
-        () => { clearTimeout(timer); done({}); },
-        { enableHighAccuracy: true, timeout: 5500, maximumAge: 60000 });
-    });
-  }
-
-  async function _punch(type, btn) {
-    if (btn) { btn.disabled = true; btn.textContent = type === 'in' ? 'Checking in…' : 'Checking out…'; }
-    try {
-      const c = await _hrCoords();
-      const r = await Utils.apiFetch('/api/hr/attendance/punch', {
-        method: 'POST', body: JSON.stringify({ type, ...c }),
-      });
-      Utils.showToast(type === 'in'
-        ? (r && r.late ? 'Checked in — marked late' : 'Checked in')
-        : 'Checked out — ' + ((r && r.workingHours) || 0) + ' hours');
-    } catch (err) {
-      Utils.showToast(err.message || 'Could not record the punch', 'error');
-    }
-    await _loadHrStrip();
-  }
-
-  // Opens the same Apply-for-Leave form Leave Management uses — one form, so
-  // the two can never drift apart — and refreshes the balance chips after.
+     Everything else about a person's HR record (punch times, balances,
+     salary, payslips) lives on their Profile, not here. */
   function _openLeaveModal() {
     const page = window.Pages && window.Pages['hr-leave'];
-    if (page && typeof page.applyLeave === 'function') page.applyLeave(() => _loadHrStrip());
+    if (page && typeof page.applyLeave === 'function') page.applyLeave();
     else window.Router.navigate('hr-leave');
   }
 
@@ -362,9 +253,6 @@ window.Pages.dashboard = (function () {
     _state.userFilter  = 'All';
 
     _renderShell(el, admin, hod);
-    // Not awaited: the dashboard is usable immediately and the HR strip
-    // fills itself in when /api/hr/me comes back.
-    _loadHrStrip();
     } catch(err) {
       el.innerHTML = `<div style="padding:2rem;color:#dc2626;font-size:14px;">❌ Dashboard error: ${err.message}</div>`;
       console.error('Dashboard render error:', err);
@@ -490,11 +378,6 @@ window.Pages.dashboard = (function () {
             ${admin ? `<div id="db-emp-picker-mobile"></div>` : ''}
           </div>
         </div>
-
-        <!-- My HR: punch, leave balance and the shortcuts an employee needs.
-             Filled in after first paint by _loadHrStrip(); renders nothing at
-             all when the signed-in account has no employee record behind it. -->
-        <div id="db-hr-strip"></div>
 
         <!-- Stat cards -->
         <div id="db-stat-cards" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1rem;margin-bottom:20px;">
