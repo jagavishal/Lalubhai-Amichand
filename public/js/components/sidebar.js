@@ -240,7 +240,24 @@ window.Sidebar = {
     const isAdmin    = this._isAdmin(user);
     const activeRoute = (window.location.hash || '').replace('#', '') || 'dashboard';
     const roles      = (user?.roles || ['User']).join(' · ');
-    const permissions = isAdmin ? null : (user?.permissions || null);
+    /* What this person is allowed to see.
+       ---------------------------------------------------------------------
+       Admins used to be handed `null` here, which means "unrestricted" — so
+       whatever an Admin was given in Users → Access was collected, saved, and
+       then ignored by the menu. Their saved record is now honoured like
+       everybody else's, which is the whole point of that screen.
+
+       Two deliberate exceptions:
+
+       - The owner is never restricted. It is the account that fixes a
+         permissions mistake, and it must not be able to lock itself out of
+         the screen it would fix it from.
+
+       - An account with no saved record at all still sees everything. That is
+         every Admin who has never been through Users → Access, so nothing
+         changes for them until somebody actually sets their access — this is
+         a switch that only takes effect once it is used. */
+    const permissions = user?.isSuperAdmin ? null : (user?.permissions || null);
     const featureFlags = user?.featureFlags || {};
 
     if (!this._openSections) this._openSections = this._loadOpenSections(activeRoute);
