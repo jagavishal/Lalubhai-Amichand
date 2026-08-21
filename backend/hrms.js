@@ -1495,6 +1495,35 @@ function mountHrms(app, ctx) {
             warning = `Only ${available} ${code} left — ${money(days - available)} day(s) will be treated as loss of pay.`;
           }
         }
+        /* Who this request goes to. Three sources, in order of how deliberate
+           they are: the approver named on the applicant's user record (Users →
+           Add/Edit → Leave Approver), then the employee's reporting manager,
+           then plain "HOD" as the app has always defaulted to. Resolved once,
+           here, and stamped onto the row — so a request keeps the approver it
+           was raised against even if the setting changes afterwards. */
+        let approverName = String(b.approver_name || '').trim();
+        let approverEmail = String(b.approver_email || '').trim();
+        if (!approverName) {
+          const applicantId = b.userId || emp?.user_id || req.session?.user?.id || '';
+          const link = applicantId
+            ? (await q(`SELECT leave_approver FROM users WHERE id = $1`, [applicantId]).catch(() => []))[0]
+            : null;
+          if (link?.leave_approver) {
+            const who = (await q(`SELECT name, email FROM users WHERE id = $1`, [link.leave_approver]).catch(() => []))[0];
+            if (who) { approverName = who.name || ''; approverEmail = who.email || ''; }
+          }
+          // Nobody named — fall back to the reporting line the employee record
+          // already carries. It holds a code on records this app created and a
+          // plain name on the ones imported from the sheet.
+          if (!approverName && emp?.reporting_to) {
+            const mgr = (await q(
+              `SELECT name, email FROM hr_employees WHERE id = $1 OR LOWER(name) = LOWER($2) LIMIT 1`,
+              [emp.reporting_to, emp.reporting_to],
+            ).catch(() => []))[0];
+            if (mgr) { approverName = mgr.name || ''; approverEmail = mgr.email || ''; }
+          }
+        }
+
         const cnt = await q(`SELECT COUNT(*) AS cnt FROM leaves`);
         const id = 'LV' + pad(Number(cnt[0]?.cnt || 0) + 1, 4);
         await pool.query(
@@ -1504,7 +1533,7 @@ function mountHrms(app, ctx) {
           [id, b.userId || req.session?.user?.id || null,
            b.userName || emp?.name || req.session?.user?.name || 'Unknown',
            employeeId || null, 'Leave', code, halfDay, days, from, to, b.reason || '',
-           b.approver || 'HOD', b.approver_email || '', b.approver_name || ''],
+           approverName || b.approver || 'HOD', approverEmail, approverName],
         );
         res.json({ success: true, id, days, warning });
       } catch (e) { res.status(500).json({ error: e.message }); }

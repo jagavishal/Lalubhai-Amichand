@@ -587,7 +587,7 @@ window.Pages.users = (() => {
           const u = _users.find(x => String(x.id) === String(btn.dataset.id));
           if (!u) return;
           _editingUser = u;
-          _form = { id: u.id, name: u.name || '', email: u.email || '', phone: u.phone || '', department: u.department || '', branch: u.branch || '', roles: normalizeRoles(u.roles), active: u.active !== false, notifEmail: u.notifEmail || '' };
+          _form = { id: u.id, name: u.name || '', email: u.email || '', phone: u.phone || '', department: u.department || '', branch: u.branch || '', leave_approver: u.leave_approver || '', roles: normalizeRoles(u.roles), active: u.active !== false, notifEmail: u.notifEmail || '' };
           _picture = u.picture || null; _pictureChanged = false; _modalOpen = true;
           renderModal();
         });
@@ -971,6 +971,16 @@ window.Pages.users = (() => {
       : BRANCHES;
     const branchOptions = branchList.map(bn => `<option value="${esc(bn)}" ${_form.branch === bn ? 'selected' : ''}>${esc(bn)}</option>`).join('');
 
+    // Who signs off this person's leave. Anyone active can be named — approving
+    // is a reporting relationship, not a role, and the shop floor reports to
+    // people who are not Admins. The person being edited is left out: nobody
+    // approves their own leave.
+    const approverOptions = (_users || [])
+      .filter(u => u.active !== false && u.id !== _form.id)
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      .map(u => `<option value="${esc(u.id)}" ${_form.leave_approver === u.id ? 'selected' : ''}>${esc(u.name || u.email)}${u.department ? ' · ' + esc(u.department) : ''}</option>`)
+      .join('');
+
     const rolesHtml = ROLES.map(r => {
       const active = curRoles.includes(r);
       const isUser = r === 'User';
@@ -1074,8 +1084,24 @@ window.Pages.users = (() => {
               </div>
             </div>
 
-            ${passwordField ? `<!-- Row 4: Password (add only) -->
-            <div class="grid grid-cols-2 gap-3">${passwordField}</div>` : ''}
+            <!-- Row 4: Leave approver -->
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <div class="mb-1.5">
+                  <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Leave Approver</label>
+                </div>
+                <div class="relative">
+                  <select id="um-leave-approver"
+                    class="w-full appearance-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-[13px] text-slate-700 outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 transition">
+                    <option value="">— None (falls back to reporting manager) —</option>
+                    ${approverOptions}
+                  </select>
+                  <svg class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </div>
+                <div class="text-[10px] text-slate-400 mt-1.5">Their leave requests are raised against this person</div>
+              </div>
+              ${passwordField}
+            </div>
 
             <!-- Roles -->
             <div>
@@ -1175,6 +1201,10 @@ window.Pages.users = (() => {
 
     document.getElementById('um-branch')?.addEventListener('change', e => {
       _form.branch = e.target.value;
+    });
+
+    document.getElementById('um-leave-approver')?.addEventListener('change', e => {
+      _form.leave_approver = e.target.value;
     });
 
     /* Department: add new via inline input */

@@ -242,6 +242,11 @@ const SCHEMA = [
   // public/js/pages/users.js) and never a migration; '' means not yet set, which
   // is what every user carries until an Admin picks one.
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS branch VARCHAR(64) DEFAULT ''`,
+  // Who signs off this person's leave. Holds another user's id, so a rename
+  // never orphans the link. Blank means nobody has been named, and the leave
+  // request falls back to the employee's reporting manager and then to plain
+  // "HOD" — see POST /api/hr/leaves.
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS leave_approver VARCHAR(16) DEFAULT NULL`,
   `CREATE TABLE IF NOT EXISTS payment_entries (id VARCHAR(16) PRIMARY KEY, vendor_id VARCHAR(16) NOT NULL, amount DECIMAL(15,2) NOT NULL DEFAULT 0, txn_type VARCHAR(4) DEFAULT 'N', narration VARCHAR(500) DEFAULT '', status VARCHAR(16) DEFAULT 'draft', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, exported_at DATETIME DEFAULT NULL, batch_label VARCHAR(128) DEFAULT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_pe_status ON payment_entries (status)`,
   `CREATE INDEX idx_pe_exported ON payment_entries (exported_at)`,
@@ -2285,7 +2290,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
     const lastNum = users.reduce((max,u)=>{ const n=parseInt((u.id||'').replace('U',''))||0; return n>max?n:max; },0);
     const id = 'U'+(lastNum+1).toString().padStart(3,'0');
     const roles = body.roles?.length ? body.roles : ['User'];
-    const newUser = { id, name:body.name.trim(), email:body.email.trim(), phone:body.phone||'', department: await canonicalDept(body.department), branch:body.branch||'', roles, active:true, permissions: defaultPermissionsFor(roles), createdAt:new Date().toISOString() };
+    const newUser = { id, name:body.name.trim(), email:body.email.trim(), phone:body.phone||'', department: await canonicalDept(body.department), branch:body.branch||'', leave_approver: body.leave_approver || null, roles, active:true, permissions: defaultPermissionsFor(roles), createdAt:new Date().toISOString() };
     users.push(newUser); store.users=users;
     await writeStore(store);
     return res.status(201).json(newUser);
@@ -2301,7 +2306,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
     const roles = body.roles?.length ? body.roles : ['User'];
     const hash = body.password ? await bcrypt.hash(body.password, 10) : null;
     const perms = defaultPermissionsFor(roles);
-    await pool.query('INSERT INTO users (id,name,email,phone,department,branch,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$9,NOW())', [id,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',await canonicalDept(body.department),body.branch||'',roles.join(','),hash,perms?JSON.stringify(perms):null]);
+    await pool.query('INSERT INTO users (id,name,email,phone,department,branch,leave_approver,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,NOW())', [id,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',await canonicalDept(body.department),body.branch||'',body.leave_approver||null,roles.join(','),hash,perms?JSON.stringify(perms):null]);
     if (body.picture) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,id]);
@@ -2330,6 +2335,7 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
       if (body.phone!==undefined) user.phone=body.phone;
       if (body.department!==undefined) user.department=await canonicalDept(body.department);
       if (body.branch!==undefined) user.branch=body.branch;
+      if (body.leave_approver!==undefined) user.leave_approver=body.leave_approver||null;
       if (body.roles!==undefined) user.roles=Array.isArray(body.roles)?body.roles:body.roles.split(',').map(r=>r.trim());
       if (body.active!==undefined) user.active=body.active;
       if (body.permissions!==undefined) user.permissions=body.permissions;
@@ -2342,8 +2348,13 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
     // stored); an empty string still clears it, as before.
     const dept = body.department == null ? null : await canonicalDept(body.department);
     await pool.query(
-      `UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), phone=COALESCE($3,phone), department=COALESCE($4,department), branch=COALESCE($5,branch), roles=COALESCE($6,roles), active=COALESCE($7,active) WHERE id=$8`,
-      [body.name??null,body.email??null,body.phone??null,dept,body.branch??null,roles,body.active===undefined?null:(body.active?1:0),body.id]
+      // leave_approver is set with a plain assignment rather than COALESCE, so
+      // clearing it (picking "— None —") actually clears it. COALESCE would
+      // read the null as "leave alone" and the field could never be unset.
+      `UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), phone=COALESCE($3,phone), department=COALESCE($4,department), branch=COALESCE($5,branch), roles=COALESCE($6,roles), active=COALESCE($7,active)${body.leave_approver===undefined?'':', leave_approver=$9'} WHERE id=$8`,
+      body.leave_approver===undefined
+        ? [body.name??null,body.email??null,body.phone??null,dept,body.branch??null,roles,body.active===undefined?null:(body.active?1:0),body.id]
+        : [body.name??null,body.email??null,body.phone??null,dept,body.branch??null,roles,body.active===undefined?null:(body.active?1:0),body.id,body.leave_approver||null]
     );
     if (body.picture!==undefined) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
