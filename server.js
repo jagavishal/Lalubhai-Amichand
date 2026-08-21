@@ -427,6 +427,143 @@ async function listDepartments() {
   }
 }
 
+// ── Department name casing ────────────────────────────────────────────────────
+// Department strings reach the database from four different directions — the
+// FACTORY_DEPARTMENTS seed (Title Case), the Users bootstrap script (ALL CAPS),
+// the HRMS sheet import (whatever HR typed that day) and every form's "+ Add new
+// department" box — so the same shop floor turned up as "Packing Dept." on PR
+// Creation and "PACKING DEPT." on the HR employee list, and the HR department
+// filter (which builds its options from the values actually stored) showed both
+// as if they were two departments. Every write path now runs its department
+// through canonicalDept(), and normalizeDepartmentCase() repairs what is already
+// stored, so a department is spelled exactly one way across the whole app.
+
+// Words that carry their own capitalisation and must survive title-casing
+// intact — without this "CNC Dept." comes back as "Cnc Dept." and "SS Dept." as
+// "Ss Dept.". Compared with punctuation stripped, so "CNC." matches too.
+const DEPT_ACRONYMS = new Set([
+  'CNC', 'SS', 'HR', 'IT', 'QC', 'QA', 'MIS', 'NPD', 'ALU', 'PPC', 'EDP', 'ERP',
+  'CXO', 'CEO', 'CFO', 'COO', 'MD', 'SEO', 'R&D', 'PR', 'PO', 'GRN', 'IMS', 'FMS',
+]);
+
+// "PACKING DEPT." / "packing dept." → "Packing Dept.". Punctuation and
+// separators are left exactly as typed; only the letters move, and each part of
+// a hyphenated or slashed word is capitalised ("in/out" → "In/Out").
+function titleCaseDept(name) {
+  return String(name == null ? '' : name)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .map((word) => {
+      const bare = word.replace(/[^A-Za-z&]/g, '');
+      if (bare && DEPT_ACRONYMS.has(bare.toUpperCase())) return word.toUpperCase();
+      return word.toLowerCase().replace(/(^|[^A-Za-z'])([a-z])/g, (_, sep, ch) => sep + ch.toUpperCase());
+    })
+    .join(' ');
+}
+
+// The one spelling of a department the app will store. The departments master
+// wins whenever the incoming name matches one of its entries case-insensitively
+// — a name typed as "packing dept." into a free-text box is saved as the
+// master's own "Packing Dept." — and anything genuinely new is title-cased so
+// it joins the list looking like the rest of it.
+// `master` is only ever passed by the bulk repair below, which reads the list
+// once and reuses it across a few hundred names rather than once per name.
+async function canonicalDept(name, master = null) {
+  const raw = String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  const list = master || await listDepartments().catch(() => []);
+  const hit = list.find((d) => normDept(d) === normDept(raw));
+  return hit || titleCaseDept(raw);
+}
+
+// PR Creation stores its Department multi-select as one comma-joined string;
+// this canonicalises each name in it and drops case-duplicates ("Packing Dept.,
+// PACKING DEPT." was two picks of the same department).
+async function canonicalDeptList(value, master = null) {
+  const parts = (Array.isArray(value) ? value : String(value == null ? '' : value).split(','))
+    .map((v) => String(v).trim())
+    .filter(Boolean);
+  const list = master || await listDepartments().catch(() => []);
+  const out = [];
+  for (const p of parts) {
+    const c = await canonicalDept(p, list);
+    if (c && !out.some((d) => normDept(d) === normDept(c))) out.push(c);
+  }
+  return out.join(', ');
+}
+
+// Every table that stores a department as plain text, repaired at boot against
+// the master list. Runs on each cold start rather than once behind a flag: the
+// Google Sheet imports (HRMS, users) can put a fresh ALL-CAPS spelling in at any
+// time, and a restart then quietly puts it right. Statements are cheap — one
+// UPDATE per distinct department per table, almost all of them matching zero
+// rows once the data is clean.
+const DEPT_TEXT_COLUMNS = [
+  ['users', 'department'],
+  ['masters', 'department'],
+  ['daily_tasks', 'department'],
+  ['ims_transactions', 'department'],
+  ['hr_employees', 'department'],
+  ['hr_payslips', 'department'],
+];
+
+async function normalizeDepartmentCase() {
+  if (!USE_DB) return;
+  let changed = 0;
+
+  // The master list first, so everything below is canonicalised against names
+  // that are themselves properly cased. UNIQUE(name) is case-insensitive under
+  // utf8mb4_unicode_ci, so re-casing a row can never collide with another.
+  try {
+    const rows = await q('SELECT id, name FROM departments');
+    for (const r of rows) {
+      const fixed = titleCaseDept(r.name);
+      if (fixed && fixed !== r.name) {
+        const res = await pool.query('UPDATE departments SET name=$1 WHERE id=$2', [fixed, r.id]);
+        changed += res.rowCount || 0;
+      }
+    }
+  } catch (e) { console.error('[departments] master re-case failed:', e.message); }
+
+  // Read once, after the re-casing above, and reused for every name below.
+  const master = await listDepartments().catch(() => []);
+
+  for (const [table, col] of DEPT_TEXT_COLUMNS) {
+    try {
+      // DISTINCT under a case-insensitive collation already collapses the
+      // variants into one representative — updating on that representative
+      // therefore rewrites every casing of it in one statement.
+      const rows = await q(`SELECT DISTINCT ${col} AS d FROM ${table} WHERE ${col} IS NOT NULL AND ${col} <> ''`);
+      for (const r of rows) {
+        const canon = await canonicalDept(r.d, master);
+        if (!canon) continue;
+        const res = await pool.query(`UPDATE ${table} SET ${col}=$1 WHERE ${col}=$2`, [canon, r.d]);
+        changed += res.rowCount || 0;
+      }
+    } catch (e) {
+      // A table that doesn't exist on this deployment (or an HR module that was
+      // never migrated) must not stop the rest of the list being cleaned up.
+      console.error(`[departments] re-case of ${table}.${col} failed:`, e.message);
+    }
+  }
+
+  // PR requisitions keep a comma-joined list rather than one name, so they are
+  // rewritten row by row instead of by distinct value.
+  try {
+    const rows = await q("SELECT id, department FROM pr_requisitions WHERE department IS NOT NULL AND department <> ''");
+    for (const r of rows) {
+      const fixed = await canonicalDeptList(r.department, master);
+      if (fixed && fixed !== r.department) {
+        const res = await pool.query('UPDATE pr_requisitions SET department=$1 WHERE id=$2', [fixed, r.id]);
+        changed += res.rowCount || 0;
+      }
+    }
+  } catch (e) { console.error('[departments] re-case of pr_requisitions failed:', e.message); }
+
+  if (changed) console.log('[db] Department casing normalized on', changed, 'row(s)');
+}
+
 async function fixCollations() {
   if (!USE_DB) return;
   // Every table the app creates needs to be listed here, not just the ones a
@@ -519,13 +656,16 @@ async function ensureSchema() {
     }
     await seedIfEmpty().catch((e) => console.error('[db] seedIfEmpty failed:', e.message));
     await seedDepartments().catch((e) => console.error('[db] seedDepartments failed:', e.message));
-    // These two must be awaited, not fire-and-forget: g.__pg_schema_ready is cached
+    // These must all be awaited, not fire-and-forget: g.__pg_schema_ready is cached
     // and returned instantly to every future ensureSchema() caller the moment this
     // IIFE resolves, so an un-awaited background fix here would race every request
     // that runs before it happens to finish (e.g. collation-dependent JOINs failing
     // intermittently right after a cold start).
     await fixCollations().catch((e) => console.error('[db] fixCollations failed:', e.message));
     await relaxEmailUnique().catch((e) => console.error('[db] relaxEmailUnique failed:', e.message));
+    // Repairs the casing of every department already stored (see the block above
+    // canonicalDept) — awaited for the same reason: pages read those columns.
+    await normalizeDepartmentCase().catch((e) => console.error('[db] normalizeDepartmentCase failed:', e.message));
   })();
   return g.__pg_schema_ready;
 }
@@ -1628,9 +1768,12 @@ app.post('/api/pr-requisitions', requireAuth, async (req, res) => {
     if (!current_stock || !quantity_required || !previous_rate) return res.status(400).json({ error: 'Current Stock, Quantity Required and Previous Rate are required' });
     const id = 'PR' + Date.now().toString(36).toUpperCase();
     const sessUser = req.session?.user;
+    const deptOther = await canonicalDept(department_other);
     const joined = {
       vendors: Array.isArray(vendors) ? vendors.join(', ') : (vendors || ''),
-      department: Array.isArray(department) ? department.join(', ') : (department || ''),
+      // Canonicalised rather than plain-joined: the multi-select can carry a
+      // department typed into an older form in a different case (see canonicalDept).
+      department: await canonicalDeptList(department),
       accessory_product: Array.isArray(accessory_product) ? accessory_product.join(', ') : (accessory_product || ''),
       brazing_product: Array.isArray(brazing_product) ? brazing_product.join(', ') : (brazing_product || ''),
       consumable_product: Array.isArray(consumable_product) ? consumable_product.join(', ') : (consumable_product || ''),
@@ -1650,7 +1793,7 @@ app.post('/api/pr-requisitions', requireAuth, async (req, res) => {
       [
         id, pr_no, filled_by,
         joined.vendors, vendor_other || '',
-        joined.department, department_other || '',
+        joined.department, deptOther,
         joined.accessory_product, joined.brazing_product, cnc_product || '', joined.consumable_product, joined.electric_product,
         joined.packing_product, joined.pressing_product, joined.washing_product, joined.welding_product,
         new_product || '',
@@ -1662,7 +1805,7 @@ app.post('/api/pr-requisitions', requireAuth, async (req, res) => {
       await appendLogRow(PR_FORM_RESPONSES_SHEET_ID, PR_FORM_RESPONSES_TAB, [
         _timestampForSheet(), pr_no, filled_by,
         joined.vendors, vendor_other || '',
-        joined.department, department_other || '',
+        joined.department, deptOther,
         joined.accessory_product, joined.brazing_product, cnc_product || '', joined.consumable_product, joined.electric_product,
         joined.packing_product, joined.pressing_product, joined.washing_product, joined.welding_product,
         new_product || '',
@@ -1784,7 +1927,7 @@ app.post('/api/masters', requireAuth, async (req, res) => {
     const assignedTo = (body.assignedTo||'').trim();
     const frequency = body.frequency || 'Daily';
     const remarks = body.remarks || '';
-    const department = body.department || '';
+    const department = await canonicalDept(body.department);
     const startDate = body.startDate || null;
     const dates = startDate ? generateChecklistDates(startDate, body.endDate || null, frequency) : [null];
     const base = Date.now().toString(36).toUpperCase();
@@ -1822,7 +1965,7 @@ app.patch('/api/masters', requireAuth, async (req, res) => {
       if (body.startDate !== undefined) m.startDate=body.startDate;
       if (body.endDate !== undefined) m.endDate=body.endDate;
       if (body.remarks !== undefined) m.remarks=body.remarks;
-      if (body.department !== undefined) m.department=body.department;
+      if (body.department !== undefined) m.department=await canonicalDept(body.department);
       await writeStore(store);
       return res.json({ success:true });
     }
@@ -1830,7 +1973,8 @@ app.patch('/api/masters', requireAuth, async (req, res) => {
     const before = await q('SELECT assigned_to, task FROM masters WHERE id=$1', [body.id]);
     const prevAssignee = before[0]?.assigned_to || '';
     const assignedTo = body.assignedTo !== undefined ? body.assignedTo.trim() : undefined;
-    await pool.query('UPDATE masters SET task=COALESCE($1,task), assigned_to=COALESCE($2,assigned_to), frequency=COALESCE($3,frequency), start_date=COALESCE($4,start_date), end_date=COALESCE($5,end_date), remarks=COALESCE($6,remarks), department=COALESCE($7,department) WHERE id=$8', [body.task??null,assignedTo??null,body.frequency??null,body.startDate??null,body.endDate??null,body.remarks??null,body.department??null,body.id]);
+    const dept = body.department == null ? null : await canonicalDept(body.department);
+    await pool.query('UPDATE masters SET task=COALESCE($1,task), assigned_to=COALESCE($2,assigned_to), frequency=COALESCE($3,frequency), start_date=COALESCE($4,start_date), end_date=COALESCE($5,end_date), remarks=COALESCE($6,remarks), department=COALESCE($7,department) WHERE id=$8', [body.task??null,assignedTo??null,body.frequency??null,body.startDate??null,body.endDate??null,body.remarks??null,dept,body.id]);
     // Fire-and-forget — bulk Transfer PATCHes many checklist rows in a row; an
     // awaited SMTP call here would serialize (and could hang) the whole batch.
     if (assignedTo && assignedTo !== prevAssignee) {
@@ -1977,7 +2121,9 @@ app.get('/api/departments', requireAuth, async (req, res) => {
 
 app.post('/api/departments', requireAuth, async (req, res) => {
   try {
-    const name = String(req.body?.name || '').trim();
+    // Title-cased on the way in so the list itself never mixes "PACKING DEPT."
+    // with "Packing Dept." — see titleCaseDept.
+    const name = titleCaseDept(req.body?.name);
     if (!name) return res.status(400).json({ error: 'Department name is required' });
     if (name.length > 128) return res.status(400).json({ error: 'Department name is too long (max 128 characters)' });
 
@@ -2075,7 +2221,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
           const id = 'U'+(lastNum+1).toString().padStart(3,'0');
           const roles = parseRoles(row.role||'', row.user_role||'');
           const hash = row.password ? await bcrypt.hash(row.password, 10) : null;
-          store.users.push({ id, name, email, phone:row.phone||'', department:row.department||'', roles, active:true, password_hash:hash, permissions: defaultPermissionsFor(roles), createdAt:new Date().toISOString() });
+          store.users.push({ id, name, email, phone:row.phone||'', department: await canonicalDept(row.department), roles, active:true, password_hash:hash, permissions: defaultPermissionsFor(roles), createdAt:new Date().toISOString() });
           inserted++;
         }
         await writeStore(store);
@@ -2095,7 +2241,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
         const hash = row.password ? await bcrypt.hash(row.password, 10) : null;
         const perms = defaultPermissionsFor(roles);
         try {
-          await pool.query('INSERT INTO users (id,name,email,phone,department,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,NOW())', [id,name,email,row.phone||'',row.department||'',roles.join(','),hash,perms?JSON.stringify(perms):null]);
+          await pool.query('INSERT INTO users (id,name,email,phone,department,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,NOW())', [id,name,email,row.phone||'',await canonicalDept(row.department),roles.join(','),hash,perms?JSON.stringify(perms):null]);
           inserted++;
         } catch(ie) {
           if (ie.code==='ER_DUP_ENTRY'||ie.code==='23505') { errors.push(`Row ${i+1}: ${email} already exists (id conflict)`); lastNum--; }
@@ -2119,7 +2265,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
     const lastNum = users.reduce((max,u)=>{ const n=parseInt((u.id||'').replace('U',''))||0; return n>max?n:max; },0);
     const id = 'U'+(lastNum+1).toString().padStart(3,'0');
     const roles = body.roles?.length ? body.roles : ['User'];
-    const newUser = { id, name:body.name.trim(), email:body.email.trim(), phone:body.phone||'', department:body.department||'', branch:body.branch||'', roles, active:true, permissions: defaultPermissionsFor(roles), createdAt:new Date().toISOString() };
+    const newUser = { id, name:body.name.trim(), email:body.email.trim(), phone:body.phone||'', department: await canonicalDept(body.department), branch:body.branch||'', roles, active:true, permissions: defaultPermissionsFor(roles), createdAt:new Date().toISOString() };
     users.push(newUser); store.users=users;
     await writeStore(store);
     return res.status(201).json(newUser);
@@ -2135,7 +2281,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
     const roles = body.roles?.length ? body.roles : ['User'];
     const hash = body.password ? await bcrypt.hash(body.password, 10) : null;
     const perms = defaultPermissionsFor(roles);
-    await pool.query('INSERT INTO users (id,name,email,phone,department,branch,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$9,NOW())', [id,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',body.department||'',body.branch||'',roles.join(','),hash,perms?JSON.stringify(perms):null]);
+    await pool.query('INSERT INTO users (id,name,email,phone,department,branch,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$9,NOW())', [id,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',await canonicalDept(body.department),body.branch||'',roles.join(','),hash,perms?JSON.stringify(perms):null]);
     if (body.picture) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,id]);
@@ -2162,7 +2308,7 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
       if (body.name!==undefined) user.name=body.name;
       if (body.email!==undefined) user.email=body.email;
       if (body.phone!==undefined) user.phone=body.phone;
-      if (body.department!==undefined) user.department=body.department;
+      if (body.department!==undefined) user.department=await canonicalDept(body.department);
       if (body.branch!==undefined) user.branch=body.branch;
       if (body.roles!==undefined) user.roles=Array.isArray(body.roles)?body.roles:body.roles.split(',').map(r=>r.trim());
       if (body.active!==undefined) user.active=body.active;
@@ -2172,9 +2318,12 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
     }
     await ensureSchema();
     const roles = body.roles ? (Array.isArray(body.roles)?body.roles.join(','):body.roles) : null;
+    // Left null when the form didn't send the field at all (COALESCE keeps what is
+    // stored); an empty string still clears it, as before.
+    const dept = body.department == null ? null : await canonicalDept(body.department);
     await pool.query(
       `UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), phone=COALESCE($3,phone), department=COALESCE($4,department), branch=COALESCE($5,branch), roles=COALESCE($6,roles), active=COALESCE($7,active) WHERE id=$8`,
-      [body.name??null,body.email??null,body.phone??null,body.department??null,body.branch??null,roles,body.active===undefined?null:(body.active?1:0),body.id]
+      [body.name??null,body.email??null,body.phone??null,dept,body.branch??null,roles,body.active===undefined?null:(body.active?1:0),body.id]
     );
     if (body.picture!==undefined) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
@@ -2355,6 +2504,11 @@ app.patch('/api/leaves', requireAuth, requireAdmin, async (req, res) => {
 // deployment stores its private key — see the note above _normalizeGooglePrivateKey.
 const hrms = mountHrms(app, {
   pool, q, ensureSchema, requireAuth, requireAdmin, requireSuperAdmin, isAdminUser, getGoogleAuth,
+  // The HR module stores departments in its own tables (hr_employees, hr_payslips)
+  // but must spell them the way the rest of the app does — so it shares this
+  // file's canonicaliser and the departments master behind it, rather than
+  // keeping the sheet's casing. See the block above canonicalDept.
+  canonicalDept, listDepartments,
 });
 
 // ── FMS (Flow Management System) API — see fmsSheet.js wiring further down,
@@ -3434,7 +3588,9 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
   try {
     const cfg = PO_FORMAT_CONFIG[req.body?.format];
     if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
-    const { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
+    const { date, prNo, department: departmentRaw, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
+    // One spelling on the sheet, the PO log and the app — see canonicalDept.
+    const department = await canonicalDept(departmentRaw);
     if (!date || !party || !poMadeBy) return res.status(400).json({ error: 'Date, ' + cfg.partyLabel + ' and PO Made By are required' });
     // A line "exists" if its identity column is filled — Item Code on the three
     // goods formats, Description on Service PO (which has no item codes at all).
@@ -3876,8 +4032,10 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     if (!cfg) return res.status(400).json({ error: 'Unknown PR format' });
     const {
       requestedBy, vendorName, partyName, personWhoRaisedPr, orderNo,
-      department, termsOfPayment, estimatedDelDate, dateRequested, items,
+      department: departmentRaw, termsOfPayment, estimatedDelDate, dateRequested, items,
     } = req.body;
+    // One spelling on the sheet, the PR log and the app — see canonicalDept.
+    const department = await canonicalDept(departmentRaw);
     const party = vendorName || partyName || '';
     if (!requestedBy || !party) return res.status(400).json({ error: 'Requested By and ' + cfg.partyLabel + ' are required' });
     const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemCode || '').trim());
@@ -6820,10 +6978,13 @@ async function _imsCreateTxn(direction, body, user) {
   // source is only meaningful for the Trading category (see IMS_SOURCES) —
   // Stores/ALU entries just get '', same as before this column existed.
   const source = IMS_SOURCES.includes(body.source) ? body.source : '';
+  // The Inward/Outward forms can post a department typed straight into the
+  // "+ Add new department" box, so it is canonicalised here rather than trusted.
+  const department = await canonicalDept(body.department);
   await pool.query(
     `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, size, quantity, uom, department, remarks, status, created_by, source)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Active',$11,$12)`,
-    [id, txnDate, direction, itemCode, body.description || '', size, quantity, body.uom || '', body.department || '', body.remarks || '', user, source]
+    [id, txnDate, direction, itemCode, body.description || '', size, quantity, body.uom || '', department, body.remarks || '', user, source]
   );
   const delta = direction === 'IN' ? quantity : -quantity;
   await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, itemCode]);

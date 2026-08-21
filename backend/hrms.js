@@ -437,6 +437,11 @@ function suggestStatutory({ basic = 0, gross = 0, branch = '' } = {}) {
    ===================================================================== */
 function mountHrms(app, ctx) {
   const { pool, q, requireAuth, requireAdmin, requireSuperAdmin, isAdminUser } = ctx;
+  // Department spelling is owned by server.js (one master list, one casing rule)
+  // — the fallbacks keep this module working standalone in tests, where ctx
+  // carries only the database handles.
+  const canonicalDept = ctx.canonicalDept || (async (d) => String(d == null ? '' : d).trim());
+  const listDepartments = ctx.listDepartments || (async () => []);
 
   /* ── Settings ─────────────────────────────────────────────────────────
      Kept in the app_config table the rest of the app already uses, under an
@@ -725,19 +730,35 @@ function mountHrms(app, ctx) {
     // Everything the HR forms need to render their dropdowns in one trip.
     app.get('/api/hr/masters', requireAuth, hrReady, async (req, res) => {
       try {
-        const [emps, types, settings] = await Promise.all([
+        const [emps, types, settings, master] = await Promise.all([
           // user_id rides along so the Users list can show which login each
           // employee record belongs to. Names and departments only — the
           // salary-bearing columns stay behind /api/hr/employees.
           q(`SELECT id, user_id, name, designation, department, branch, status FROM hr_employees ORDER BY name ASC`),
           leaveTypes(),
           getSettings(),
+          // The app-wide departments master, so the HR Department dropdown offers
+          // the same names as PR/PO/IMS instead of only whatever HR happens to
+          // have typed so far.
+          listDepartments().catch(() => []),
         ]);
         const uniq = (arr) => [...new Set(arr.filter((x) => x && String(x).trim()))].sort();
+        // Case-insensitive dedupe: a department still stored on an old employee row
+        // in a different case must not show up as a second option next to the
+        // master's spelling — the master's wins.
+        const uniqDept = (arr) => {
+          const out = [];
+          for (const v of arr) {
+            const name = String(v == null ? '' : v).trim();
+            if (!name) continue;
+            if (!out.some((d) => d.toLowerCase() === name.toLowerCase())) out.push(name);
+          }
+          return out;
+        };
         res.json({
           employees: emps,
           leaveTypes: types,
-          departments: uniq(emps.map((e) => e.department)),
+          departments: uniqDept([...master, ...emps.map((e) => e.department).sort()]),
           designations: uniq(emps.map((e) => e.designation)),
           branches: uniq(emps.map((e) => e.branch)).concat(['Mumbai', 'Ahmedabad'])
             .filter((v, i, a) => a.indexOf(v) === i).sort(),
@@ -951,8 +972,12 @@ function mountHrms(app, ctx) {
         } else {
           id = await nextCode('hr_employees', 'id', branchPrefix(b.branch), 3);
         }
+        // Department goes in spelled the way the departments master spells it, so
+        // the HR list and every other page agree — see canonicalDept in server.js.
+        const dept = await canonicalDept(b.department);
         const vals = EMP_FIELDS.map((f) => {
           const v = b[f];
+          if (f === 'department') return dept;
           if (EMP_DATE_FIELDS.has(f)) return isoDate(v);
           if (f === 'probation_months') return num(v);
           return v === undefined || v === null ? '' : v;
@@ -980,7 +1005,8 @@ function mountHrms(app, ctx) {
         for (const f of EMP_FIELDS) {
           if (!(f in b)) continue;
           let v = b[f];
-          if (EMP_DATE_FIELDS.has(f)) v = isoDate(v);
+          if (f === 'department') v = await canonicalDept(v);
+          else if (EMP_DATE_FIELDS.has(f)) v = isoDate(v);
           else if (f === 'probation_months') v = num(v);
           params.push(v === undefined ? null : v);
           sets.push(`${f} = $${params.length}`);
@@ -2336,7 +2362,7 @@ function mountHrms(app, ctx) {
           const fields = {
             name,
             email: val(r, 'Email ID'), phone: val(r, 'Contact No'),
-            designation: val(r, 'Designation'), department: val(r, 'Department'),
+            designation: val(r, 'Designation'), department: await canonicalDept(val(r, 'Department')),
             branch: val(r, 'Branch') || 'Mumbai',
             doj, dol: sheetDate(val(r, 'DOL'), 'dmy'),
             status: val(r, 'Employee Status') || 'Active',
