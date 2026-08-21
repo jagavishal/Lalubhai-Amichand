@@ -50,11 +50,19 @@ window.HR = (function () {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
 
+  const isOwner = () => !!window.currentUser?.isSuperAdmin;
+
+  /* Which HR views a person gets: the company-wide ones, or their own.
+     The owner is always on the company-wide side — it is the account that
+     reopens payroll and imports the sheet, so being scoped down to its own
+     leave and payslips would be nonsense. Matches isAdminUser() in server.js,
+     which decides the same for the API; the two must agree, or the page asks
+     for data it will be refused, or hides data it is entitled to. */
   const isAdmin = () => {
+    if (isOwner()) return true;
     const r = window.currentUser?.roles || [];
     return (Array.isArray(r) ? r : String(r).split(',')).some((x) => ['Admin', 'HOD'].includes(String(x).trim()));
   };
-  const isOwner = () => !!window.currentUser?.isSuperAdmin;
 
   const api = (url, opts) => Utils.apiFetch(url, opts);
   const post = (url, body) => Utils.apiFetch(url, { method: 'POST', body: JSON.stringify(body || {}) });

@@ -151,7 +151,14 @@ window.Sidebar = {
     ]},
   ],
 
+  // The owner account counts as an Admin here, so the adminOnly entries (Users,
+  // Employee Master, HR Reports) are on its menu whether or not somebody
+  // remembered to also give it the Admin role. It outranks Admin everywhere
+  // else — it is the only account that can delete a record or reopen a
+  // finalised payroll — so it should never be shown less. Mirrors
+  // isAdminUser() in server.js, which decides the same thing for the routes.
   _isAdmin(user) {
+    if (user?.isSuperAdmin) return true;
     const roles = user?.roles || [];
     return roles.includes('Admin') || roles.includes('HOD');
   },

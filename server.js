@@ -883,13 +883,20 @@ function requireAuth(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-  const roles = req.session?.user?.roles || [];
-  const rolesArr = Array.isArray(roles) ? roles : String(roles).split(',').map(r=>r.trim());
-  if (!rolesArr.includes('Admin') && !rolesArr.includes('HOD')) return res.status(403).json({ error: 'Forbidden' });
+  if (!isAdminUser(req.session?.user)) return res.status(403).json({ error: 'Forbidden' });
   next();
 }
 
+// Admin or HOD by role — plus the owner, always. The owner account is the most
+// privileged one in the app: it alone deletes records, reopens a finalised
+// payroll and imports the HRMS sheet. Whether it also carries the "Admin" role
+// is a data question, and it used to be the only thing standing between the
+// owner and a 403 on every admin route — or, worse, being quietly scoped down
+// to their own leave and payslips by the HR module, which reads company-wide
+// access from this same function. The owner outranks Admin, so it can never
+// see less than one.
 function isAdminUser(user) {
+  if (isSuperAdmin(user)) return true;
   const roles = user?.roles || [];
   const rolesArr = Array.isArray(roles) ? roles : String(roles).split(',').map(r=>r.trim());
   return rolesArr.includes('Admin') || rolesArr.includes('HOD');
