@@ -214,11 +214,11 @@ window.Pages.profile = {
       return isNaN(d.getTime()) ? null : Math.floor((Date.now() - d.getTime()) / (365.25 * 864e5));
     };
     const row = (label, value) => `
-      <div class="flex justify-between gap-3 py-0.5 border-b border-dotted border-slate-200">
-        <span class="text-xs text-slate-400">${esc(label)}</span>
-        <span class="text-[13px] font-semibold text-slate-800 text-right break-words">${value == null || value === '' ? '—' : esc(value)}</span>
+      <div class="flex justify-between gap-3 py-1 border-b border-dotted border-slate-200">
+        <span class="text-[12.5px] text-slate-500">${esc(label)}</span>
+        <span class="text-[13.5px] font-semibold text-slate-800 text-right break-words">${value == null || value === '' ? '—' : esc(value)}</span>
       </div>`;
-    const heading = (t) => `<div class="text-[11px] font-bold uppercase tracking-wider text-primary-600 mb-1 mt-2 first:mt-0">${esc(t)}</div>`;
+    const heading = (t) => `<div class="text-[11.5px] font-bold uppercase tracking-wider text-primary-600 mb-1.5 mt-3 first:mt-0">${esc(t)}</div>`;
 
     const tenure = years(e.doj);
     const a = hr.attendance || {};
@@ -228,9 +228,9 @@ window.Pages.profile = {
     // was only ever wrapping the row onto a second line.
     const balanceCards = (hr.balances || []).map((b) => {
       const tone = !b.paid ? 'text-slate-500' : (b.balance > 0 ? 'text-green-700' : 'text-red-700');
-      return `<div class="rounded-lg border border-slate-200 px-1 py-2 text-center" title="${esc(b.name)} — ${b.used} used of ${b.entitled}">
-        <div class="text-base font-bold ${tone} leading-none">${b.paid ? b.balance : b.used}</div>
-        <div class="text-[9px] uppercase tracking-wide text-slate-400 font-semibold mt-1">${esc(b.code)}</div>
+      return `<div class="rounded-lg border border-slate-200 px-1 py-2.5 text-center" title="${esc(b.name)} — ${b.used} used of ${b.entitled}">
+        <div class="text-xl font-bold ${tone} leading-none">${b.paid ? b.balance : b.used}</div>
+        <div class="text-[10.5px] uppercase tracking-wide text-slate-500 font-semibold mt-1">${esc(b.code)}</div>
       </div>`;
     }).join('');
 
@@ -240,10 +240,10 @@ window.Pages.profile = {
     const allSlips = hr.payslips || [];
     const payslipRows = allSlips.slice(0, SLIPS_SHOWN).map((s) => `
       <tr class="border-b border-slate-100" title="${esc(s.id)} — deductions ${money(s.total_deductions)}">
-        <td class="py-1 text-[12.5px] font-medium text-slate-800">${esc(this._monthName(s.month)).slice(0, 3)} ${s.year}</td>
-        <td class="py-1 text-[12.5px] text-right text-slate-700">${money(s.total_gross)}</td>
-        <td class="py-1 text-[12.5px] text-right font-semibold text-green-700">${money(s.net_salary)}</td>
-        <td class="py-1 text-right">
+        <td class="py-1.5 text-[13.5px] font-medium text-slate-800">${esc(this._monthName(s.month)).slice(0, 3)} ${s.year}</td>
+        <td class="py-1.5 text-[13.5px] text-right text-slate-700">${money(s.total_gross)}</td>
+        <td class="py-1.5 text-[13.5px] text-right font-semibold text-green-700">${money(s.net_salary)}</td>
+        <td class="py-1.5 text-right">
           <a href="/api/hr/payslip/${encodeURIComponent(s.id)}/print" target="_blank" rel="noopener"
              class="btn-ghost btn-xs no-underline">Slip</a>
         </td>
@@ -252,22 +252,22 @@ window.Pages.profile = {
     const salary = hr.salary;
     const salaryBlock = salary ? `
       ${heading('Salary')}
-      <div class="grid grid-cols-3 gap-1.5 mb-1">
-        <div class="rounded-lg border border-slate-200 px-2 py-2">
-          <div class="text-[9px] uppercase tracking-wide text-slate-400 font-semibold">Gross</div>
-          <div class="text-[15px] font-bold text-slate-900">₹ ${money(salary.gross)}</div>
+      <div class="grid grid-cols-3 gap-2 mb-1">
+        <div class="rounded-lg border border-slate-200 px-2.5 py-2.5">
+          <div class="text-[10.5px] uppercase tracking-wide text-slate-500 font-semibold">Gross</div>
+          <div class="text-[17px] font-bold text-slate-900 mt-0.5">₹ ${money(salary.gross)}</div>
         </div>
-        <div class="rounded-lg border border-slate-200 px-2 py-2">
-          <div class="text-[9px] uppercase tracking-wide text-slate-400 font-semibold">Deductions</div>
-          <div class="text-[15px] font-bold text-red-700">₹ ${money(salary.deductions)}</div>
+        <div class="rounded-lg border border-slate-200 px-2.5 py-2.5">
+          <div class="text-[10.5px] uppercase tracking-wide text-slate-500 font-semibold">Deductions</div>
+          <div class="text-[17px] font-bold text-red-700 mt-0.5">₹ ${money(salary.deductions)}</div>
         </div>
-        <div class="rounded-lg border border-slate-200 px-2 py-2">
-          <div class="text-[9px] uppercase tracking-wide text-slate-400 font-semibold">Net</div>
-          <div class="text-[15px] font-bold text-green-700">₹ ${money(salary.net)}</div>
+        <div class="rounded-lg border border-slate-200 px-2.5 py-2.5">
+          <div class="text-[10.5px] uppercase tracking-wide text-slate-500 font-semibold">Net</div>
+          <div class="text-[17px] font-bold text-green-700 mt-0.5">₹ ${money(salary.net)}</div>
         </div>
       </div>
       <details class="mt-1">
-        <summary class="text-[11.5px] text-primary-600 font-semibold cursor-pointer select-none">Head-by-head breakdown</summary>
+        <summary class="text-[12.5px] text-primary-600 font-semibold cursor-pointer select-none">Head-by-head breakdown</summary>
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-x-6 mt-1">
           ${salary.earnings.filter((x) => x.amount).map((x) => row(x.label, '₹ ' + money(x.amount))).join('')}
           ${salary.deductionLines.filter((x) => x.amount).map((x) => row(x.label, '− ₹ ' + money(x.amount))).join('')}
@@ -327,9 +327,9 @@ window.Pages.profile = {
                  ['Half', a.halfDay, 'text-amber-700'], ['Absent', a.absent, 'text-red-700'],
                  ['Late', a.late, 'text-amber-700'], ['Hours', a.hours, 'text-slate-800']]
                 .map(([label, val, tone]) => `
-                  <div class="rounded-lg border border-slate-200 px-1 py-2 text-center">
-                    <div class="text-base font-bold ${tone} leading-none">${val || 0}</div>
-                    <div class="text-[9px] uppercase tracking-wide text-slate-400 font-semibold mt-1">${esc(label)}</div>
+                  <div class="rounded-lg border border-slate-200 px-1 py-2.5 text-center">
+                    <div class="text-xl font-bold ${tone} leading-none">${val || 0}</div>
+                    <div class="text-[10.5px] uppercase tracking-wide text-slate-500 font-semibold mt-1">${esc(label)}</div>
                   </div>`).join('')}
             </div>
           </div>
@@ -342,15 +342,15 @@ window.Pages.profile = {
             ${heading('Payslips')}
             ${payslipRows ? `<div class="overflow-x-auto"><table class="w-full">
                 <thead><tr class="border-b border-slate-200">
-                  <th class="py-1 text-left text-[10px] uppercase tracking-wider text-slate-400 font-bold">Period</th>
-                  <th class="py-1 text-right text-[10px] uppercase tracking-wider text-slate-400 font-bold">Gross</th>
-                  <th class="py-1 text-right text-[10px] uppercase tracking-wider text-slate-400 font-bold">Net</th>
+                  <th class="py-1.5 text-left text-[10.5px] uppercase tracking-wider text-slate-500 font-bold">Period</th>
+                  <th class="py-1.5 text-right text-[10.5px] uppercase tracking-wider text-slate-500 font-bold">Gross</th>
+                  <th class="py-1.5 text-right text-[10.5px] uppercase tracking-wider text-slate-500 font-bold">Net</th>
                   <th></th>
                 </tr></thead>
                 <tbody>${payslipRows}</tbody>
               </table>
               ${allSlips.length > SLIPS_SHOWN
-                ? `<button data-profile-go="hr-payroll" class="text-[11.5px] text-primary-600 font-semibold mt-1"
+                ? `<button data-profile-go="hr-payroll" class="text-[12.5px] text-primary-600 font-semibold mt-1.5"
                      style="border:none;background:none;cursor:pointer;padding:0;">
                      View all ${allSlips.length} payslips</button>` : ''}
               </div>`
