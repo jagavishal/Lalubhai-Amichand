@@ -798,10 +798,12 @@ function mountHrms(app, ctx) {
         const monthStart = `${year}-${pad(now.getMonth() + 1, 2)}-01`;
         const today = isoDate(now);
 
-        const [types, structure, att, slips, docs, team, exits] = await Promise.all([
+        const [types, structure, att, slips, docs, team, exits, settings] = await Promise.all([
           leaveTypes(),
           structureOn(e.id, today),
-          q(`SELECT status, late_mark, working_hours FROM hr_attendance
+          // The whole month including today, so the strip on the Dashboard can
+          // show the punch state without a second round trip.
+          q(`SELECT att_date, status, late_mark, working_hours, check_in, check_out FROM hr_attendance
               WHERE employee_id = $1 AND att_date BETWEEN $2 AND $3`, [e.id, monthStart, today]).catch(() => []),
           q(`SELECT p.id, p.month, p.year, p.total_gross, p.total_deductions, p.leave_deduction, p.net_salary
                FROM hr_payslips p JOIN hr_payroll_runs r ON r.id = p.run_id
@@ -815,6 +817,7 @@ function mountHrms(app, ctx) {
               WHERE status = 'Active' AND reporting_to <> '' AND (reporting_to = $1 OR LOWER(reporting_to) = LOWER($2))
               ORDER BY name ASC`, [e.id, e.name]).catch(() => []),
           q(`SELECT * FROM hr_exits WHERE employee_id = $1`, [e.id]).catch(() => []),
+          getSettings(),
         ]);
 
         const balances = [];
@@ -868,6 +871,17 @@ function mountHrms(app, ctx) {
           } : null,
           balances,
           attendance: tally,
+          // Today's own row, so a punch button can render its correct state
+          // (not in yet / in but not out / done) from this one response.
+          today: (() => {
+            const t = att.find((a) => isoDate(a.att_date) === today);
+            return t ? {
+              date: today, status: t.status, late: !!t.late_mark,
+              check_in: t.check_in || null, check_out: t.check_out || null,
+              working_hours: money(t.working_hours),
+            } : null;
+          })(),
+          shift: { start: settings.hr_shift_start, end: settings.hr_shift_end, grace: num(settings.hr_grace_minutes) },
           payslips: slips,
           documents: docs.map((d) => ({ ...d, expires_on: isoDate(d.expires_on) })),
           exit: exits[0] ? { last_working_day: isoDate(exits[0].last_working_day), exit_type: exits[0].exit_type } : null,

@@ -355,7 +355,9 @@ window.Pages['hr-leave'] = (() => {
     });
   }
 
-  function openApply() {
+  // onDone fires after a request is submitted, so a caller outside this
+  // page (the Dashboard strip) can refresh what it shows.
+  function openApply(onDone) {
     const admin = H.isAdmin();
     const emps = (_masters.employees || []).filter((e) => e.status === 'Active')
       .map((e) => ({ value: e.id, label: `${e.name} (${e.id})` }));
@@ -403,6 +405,7 @@ window.Pages['hr-leave'] = (() => {
         const r = await H.post('/api/hr/leaves', payload);
         H.closeModal('hrla');
         H.toast(r.warning || `Leave requested — ${r.days} day(s)`, r.warning ? 'warning' : 'success');
+        if (typeof onDone === 'function') { onDone(); return; }
         await loadRequests();
         render();
       },
@@ -559,6 +562,18 @@ window.Pages['hr-leave'] = (() => {
       } catch (e) {
         if (el) el.innerHTML = H.empty('Could not load leave', e.message);
       }
+    },
+
+    /* Open the Apply-for-Leave form from anywhere — the Dashboard puts it on
+       a button so an employee never has to find this page to book a day off.
+       Loads its own reference data first, because the caller has usually
+       never opened Leave Management at all. onDone lets the caller refresh
+       whatever it is showing (a balance strip, say) once a request is in. */
+    async applyLeave(onDone) {
+      try {
+        await loadMasters();
+        openApply(onDone);
+      } catch (e) { H.fail(e); }
     },
   };
 })();
