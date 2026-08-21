@@ -343,11 +343,13 @@ window.Pages.dashboard = (function () {
 
           <!-- RIGHT: action buttons -->
           <div id="db-btn-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            ${admin ? `
+            <!-- Shown to everyone: which days the company is closed is something
+                 all staff need, and it was behind an admin-only button. What the
+                 modal contains still depends on who opened it. -->
             <button id="db-btn-holidays" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#f59e0b;color:#fff;border:none;cursor:pointer;">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-              Holidays
-            </button>` : ''}
+              ${admin ? 'Holidays' : 'Holiday List'}
+            </button>
             <button id="db-btn-checklist" style="padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#059669;color:#fff;border:none;cursor:pointer;">
               Checklist
             </button>
@@ -636,6 +638,7 @@ window.Pages.dashboard = (function () {
             </button>
           </div>
           <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
+            ${admin ? `
             <!-- Add holiday form -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
@@ -669,7 +672,10 @@ window.Pages.dashboard = (function () {
                   Upload CSV
                 </button>
               </div>
-            </div>
+            </div>` : `
+            <p style="font-size:12.5px;color:#64748b;margin:0;line-height:1.5;">
+              The days the company is closed. Leave taken on these days is not counted against your balance.
+            </p>`}
             <!-- Holiday list -->
             <div>
               <p style="font-size:10.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#2563eb;margin:0 0 8px;">HOLIDAY LIST</p>
@@ -960,12 +966,20 @@ window.Pages.dashboard = (function () {
       listEl.innerHTML = '<div style="color:#94a3b8;font-size:12px;text-align:center;padding:1rem;">No holidays added yet.</div>';
       return;
     }
-    listEl.innerHTML = holidays.map(h => `
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f1f5f9;">
-        <span style="font-size:13px;font-weight:700;color:#0f172a;">${fmt(h.date)}</span>
+    // Remove is Admin/HOD only — the route refuses anyone else anyway, so
+    // showing the button to staff would only produce a red toast.
+    const canEdit = isAdmin(window.currentUser);
+    const today = new Date().toISOString().slice(0, 10);
+    listEl.innerHTML = holidays.map(h => {
+      // Days already gone are dimmed, so what is coming up reads first.
+      const past = String(h.date).slice(0, 10) < today;
+      return `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f1f5f9;opacity:${past ? '.5' : '1'};">
+        <span style="font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap;">${fmt(h.date)}</span>
         <span style="font-size:13px;color:#475569;flex:1;padding:0 12px;">— ${h.name}</span>
-        <button data-hol-del="${h.id}" style="padding:3px 10px;border-radius:6px;background:#fff0f0;color:#ef4444;border:1px solid #fecaca;font-size:11.5px;font-weight:600;cursor:pointer;">Remove</button>
-      </div>`).join('');
+        ${canEdit ? `<button data-hol-del="${h.id}" style="padding:3px 10px;border-radius:6px;background:#fff0f0;color:#ef4444;border:1px solid #fecaca;font-size:11.5px;font-weight:600;cursor:pointer;">Remove</button>` : ''}
+      </div>`;
+    }).join('');
 
     listEl.querySelectorAll('[data-hol-del]').forEach(btn => {
       btn.addEventListener('click', async () => {

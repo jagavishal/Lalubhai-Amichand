@@ -2428,7 +2428,10 @@ app.get('/api/holidays', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
-app.post('/api/holidays', requireAuth, async (req, res) => {
+// Adding a holiday moves payroll and the muster roll for the whole company,
+// so it is Admin/HOD only. The button was hidden from everyone else but the
+// route never checked — hiding a button is not a permission.
+app.post('/api/holidays', requireAuth, requireAdmin, async (req, res) => {
   try {
     await ensureSchema();
     const b = req.body;
@@ -2453,7 +2456,8 @@ app.post('/api/holidays', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
-app.delete('/api/holidays', requireAuth, async (req, res) => {
+// Same for removing one — see the note on POST above.
+app.delete('/api/holidays', requireAuth, requireAdmin, async (req, res) => {
   try {
     await ensureSchema();
     const id = req.query.id;
