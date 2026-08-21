@@ -649,6 +649,12 @@ window.Pages.dashboard = (function () {
                 <label class="label">HOLIDAY NAME</label>
                 <input type="text" id="hol-name" class="input" placeholder="e.g. Diwali" />
               </div>
+              <div style="grid-column:1/-1;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151;">
+                  <input type="checkbox" id="hol-unpaid" style="width:15px;height:15px;accent-color:#d9737a;cursor:pointer;" />
+                  Unpaid leave (UL) — shown in red on the list
+                </label>
+              </div>
             </div>
             <button id="hol-add-btn" style="width:100%;padding:9px;border-radius:8px;font-size:13px;font-weight:700;background:#2563eb;color:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
               + Add Holiday
@@ -969,17 +975,58 @@ window.Pages.dashboard = (function () {
     // Remove is Admin/HOD only — the route refuses anyone else anyway, so
     // showing the button to staff would only produce a red toast.
     const canEdit = isAdmin(window.currentUser);
-    const today = new Date().toISOString().slice(0, 10);
-    listEl.innerHTML = holidays.map(h => {
-      // Days already gone are dimmed, so what is coming up reads first.
-      const past = String(h.date).slice(0, 10) < today;
-      return `
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f1f5f9;opacity:${past ? '.5' : '1'};">
-        <span style="font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap;">${fmt(h.date)}</span>
-        <span style="font-size:13px;color:#475569;flex:1;padding:0 12px;">— ${h.name}</span>
-        ${canEdit ? `<button data-hol-del="${h.id}" style="padding:3px 10px;border-radius:6px;background:#fff0f0;color:#ef4444;border:1px solid #fecaca;font-size:11.5px;font-weight:600;cursor:pointer;">Remove</button>` : ''}
-      </div>`;
-    }).join('');
+    const escH = (v) => String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const dayName = (iso) => {
+      const d = new Date(String(iso).slice(0, 10) + 'T00:00:00');
+      return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-IN', { weekday: 'long' });
+    };
+    // The company's own holiday sheet shades the unpaid ones red and explains
+    // the colour underneath, so the ERP does the same rather than inventing a
+    // second visual language for a list people already know by sight.
+    const isUnpaid = (h) => /unpaid|\bUL\b/i.test(String(h.type || '') + ' ' + String(h.notes || ''));
+
+    const th = 'padding:7px 10px;font-size:11px;font-weight:700;color:#7c2d12;background:#f5d9a0;'
+      + 'border:1px solid #e7c884;text-align:center;white-space:nowrap;';
+    const td = 'padding:7px 10px;font-size:12.5px;border:1px solid #eadfc6;text-align:center;';
+
+    listEl.innerHTML = `
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr>
+            <th style="${th}">Sr.no</th>
+            <th style="${th}">Date</th>
+            <th style="${th}">Day</th>
+            <th style="${th}width:100%;">Holidays</th>
+            ${canEdit ? `<th style="${th}"></th>` : ''}
+          </tr></thead>
+          <tbody>
+            ${holidays.map((h, i) => {
+              const unpaid = isUnpaid(h);
+              // No dimming of days already gone: this is the year's calendar as
+              // the company publishes it, and the printed sheet does not fade
+              // half of it out. Colour here means paid or unpaid, nothing else.
+              const bg = unpaid ? '#d9737a' : '#fdf3dc';
+              const fg = unpaid ? '#ffffff' : '#374151';
+              return `<tr style="background:${bg};color:${fg};">
+                <td style="${td}font-weight:700;">${i + 1}</td>
+                <td style="${td}white-space:nowrap;">${fmt(h.date)}</td>
+                <td style="${td}white-space:nowrap;">${escH(dayName(h.date))}</td>
+                <td style="${td}text-align:left;">${escH(h.name)}</td>
+                ${canEdit ? `<td style="${td}">
+                  <button data-hol-del="${escH(h.id)}" title="Remove"
+                    style="padding:2px 8px;border-radius:6px;background:rgba(255,255,255,.85);color:#b91c1c;border:1px solid #fecaca;font-size:11px;font-weight:600;cursor:pointer;">Remove</button>
+                </td>` : ''}
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${holidays.some(isUnpaid) ? `
+      <div style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+        <span style="width:26px;height:16px;border-radius:4px;background:#d9737a;border:1px solid #c95f66;flex-shrink:0;"></span>
+        <span style="font-size:11.5px;color:#64748b;">This colour represents Unpaid Leaves (UL)</span>
+      </div>` : ''}`;
 
     listEl.querySelectorAll('[data-hol-del]').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -1577,13 +1624,18 @@ window.Pages.dashboard = (function () {
       if (addBtn) { addBtn.disabled = true; addBtn.textContent = '…'; }
 
       try {
+        // 'Unpaid' is what the list reads to colour a row red, and what the
+        // company's own sheet calls UL.
+        const unpaid = !!el.querySelector('#hol-unpaid')?.checked;
+        const type = unpaid ? 'Unpaid' : 'Holiday';
         const result = await Utils.apiFetch('/api/holidays', {
           method: 'POST',
-          body: JSON.stringify({ date, name }),
+          body: JSON.stringify({ date, name, type }),
         });
-        if (result?.id) _state.holidays.push({ id: result.id, date, name, type: 'Holiday' });
+        if (result?.id) _state.holidays.push({ id: result.id, date, name, type });
         if (el.querySelector('#hol-date'))  el.querySelector('#hol-date').value  = '';
         if (el.querySelector('#hol-name'))  el.querySelector('#hol-name').value  = '';
+        if (el.querySelector('#hol-unpaid')) el.querySelector('#hol-unpaid').checked = false;
         _renderHolidayList();
       } catch (err) {
         if (errEl) { errEl.textContent = err.message || 'Failed to add holiday.'; errEl.style.display = 'block'; }
