@@ -84,8 +84,8 @@ window.Pages.profile = {
     const dept     = me.department || '—';
 
     const avatarHtml = this._picture
-      ? `<img src="${this._esc(this._picture)}" alt="Profile" data-zoom title="Click to view full image" class="w-24 h-24 rounded-2xl object-cover shadow-elevated ring-4 ring-white" id="profile-avatar-img" />`
-      : `<div class="w-24 h-24 rounded-2xl bg-gradient-to-br from-amber-400 to-pink-500 grid place-items-center text-white text-2xl font-bold shadow-elevated ring-4 ring-white" id="profile-avatar-initials">${this._esc(initials)}</div>`;
+      ? `<img src="${this._esc(this._picture)}" alt="Profile" data-zoom title="Click to view full image" class="w-16 h-16 rounded-xl object-cover shadow-elevated" id="profile-avatar-img" />`
+      : `<div class="w-16 h-16 rounded-xl bg-gradient-to-br from-amber-400 to-pink-500 grid place-items-center text-white text-lg font-bold shadow-elevated" id="profile-avatar-initials">${this._esc(initials)}</div>`;
 
     root.innerHTML = `
       <!-- Two columns that both start at the top: everything you can change on
@@ -93,55 +93,50 @@ window.Pages.profile = {
            reads on one screen instead of the HR half sitting below the fold.
            items-start stops the shorter column being stretched to match the
            taller one. -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
 
         <!-- LEFT: who you are, and the two things you can edit -->
-        <div class="space-y-6">
+        <div class="space-y-4">
 
-          <!-- Identity card -->
-          <div class="card overflow-hidden">
-            <div class="h-24 bg-gradient-to-br from-primary-500 via-primary-600 to-violet-600"></div>
-            <div class="px-6 pb-6 -mt-12">
-              <div class="relative w-24 h-24" id="profile-avatar-wrap">
+          <!-- Identity card. Laid out across rather than down: the tall
+               gradient banner and stacked 96px avatar cost about 150px of
+               height and said nothing the name and role do not. -->
+          <div class="card p-4">
+            <div class="flex items-center gap-4">
+              <div class="relative w-16 h-16 shrink-0" id="profile-avatar-wrap">
                 ${avatarHtml}
               </div>
-              <div class="mt-4">
-                <div class="text-lg font-semibold text-slate-900" id="profile-display-name">${this._esc(f.name || '—')}</div>
-                <div class="text-sm text-slate-500" id="profile-display-email">${this._esc(f.email || '—')}</div>
-                <span class="pill bg-amber-50 text-amber-700 border border-amber-100 mt-2 inline-flex items-center gap-1">
-                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7Z"/></svg>
-                  ${this._esc(role)}
-                </span>
+              <div class="min-w-0 flex-1">
+                <div class="text-base font-semibold text-slate-900 truncate" id="profile-display-name">${this._esc(f.name || '—')}</div>
+                <div class="text-xs text-slate-500 truncate" id="profile-display-email">${this._esc(f.email || '—')}</div>
+                <div class="flex items-center gap-2 mt-1.5 flex-wrap">
+                  <span class="pill bg-amber-50 text-amber-700 border border-amber-100 inline-flex items-center gap-1 !py-0.5 text-[11px]">
+                    <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7Z"/></svg>
+                    ${this._esc(role)}
+                  </span>
+                  <span class="text-[11px] text-slate-400">${this._esc(dept)}</span>
+                  <span class="text-[11px] text-slate-400" id="profile-display-phone">${this._esc(f.phone || '—')}</span>
+                </div>
               </div>
-              <div class="flex gap-2 mt-4">
-                <button id="profile-change-photo-btn" class="btn-secondary !py-1.5 text-xs flex-1" ${this._picSaving ? 'disabled' : ''}>
+              <div class="flex flex-col gap-1.5 shrink-0">
+                <button id="profile-change-photo-btn" class="btn-secondary !py-1 text-[11px]" ${this._picSaving ? 'disabled' : ''}>
                   ${this._picSaving ? 'Saving…' : 'Change Photo'}
                 </button>
-                <button id="profile-remove-photo-btn" class="btn-ghost !py-1.5 text-xs text-red-600 hover:bg-red-50 flex-1" ${this._picSaving ? 'disabled' : ''}>
+                <button id="profile-remove-photo-btn" class="btn-ghost !py-1 text-[11px] text-red-600 hover:bg-red-50" ${this._picSaving ? 'disabled' : ''}>
                   Remove
                 </button>
                 <input id="profile-file-input" type="file" accept="image/*" class="hidden" />
-              </div>
-              <div class="mt-5 pt-5 border-t border-slate-100 grid grid-cols-2 gap-3 text-center">
-                <div>
-                  <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Department</div>
-                  <div class="text-sm font-medium text-slate-800 mt-0.5">${this._esc(dept)}</div>
-                </div>
-                <div>
-                  <div class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Phone</div>
-                  <div class="text-sm font-medium text-slate-800 mt-0.5" id="profile-display-phone">${this._esc(f.phone || '—')}</div>
-                </div>
               </div>
             </div>
           </div>
 
           <!-- Personal Information -->
-          <div class="card p-5">
-            <div class="mb-4">
+          <div class="card p-4">
+            <div class="mb-3">
               <h3 class="text-[15px] font-semibold text-slate-900">Personal Information</h3>
               <p class="text-xs text-slate-500 mt-0.5">Public profile details</p>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               ${this._fieldHtml('name',              'Full Name',           f.name,              'text',     '')}
               ${this._fieldHtml('email',             'Email Address',       f.email,             'email',    '')}
               ${this._fieldHtml('phone',             'Phone Number',        f.phone,             'text',     '')}
@@ -150,12 +145,12 @@ window.Pages.profile = {
           </div>
 
           <!-- Security -->
-          <div class="card p-5">
-            <div class="mb-4">
+          <div class="card p-4">
+            <div class="mb-3">
               <h3 class="text-[15px] font-semibold text-slate-900">Security</h3>
               <p class="text-xs text-slate-500 mt-0.5">Change your account password</p>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
               ${this._fieldHtml('currentPassword', 'Current Password', '', 'password', '', '••••••')}
               ${this._fieldHtml('newPassword',     'New Password',     '', 'password', '', 'Enter new password')}
               ${this._fieldHtml('confirmPassword', 'Confirm Password', '', 'password', '', 'Confirm new password')}
@@ -219,35 +214,36 @@ window.Pages.profile = {
       return isNaN(d.getTime()) ? null : Math.floor((Date.now() - d.getTime()) / (365.25 * 864e5));
     };
     const row = (label, value) => `
-      <div class="flex justify-between gap-3 py-1.5 border-b border-dotted border-slate-200">
+      <div class="flex justify-between gap-3 py-0.5 border-b border-dotted border-slate-200">
         <span class="text-xs text-slate-400">${esc(label)}</span>
         <span class="text-[13px] font-semibold text-slate-800 text-right break-words">${value == null || value === '' ? '—' : esc(value)}</span>
       </div>`;
-    const heading = (t) => `<div class="text-[11px] font-bold uppercase tracking-wider text-primary-600 mb-2 mt-4 first:mt-0">${esc(t)}</div>`;
+    const heading = (t) => `<div class="text-[11px] font-bold uppercase tracking-wider text-primary-600 mb-1 mt-2 first:mt-0">${esc(t)}</div>`;
 
     const tenure = years(e.doj);
     const a = hr.attendance || {};
 
+    // One tile per type across a single row, so the code and the number are
+    // what carry it. The full name goes on the tooltip — five tiles wide, it
+    // was only ever wrapping the row onto a second line.
     const balanceCards = (hr.balances || []).map((b) => {
       const tone = !b.paid ? 'text-slate-500' : (b.balance > 0 ? 'text-green-700' : 'text-red-700');
-      return `<div class="rounded-xl border border-slate-200 p-3">
-        <div class="flex items-baseline justify-between gap-2">
-          <span class="text-xs font-bold text-slate-900">${esc(b.code)}</span>
-          <span class="text-[10px] text-slate-400">${esc(b.name)}</span>
-        </div>
-        <div class="text-xl font-bold ${tone} mt-1">${b.paid ? b.balance : b.used}</div>
-        <div class="text-[10px] text-slate-400">${b.paid ? `left of ${b.entitled}` : 'days taken'}</div>
+      return `<div class="rounded-lg border border-slate-200 px-1 py-2 text-center" title="${esc(b.name)} — ${b.used} used of ${b.entitled}">
+        <div class="text-base font-bold ${tone} leading-none">${b.paid ? b.balance : b.used}</div>
+        <div class="text-[9px] uppercase tracking-wide text-slate-400 font-semibold mt-1">${esc(b.code)}</div>
       </div>`;
     }).join('');
 
-    const payslipRows = (hr.payslips || []).map((s) => `
-      <tr class="border-b border-slate-100">
-        <td class="py-2 text-[13px] font-medium text-slate-800">${esc(this._monthName(s.month))} ${s.year}</td>
-        <td class="py-2 text-xs text-slate-500">${esc(s.id)}</td>
-        <td class="py-2 text-[13px] text-right text-slate-700">${money(s.total_gross)}</td>
-        <td class="py-2 text-[13px] text-right text-red-700">${money(s.total_deductions)}</td>
-        <td class="py-2 text-[13px] text-right font-semibold text-green-700">${money(s.net_salary)}</td>
-        <td class="py-2 text-right">
+    // Only the recent months. A year of rows would make this card taller than
+    // the screen on its own, and Payroll already lists the lot.
+    const SLIPS_SHOWN = 3;
+    const allSlips = hr.payslips || [];
+    const payslipRows = allSlips.slice(0, SLIPS_SHOWN).map((s) => `
+      <tr class="border-b border-slate-100" title="${esc(s.id)} — deductions ${money(s.total_deductions)}">
+        <td class="py-1 text-[12.5px] font-medium text-slate-800">${esc(this._monthName(s.month)).slice(0, 3)} ${s.year}</td>
+        <td class="py-1 text-[12.5px] text-right text-slate-700">${money(s.total_gross)}</td>
+        <td class="py-1 text-[12.5px] text-right font-semibold text-green-700">${money(s.net_salary)}</td>
+        <td class="py-1 text-right">
           <a href="/api/hr/payslip/${encodeURIComponent(s.id)}/print" target="_blank" rel="noopener"
              class="btn-ghost btn-xs no-underline">Slip</a>
         </td>
@@ -256,33 +252,35 @@ window.Pages.profile = {
     const salary = hr.salary;
     const salaryBlock = salary ? `
       ${heading('Salary')}
-      <div class="grid grid-cols-3 gap-3 mb-2">
-        <div class="rounded-xl border border-slate-200 p-3">
-          <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Gross / month</div>
-          <div class="text-lg font-bold text-slate-900 mt-0.5">₹ ${money(salary.gross)}</div>
+      <div class="grid grid-cols-3 gap-1.5 mb-1">
+        <div class="rounded-lg border border-slate-200 px-2 py-2">
+          <div class="text-[9px] uppercase tracking-wide text-slate-400 font-semibold">Gross</div>
+          <div class="text-[15px] font-bold text-slate-900">₹ ${money(salary.gross)}</div>
         </div>
-        <div class="rounded-xl border border-slate-200 p-3">
-          <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Deductions</div>
-          <div class="text-lg font-bold text-red-700 mt-0.5">₹ ${money(salary.deductions)}</div>
+        <div class="rounded-lg border border-slate-200 px-2 py-2">
+          <div class="text-[9px] uppercase tracking-wide text-slate-400 font-semibold">Deductions</div>
+          <div class="text-[15px] font-bold text-red-700">₹ ${money(salary.deductions)}</div>
         </div>
-        <div class="rounded-xl border border-slate-200 p-3">
-          <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Net / month</div>
-          <div class="text-lg font-bold text-green-700 mt-0.5">₹ ${money(salary.net)}</div>
+        <div class="rounded-lg border border-slate-200 px-2 py-2">
+          <div class="text-[9px] uppercase tracking-wide text-slate-400 font-semibold">Net</div>
+          <div class="text-[15px] font-bold text-green-700">₹ ${money(salary.net)}</div>
         </div>
       </div>
-      <div class="grid grid-cols-1 xl:grid-cols-2 gap-x-6">
-        ${salary.earnings.filter((x) => x.amount).map((x) => row(x.label, '₹ ' + money(x.amount))).join('')}
-        ${salary.deductionLines.filter((x) => x.amount).map((x) => row(x.label, '− ₹ ' + money(x.amount))).join('')}
-      </div>
-      <div class="text-[11px] text-slate-400 mt-2">In force since ${esc(date(salary.effective_from))}. What you are actually paid each month also depends on that month's attendance and leave.</div>
+      <details class="mt-1">
+        <summary class="text-[11.5px] text-primary-600 font-semibold cursor-pointer select-none">Head-by-head breakdown</summary>
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-x-6 mt-1">
+          ${salary.earnings.filter((x) => x.amount).map((x) => row(x.label, '₹ ' + money(x.amount))).join('')}
+          ${salary.deductionLines.filter((x) => x.amount).map((x) => row(x.label, '− ₹ ' + money(x.amount))).join('')}
+        </div>
+        <div class="text-[11px] text-slate-400 mt-2">In force since ${esc(date(salary.effective_from))}. What you are actually paid each month also depends on that month's attendance and leave.</div>
+      </details>
     ` : `${heading('Salary')}<div class="text-[13px] text-slate-500">No salary structure has been recorded against your employee record yet.</div>`;
 
     return `
-      <div class="card p-5">
+      <div class="card p-3.5">
         <div class="flex items-start justify-between gap-3 mb-1">
           <div>
             <h3 class="text-[15px] font-semibold text-slate-900">Employment</h3>
-            <p class="text-xs text-slate-500 mt-0.5">Your record in the HR system</p>
           </div>
           <span class="pill pill-brand pill-sm">${esc(e.id)}</span>
         </div>
@@ -313,48 +311,61 @@ window.Pages.profile = {
           </div>
         </div>
 
-        ${heading(`Leave Balance — ${hr.year}`)}
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-2">${balanceCards}</div>
-
-        ${heading(`Attendance — ${esc(hr.monthName)} ${hr.year}`)}
-        <div class="grid grid-cols-3 md:grid-cols-6 gap-2">
-          ${[['Present', a.present, 'text-green-700'], ['Remote', a.remote, 'text-sky-700'],
-             ['Half Day', a.halfDay, 'text-amber-700'], ['Absent', a.absent, 'text-red-700'],
-             ['Late Marks', a.late, 'text-amber-700'], ['Hours', a.hours, 'text-slate-800']]
-            .map(([label, val, tone]) => `
-              <div class="rounded-xl border border-slate-200 p-3 text-center">
-                <div class="text-lg font-bold ${tone}">${val || 0}</div>
-                <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold mt-0.5">${esc(label)}</div>
-              </div>`).join('')}
+        <!-- Leave and attendance are both a single row of small tiles, so they
+             sit beside each other. Stacking them wasted about 90px of height on
+             a card that had width to spare — which is the whole reason this
+             page did not fit on a screen. -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-5">
+          <div>
+            ${heading(`Leave Balance — ${hr.year}`)}
+            <div class="grid grid-cols-5 gap-1.5">${balanceCards}</div>
+          </div>
+          <div>
+            ${heading(`Attendance — ${esc(hr.monthName)}`)}
+            <div class="grid grid-cols-6 gap-1.5">
+              ${[['Present', a.present, 'text-green-700'], ['Remote', a.remote, 'text-sky-700'],
+                 ['Half', a.halfDay, 'text-amber-700'], ['Absent', a.absent, 'text-red-700'],
+                 ['Late', a.late, 'text-amber-700'], ['Hours', a.hours, 'text-slate-800']]
+                .map(([label, val, tone]) => `
+                  <div class="rounded-lg border border-slate-200 px-1 py-2 text-center">
+                    <div class="text-base font-bold ${tone} leading-none">${val || 0}</div>
+                    <div class="text-[9px] uppercase tracking-wide text-slate-400 font-semibold mt-1">${esc(label)}</div>
+                  </div>`).join('')}
+            </div>
+          </div>
         </div>
 
-        ${salaryBlock}
+        <!-- Same again for the money: three figures next to a short table. -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-5">
+          <div>${salaryBlock}</div>
+          <div>
+            ${heading('Payslips')}
+            ${payslipRows ? `<div class="overflow-x-auto"><table class="w-full">
+                <thead><tr class="border-b border-slate-200">
+                  <th class="py-1 text-left text-[10px] uppercase tracking-wider text-slate-400 font-bold">Period</th>
+                  <th class="py-1 text-right text-[10px] uppercase tracking-wider text-slate-400 font-bold">Gross</th>
+                  <th class="py-1 text-right text-[10px] uppercase tracking-wider text-slate-400 font-bold">Net</th>
+                  <th></th>
+                </tr></thead>
+                <tbody>${payslipRows}</tbody>
+              </table>
+              ${allSlips.length > SLIPS_SHOWN
+                ? `<button data-profile-go="hr-payroll" class="text-[11.5px] text-primary-600 font-semibold mt-1"
+                     style="border:none;background:none;cursor:pointer;padding:0;">
+                     View all ${allSlips.length} payslips</button>` : ''}
+              </div>`
+              : '<div class="text-[13px] text-slate-500">No payslips yet. They appear once HR finalises the month.</div>'}
+          </div>
+        </div>
 
-        ${heading('Payslips')}
-        ${payslipRows ? `<div class="overflow-x-auto"><table class="w-full">
-            <thead><tr class="border-b border-slate-200">
-              <th class="py-2 text-left text-[10px] uppercase tracking-wider text-slate-400 font-bold">Period</th>
-              <th class="py-2 text-left text-[10px] uppercase tracking-wider text-slate-400 font-bold">Slip No</th>
-              <th class="py-2 text-right text-[10px] uppercase tracking-wider text-slate-400 font-bold">Gross</th>
-              <th class="py-2 text-right text-[10px] uppercase tracking-wider text-slate-400 font-bold">Deductions</th>
-              <th class="py-2 text-right text-[10px] uppercase tracking-wider text-slate-400 font-bold">Net</th>
-              <th></th>
-            </tr></thead>
-            <tbody>${payslipRows}</tbody>
-          </table></div>`
-          : '<div class="text-[13px] text-slate-500">No payslips yet. They appear here once HR finalises the month.</div>'}
-
-        ${(hr.documents || []).length ? `${heading('Documents')}
-          <div class="flex flex-wrap gap-2">
-            ${hr.documents.map((d) => (d.url
-              ? `<a href="${esc(d.url)}" target="_blank" rel="noopener" class="pill pill-neutral pill-sm no-underline">${esc(d.doc_type)}</a>`
-              : `<span class="pill pill-neutral pill-sm">${esc(d.doc_type)}</span>`)).join('')}
-          </div>` : ''}
-
-        <div class="flex flex-wrap gap-2 mt-5 pt-4 border-t border-slate-100">
+        <!-- Documents and the shortcuts share the last line. -->
+        <div class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-slate-100">
+          ${(hr.documents || []).map((d) => (d.url
+            ? `<a href="${esc(d.url)}" target="_blank" rel="noopener" class="pill pill-neutral pill-sm no-underline">${esc(d.doc_type)}</a>`
+            : `<span class="pill pill-neutral pill-sm">${esc(d.doc_type)}</span>`)).join('')}
+          <span class="flex-1"></span>
           <button class="btn-secondary btn-sm" data-profile-go="hr-leave">Apply for Leave</button>
           <button class="btn-secondary btn-sm" data-profile-go="hr-attendance">My Attendance</button>
-          <button class="btn-secondary btn-sm" data-profile-go="hr-payroll">My Payslips</button>
         </div>
       </div>`;
   },
@@ -513,10 +524,10 @@ window.Pages.profile = {
     const wrap = document.getElementById('profile-avatar-wrap');
     if (!wrap) return;
     if (this._picture) {
-      wrap.innerHTML = `<img src="${this._esc(this._picture)}" alt="Profile" data-zoom title="Click to view full image" class="w-24 h-24 rounded-2xl object-cover shadow-elevated ring-4 ring-white" id="profile-avatar-img" />`;
+      wrap.innerHTML = `<img src="${this._esc(this._picture)}" alt="Profile" data-zoom title="Click to view full image" class="w-16 h-16 rounded-xl object-cover shadow-elevated" id="profile-avatar-img" />`;
     } else {
       const initials = this._initials(this._form.name);
-      wrap.innerHTML = `<div class="w-24 h-24 rounded-2xl bg-gradient-to-br from-amber-400 to-pink-500 grid place-items-center text-white text-2xl font-bold shadow-elevated ring-4 ring-white" id="profile-avatar-initials">${this._esc(initials)}</div>`;
+      wrap.innerHTML = `<div class="w-16 h-16 rounded-xl bg-gradient-to-br from-amber-400 to-pink-500 grid place-items-center text-white text-lg font-bold shadow-elevated" id="profile-avatar-initials">${this._esc(initials)}</div>`;
     }
   },
 

@@ -292,10 +292,15 @@ window.Utils = {
     const list = (this._deptCache || []).slice();
     // A department stored on an old record but since removed from the master
     // list must still show as the current selection instead of silently
-    // resetting the field to blank.
-    [].concat(extra, selected ? [selected] : []).forEach(v => { if (v && !list.includes(v)) list.push(v); });
+    // resetting the field to blank. Matched case-insensitively: an old record
+    // holding "PACKING DEPT." must select the master's "Packing Dept." rather
+    // than adding a second, identical-looking option beside it.
+    const has = (v) => list.some(d => String(d).toLowerCase() === String(v).toLowerCase());
+    [].concat(extra, selected ? [selected] : []).forEach(v => { if (v && !has(v)) list.push(v); });
+    // ...and the option that renders as selected is matched the same way.
+    const isPicked = (d) => selected != null && String(d).toLowerCase() === String(selected).toLowerCase();
     return (placeholder != null ? `<option value="">${escHtml(placeholder)}</option>` : '')
-      + list.map(d => `<option value="${escHtml(d)}"${d === selected ? ' selected' : ''}>${escHtml(d)}</option>`).join('')
+      + list.map(d => `<option value="${escHtml(d)}"${isPicked(d) ? ' selected' : ''}>${escHtml(d)}</option>`).join('')
       + (addNew ? `<option value="${this.DEPT_ADD_NEW}">+ Add new department</option>` : '');
   },
 
@@ -304,7 +309,13 @@ window.Utils = {
     if (!sel) return;
     const keep = selected != null ? selected : sel.value;
     sel.innerHTML = this.deptOptionsHtml(keep === this.DEPT_ADD_NEW ? '' : keep, opts);
-    if (keep && keep !== this.DEPT_ADD_NEW) sel.value = keep;
+    if (keep && keep !== this.DEPT_ADD_NEW) {
+      // Assigning the stored string straight to .value silently blanks the field
+      // when the record spells the department in a different case than the master
+      // does — take the option's own value instead.
+      const match = [...sel.options].find(o => o.value.toLowerCase() === String(keep).toLowerCase());
+      sel.value = match ? match.value : keep;
+    }
   },
 
   // Wires the "+ Add new department" option on a Department <select>: asks for
