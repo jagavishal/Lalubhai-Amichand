@@ -537,7 +537,12 @@ async function normalizeDepartmentCase() {
       const rows = await q(`SELECT DISTINCT ${col} AS d FROM ${table} WHERE ${col} IS NOT NULL AND ${col} <> ''`);
       for (const r of rows) {
         const canon = await canonicalDept(r.d, master);
-        if (!canon) continue;
+        // Skip the ones already spelled correctly. Without this the repair
+        // fires a full-table UPDATE per distinct department on every boot even
+        // when there is nothing to fix — department is not indexed on any of
+        // these tables, so on ims_transactions and daily_tasks that is a scan
+        // and rewrite of the whole table, every restart.
+        if (!canon || canon === r.d) continue;
         const res = await pool.query(`UPDATE ${table} SET ${col}=$1 WHERE ${col}=$2`, [canon, r.d]);
         changed += res.rowCount || 0;
       }
@@ -663,10 +668,25 @@ async function ensureSchema() {
     // intermittently right after a cold start).
     await fixCollations().catch((e) => console.error('[db] fixCollations failed:', e.message));
     await relaxEmailUnique().catch((e) => console.error('[db] relaxEmailUnique failed:', e.message));
-    // Repairs the casing of every department already stored (see the block above
-    // canonicalDept) — awaited for the same reason: pages read those columns.
-    await normalizeDepartmentCase().catch((e) => console.error('[db] normalizeDepartmentCase failed:', e.message));
   })();
+
+  /* The department casing repair runs AFTER the schema is ready, and is
+     deliberately not awaited.
+     ---------------------------------------------------------------------
+     Everything above must block: a request that runs before the tables exist
+     or before the collations are normalized gets wrong answers. This one is
+     different — it only corrects how a department is spelled. Awaiting it put
+     it in front of every request in the app, including /api/auth/login, and a
+     pass over the larger tables took long enough that nobody could sign in at
+     all. Cosmetic repair is never worth an outage.
+
+     Left to finish on its own it converges within seconds of a cold start, and
+     it is idempotent, so the worst case is a page showing "PACKING DEPT."
+     instead of "Packing Dept." for a moment after a restart. */
+  g.__pg_schema_ready.then(() => {
+    normalizeDepartmentCase().catch((e) => console.error('[db] normalizeDepartmentCase failed:', e.message));
+  }).catch(() => {});
+
   return g.__pg_schema_ready;
 }
 
