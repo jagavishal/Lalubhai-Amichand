@@ -2179,9 +2179,22 @@ function mountHrms(app, ctx) {
             valueRenderOption: 'FORMATTED_VALUE',
           });
         } catch (err) {
-          const msg = /permission/i.test(err.message || '')
-            ? `The sheet is not shared with ${process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL} — give that address Viewer access and try again.`
-            : err.message;
+          /* Google's own wording is no help to whoever is standing at this
+             button, so the three failures that actually happen are named.
+             The quota one matters most: it reads like a hard failure but is
+             a per-minute cap that clears on its own — and pressing the button
+             again immediately is exactly what makes it worse. */
+          const raw = err.message || '';
+          let msg = raw;
+          if (/permission/i.test(raw)) {
+            msg = `The sheet is not shared with ${process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL} — give that address Viewer access, then try again.`;
+          } else if (/quota|rate limit|too many requests|\b429\b/i.test(raw)) {
+            msg = 'Google\'s per-minute read limit for this project has been reached. Nothing was written. '
+                + 'Wait about a minute and press Preview again — pressing it repeatedly keeps the limit used up.';
+          } else if (/not found|requested entity was not found/i.test(raw)) {
+            msg = 'No spreadsheet with that id — check the HRMS sheet id in HR settings, or paste the id above.';
+          }
+          console.error('[hrms] sheet read failed:', raw);
           return res.status(400).json({ error: msg });
         }
 
