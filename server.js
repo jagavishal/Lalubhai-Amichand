@@ -2349,7 +2349,13 @@ app.patch('/api/leaves', requireAuth, requireAdmin, async (req, res) => {
 // module gets this file's pool, its schema bootstrap and its guards, so there is
 // one database connection and one definition of "Admin" across the whole app.
 // Everything it serves lives under /api/hr/. See backend/hrms.js.
-const hrms = mountHrms(app, { pool, q, ensureSchema, requireAuth, requireAdmin, requireSuperAdmin, isAdminUser });
+// getGoogleAuth is handed over rather than letting the HR module build its own
+// credentials: it is a function declaration defined further down (hoisted, and
+// only called at request time), and it is the one place that knows how this
+// deployment stores its private key — see the note above _normalizeGooglePrivateKey.
+const hrms = mountHrms(app, {
+  pool, q, ensureSchema, requireAuth, requireAdmin, requireSuperAdmin, isAdminUser, getGoogleAuth,
+});
 
 // ── FMS (Flow Management System) API — see fmsSheet.js wiring further down,
 // registered once getGoogleAuth()/ensureLogTab() etc. exist (search "FMS routes").
@@ -3689,6 +3695,12 @@ const PR_FORMAT_CONFIG = {
     // first use if N stayed in the clear range. Never widen this to include N.
     items: { firstRow: 8, lastRow: 22, clearCols: ['A', 'M'], fields: { itemCode: 'A', boxQty: 'J', boxRate: 'K', plateQty: 'L', plateRate: 'M' } },
     summary: { totalCell: 'N23' },
+    // Page setup for the PDF export (see _exportPrTabPdf). This is the widest
+    // PR template — 14 columns, several of them long text — so it prints
+    // landscape. c1/c2 pin the export to A:N: the tab's GRID is 29 columns
+    // wide, and without them fitw=true shrinks the template to ~half size to
+    // make room for 15 columns of empty space nobody can see.
+    pdf: { portrait: false, c1: 0, c2: 14 },
   },
   ALU: {
     tabName: 'purchase_requisition(ALU)',
@@ -3756,14 +3768,19 @@ async function _prSheetMeta() {
 
 // Same borrowed docs.google.com export approach as _exportPoTabPdf — no per-tab
 // PDF export exists in the documented Sheets/Drive API.
-async function _exportPrTabPdf(sourceSheetId) {
+// opts — the format's own `pdf` config, absent on formats that keep the
+// portrait default: { portrait, c1, c2 } (c1/c2 0-indexed, c2 exclusive).
+async function _exportPrTabPdf(sourceSheetId, opts) {
   const auth = getGoogleAuth();
   const client = await auth.getClient();
   const { token } = await client.getAccessToken();
+  const portrait = !opts || opts.portrait !== false;
+  const rangeParams = opts && opts.c2 != null ? `&c1=${opts.c1 || 0}&c2=${opts.c2}` : '';
   const url = `https://docs.google.com/spreadsheets/d/${PR_CREATION_SHEET_ID}/export`
-    + `?format=pdf&gid=${sourceSheetId}&size=A4&portrait=true&fitw=true`
+    + `?format=pdf&gid=${sourceSheetId}&size=A4&portrait=${portrait}&fitw=true`
     + `&gridlines=false&printtitle=false&sheetnames=false`
-    + `&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3`;
+    + `&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3`
+    + rangeParams;
   const resp = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
   if (!resp.ok) throw new Error('PDF export failed: HTTP ' + resp.status);
   const buf = Buffer.from(await resp.arrayBuffer());
@@ -3940,7 +3957,7 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     // never block the PR itself from being created.
     let pdfLink = null;
     try {
-      const pdfBuffer = await _exportPrTabPdf(sourceSheetId);
+      const pdfBuffer = await _exportPrTabPdf(sourceSheetId, cfg.pdf);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${prNoFormatted} - ${tab}.pdf`, PR_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[pr-creation] PDF export failed:', e.message); }
 

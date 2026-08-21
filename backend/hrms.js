@@ -2156,18 +2156,27 @@ function mountHrms(app, ctx) {
         const settings = await getSettings();
         const sheetId = String(b.sheetId || settings.hr_sheet_id || '').trim();
         if (!sheetId) return res.status(400).json({ error: 'No HRMS sheet id configured' });
-        if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
-          return res.status(400).json({ error: 'Google service account is not configured on the server' });
-        }
+        /* Auth comes from the host's getGoogleAuth(), never from a second copy
+           built here. That helper exists because a PEM private key does not
+           survive a hosting panel's environment editor intact — surrounding
+           quotes get kept, CRLF sneaks in, only some escaped "\n" sequences
+           become real newlines, and long values get truncated outright — so
+           production sets GOOGLE_PRIVATE_KEY_B64 instead and the helper
+           decodes that first. This route originally read GOOGLE_PRIVATE_KEY
+           directly and did the one naive \n replacement, which works on a
+           developer's machine and fails on the server with OpenSSL's
+           "error:1E08010C:DECODER routines::unsupported" — a message that
+           says nothing about why. Every other Google call in the app already
+           goes through the helper; this one now does too. */
         const dryRun = !!b.dryRun;
+        const auth = ctx.getGoogleAuth ? ctx.getGoogleAuth() : null;
+        if (!auth) {
+          return res.status(400).json({
+            error: 'Google service account is not configured on the server — set GOOGLE_SERVICE_ACCOUNT_EMAIL and '
+                 + 'GOOGLE_PRIVATE_KEY_B64 (or GOOGLE_PRIVATE_KEY) in the environment.',
+          });
+        }
         const { google } = require('googleapis');
-        const auth = new google.auth.GoogleAuth({
-          credentials: {
-            client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-            private_key: String(process.env.GOOGLE_PRIVATE_KEY).replace(/\\n/g, '\n'),
-          },
-          scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
-        });
         const sheets = google.sheets({ version: 'v4', auth });
 
         const TABS = ['EmployeeDetails', 'Directors Salary Details', 'HolidayList', 'Leave', 'Attendance', 'Salary'];
