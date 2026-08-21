@@ -272,10 +272,17 @@ const CONSIGNEE_SOURCE = {
 // append's table detection is not reliable under a header block like that.
 const FMS_TRACKER = {
   spreadsheetId: '1Uf2CXMaOEWybb3ZQETPVGFSUG3l1vTUgnhvUAJCqkZE',
-  tab: 'Sheet1',
+  // The workbook now runs two flows and this is the first of them: lead in,
+  // PI out, chased as far as the advance landing. It was called "Sheet1" until
+  // the second flow ("Order to dispatch", see order-sheet-format.js) was added
+  // beside it — a rename that silently broke every append until this followed.
+  tab: 'Lead to Order FMS',
   headerRow: 6,
   firstDataRow: 7,
-  cols: { timestamp: 'A', piNo: 'B', assignedTo: 'C', customerName: 'D', quantity: 'E', targetDate: 'F' },
+  // G is the tracker's own "PI PDF" column. H onward are the flow's process
+  // steps, several of them WORKDAY formulas keyed off the timestamp in A —
+  // never written here.
+  cols: { timestamp: 'A', piNo: 'B', assignedTo: 'C', customerName: 'D', quantity: 'E', targetDate: 'F', piPdf: 'G' },
   // Every PI opens its tracker row against the same person, so the create form
   // does not ask — it used to, and the answer was always this. Row 3 of the
   // tracker still lists the others (Paresh, Obaid); re-assigning a PI to one

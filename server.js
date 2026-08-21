@@ -2800,6 +2800,20 @@ async function ensureLogTab(spreadsheetId, tabName, headerRow) {
   if (!exists) {
     await sheets.spreadsheets.batchUpdate({ spreadsheetId, requestBody: { requests: [{ addSheet: { properties: { title: tabName } } }] } });
     await sheets.spreadsheets.values.update({ spreadsheetId, range: `${tabName}!A1`, valueInputOption: 'RAW', requestBody: { values: [headerRow] } });
+    return;
+  }
+  // A log tab can also exist with nothing in it — someone adds it by hand
+  // ahead of the code that fills it. appendLogRow would then drop the first
+  // record on row 1, and every /list route reads from row 2, so that record
+  // would simply never appear. Write the header when, and only when, row 1 is
+  // still blank; a tab that already has one is left exactly as it is.
+  try {
+    const head = await sheets.spreadsheets.values.get({ spreadsheetId, range: `'${tabName}'!1:1`, valueRenderOption: 'FORMATTED_VALUE' });
+    if (!(head.data.values?.[0] || []).some(c => String(c ?? '').trim())) {
+      await sheets.spreadsheets.values.update({ spreadsheetId, range: `'${tabName}'!A1`, valueInputOption: 'RAW', requestBody: { values: [headerRow] } });
+    }
+  } catch (e) {
+    console.error('[log-tab] header check failed for', tabName + ':', e.message);
   }
 }
 
@@ -4724,25 +4738,30 @@ async function _piSheetMeta(fy) {
 // isolated from the PI write itself: the tracker is a separate workbook owned
 // by another team, and it going down must never cost someone the PI they just
 // filled in — the caller logs and carries on.
-async function _appendPiFmsRow(sheets, entry) {
-  const T = PI_FMT.FMS_TRACKER;
-  const C = T.cols;
-  // First row with neither a timestamp nor a PI number. Scanning beats
-  // values.append here — five rows of process notes above the header row
-  // confuse append's idea of where the table starts.
+// First row of a tracker with nothing in any of its key columns. Scanning
+// beats values.append here — five rows of WHO/HOW/WHEN process notes above the
+// header row confuse append's idea of where the table starts. `keyOffsets` are
+// indexes into the scanned block, which always starts at the timestamp column.
+async function _firstFreeFmsRow(sheets, tracker, lastKeyCol, keyOffsets) {
   const used = await sheets.spreadsheets.values.get({
-    spreadsheetId: T.spreadsheetId,
-    range: `'${T.tab}'!${C.timestamp}${T.firstDataRow}:${C.piNo}5000`,
+    spreadsheetId: tracker.spreadsheetId,
+    range: `'${tracker.tab}'!${tracker.cols.timestamp}${tracker.firstDataRow}:${lastKeyCol}5000`,
     valueRenderOption: 'FORMATTED_VALUE',
   });
   const rows = used.data.values || [];
-  let offset = rows.findIndex(r => !String(r?.[0] ?? '').trim() && !String(r?.[1] ?? '').trim());
+  let offset = rows.findIndex(r => keyOffsets.every(i => !String(r?.[i] ?? '').trim()));
   if (offset === -1) offset = rows.length;
-  const row = T.firstDataRow + offset;
+  return tracker.firstDataRow + offset;
+}
+
+async function _appendPiFmsRow(sheets, entry) {
+  const T = PI_FMT.FMS_TRACKER;
+  const C = T.cols;
+  const row = await _firstFreeFmsRow(sheets, T, C.piNo, [0, 1]);
 
   await sheets.spreadsheets.values.update({
     spreadsheetId: T.spreadsheetId,
-    range: `'${T.tab}'!${C.timestamp}${row}:${C.targetDate}${row}`,
+    range: `'${T.tab}'!${C.timestamp}${row}:${C.piPdf}${row}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: {
       values: [[
@@ -4752,7 +4771,46 @@ async function _appendPiFmsRow(sheets, entry) {
         entry.customerName || '',
         entry.quantity || '',
         entry.targetDate || '',
+        entry.pdfLink || '',
       ]],
+    },
+  });
+  return row;
+}
+
+// Opens the order's row in the workbook's second flow, "Order to dispatch".
+// Same isolation as the PI's own tracker row: a tracker that is down must
+// never cost someone the Order Sheet they just raised, so the caller logs and
+// carries on.
+//
+// Written as two ranges so the columns between them survive — see the note on
+// OS_FMT.FMS_TRACKER.cols for what lives there.
+async function _appendOrderFmsRow(sheets, entry) {
+  const T = OS_FMT.FMS_TRACKER;
+  const C = T.cols;
+  const row = await _firstFreeFmsRow(sheets, T, C.orderNo, [0, 3]);
+
+  await sheets.spreadsheets.values.batchUpdate({
+    spreadsheetId: T.spreadsheetId,
+    requestBody: {
+      valueInputOption: 'USER_ENTERED',
+      data: [
+        {
+          range: `'${T.tab}'!${C.timestamp}${row}:${C.dueDate}${row}`,
+          values: [[
+            _timestampForSheet(),
+            entry.customerName || '',
+            entry.location || '',
+            "'" + entry.orderNo,      // "VTV/ORD/001/26-27" — text, never a fraction
+            entry.advanceDate || '',
+            entry.dueDate || '',
+          ]],
+        },
+        {
+          range: `'${T.tab}'!${C.orderPdf}${row}:${C.piPdf}${row}`,
+          values: [[entry.orderPdfLink || '', entry.piPdfLink || '']],
+        },
+      ],
     },
   });
   return row;
@@ -4796,6 +4854,19 @@ function _piColIndex(letter) {
   return String(letter).toUpperCase().split('').reduce((n, ch) => n * 26 + (ch.charCodeAt(0) - 64), 0) - 1;
 }
 
+// Sheets reads a leading =, +, - or @ as the start of a formula, so a buyer
+// contact like "+966 50 123 4567" lands on the printed page as #ERROR!.
+// Anything written as text goes through here first; the apostrophe is a
+// display-time marker Sheets strips, so the cell still reads back clean.
+// Numbers are passed straight through — quoting them would make the sheet
+// hold text where the totals row expects a figure to sum.
+function _sheetText(v) {
+  if (v == null) return '';
+  if (typeof v === 'number') return v;
+  const str = String(v);
+  return /^[=+@-]/.test(str) ? "'" + str : str;
+}
+
 async function _fillPiTemplate(sheets, form, templateSheetId) {
   const tab = PI_TEMPLATE_TAB;
   const { LAYOUT: L, CELLS: C, ITEMS: IT, DEFAULTS: D } = PI_FMT;
@@ -4833,8 +4904,9 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
   const photoRows = new Set(canGroupPhotos ? photoGroups.map(g => g.start) : items.map((_, i) => i));
 
   const data = [];
-  const put = (a1, value) => data.push({ range: `'${tab}'!${a1}`, values: [[value ?? '']] });
-  const putText = (a1, value) => put(a1, value ? "'" + value : '');   // force text, never a parsed date/number
+  const putRaw = (a1, value) => data.push({ range: `'${tab}'!${a1}`, values: [[value ?? '']] });
+  const put = (a1, value) => putRaw(a1, _sheetText(value));
+  const putText = (a1, value) => putRaw(a1, value ? "'" + value : '');   // force text, never a parsed date/number
 
   putText(C.piNo, form.piNo);
   putText(C.date, _piDisplayDate(form.date));
@@ -4882,7 +4954,7 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
     // a blank cell rather than a broken =IMAGE(), and so does every line after
     // the first of a photo group — the merge below spreads the first one's
     // picture over all of them.
-    put(`${IT.photoCol}${row}`, photoRows.has(i) ? _piPhotoFormula(it.imageUrl) : '');
+    putRaw(`${IT.photoCol}${row}`, photoRows.has(i) ? _piPhotoFormula(it.imageUrl) : '');
   });
 
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
@@ -5229,6 +5301,11 @@ app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
       priceTypes: PI_FMT.PRICE_TYPES,
       currencies: Object.keys(PI_FMT.CURRENCIES),
       priceDefault: PI_FMT.PRICE_DEFAULT,
+      // For the Order Sheet tab's form, so its standing packing instructions
+      // are the same list the server falls back to rather than a second copy
+      // typed into the page script.
+      orderDefaults: OS_FMT.DEFAULTS,
+      orderMaxItems: OS_FMT.LAYOUT.itemsLastRow - OS_FMT.LAYOUT.itemsFirstRow + 1,
     });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -5508,6 +5585,9 @@ app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
         customerName: form.buyerName,
         quantity: totalQty || '',
         targetDate: form.targetDate,
+        // The tracker keeps its own "PI PDF" column, and the export team was
+        // pasting this link into it by hand off the PI List.
+        pdfLink,
       });
     } catch (e) {
       fmsTracked = false;
@@ -5820,6 +5900,399 @@ app.delete('/api/proforma-invoice', requireAuth, requireSuperAdmin, async (req, 
     const piNo = req.query.piNo;
     if (!piNo) return res.status(400).json({ error: 'piNo is required' });
     await _deleteLogRowByKey(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo);
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
+});
+
+// ── Order Sheet ───────────────────────────────────────────────────────────
+// Raised once a PI is final and the advance has landed. Same buyer and the
+// same lines as the PI, with NO money anywhere on the page — see
+// backend/lib/order-sheet-format.js for why it is not simply a second PI.
+//
+// It lives in the PI's own workbook, on the "Order sheet" tab painted by
+// scripts/build-order-sheet.js, and is logged to "ERP Order sheet Log" the
+// same way every PI is logged to "ERP PI Log".
+const OS_FMT = require('./backend/lib/order-sheet-format.js');
+const ORDER_SHEET_TAB = 'Order sheet';
+const ORDER_LOG_TAB = 'ERP Order sheet Log';
+const ORDER_NO_PREFIX = 'VTV/ORD';   // "VTV/ORD/001/26-27" — the PI series with ORD in it
+
+function _orderNoFormat(seq, fy) {
+  return `${ORDER_NO_PREFIX}/${String(seq).padStart(3, '0')}/${fy}`;
+}
+
+// Mirrors _piSeqOf: only THIS financial year's numbers count towards the next
+// one, so the series restarts at 001 each April.
+function _orderSeqOf(raw, fy) {
+  const m = /^[A-Za-z]+\/[A-Za-z]+\/(\d+)\/(\d{2}-\d{2})$/i.exec(String(raw ?? '').trim());
+  return m && m[2] === fy ? parseInt(m[1], 10) : 0;
+}
+
+async function _orderSheetMeta(fy) {
+  const auth = getGoogleAuth();
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: PI_CREATION_SHEET_ID });
+  const tpl = meta.data.sheets.find(s => s.properties.title === ORDER_SHEET_TAB);
+  if (!tpl) throw new Error(`The "${ORDER_SHEET_TAB}" tab is missing from the PI workbook`);
+  let maxSeq = 0;
+  try {
+    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:A`, valueRenderOption: 'FORMATTED_VALUE' });
+    for (const row of (logRes.data.values || [])) maxSeq = Math.max(maxSeq, _orderSeqOf(row[0], fy));
+  } catch (e) {
+    if (!/unable to parse range/i.test(e.message || '')) console.error('[order-sheet] log read for numbering failed:', e.message);
+  }
+  return { nextSeq: maxSeq + 1, templateSheetId: tpl.properties.sheetId };
+}
+
+// Same shape as _piCleanItems, minus the rate. Dropping it HERE rather than
+// at the sheet is what guarantees a price can never reach an order sheet:
+// there is no rate on the stored form, so there is nothing to print even if
+// the request carried one.
+function _orderCleanItems(b) {
+  const items = (Array.isArray(b.items) ? b.items : [])
+    .filter(it => it && (String(it.modelNo || '').trim() || String(it.itemName || '').trim()))
+    .map(it => ({
+      modelNo: String(it.modelNo || '').trim(),
+      itemName: String(it.itemName || '').trim(),
+      size: String(it.size || '').trim(),
+      swg: String(it.swg || '').trim(),
+      packing: String(it.packing || '').trim(),
+      qty: it.qty, boxes: it.boxes, cbm: it.cbm, weight: it.weight,
+      remarks: String(it.remarks || '').trim(),
+      imageUrl: String(it.imageUrl || '').trim(),
+    }));
+  if (!items.length) return { items, error: 'Add at least one item' };
+  const maxItems = OS_FMT.LAYOUT.itemsLastRow - OS_FMT.LAYOUT.itemsFirstRow + 1;
+  if (items.length > maxItems) return { items, error: `The Order Sheet template holds ${maxItems} item rows — this order has ${items.length}` };
+  return { items, error: null };
+}
+
+// Everything the printed Order Sheet needs, kept together so it can be
+// re-rendered later from this one blob — same discipline as _piFormFromBody.
+//
+// The customer and the shipping terms come from the PI's OWN stored form and
+// never from the request: the order confirms that PI, so it has to say what
+// the PI said. Only the four order-side dates and the notes are the user's to
+// give here.
+function _orderFormFromBody(b, pi, user, cleanItems) {
+  const p = pi || {};
+  return {
+    orderDate: String(b.orderDate || '').trim(),
+    piNo: String(b.piNo || '').trim(),
+    piDate: String(p.date || '').trim(),
+    advanceReceivedOn: String(b.advanceReceivedOn || '').trim(),
+    deliveryDate: String(b.deliveryDate || '').trim(),
+    buyerName: String(p.buyerName || '').trim(),
+    buyerTrn: String(p.buyerTrn || '').trim(),
+    buyerAddress1: String(p.buyerAddress1 || '').trim(),
+    buyerAddress2: String(p.buyerAddress2 || '').trim(),
+    buyerContact: String(p.buyerContact || '').trim(),
+    buyerEmail: String(b.buyerEmail || '').trim(),
+    paymentTerms: String(p.paymentTerms || '').trim(),
+    portOfLoading: String(p.portOfLoading || '').trim(),
+    portOfDischarge: String(p.portOfDischarge || '').trim(),
+    placeOfDelivery: String(p.placeOfDelivery || '').trim(),
+    shipmentNote: String(b.shipmentNote || p.shipmentNote || OS_FMT.DEFAULTS.shipmentNote).trim(),
+    notes: (Array.isArray(b.notes) && b.notes.length ? b.notes : OS_FMT.DEFAULTS.notes)
+      .map(t => String(t || '').trim()).filter(Boolean),
+    madeBy: user.name || '',
+    items: cleanItems,
+  };
+}
+
+// Fills the "Order sheet" tab as a FULL rewrite of the current order — same
+// rule as _fillPiTemplate: every mapped cell is written even when blank, or a
+// leftover value from the previous order prints on this one.
+async function _fillOrderTemplate(sheets, form, templateSheetId) {
+  const tab = ORDER_SHEET_TAB;
+  const { LAYOUT: L, CELLS: C, ITEMS: IT } = OS_FMT;
+  const items = form.items || [];
+
+  await sheets.spreadsheets.values.batchClear({
+    spreadsheetId: PI_CREATION_SHEET_ID,
+    requestBody: { ranges: IT.clearRanges.map(([a, b]) => `'${tab}'!${a}${L.itemsFirstRow}:${b}${L.itemsLastRow}`) },
+  });
+
+  // Photo merges left by the PREVIOUS order have to go before anything is
+  // written: a value aimed at a cell swallowed by a merge never lands.
+  const canGroupPhotos = templateSheetId != null;
+  const photoColIdx = _piColIndex(IT.photoCol);
+  if (canGroupPhotos) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: PI_CREATION_SHEET_ID,
+      requestBody: {
+        requests: [{
+          unmergeCells: {
+            range: {
+              sheetId: templateSheetId,
+              startRowIndex: L.itemsFirstRow - 1, endRowIndex: L.itemsLastRow,
+              startColumnIndex: photoColIdx, endColumnIndex: photoColIdx + 1,
+            },
+          },
+        }],
+      },
+    });
+  }
+
+  const capacity = L.itemsLastRow - L.itemsFirstRow + 1;
+  const photoGroups = _piPhotoGroups(items.slice(0, capacity));
+  const photoRows = new Set(canGroupPhotos ? photoGroups.map(g => g.start) : items.map((_, i) => i));
+
+  const data = [];
+  const putRaw = (a1, value) => data.push({ range: `'${tab}'!${a1}`, values: [[value ?? '']] });
+  const put = (a1, value) => putRaw(a1, _sheetText(value));
+  const putText = (a1, value) => putRaw(a1, value ? "'" + value : '');   // force text, never a parsed date/number
+
+  putText(C.orderNo, form.orderNo);
+  putText(C.orderDate, _piDisplayDate(form.orderDate));
+  putText(C.piNo, form.piNo);
+  putText(C.piDate, _piDisplayDate(form.piDate));
+  putText(C.advanceReceivedOn, _piDisplayDate(form.advanceReceivedOn));
+  putText(C.deliveryDate, _piDisplayDate(form.deliveryDate));
+  put(C.paymentTerms, form.paymentTerms);
+  put(C.portOfLoading, form.portOfLoading);
+  put(C.portOfDischarge, form.portOfDischarge);
+  put(C.placeOfDelivery, form.placeOfDelivery);
+  put(C.buyerName, form.buyerName);
+  put(C.buyerTrn, form.buyerTrn);
+  put(C.buyerAddress1, form.buyerAddress1);
+  put(C.buyerAddress2, form.buyerAddress2);
+  put(C.buyerContact, form.buyerContact);
+  put(C.buyerEmail, form.buyerEmail);
+  put(C.shipmentNote, form.shipmentNote);
+
+  // Whatever the stored form says, verbatim — _orderFormFromBody has already
+  // settled what an order with no notes of its own falls back to.
+  const notes = form.notes || [];
+  for (let r = L.notesFirstRow; r <= L.notesLastRow; r++) put(`A${r}`, notes[r - L.notesFirstRow] || '');
+
+  items.forEach((it, i) => {
+    const row = L.itemsFirstRow + i;
+    if (row > L.itemsLastRow) return;   // beyond capacity — see the cap enforced in POST
+    put(`${IT.srNoCol}${row}`, i + 1);
+    Object.entries(IT.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
+    put(`${IT.remarksCol}${row}`, it.remarks);
+    putRaw(`${IT.photoCol}${row}`, photoRows.has(i) ? _piPhotoFormula(it.imageUrl) : '');
+  });
+
+  await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
+
+  // Collapse the unused tail of the 30-row table — hidden rows are left out of
+  // the PDF export — and re-show whatever the previous order had hidden.
+  if (templateSheetId != null) {
+    const firstIdx = L.itemsFirstRow - 1;
+    const endIdx = L.itemsLastRow;
+    const usedEnd = Math.min(firstIdx + Math.max(items.length, 1), endIdx);
+    const rowRange = (startIndex, endIndex, hidden) => ({
+      updateDimensionProperties: {
+        range: { sheetId: templateSheetId, dimension: 'ROWS', startIndex, endIndex },
+        properties: { hiddenByUser: hidden }, fields: 'hiddenByUser',
+      },
+    });
+    const requests = [rowRange(firstIdx, usedEnd, false)];
+    if (usedEnd < endIdx) requests.push(rowRange(usedEnd, endIdx, true));
+
+    // Every used line gets the same height, so the table reads as one block —
+    // the reasoning is spelled out on _fillPiTemplate.
+    const rowPx = photoGroups.some(g => g.photo) ? L.itemRowHeightWithPhoto : L.itemRowHeight;
+    items.slice(0, endIdx - firstIdx).forEach((_, i) => {
+      requests.push({
+        updateDimensionProperties: {
+          range: { sheetId: templateSheetId, dimension: 'ROWS', startIndex: firstIdx + i, endIndex: firstIdx + i + 1 },
+          properties: { pixelSize: rowPx }, fields: 'pixelSize',
+        },
+      });
+    });
+
+    // Nothing is hidden on this document — Total Weight in particular is the
+    // whole point of it — but the loop is kept so the format file stays the
+    // one place that decides.
+    (IT.printHiddenCols || []).forEach(col => {
+      const idx = _piColIndex(col);
+      requests.push({
+        updateDimensionProperties: {
+          range: { sheetId: templateSheetId, dimension: 'COLUMNS', startIndex: idx, endIndex: idx + 1 },
+          properties: { hiddenByUser: true }, fields: 'hiddenByUser',
+        },
+      });
+    });
+
+    // One Photo cell per product, spanning that product's size lines.
+    photoGroups.forEach(g => {
+      if (g.count < 2) return;
+      requests.push({
+        mergeCells: {
+          range: {
+            sheetId: templateSheetId,
+            startRowIndex: firstIdx + g.start, endRowIndex: firstIdx + g.start + g.count,
+            startColumnIndex: photoColIdx, endColumnIndex: photoColIdx + 1,
+          },
+          mergeType: 'MERGE_ALL',
+        },
+      });
+    });
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { requests } });
+  }
+}
+
+// Exports the filled tab and files the PDF next to the PIs. Shorter than the
+// PI's equivalent because there is no total to read back and no amount in
+// words to stamp — the pause is only to let the =IMAGE() photos render before
+// the page is captured. Never lets a Drive/export hiccup block the data write.
+async function _finishOrderSubmission(orderNo, templateSheetId) {
+  await _sleep(2000);
+  try {
+    const pdfBuffer = await _exportSheetTabPdf(PI_CREATION_SHEET_ID, templateSheetId, {
+      c1: 0, c2: OS_FMT.LAYOUT.colCount, r1: 0, r2: OS_FMT.LAYOUT.lastRow, portrait: true, scale: 4,
+    });
+    // "VTV/ORD/001/26-27" has slashes in it — a Drive filename must not.
+    return await safeUploadPdfToDrive(pdfBuffer, `${orderNo.replace(/\//g, '-')} - Order Sheet.pdf`, PI_PDF_DRIVE_FOLDER_ID);
+  } catch (e) {
+    console.error('[order-sheet] PDF export failed:', e.message);
+    return null;
+  }
+}
+
+// Reads one PI's stored form out of the PI log. The order sheet is built from
+// it rather than from the request, so a user cannot quietly re-address the
+// order to a different buyer than the PI they picked.
+async function _piFormByNo(sheets, piNo) {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: PI_CREATION_SHEET_ID,
+    range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`,
+    valueRenderOption: 'FORMATTED_VALUE',
+  });
+  const row = (res.data.values || []).find(r => String(r[0] || '').trim() === String(piNo).trim());
+  if (!row) return { form: null, status: null, pdfLink: '', notFound: true };
+  let form = null;
+  try { form = row[9] ? JSON.parse(row[9]) : null; } catch {}
+  // The PI's own PDF travels with the order onto the dispatch tracker, which
+  // lists both documents side by side.
+  return { form, status: row[10] || 'Draft', pdfLink: row[4] || '', notFound: false };
+}
+
+// POST /api/order-sheet — raises the Order Sheet for one PI: fills the tab,
+// exports the PDF and logs the order. Body carries only the order-side fields;
+// everything about the customer and the goods comes from the PI.
+app.post('/api/order-sheet', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const piNo = String(b.piNo || '').trim();
+    if (!piNo) return res.status(400).json({ error: 'Pick the Proforma Invoice this order is against' });
+    if (!b.orderDate) return res.status(400).json({ error: 'Order Date is required' });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const { form: piForm, status: piStatus, pdfLink: piPdfLink, notFound } = await _piFormByNo(sheets, piNo);
+    if (notFound) return res.status(404).json({ error: 'PI ' + piNo + ' is not on the PI log' });
+    if (!piForm) return res.status(400).json({ error: 'PI ' + piNo + ' has no saved detail to build an order from' });
+    // An order sheet says the goods are going into production. A cancelled PI
+    // is dead and a superseded one has been replaced by its own revision —
+    // neither is the paperwork the buyer is holding.
+    if (piStatus === 'Cancelled' || piStatus === 'Superseded') {
+      return res.status(400).json({ error: 'PI ' + piNo + ' is ' + piStatus + ' — raise the order against the PI in force' });
+    }
+
+    // Items default to the PI's own lines; the form may send them back edited
+    // (a part shipment, a corrected box count) but never with a rate attached.
+    const { items: cleanItems, error: itemsError } = _orderCleanItems(
+      Array.isArray(b.items) && b.items.length ? b : { items: piForm.items || [] }
+    );
+    if (itemsError) return res.status(400).json({ error: itemsError });
+
+    const fy = _piFyLabel(b.orderDate);
+    const { nextSeq, templateSheetId } = await _orderSheetMeta(fy);
+    const orderNo = _orderNoFormat(nextSeq, fy);
+
+    const form = _orderFormFromBody(b, piForm, req.session.user, cleanItems);
+
+    await _fillOrderTemplate(sheets, { ...form, orderNo }, templateSheetId);
+    const pdfLink = await _finishOrderSubmission(orderNo, templateSheetId);
+
+    const totalQty = cleanItems.reduce((sum, it) => sum + (parseFloat(it.qty) || 0), 0);
+    await ensureLogTab(PI_CREATION_SHEET_ID, ORDER_LOG_TAB, OS_FMT.ORDER_LOG_HEADER);
+    await appendLogRow(PI_CREATION_SHEET_ID, ORDER_LOG_TAB, [
+      "'" + orderNo, "'" + b.orderDate, "'" + piNo, form.buyerName, totalQty || '', pdfLink || '',
+      req.session.user.name || '', _timestampForSheet(),
+      JSON.stringify(form),
+      'Open',
+    ]);
+
+    // Opens the order's row in the "Order to dispatch" flow. Reported back
+    // rather than thrown — the order itself is already filled, exported and
+    // logged by this point, and the row can be added by hand.
+    let fmsTracked = true;
+    try {
+      await _appendOrderFmsRow(sheets, {
+        orderNo,
+        customerName: form.buyerName,
+        // "Location" on that tracker is where the goods are going.
+        location: form.placeOfDelivery || form.portOfDischarge || '',
+        advanceDate: form.advanceReceivedOn,
+        dueDate: form.deliveryDate,
+        orderPdfLink: pdfLink || '',
+        piPdfLink: piPdfLink || '',
+      });
+    } catch (e) {
+      fmsTracked = false;
+      console.error('[order-sheet] Order to dispatch FMS row failed:', e.message);
+    }
+
+    return res.json({ success: true, orderNo, pdfLink, piNo, fmsTracked });
+  } catch (e) {
+    console.error('[order-sheet] create failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/order-sheet/list — recent order sheets, newest first, capped at 200.
+app.get('/api/order-sheet/list', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const rows = (result.data.values || []).map(r => {
+      let form = null;
+      try { form = r[8] ? JSON.parse(r[8]) : null; } catch {}
+      return {
+        orderNo: r[0] || '', orderDate: _sheetDateToIso(r[1]), piNo: r[2] || '', buyer: r[3] || '',
+        totalQty: r[4] || '', pdfLink: r[5] || '', createdBy: r[6] || '', createdAt: r[7] || '',
+        form, status: r[9] || 'Open',
+      };
+    }).reverse().slice(0, 200);
+    return res.json(rows);
+  } catch (e) {
+    if (/unable to parse range/i.test(e.message || '')) return res.json([]);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/order-sheet/cancel?orderNo=... — flips Status only, same
+// Cancel-in-place pattern as the PI: the row stays and the archived PDF is
+// never touched.
+app.put('/api/order-sheet/cancel', requireAuth, async (req, res) => {
+  try {
+    const orderNo = req.query.orderNo;
+    if (!orderNo) return res.status(400).json({ error: 'orderNo is required' });
+    await _setLogRowStatus(PI_CREATION_SHEET_ID, ORDER_LOG_TAB, orderNo, 'J', 'Cancelled');
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
+});
+
+// Owner-only, and worth the same warning the PI's delete carries: the next
+// order number is the highest on this log plus one, so deleting the most
+// recent order hands its number to the next one raised.
+app.delete('/api/order-sheet', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    const orderNo = req.query.orderNo;
+    if (!orderNo) return res.status(400).json({ error: 'orderNo is required' });
+    await _deleteLogRowByKey(PI_CREATION_SHEET_ID, ORDER_LOG_TAB, orderNo);
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });

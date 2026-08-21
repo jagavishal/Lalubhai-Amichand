@@ -162,6 +162,30 @@ const DEFAULTS = {
   ],
 };
 
+// "Order to dispatch" — the second flow in the same Export Marketing FMS
+// workbook the PI opens a row in. Where PI_FMT.FMS_TRACKER covers lead → PI →
+// advance, this one picks the order up from there and runs it to the shipment
+// being paid for. Raising an Order Sheet is what opens its row.
+//
+// Its header sits on row 6 under the same five rows of WHO/HOW/WHEN process
+// notes, so rows are placed by finding the first free one rather than by
+// values.append.
+const FMS_TRACKER = {
+  spreadsheetId: PI.FMS_TRACKER.spreadsheetId,
+  tab: 'Order to dispatch',
+  headerRow: 6,
+  firstDataRow: 7,
+  // Two blocks, not one contiguous range. A..F is what raising the order
+  // knows; L and M are the two documents. Everything between them belongs to
+  // the dispatch team or to the sheet itself — G ("TODAY'S DATE") and H
+  // ("Overdue days") are its own working columns, and I..K are filled in as
+  // the shipment actually moves. Writing across them would wipe that.
+  cols: {
+    timestamp: 'A', party: 'B', location: 'C', orderNo: 'D',
+    advanceDate: 'E', dueDate: 'F', orderPdf: 'L', piPdf: 'M',
+  },
+};
+
 // Column layout of the "ERP Order sheet Log" tab — the database for every
 // order sheet raised, mirroring "ERP PI Log". Defined here so the tab and the
 // code that will fill it are described in one place; nothing writes it yet.
@@ -170,4 +194,4 @@ const ORDER_LOG_HEADER = [
   'Created By', 'Created At', 'Form JSON', 'Status',
 ];
 
-module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, DEFAULTS, ORDER_LOG_HEADER };
+module.exports = { LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, DEFAULTS, FMS_TRACKER, ORDER_LOG_HEADER };

@@ -74,6 +74,21 @@ window.Pages['proforma-invoice'] = (() => {
   // closing would pop up again the next time they opened this page.
   let _priceQueued = false;
 
+  // Order Sheet tab state — the third view on this page. An order sheet is
+  // always raised against a PI, so _osOf holds that PI (number, buyer and its
+  // stored form) for as long as the create form is open.
+  let _oslRows = [];
+  let _oslLoaded = false;
+  let _oslLoadError = '';
+  let _oslFBuyer = '';
+  let _oslFFrom = '';
+  let _oslFTo = '';
+  let _osOf = null;
+  let _osSaving = false;
+  // Standing packing instructions, from /masters so the page never keeps a
+  // second copy of what the server decides.
+  let _orderDefaults = null;
+
   // Revision state — set while the Create tab is being used to re-issue an
   // existing PI rather than raise a new one. { piNo, status } of the parent.
   let _reviseOf = null;
@@ -126,6 +141,7 @@ window.Pages['proforma-invoice'] = (() => {
       if (data.currencies) _currencies = data.currencies;
       if (data.priceDefault) _priceDefault = data.priceDefault;
       if (data.defaults) _defaults = data.defaults;
+      if (data.orderDefaults) _orderDefaults = data.orderDefaults;
       if (data.maxItems) _maxItems = data.maxItems;
       _mastersLoaded = true;
       const el = document.getElementById('pic-next-no');
@@ -800,6 +816,7 @@ window.Pages['proforma-invoice'] = (() => {
     return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
       + _tabTab('Create PI', _view === 'create', 'class="pic-create-tab"')
       + _tabTab('PI List', _view === 'list', 'class="pic-list-tab"')
+      + _tabTab('Order Sheets', _view === 'orders', 'class="pic-orders-tab"')
     + '</div>';
   }
 
@@ -993,6 +1010,7 @@ window.Pages['proforma-invoice'] = (() => {
       body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_pilRows.length ? 'No Proforma Invoices match these filters' : 'No Proforma Invoices created yet') + '</td></tr>';
       return;
     }
+    const ordered = _osOrderedPiNos();
     body.innerHTML = rows.map(v => {
       const r = v.r;
       const open = _pilOpenFamilies.has(v.fam);
@@ -1030,6 +1048,14 @@ window.Pages['proforma-invoice'] = (() => {
           // editing a PI they already hold a copy of.
           + (r.canRevise && r.form
             ? '<button type="button" class="pic-revise-btn" data-pi="' + esc(r.piNo) + '" style="border:1.5px solid #bfdbfe;background:#fff;color:#1e40af;cursor:pointer;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:7px;margin-right:6px;">Revise</button>'
+            : '')
+          // The advance has landed and the order goes into production. Only a
+          // priced PI can be ordered against — an unpriced one is not a deal
+          // yet — and a PI that already has one says so instead.
+          + (r.status === 'Priced' && r.form
+            ? (ordered.has(String(r.piNo).trim())
+              ? '<span title="An Order Sheet has already been raised against this PI" style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f0fdf4;color:#15803d;font-size:11px;font-weight:600;margin-right:6px;">Ordered</span>'
+              : '<button type="button" class="pic-order-btn" data-pi="' + esc(r.piNo) + '" style="border:1.5px solid #86efac;background:#fff;color:#15803d;cursor:pointer;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:7px;margin-right:6px;">Create Order Sheet</button>')
             : '')
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
@@ -1089,6 +1115,13 @@ window.Pages['proforma-invoice'] = (() => {
         const row = _pilRows.find(r => String(r.piNo) === reviseBtn.dataset.pi);
         if (!row || !row.form) { Utils.showToast('This PI has no saved detail to revise from', 'error'); return; }
         _startRevise(row);
+        return;
+      }
+      const orderBtn = e.target.closest('.pic-order-btn');
+      if (orderBtn) {
+        const row = _pilRows.find(r => String(r.piNo) === orderBtn.dataset.pi);
+        if (!row || !row.form) { Utils.showToast('This PI has no saved detail to build an order from', 'error'); return; }
+        _osStartFrom(row);
         return;
       }
       const priceBtn = e.target.closest('.pic-price-btn');
@@ -1339,13 +1372,314 @@ window.Pages['proforma-invoice'] = (() => {
     }
   }
 
+  /* ── Order Sheet tab ──────────────────────────────────────────────────
+     The document raised once a PI is final and the advance has landed. It is
+     always built FROM a PI — never keyed from scratch — so the customer and
+     the shipping terms come across verbatim and only the order-side dates and
+     the packing note are asked for. No rate, no amount: see
+     backend/lib/order-sheet-format.js. ─────────────────────────────────── */
+
+  function _osFilteredRows() {
+    return _oslRows.filter(r => {
+      if (_oslFBuyer) {
+        const q = _oslFBuyer.toLowerCase();
+        if (!(r.buyer || '').toLowerCase().includes(q) && !(r.orderNo || '').toLowerCase().includes(q)
+          && !(r.piNo || '').toLowerCase().includes(q)) return false;
+      }
+      if (_oslFFrom && (r.orderDate || '') < _oslFFrom) return false;
+      if (_oslFTo && (r.orderDate || '') > _oslFTo) return false;
+      return true;
+    });
+  }
+
+  // Which PIs already have a live order sheet against them — so the PI List
+  // can say so rather than letting the same PI be ordered twice by accident.
+  function _osOrderedPiNos() {
+    return new Set(_oslRows.filter(r => r.status !== 'Cancelled').map(r => String(r.piNo || '').trim()).filter(Boolean));
+  }
+
+  async function _osLoad() {
+    _oslLoaded = false;
+    _oslLoadError = '';
+    _osRenderTable();
+    try {
+      _oslRows = await Utils.apiFetch('/api/order-sheet/list') || [];
+    } catch (e) {
+      _oslRows = [];
+      _oslLoadError = e.message || 'Failed to load Order Sheets';
+    }
+    _oslLoaded = true;
+    _osRenderTable();
+    // The PI List's "Ordered" badge reads the same rows. When this load was
+    // kicked off from that tab there is no #osl-body to paint, so repaint the
+    // PI table instead — otherwise the badge stays missing until a reload.
+    if (document.getElementById('pil-body')) _pilRenderTable();
+  }
+
+  function _osStatusPillHtml(status) {
+    const styles = {
+      Open: 'background:#f0fdf4;color:#15803d;',
+      Cancelled: 'background:#f1f5f9;color:#64748b;',
+    };
+    return '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;'
+      + (styles[status] || styles.Open) + '">' + esc(status || 'Open') + '</span>';
+  }
+
+  function _osFilterBarHtml() {
+    return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
+      + '<input type="text" id="osl-q" value="' + esc(_oslFBuyer) + '" placeholder="Search order no, PI no or customer…" style="flex:1;min-width:220px;' + _inputStyle + '" />'
+      + '<input type="date" id="osl-from" value="' + esc(_oslFFrom) + '" style="' + _inputStyle + 'width:auto;" />'
+      + '<span style="align-self:center;font-size:12px;color:#94a3b8;">to</span>'
+      + '<input type="date" id="osl-to" value="' + esc(_oslFTo) + '" style="' + _inputStyle + 'width:auto;" />'
+      + '<button type="button" id="osl-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
+      + '<button type="button" id="osl-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
+    + '</div>';
+  }
+
+  function _osListHtml() {
+    return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;">'
+        + '<p style="font-size:12.5px;color:#64748b;margin:0;">Raised once a PI is final and the advance is in. Start one from the Create Order Sheet button on any priced PI in the PI List.</p>'
+        + '<span id="osl-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
+      + '</div>'
+      + _osFilterBarHtml()
+      + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+        + '<table style="width:100%;border-collapse:collapse;min-width:860px;">'
+          + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+            + ['Order No', 'Order Date', 'Against PI', 'Customer', 'Status', 'Total Qty', 'PDF', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+          + '</tr></thead>'
+          + '<tbody id="osl-body"><tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+        + '</table>'
+      + '</div>';
+  }
+
+  function _osRenderTable() {
+    const body = document.getElementById('osl-body');
+    const countEl = document.getElementById('osl-count');
+    if (!body) return;
+    if (!_oslLoaded) {
+      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      if (countEl) countEl.textContent = '';
+      return;
+    }
+    if (_oslLoadError) {
+      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_oslLoadError) + '</td></tr>';
+      if (countEl) countEl.textContent = '';
+      return;
+    }
+    const rows = _osFilteredRows();
+    if (countEl) countEl.textContent = rows.length + ' of ' + _oslRows.length;
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">'
+        + (_oslRows.length ? 'No Order Sheets match these filters' : 'No Order Sheets raised yet') + '</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(r => ''
+      + '<tr style="border-bottom:1px solid #f1f5f9;">'
+        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.orderNo) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.orderDate) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + esc(r.piNo) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + _osStatusPillHtml(r.status) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">' + (r.totalQty ? esc(r.totalQty) : '<span style="color:#cbd5e1;">—</span>') + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+          + (r.status === 'Cancelled'
+            ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
+            : '<button type="button" class="osl-cancel-btn" data-order="' + esc(r.orderNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
+          + Utils.ownerDeleteBtn('osl-delete-btn', 'order', r.orderNo)
+        + '</td>'
+      + '</tr>').join('');
+  }
+
+  function _osBindListBar() {
+    const q = document.getElementById('osl-q');
+    if (!q) return;
+    q.addEventListener('input', (e) => { _oslFBuyer = e.target.value; _osRenderTable(); });
+    document.getElementById('osl-from').addEventListener('change', (e) => { _oslFFrom = e.target.value; _osRenderTable(); });
+    document.getElementById('osl-to').addEventListener('change', (e) => { _oslFTo = e.target.value; _osRenderTable(); });
+    document.getElementById('osl-clear').addEventListener('click', () => {
+      _oslFBuyer = ''; _oslFFrom = ''; _oslFTo = '';
+      q.value = ''; document.getElementById('osl-from').value = ''; document.getElementById('osl-to').value = '';
+      _osRenderTable();
+    });
+    document.getElementById('osl-refresh').addEventListener('click', _osLoad);
+
+    const body = document.getElementById('osl-body');
+    if (!body || body.dataset.actionsBound) return;
+    body.dataset.actionsBound = '1';
+    body.addEventListener('click', async (e) => {
+      const cancelBtn = e.target.closest('.osl-cancel-btn');
+      if (cancelBtn) {
+        const ok = await Utils.showConfirm('Order ' + cancelBtn.dataset.order + ' will be marked Cancelled. This can\'t be undone.', { title: 'Cancel Order Sheet', confirmText: 'Cancel Order', danger: true });
+        if (!ok) return;
+        try {
+          await Utils.apiFetch('/api/order-sheet/cancel?orderNo=' + encodeURIComponent(cancelBtn.dataset.order), { method: 'PUT' });
+          Utils.showToast('Order ' + cancelBtn.dataset.order + ' cancelled', 'success');
+          await _osLoad();
+        } catch (err) { Utils.showToast(err.message || 'Failed to cancel', 'error'); }
+        return;
+      }
+      const delBtn = e.target.closest('.osl-delete-btn');
+      if (delBtn) {
+        const orderNo = delBtn.dataset.order;
+        if (!(await Utils.ownerDeleteConfirm('Order ' + orderNo + ' (its number can then be re-issued to a new order)'))) return;
+        try {
+          await Utils.apiFetch('/api/order-sheet?orderNo=' + encodeURIComponent(orderNo), { method: 'DELETE' });
+          Utils.showToast('Order ' + orderNo + ' deleted', 'success');
+          await _osLoad();
+        } catch (err) { Utils.showToast(err.message || 'Failed to delete', 'error'); }
+      }
+    });
+  }
+
+  /* ── Create Order Sheet form (opened from a PI) ───────────────────────── */
+
+  function _osStartFrom(row) {
+    _osOf = { piNo: row.piNo, buyer: row.buyer, form: row.form };
+    _view = 'orders';
+    renderPage();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function _osCancelForm() {
+    _osOf = null;
+    renderPage();
+  }
+
+  function _osOrderItemsHtml(items) {
+    const head = ['#', 'Model No.', 'Item Name', 'Size', 'SWG', 'Per Box Dozen Packing', 'Total Qty (Pcs/Set)', 'Total Box', 'Total CBM', 'Total Weight (Kgs)', 'Remarks'];
+    // Identity columns are read-only — an order sheet confirms the PI's goods,
+    // so changing what the item IS belongs on a PI revision, not here. The
+    // quantities stay editable for a part shipment or a corrected box count.
+    const editable = ['packing', 'qty', 'boxes', 'cbm', 'weight', 'remarks'];
+    return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+      + '<table style="width:100%;border-collapse:collapse;min-width:960px;">'
+        + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+          + head.map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">' + esc(h) + '</th>').join('')
+        + '</tr></thead>'
+        + '<tbody id="os-items-tbody">'
+          + items.map((it, i) => '<tr class="os-item-row" style="border-bottom:1px solid #f1f5f9;">'
+            + '<td style="padding:6px 8px;font-size:12px;color:#94a3b8;">' + (i + 1) + '</td>'
+            + ['modelNo', 'itemName', 'size', 'swg'].map(f =>
+                '<td style="padding:6px 8px;font-size:12.5px;">' + esc(it[f] || '')
+                + '<input type="hidden" data-field="' + f + '" value="' + esc(it[f] || '') + '" /></td>').join('')
+            + editable.map(f =>
+                '<td style="padding:6px 8px;"><input type="text" data-field="' + f + '" value="' + esc(it[f] == null ? '' : it[f]) + '" style="' + _cellInput + '" /></td>').join('')
+            + '<input type="hidden" data-field="imageUrl" value="' + esc(it.imageUrl || '') + '" />'
+          + '</tr>').join('')
+        + '</tbody>'
+      + '</table>'
+    + '</div>';
+  }
+
+  function _osFormHtml() {
+    const pi = (_osOf && _osOf.form) || {};
+    const items = pi.items || [];
+    const notes = (_orderDefaults && _orderDefaults.notes) || [];
+    const noteSlots = 5;
+    return '<form id="os-form" style="display:flex;flex-direction:column;gap:16px;">'
+      + '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
+        + '<div>'
+          + '<div style="font-size:13px;font-weight:700;color:#1e40af;">Order against ' + esc(_osOf.piNo) + '</div>'
+          + '<div style="font-size:11.5px;color:#1e40af;opacity:.85;margin-top:2px;">The customer, the shipping terms and the lines come across from that PI. No pricing appears on an Order Sheet.</div>'
+        + '</div>'
+        + '<button type="button" id="os-form-cancel" style="padding:6px 12px;border-radius:8px;background:#fff;border:1.5px solid #bfdbfe;color:#1e40af;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Back to Order Sheets</button>'
+      + '</div>'
+
+      + _sectionTitle('Order Details')
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">'
+        // Issued server-side on submit, so the form cannot promise a number
+        // that a concurrent order would take first.
+        + _readonlyField('os-next-no', 'Order No.', 'Assigned on save')
+        + _textField('os-order-date', 'Order Date', { type: 'date', value: _today() })
+        + _textField('os-advance-date', 'Advance Received On', { type: 'date' })
+        + _textField('os-delivery-date', 'Delivery / Dispatch Date', { type: 'date' })
+      + '</div>'
+
+      + _sectionTitle('Customer (from the PI)')
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">'
+        + _readonlyField('os-buyer', 'Consignee', pi.buyerName || _osOf.buyer || '—')
+        + _readonlyField('os-buyer-trn', 'TRN / VAT No.', pi.buyerTrn || '—')
+        + _readonlyField('os-buyer-contact', 'Contact', pi.buyerContact || '—')
+        + _readonlyField('os-terms', 'Terms of Payment', pi.paymentTerms || '—')
+        + _readonlyField('os-pol', 'Port of Loading', pi.portOfLoading || '—')
+        + _readonlyField('os-pod', 'Port of Discharge', pi.portOfDischarge || '—')
+        + _readonlyField('os-pdel', 'Place of Delivery', pi.placeOfDelivery || '—')
+        + _textField('os-email', 'Email (optional)', { value: '' })
+      + '</div>'
+
+      + _sectionTitle('Items')
+      + _textField('os-shipment-note', 'Container / Shipment Note', { value: pi.shipmentNote || '' })
+      + _osOrderItemsHtml(items)
+
+      + _sectionTitle('Special Instructions / Packing & Marking')
+      + '<div style="display:flex;flex-direction:column;gap:8px;">'
+        + Array.from({ length: noteSlots }, (_, i) =>
+            '<input type="text" class="os-note" value="' + esc(notes[i] || '') + '" placeholder="' + (i < notes.length ? '' : 'Anything the buyer asked for on this order…') + '" style="' + _inputStyle + '" />').join('')
+      + '</div>'
+
+      + '<button type="submit" id="os-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Order Sheet</button>'
+    + '</form>';
+  }
+
+
+  function _osCollectItems() {
+    return Array.from(document.querySelectorAll('#os-items-tbody .os-item-row')).map(row => {
+      const item = {};
+      row.querySelectorAll('[data-field]').forEach(el => { item[el.dataset.field] = el.value.trim(); });
+      return item;
+    }).filter(it => it.modelNo || it.itemName);
+  }
+
+  async function _osSubmit(e) {
+    e.preventDefault();
+    if (_osSaving) return;
+    const btn = document.getElementById('os-submit-btn');
+    const orderDate = document.getElementById('os-order-date').value;
+    if (!orderDate) { Utils.showToast('Order Date is required', 'error'); return; }
+    const items = _osCollectItems();
+    if (!items.length) { Utils.showToast('This order has no items', 'error'); return; }
+
+    _osSaving = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+    try {
+      const body = {
+        piNo: _osOf.piNo,
+        orderDate,
+        advanceReceivedOn: document.getElementById('os-advance-date').value,
+        deliveryDate: document.getElementById('os-delivery-date').value,
+        buyerEmail: document.getElementById('os-email').value.trim(),
+        shipmentNote: document.getElementById('os-shipment-note').value.trim(),
+        notes: Array.from(document.querySelectorAll('.os-note')).map(el => el.value.trim()).filter(Boolean),
+        items,
+      };
+      const out = await Utils.apiFetch('/api/order-sheet', { method: 'POST', body: JSON.stringify(body) });
+      Utils.showToast('Order Sheet ' + out.orderNo + ' created', 'success');
+      if (!out.pdfLink) Utils.showToast('The order is logged, but its PDF could not be filed — raise it again or export the tab by hand', 'error');
+      _osOf = null;
+      _view = 'orders';
+      renderPage();
+    } catch (err) {
+      Utils.showToast(err.message || 'Failed to create the Order Sheet', 'error');
+    } finally {
+      _osSaving = false;
+      const b2 = document.getElementById('os-submit-btn');
+      if (b2) { b2.disabled = false; b2.textContent = 'Create Order Sheet'; }
+    }
+  }
+
   /* ── Render ─────────────────────────────────────────────────────────── */
   function renderPage() {
     const el = document.getElementById('main-content');
     if (!el) return;
 
     const isList = _view === 'list';
-    const bodyHtml = isList
+    const isOrders = _view === 'orders';
+    // The Order Sheets tab shows its list, or the create form once a PI has
+    // been picked from the PI List.
+    const bodyHtml = isOrders
+      ? (_osOf ? _osFormHtml() : _osListHtml())
+      : isList
       ? _pilViewHtml()
       : '<form id="pic-form" style="display:flex;flex-direction:column;gap:16px;">'
         + _reviseBannerHtml()
@@ -1369,7 +1703,7 @@ window.Pages['proforma-invoice'] = (() => {
         + '<button type="submit" id="pic-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">' + (_reviseOf ? 'Issue Revision' : 'Create Proforma Invoice') + '</button>'
       + '</form>';
 
-    el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '1180px') + ';margin:0 auto;padding:4px 0 40px;">'
+    el.innerHTML = '<div style="max-width:' + (isList || isOrders ? '1200px' : '1180px') + ';margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Proforma Invoice / OCS</h1>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Export PI. Create captures consignee, shipping &amp; items only — the rate, its basis and its currency are added afterward by an authorized user.</p>'
@@ -1382,6 +1716,9 @@ window.Pages['proforma-invoice'] = (() => {
     // must not silently ride along on the tab the user thinks is blank.
     document.querySelector('.pic-create-tab').addEventListener('click', () => { _reviseOf = null; _view = 'create'; renderPage(); });
     document.querySelector('.pic-list-tab').addEventListener('click', () => { _view = 'list'; renderPage(); });
+    // Clicking the tab by hand means "show me the orders", not "carry on with
+    // the one I started" — same reasoning as the Create tab clearing a revision.
+    document.querySelector('.pic-orders-tab').addEventListener('click', () => { _osOf = null; _view = 'orders'; renderPage(); });
 
     // Both views need the masters, not just Create: the Add Price screen opens
     // off the LIST, and its Price Type / Currency dropdowns are filled from
@@ -1389,6 +1726,17 @@ window.Pages['proforma-invoice'] = (() => {
     // the value the PI already had. Every field _loadMasters() touches is
     // looked up by id and skipped when absent, so it is safe on either view.
     if (!_mastersLoaded) _loadMasters(_today());
+
+    if (isOrders) {
+      if (_osOf) {
+        document.getElementById('os-form-cancel').addEventListener('click', _osCancelForm);
+        document.getElementById('os-form').addEventListener('submit', _osSubmit);
+      } else {
+        _osBindListBar();
+        _osLoad();
+      }
+      return;
+    }
 
     if (isList) {
       _pilBindFilterBar();
@@ -1399,6 +1747,9 @@ window.Pages['proforma-invoice'] = (() => {
       // #pil-body, so it will not wipe it back out.
       _renderPriceModal();
       _pilLoad();
+      // Which PIs already carry an order sheet is read from the same log the
+      // Order Sheets tab uses; a failure here only costs the badge.
+      _osLoad().catch(() => {});
       return;
     }
 
