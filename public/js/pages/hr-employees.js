@@ -57,8 +57,12 @@ window.Pages['hr-employees'] = (() => {
     if (!el) return;
     const admin = H.isAdmin();
 
+    // The import is a bulk write over the whole HR database, so it is owner-only
+    // (requireSuperAdmin on the route). It used to be offered to every Admin and
+    // then refused with a red toast on click, which reads like a broken button
+    // rather than a deliberate restriction — so it is simply not shown.
     const actions = admin ? `
-      <button id="hre-import" class="btn-secondary btn-sm">Import from Sheet</button>
+      ${H.isOwner() ? '<button id="hre-import" class="btn-secondary btn-sm">Import from Sheet</button>' : ''}
       <button id="hre-link" class="btn-secondary btn-sm">Link Logins</button>
       <button id="hre-add" class="btn-primary btn-sm">+ Add Employee</button>` : '';
 
@@ -110,9 +114,14 @@ window.Pages['hr-employees'] = (() => {
         ${H.table(
           ['Code', 'Employee', 'Department', 'Branch', 'Joined', 'Tenure', 'Status', { label: 'Actions', nowrap: true }],
           rows,
+          // An empty master almost always means the one-time import has not been
+          // run yet, so the empty state says who can run it rather than pointing
+          // at a button this person may not have.
           { empty: _filters.q || _filters.status !== 'Active'
               ? 'No employee matches these filters'
-              : 'No employees yet — add one, or import the old HRMS sheet' },
+              : (H.isOwner()
+                ? 'No employees yet — add one, or use Import from Sheet to bring across the old HRMS spreadsheet'
+                : 'No employees yet. The one-time import from the old HRMS spreadsheet has to be run from the owner account; after that everyone appears here.') },
         )}
       </div>`;
 
