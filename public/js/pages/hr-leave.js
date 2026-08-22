@@ -388,9 +388,16 @@ window.Pages['hr-leave'] = (() => {
         [{ value: 'full', label: 'Full day(s)' }, { value: 'first', label: 'Half day — first half' }, { value: 'second', label: 'Half day — second half' }])}
       ${H.field('hrla-from', 'From', H.todayISO(), { type: 'date', required: true })}
       ${H.field('hrla-to', 'To', H.todayISO(), { type: 'date', required: true })}
+      <!-- Worked out from the dates rather than typed. It was a line of small
+           grey text under the form; the number people are actually deciding on
+           deserves to be a field they can see while they pick the dates. -->
+      <div style="grid-column:1/-1;">
+        <label style="${H.LABEL}">How Many Days</label>
+        <div id="hrla-days" style="${H.CONTROL}background:#f8fafc;display:flex;align-items:baseline;gap:8px;
+             font-weight:700;color:#0f172a;">—</div>
+      </div>
       ${H.textarea('hrla-reason', 'Reason', '', { rows: 3 })}
       <div id="hrla-bal" style="grid-column:1/-1;"></div>
-      <div id="hrla-hint" style="grid-column:1/-1;font-size:12px;color:#64748b;"></div>
     `);
     H.openModal({
       id: 'hrla', title: 'Apply for Leave', subtitle: 'The balance moves only once this is approved',
@@ -399,7 +406,7 @@ window.Pages['hr-leave'] = (() => {
         const half = document.getElementById('hrla-half');
         const from = document.getElementById('hrla-from');
         const to = document.getElementById('hrla-to');
-        const hint = document.getElementById('hrla-hint');
+        const daysBox = document.getElementById('hrla-days');
         const type = document.getElementById('hrla-type');
         const empSel = document.getElementById('hrla-emp');
         const balBox = document.getElementById('hrla-bal');
@@ -467,8 +474,23 @@ window.Pages['hr-leave'] = (() => {
           if (isHalf) { to.value = from.value; to.readOnly = true; to.style.background = '#f8fafc'; }
           else { to.readOnly = false; to.style.background = '#fff'; }
           if (to.value < from.value) to.value = from.value;
+          /* Shown the way the server counts by default: plain calendar days,
+             which is how the company's own sheet has always counted them (1–10
+             April is 10 days, Sundays included). Turning on
+             hr_leave_exclude_holidays makes the server skip week-offs and the
+             holiday calendar, and its figure is the one that gets stored — so
+             the field says which rule it used rather than quietly disagreeing. */
           const days = requestedDays();
-          hint.textContent = days ? `${days} day${days === 1 ? '' : 's'} will be requested.` : '';
+          if (daysBox) {
+            // The gap is a real element rather than trusting whitespace between
+            // two spans in a template — the first version rendered "1day".
+            daysBox.innerHTML = days
+              ? `<span style="font-size:17px;">${days}</span>`
+                + `<span style="font-size:12px;font-weight:500;color:#64748b;">`
+                + `&nbsp;${days === 1 ? 'day' : 'days'}`
+                + `${half.value === 'full' ? '&nbsp;· counted as calendar days' : '&nbsp;· half day'}</span>`
+              : `<span style="font-size:12.5px;font-weight:500;color:#b45309;">Pick both dates</span>`;
+          }
           paintBalances();
         };
         [half, from, to, type, empSel].forEach((x) => x && x.addEventListener('change', sync));
