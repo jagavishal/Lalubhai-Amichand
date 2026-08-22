@@ -265,7 +265,7 @@ window.Pages['hr-employees'] = (() => {
       { key: 'salary', label: 'Salary', count: p.structures.length },
       { key: 'leave', label: 'Leave' },
       { key: 'payslips', label: 'Payslips', count: p.payslips.length },
-      { key: 'documents', label: 'Documents', count: p.documents.length },
+      { key: 'documents', label: 'Documents', count: allDocuments(p).length },
       { key: 'joining', label: 'Joining', count: p.onboarding.length },
       { key: 'exit', label: 'Exit' },
     ];
@@ -423,26 +423,27 @@ window.Pages['hr-employees'] = (() => {
     }
 
     if (_profileTab === 'documents') {
-      const rows = p.documents.map((d) => [
-        H.esc(d.doc_type), H.esc(d.doc_no || '—'),
+      const docs = allDocuments(p);
+      const rows = docs.map((d) => [
+        `${H.esc(d.doc_type)}${d.onMaster
+          ? '<div style="font-size:10px;color:#94a3b8;">on the employee record</div>' : ''}`,
+        H.esc(d.doc_no || '—'),
         d.url ? `<a href="${H.esc(d.url)}" target="_blank" rel="noopener" style="color:var(--color-primary);">Open</a>` : '—',
-        H.fmtDate(d.issued_on),
+        d.onMaster ? '—' : H.fmtDate(d.issued_on),
         d.expires_on
           ? `<span style="color:${d.expires_on < H.todayISO() ? '#b91c1c' : '#334155'};">${H.fmtDate(d.expires_on)}</span>`
           : '—',
         H.esc(d.remarks || '—'),
-        admin ? `<button class="btn-ghost btn-xs hrep-doc-del" data-id="${H.esc(d.id)}" style="color:#b91c1c;">Remove</button>` : '',
+        // Nothing to delete for the two that live on the employee row; they are
+        // changed on the employee form, where they are actually stored.
+        (admin && !d.onMaster)
+          ? `<button class="btn-ghost btn-xs hrep-doc-del" data-id="${H.esc(d.id)}" style="color:#b91c1c;">Remove</button>`
+          : '',
       ]);
-      const onFile = [
-        e.aadhar_url ? { doc_type: 'Aadhar Card', doc_no: e.aadhar_no, url: e.aadhar_url } : null,
-        e.pan_url ? { doc_type: 'PAN Card', doc_no: e.pan_no, url: e.pan_url } : null,
-      ].filter(Boolean);
       return `
         ${admin ? '<div style="margin-bottom:12px;"><button id="hrep-add-doc" class="btn-primary btn-sm">+ Add Document</button></div>' : ''}
-        ${onFile.length ? `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:11px 14px;margin-bottom:13px;
-             font-size:12.5px;color:#475569;">On the master record:
-             ${onFile.map((d) => `<a href="${H.esc(d.url)}" target="_blank" rel="noopener" style="color:var(--color-primary);margin-right:12px;">${H.esc(d.doc_type)}</a>`).join('')}</div>` : ''}
-        ${H.table(['Type', 'Number', 'File', 'Issued', 'Expires', 'Remarks', ''], rows, { empty: 'No documents recorded' })}`;
+        ${H.table(['Type', 'Number', 'File', 'Issued', 'Expires', 'Remarks', ''], rows,
+          { empty: 'No documents on file — not even an Aadhar or PAN on the employee record' })}`;
     }
 
     if (_profileTab === 'joining') {
@@ -501,6 +502,31 @@ window.Pages['hr-employees'] = (() => {
         ${admin ? '<div style="margin-top:14px;"><button id="hrep-exit" class="btn-secondary btn-sm">Edit Exit Record</button></div>' : ''}`;
     }
     return '';
+  }
+
+  /* Every document the employee actually has.
+
+     Aadhar and PAN arrive as columns on the employee row — that is how the
+     HRMS sheet carried them and how the import writes them — while anything
+     added later is a row in hr_documents. The tab was counting only the second
+     kind, so a person whose Aadhar and PAN were both on file was shown
+     "Documents (0)" with the two of them mentioned in a footnote above the
+     empty table.
+
+     They are folded into one list here. The ones off the employee row are
+     marked, and carry no Remove: there is no row to delete, and they are
+     edited where they live, on the employee form. */
+  function allDocuments(p) {
+    const e = p.employee || {};
+    const fromMaster = [
+      { doc_type: 'Aadhar Card', doc_no: e.aadhar_no, url: e.aadhar_url },
+      { doc_type: 'PAN Card', doc_no: e.pan_no, url: e.pan_url },
+    ]
+      // Kept when either the number or the scan is on file — a recorded Aadhar
+      // number is a document the company holds, whether or not it was scanned.
+      .filter((d) => String(d.doc_no || '').trim() || String(d.url || '').trim())
+      .map((d) => ({ ...d, onMaster: true }));
+    return [...fromMaster, ...(p.documents || [])];
   }
 
   const reportingName = (key) => {
