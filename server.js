@@ -1279,19 +1279,21 @@ async function sendDailyGreetings() {
 
   let sent = 0;
   for (const r of rows) {
-    const dobMatch = r.dob && toDateStr(r.dob).slice(5) === md;
-    const dojMatch = r.doj && toDateStr(r.doj).slice(5) === md;
+    // Only whoever the day actually belongs to. `md` is today's MM-DD in IST;
+    // everybody else falls straight through, which is why the sweep can run
+    // every day without anybody hearing from it every day.
+    const dobMatch = !!r.dob && toDateStr(r.dob).slice(5) === md;
+    const dojMatch = !!r.doj && toDateStr(r.doj).slice(5) === md;
     if (!dobMatch && !dojMatch) continue;
+
     // Profile's real address first, exactly as the leave mail resolves it —
     // several logins are shared department inboxes.
     const to = String(r.notification_email || '').trim()
       || String(r.login_email || '').trim()
       || String(r.email || '').trim();
-    const dobMd = r.dob ? toDateStr(r.dob).slice(5) : '';
-    const dojMd = r.doj ? toDateStr(r.doj).slice(5) : '';
 
-    if (dobMd === md && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'birthday' })) sent++;
-    if (dojMd === md) {
+    if (dobMatch && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'birthday' })) sent++;
+    if (dojMatch) {
       const years = year - Number(toDateStr(r.doj).slice(0, 4));
       // Not on the joining day itself, and never a negative for a future date.
       if (years >= 1 && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'anniversary', years })) sent++;
