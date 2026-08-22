@@ -1164,6 +1164,148 @@ async function sendLeaveDecisionEmail({ toEmail, toName, status, decidedBy, leav
   }
 }
 
+
+/* ── Birthdays and work anniversaries ─────────────────────────────────────────
+   The old HRMS spreadsheet mailed these from an Apps Script trigger; nothing
+   replaced it when the module moved here, so the tab full of dates was being
+   kept and never used. A sweep runs through the day and greets whoever it is
+   for, copying the office inbox on each one.
+
+   Three things this has to get right.
+
+   The date is India's, not the server's. Hostinger runs UTC, so "today" taken
+   from the box would greet people at half past five in the morning and, for
+   anything after 18:30 IST, on the wrong day entirely.
+
+   It must not repeat. The day is claimed in app_config BEFORE any mail goes
+   out, so a restart mid-sweep, a second tick, or two processes cannot send the
+   same person two birthday emails. The cost of that ordering is that a crash
+   between the claim and the send loses a day's greetings — the right way round,
+   because nobody minds a missed greeting and everybody notices a duplicate.
+
+   And it only greets the living roll: Active employees, and an anniversary only
+   from the first year onward, so nobody is congratulated on joining today. */
+
+const GREETINGS_CC = (process.env.LEAVE_REQUEST_CC || 'inquiry@laltd.in').trim();
+
+// Today in Asia/Kolkata as { iso, md } — md is the "MM-DD" the dates are matched on.
+function istToday() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date()).reduce((a, p) => (a[p.type] = p.value, a), {});
+  return { iso: `${parts.year}-${parts.month}-${parts.day}`, md: `${parts.month}-${parts.day}`, year: +parts.year };
+}
+
+async function sendGreetingEmail({ toEmail, toName, kind, years }) {
+  const mailer = getMailer();
+  const cc = GREETINGS_CC && GREETINGS_CC.toLowerCase() !== String(toEmail || '').toLowerCase() ? GREETINGS_CC : '';
+  if (!mailer || (!toEmail && !cc)) return false;
+  const birthday = kind === 'birthday';
+  const subject = birthday
+    ? `Happy Birthday, ${toName}!`
+    : `Happy Work Anniversary, ${toName}! — ${years} year${years === 1 ? '' : 's'}`;
+  const body = birthday
+    ? `Wishing you a very happy birthday and a wonderful year ahead.`
+    : `Today marks <b>${years} year${years === 1 ? '' : 's'}</b> with Lallubhai Amichand Limited. `
+      + `Thank you for everything you have brought to the team.`;
+  try {
+    await mailer.sendMail({
+      from: `"Lallubhai Amichand" <${process.env.SMTP_USER}>`,
+      to: toEmail || cc,
+      ...(toEmail && cc ? { cc } : {}),
+      subject,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:520px;padding:28px;border:1px solid #e2e8f0;border-radius:10px;text-align:center">
+          <div style="font-size:40px;line-height:1">${birthday ? '&#127874;' : '&#127881;'}</div>
+          <h2 style="color:${birthday ? '#b45309' : '#0150AA'};margin:12px 0 14px">${birthday ? 'Happy Birthday' : 'Happy Work Anniversary'}</h2>
+          <p style="color:#374151;font-size:15px;margin:0 0 8px">Dear <b>${toName}</b>,</p>
+          <p style="color:#374151;font-size:14px;line-height:1.6;margin:0">${body}</p>
+          <p style="color:#94a3b8;font-size:12px;margin-top:26px">From everyone at Lallubhai Amichand Limited</p>
+        </div>`,
+    });
+    return true;
+  } catch (e) {
+    console.error('[greetings] send failed for', toEmail || cc, '—', e.message);
+    return false;
+  }
+}
+
+async function sendDailyGreetings() {
+  if (!USE_DB) return;
+  // Off by setting greetings_enabled to 'false'; absent means on, because this
+  // replaces something the company already had running.
+  try {
+    const cfg = await q(`SELECT "value" FROM app_config WHERE "key" = 'greetings_enabled'`);
+    if (cfg[0] && cfg[0].value === 'false') return;
+  } catch { /* table not ready yet — try again on the next tick */ return; }
+
+  const { iso, md, year } = istToday();
+
+  // Claim the day first. ON CONFLICT ... WHERE would be neater but the MySQL
+  // translation does not carry a WHERE, so the guard is a read followed by a
+  // write of a value that already encodes the day.
+  try {
+    const last = await q(`SELECT "value" FROM app_config WHERE "key" = 'greetings_last_sent'`);
+    if (last[0] && last[0].value === iso) return;
+    await pool.query(
+      `INSERT INTO app_config ("key","value") VALUES ('greetings_last_sent',$1) ON CONFLICT ("key") DO UPDATE SET "value"=$2`,
+      [iso, iso],
+    );
+  } catch (e) {
+    console.error('[greetings] could not claim the day:', e.message);
+    return;
+  }
+
+  if (!getMailer()) {
+    console.log('[greetings] skipped for', iso, '— SMTP is not configured');
+    return;
+  }
+
+  let rows = [];
+  try {
+    // Matched in JS rather than in SQL: DATE_FORMAT is MySQL's and this app
+    // also runs on Postgres. Active staff number in the dozens, so reading
+    // them and comparing two strings costs nothing and keeps the query plain.
+    rows = await q(
+      `SELECT e.id, e.name, e.email, e.dob, e.doj, e.user_id, u.email AS login_email, p.notification_email
+         FROM hr_employees e
+         LEFT JOIN users u ON u.id = e.user_id
+         LEFT JOIN profile p ON p.user_id = e.user_id
+        WHERE e.status = 'Active' AND (e.dob IS NOT NULL OR e.doj IS NOT NULL)`);
+  } catch (e) {
+    console.error('[greetings] lookup failed:', e.message);
+    return;
+  }
+
+  let sent = 0;
+  for (const r of rows) {
+    const dobMatch = r.dob && toDateStr(r.dob).slice(5) === md;
+    const dojMatch = r.doj && toDateStr(r.doj).slice(5) === md;
+    if (!dobMatch && !dojMatch) continue;
+    // Profile's real address first, exactly as the leave mail resolves it —
+    // several logins are shared department inboxes.
+    const to = String(r.notification_email || '').trim()
+      || String(r.login_email || '').trim()
+      || String(r.email || '').trim();
+    const dobMd = r.dob ? toDateStr(r.dob).slice(5) : '';
+    const dojMd = r.doj ? toDateStr(r.doj).slice(5) : '';
+
+    if (dobMd === md && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'birthday' })) sent++;
+    if (dojMd === md) {
+      const years = year - Number(toDateStr(r.doj).slice(0, 4));
+      // Not on the joining day itself, and never a negative for a future date.
+      if (years >= 1 && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'anniversary', years })) sent++;
+    }
+  }
+  if (sent) console.log('[greetings]', sent, 'greeting(s) sent for', iso);
+}
+
+/* Checked every half hour rather than scheduled for a wall-clock time: this
+   process restarts on every deploy, so a one-shot timer aimed at 9am would
+   simply be lost. The claim above is what makes running it repeatedly safe. */
+setInterval(() => { sendDailyGreetings().catch((e) => console.error('[greetings]', e.message)); }, 30 * 60 * 1000);
+setTimeout(() => { sendDailyGreetings().catch((e) => console.error('[greetings]', e.message)); }, 60 * 1000);
+
 // ── Middleware ────────────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
   if (!req.session?.user) return res.status(401).json({ error: 'Not authenticated' });
