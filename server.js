@@ -1192,9 +1192,21 @@ const GREETINGS_CC = (process.env.LEAVE_REQUEST_CC || 'inquiry@laltd.in').trim()
 function istToday() {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', hourCycle: 'h23',
   }).formatToParts(new Date()).reduce((a, p) => (a[p.type] = p.value, a), {});
-  return { iso: `${parts.year}-${parts.month}-${parts.day}`, md: `${parts.month}-${parts.day}`, year: +parts.year };
+  return {
+    iso: `${parts.year}-${parts.month}-${parts.day}`,
+    md: `${parts.month}-${parts.day}`,
+    year: +parts.year,
+    hour: +parts.hour,
+  };
 }
+
+// The hour of the Indian day greetings go out at, 0–23. Ten in the morning:
+// the first sweep after IST midnight would otherwise send them at around
+// quarter past twelve at night, which is not when a company wishes anybody
+// anything. Change it in app_config under 'greetings_hour'.
+const GREETINGS_DEFAULT_HOUR = 10;
 
 async function sendGreetingEmail({ toEmail, toName, kind, years }) {
   const mailer = getMailer();
@@ -1239,7 +1251,18 @@ async function sendDailyGreetings() {
     if (cfg[0] && cfg[0].value === 'false') return;
   } catch { /* table not ready yet — try again on the next tick */ return; }
 
-  const { iso, md, year } = istToday();
+  const { iso, md, year, hour } = istToday();
+
+  /* Wait for the hour. Deliberately checked before the day is claimed, so an
+     early tick leaves the day unclaimed and the next one still sends. If the
+     server was down all morning and comes up in the afternoon, hour is already
+     past and the greeting goes out late rather than not at all. */
+  let sendHour = GREETINGS_DEFAULT_HOUR;
+  try {
+    const h = await q(`SELECT "value" FROM app_config WHERE "key" = 'greetings_hour'`);
+    if (h[0] && Number.isFinite(+h[0].value)) sendHour = Math.min(23, Math.max(0, +h[0].value));
+  } catch { /* keep the default */ }
+  if (hour < sendHour) return;
 
   // Claim the day first. ON CONFLICT ... WHERE would be neater but the MySQL
   // translation does not carry a WHERE, so the guard is a read followed by a
