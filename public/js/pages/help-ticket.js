@@ -10,6 +10,14 @@ window.Pages['help-ticket'] = (() => {
   let _modalOpen = false;
   let _form      = { name: '', filedBy: '', subject: '', description: '', date: '', priority: 'Medium', category: '', amount: '' };
   let _saving    = false;
+  // Which list is on screen. They share a table, a status flow and a transfer,
+  // but not a queue: an issue for the admin team and a request for money are
+  // read by different people looking for different things.
+  let _tab       = 'ticket';   // 'ticket' | 'payment'
+
+  /* Rows raised before the split carry no kind. A category was only ever set by
+     the payment form, so it is the honest fallback for those. */
+  const kindOf = (t) => t.kind || (t.category ? 'payment' : 'ticket');
 
   const isAdmin = () => {
     const r = window.currentUser?.roles || [];
@@ -121,21 +129,26 @@ window.Pages['help-ticket'] = (() => {
   async function submitTicket() {
     if (!_form.subject.trim()) { Utils.showToast('Issue required', 'error'); return; }
     if (!_form.date)           { Utils.showToast('Date required', 'error'); return; }
+    if (_tab === 'payment' && !String(_form.category).trim()) {
+      Utils.showToast('Pick a category — it decides who approves this', 'error'); return;
+    }
     if (needsAmount(_form.category) && toAmount(_form.amount) === null) {
       Utils.showToast(`A valid amount is required for ${_form.category} — it decides who approves it`, 'error');
       return;
     }
     _saving = true; renderModal();
     try {
-      const r = await Utils.apiFetch('/api/help-tickets', { method: 'POST', body: JSON.stringify(_form) });
+      const r = await Utils.apiFetch('/api/help-tickets', {
+        method: 'POST', body: JSON.stringify({ ..._form, kind: _tab }),
+      });
       _modalOpen = false; _saving = false;
       _form = { name: '', filedBy: '', subject: '', description: '', date: '', priority: 'Medium', category: '', amount: '' };
       renderModal();
       await loadData(); renderPage();
       Utils.showToast(
         r?.routedTo
-          ? `Ticket sent to ${r.routedTo}${r.routing === 'inquiry' ? ' as an inquiry' : ' for approval'}`
-          : 'Ticket submitted',
+          ? `Sent to ${r.routedTo}${r.routing === 'inquiry' ? ' as an inquiry' : ' for approval'}`
+          : (_tab === 'payment' ? 'Payment request submitted' : 'Ticket submitted'),
       );
     } catch (e) {
       _saving = false; renderModal();
@@ -234,8 +247,8 @@ window.Pages['help-ticket'] = (() => {
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               </div>
               <div>
-                <div style="font-size:15px;font-weight:700;color:#0f172a;">Raise Help Ticket</div>
-                <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">Submit your issue to the admin team</div>
+                <div style="font-size:15px;font-weight:700;color:#0f172a;">${_tab === 'payment' ? 'Raise Payment Request' : 'Raise Help Ticket'}</div>
+                <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">${_tab === 'payment' ? 'Goes to whoever holds that approval authority' : 'Submit your issue to the admin team'}</div>
               </div>
             </div>
             <button id="ht-modal-close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;color:#64748b;cursor:pointer;display:flex;align-items:center;justify-content:center;">
@@ -263,11 +276,11 @@ window.Pages['help-ticket'] = (() => {
               <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Date <span style="color:#ef4444">*</span></label>
               <input id="ht-date" type="date" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${esc(_form.date)}" />
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+            ${_tab !== 'payment' ? '' : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Category</label>
+                <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Category <span style="color:#ef4444">*</span></label>
                 <select id="ht-category" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;">
-                  <option value="">— General —</option>
+                  <option value="">— Select —</option>
                   ${(_authority.expense||[]).map(r => `<option value="${esc(r.category)}" ${_form.category===r.category?'selected':''}>${esc(r.category)}</option>`).join('')}
                 </select>
               </div>
@@ -276,7 +289,7 @@ window.Pages['help-ticket'] = (() => {
                 <input id="ht-amount" type="number" min="0" step="1" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${esc(_form.amount)}" placeholder="${needsAmount(_form.category)?'Required':'Optional'}" />
               </div>
             </div>
-            ${routeHintHtml()}
+            ${routeHintHtml()}`}
             <div>
               <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Priority</label>
               <select id="ht-priority" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;">
@@ -286,7 +299,7 @@ window.Pages['help-ticket'] = (() => {
           </div>
           <div style="padding:16px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;">
             <button id="ht-cancel" class="btn-secondary">Cancel</button>
-            <button id="ht-submit" class="btn-primary" ${_saving?'disabled':''}>${_saving?'Submitting…':'Submit Ticket'}</button>
+            <button id="ht-submit" class="btn-primary" ${_saving?'disabled':''}>${_saving?'Submitting…':(_tab === 'payment' ? 'Submit Request' : 'Submit Ticket')}</button>
           </div>
         </div>
       </div>`;
@@ -457,17 +470,24 @@ window.Pages['help-ticket'] = (() => {
     if (!el) return;
     const admin = isAdmin();
 
-    const rows = _tickets.map(t => {
+    const pay = _tab === 'payment';
+    const visible = _tickets.filter(t => kindOf(t) === _tab);
+
+    const rows = visible.map(t => {
       const ss  = STATUS_STYLE[t.status] || STATUS_STYLE.open;
       const ps  = PRI_STYLE[t.priority]  || PRI_STYLE.Medium;
-      const displayName = t.name || t.submitted_by || '—';
+      // Two different people: who the ticket is about, and who typed it in.
+      // They are usually the same and the row says so once; when an admin
+      // raises one on somebody's behalf, both names have to be readable.
+      const forName   = t.name || t.submitted_by || '—';
+      const filedBy   = t.submitted_by || '';
       const displayDate = t.ticket_date ? fmt(t.ticket_date) : fmt(t.created_at);
       const transferredBadge = t.transferred_to
         ? `<div style="font-size:10px;color:#3b82f6;margin-top:2px;">→ ${esc(t.transferred_to)}${t.routing === 'inquiry' ? ' (inquiry)' : ''}</div>` : '';
       const categoryCell = t.category
         ? `<div style="font-size:11.5px;font-weight:600;color:#334155;">${esc(t.category)}</div>${
-            money(t.amount) ? `<div style="font-size:10.5px;color:#64748b;margin-top:1px;">${money(t.amount)}</div>` : ''}`
-        : '<span style="font-size:11.5px;color:#cbd5e1;">General</span>';
+            money(t.amount) ? `<div style="font-size:13px;font-weight:700;color:#0f172a;margin-top:2px;">${money(t.amount)}</div>` : ''}`
+        : '<span style="font-size:11.5px;color:#cbd5e1;">—</span>';
 
       const statusCell = (admin && t.status !== 'resolved')
         ? `<select class="ht-status-sel" data-id="${esc(t.id)}" style="font-size:11px;font-weight:600;border:1.5px solid ${ss.color}33;border-radius:7px;padding:3px 8px;cursor:pointer;background:${ss.bg};color:${ss.color};">
@@ -490,13 +510,15 @@ window.Pages['help-ticket'] = (() => {
       const rowBg = t.status === 'resolved' ? '#f0fdf4' : '';
 
       return `<tr style="transition:background .1s;background:${rowBg};" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='${rowBg}'">
-        <td style="padding:11px 14px;font-size:13px;font-weight:600;color:#0f172a;">
-          ${esc(displayName)}${transferredBadge}
+        <td style="padding:11px 14px;font-size:13px;font-weight:600;color:#0f172a;vertical-align:top;">
+          ${esc(forName)}${transferredBadge}
         </td>
-        <td style="padding:11px 14px;font-size:13px;color:#374151;max-width:240px;">
-          <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(t.subject||'')}">${esc(t.subject||'—')}</div>
+        <td style="padding:11px 14px;font-size:12.5px;color:#64748b;vertical-align:top;">${esc(filedBy || '—')}</td>
+        <td style="padding:11px 14px;font-size:13px;color:#374151;vertical-align:top;min-width:280px;">
+          <div style="white-space:pre-wrap;overflow-wrap:anywhere;">${esc(t.subject||'—')}</div>
+          ${t.description ? `<div style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:#64748b;margin-top:3px;">${esc(t.description)}</div>` : ''}
         </td>
-        <td style="padding:11px 14px;white-space:nowrap;">${categoryCell}</td>
+        ${pay ? `<td style="padding:11px 14px;white-space:nowrap;vertical-align:top;">${categoryCell}</td>` : ''}
         <td style="padding:11px 14px;font-size:12px;color:#64748b;white-space:nowrap;">${displayDate}</td>
         <td style="padding:11px 14px;">
           <span style="font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;background:${ps.bg};color:${ps.color}">${esc(t.priority||'Medium')}</span>
@@ -512,8 +534,10 @@ window.Pages['help-ticket'] = (() => {
       <div style="display:flex;flex-direction:column;gap:16px;">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
           <div>
-            <h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Help Tickets</h1>
-            <p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Submit issues or requests to the admin team</p>
+            <h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">${pay ? 'Payment Requests' : 'Help Tickets'}</h1>
+            <p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">${pay
+              ? 'Spend that needs an approval, routed to whoever holds that authority'
+              : 'Submit issues or requests to the admin team'}</p>
           </div>
           <div style="display:flex;align-items:center;gap:8px;">
           ${admin ? `<button id="ht-authority-btn" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;cursor:pointer;">
@@ -522,9 +546,18 @@ window.Pages['help-ticket'] = (() => {
           </button>` : ''}
           <button id="ht-new-btn" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;background:linear-gradient(135deg,#0150AA,#013D82);color:#fff;border:none;cursor:pointer;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-            New Ticket
+            ${pay ? 'New Payment Request' : 'New Ticket'}
           </button>
           </div>
+        </div>
+        <div style="display:flex;gap:4px;border-bottom:1px solid #e2e8f0;">
+          ${[['ticket', 'Help Tickets'], ['payment', 'Payment Requests']].map(([k, label]) => {
+            const on = _tab === k;
+            const n = _tickets.filter(t => kindOf(t) === k).length;
+            return `<button class="ht-tab" data-tab="${k}" style="position:relative;padding:9px 16px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:${on?700:600};color:${on?'#0150AA':'#64748b'};border-bottom:2.5px solid ${on?'#0150AA':'transparent'};margin-bottom:-1px;">
+              ${label}<span style="margin-left:6px;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:${on?'#e0ecfb':'#f1f5f9'};color:${on?'#0150AA':'#94a3b8'};">${n}</span>
+            </button>`;
+          }).join('')}
         </div>
         <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
           <div style="overflow-x:auto;">
@@ -532,15 +565,17 @@ window.Pages['help-ticket'] = (() => {
               <thead>
                 <tr>
                   <th style="${thStyle}">Name</th>
-                  <th style="${thStyle}">Issue</th>
-                  <th style="${thStyle}">Category</th>
+                  <th style="${thStyle}">Filed By</th>
+                  <th style="${thStyle}">${pay ? 'Request' : 'Issue'}</th>
+                  ${pay ? `<th style="${thStyle}">Category / Amount</th>` : ''}
                   <th style="${thStyle}">Date</th>
                   <th style="${thStyle}">Priority</th>
                   <th style="${thStyle}">Status</th>
                   ${admin ? '<th style="' + thStyle + '">Action</th>' : ''}
                 </tr>
               </thead>
-              <tbody>${rows || '<tr><td colspan="' + (admin?7:6) + '" style="padding:48px;text-align:center;color:#94a3b8;">No tickets yet</td></tr>'}</tbody>
+              <tbody>${rows || '<tr><td colspan="' + (6 + (pay?1:0) + (admin?1:0)) + '" style="padding:48px;text-align:center;color:#94a3b8;">'
+                + (pay ? 'No payment requests yet' : 'No tickets yet') + '</td></tr>'}</tbody>
             </table>
           </div>
         </div>
@@ -548,6 +583,13 @@ window.Pages['help-ticket'] = (() => {
 
     document.getElementById('ht-new-btn')?.addEventListener('click', () => { _modalOpen = true; renderModal(); });
     document.getElementById('ht-authority-btn')?.addEventListener('click', openAuthorityModal);
+    el.querySelectorAll('.ht-tab').forEach(btn => btn.addEventListener('click', () => {
+      if (_tab === btn.dataset.tab) return;
+      _tab = btn.dataset.tab;
+      // A category picked on the payment form means nothing on the other tab.
+      _form.category = ''; _form.amount = '';
+      renderPage();
+    }));
     el.querySelectorAll('.ht-status-sel').forEach(sel => {
       sel.addEventListener('change', () => updateStatus(sel.dataset.id, sel.value));
     });

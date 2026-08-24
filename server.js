@@ -305,6 +305,12 @@ const SCHEMA = [
   // being told (repairs under the threshold). Stamped at raise time and kept,
   // so a later change to the matrix never rewrites what an old ticket asked for.
   `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS routing VARCHAR(16) DEFAULT ''`,
+  // 'payment' — money being asked for, routed to whoever holds that authority.
+  // 'ticket' — an ordinary issue for the admin team. One table because they
+  // share a status flow, a transfer and a thread; two lists because nobody
+  // wants a toner cartridge and a ₹40,000 rewire in the same queue. Blank on
+  // every row raised before the split — read with the fallback in kindOf().
+  `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS kind VARCHAR(16) DEFAULT ''`,
   `CREATE TABLE IF NOT EXISTS announcements (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, message TEXT DEFAULT NULL, posted_by VARCHAR(255) NOT NULL DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS vendor_submissions (id VARCHAR(16) PRIMARY KEY, business_name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', phone VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', gst_no VARCHAR(32) DEFAULT '', address TEXT DEFAULT NULL, products TEXT DEFAULT NULL, notes TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS pr_requisitions (id VARCHAR(16) PRIMARY KEY, pr_no VARCHAR(64) NOT NULL, filled_by VARCHAR(255) NOT NULL DEFAULT '', vendors TEXT DEFAULT NULL, vendor_other VARCHAR(255) DEFAULT '', department TEXT DEFAULT NULL, department_other VARCHAR(255) DEFAULT '', accessory_product TEXT DEFAULT NULL, brazing_product TEXT DEFAULT NULL, cnc_product VARCHAR(255) DEFAULT '', consumable_product TEXT DEFAULT NULL, electric_product TEXT DEFAULT NULL, packing_product TEXT DEFAULT NULL, pressing_product TEXT DEFAULT NULL, washing_product TEXT DEFAULT NULL, welding_product TEXT DEFAULT NULL, new_product VARCHAR(255) DEFAULT '', current_stock VARCHAR(64) NOT NULL DEFAULT '', quantity_required VARCHAR(64) NOT NULL DEFAULT '', previous_rate VARCHAR(64) NOT NULL DEFAULT '', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -1290,14 +1296,20 @@ async function sendLeaveDecisionEmail({ toEmail, toName, status, decidedBy, leav
    being asked for. */
 async function sendHelpTicketEmail({
   toEmail, toName, ticketId, subject, description, category, amount, priority,
-  raisedBy, ticketFor, kind, threshold, transferredBy,
+  raisedBy, ticketFor, kind, threshold, transferredBy, ticketKind,
 }) {
   const mailer = getMailer();
   if (!mailer || !toEmail) {
     console.log('[email] help ticket not sent — mailer:', !!mailer, '| to:', toEmail || '(none)');
     return;
   }
-  const inquiry = kind === 'inquiry';
+  /* Three different things to say, and saying the wrong one wastes the
+     reader's time: an ordinary help ticket wants them to act, a payment
+     request under the threshold is only telling them, and one at or above it
+     is actually waiting on their yes. */
+  const isPayment = ticketKind === 'payment';
+  const inquiry = isPayment && kind === 'inquiry';
+  const approval = isPayment && !inquiry;
   const rupees = (v) => {
     const n = toAmount(v);
     return n === null ? '' : '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -1306,13 +1318,15 @@ async function sendHelpTicketEmail({
     await mailer.sendMail({
       from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
       to: toEmail,
-      subject: `${inquiry ? 'For your information' : 'Approval needed'} — ${category ? category + ': ' : ''}${String(subject).slice(0, 60)}`,
+      subject: `${approval ? 'Approval needed' : inquiry ? 'For your information' : 'Help ticket'} — ${category ? category + ': ' : ''}${String(subject).slice(0, 60)}`,
       html: _leaveMailHtml({
-        heading: inquiry ? 'Help Ticket — For Your Information' : 'Help Ticket Awaiting Your Approval',
+        heading: approval ? 'Payment Request Awaiting Your Approval'
+          : inquiry ? 'Payment Request — For Your Information'
+          : 'Help Ticket For You',
         colour: inquiry ? '#0f766e' : '#0150AA',
         lead: transferredBy
-          ? `Hi <b>${toName || 'there'}</b>, <b>${transferredBy}</b> has transferred this help ticket to you.`
-          : `Hi <b>${toName || 'there'}</b>, a help ticket has been raised under <b>${category || 'Help'}</b>, which you are the authority for.`,
+          ? `Hi <b>${toName || 'there'}</b>, <b>${transferredBy}</b> has transferred this ${isPayment ? 'payment request' : 'help ticket'} to you.`
+          : `Hi <b>${toName || 'there'}</b>, a ${isPayment ? 'payment request' : 'help ticket'} has been raised under <b>${category || 'Help'}</b>, which you are the authority for.`,
         rows: [
           ['Ticket', ticketId],
           ['Issue', subject],
@@ -1325,7 +1339,9 @@ async function sendHelpTicketEmail({
         ],
         footer: inquiry
           ? `This is an inquiry only — no approval is needed from you${threshold ? ` for anything under ${rupees(threshold)}` : ''}. Please look into it.`
-          : 'Open <b>Help Tickets</b> in the ERP to work it and mark it resolved.',
+          : approval
+            ? 'Open <b>Help Tickets → Payment Requests</b> in the ERP to approve or reject it.'
+            : 'Open <b>Help Tickets</b> in the ERP to work it and mark it resolved.',
       }),
     });
     console.log('[email] Help ticket notification sent to:', toEmail, '| kind:', kind || 'approval');
@@ -2528,6 +2544,13 @@ app.post('/api/help-tickets', requireAuth, async (req, res) => {
     const { subject, description, priority, name, date, filedBy, category, amount } = req.body;
     if (!subject) return res.status(400).json({ error: 'Subject required' });
     const user = req.session.user;
+    // Which of the two lists this belongs in. Sent by whichever form raised it
+    // rather than inferred from the category, so a help category that happens
+    // to have an owner never turns an issue into a payment request.
+    const kind = req.body.kind === 'payment' ? 'payment' : 'ticket';
+    if (kind === 'payment' && !String(category || '').trim()) {
+      return res.status(400).json({ error: 'A payment request needs a category — it decides who approves it.' });
+    }
     const id = 'HT' + Date.now().toString(36).toUpperCase();
     const displayName = name || user.name;
     const filer = filedBy || user.name;
@@ -2545,9 +2568,9 @@ app.post('/api/help-tickets', requireAuth, async (req, res) => {
     const route = expenseRouteFor(matrix, cat, amt);
 
     await pool.query(
-      'INSERT INTO help_tickets (id,subject,description,priority,status,submitted_by,submitted_by_id,ticket_date,name,category,amount,routing,transferred_to) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',
+      'INSERT INTO help_tickets (id,subject,description,priority,status,submitted_by,submitted_by_id,ticket_date,name,category,amount,routing,transferred_to,kind) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
       [id, subject, description||'', priority||'Medium', 'open', filer, user.id, date||null, displayName,
-       cat, amt, route?.kind || '', route?.owner || null]
+       cat, amt, route?.kind || '', route?.owner || null, kind]
     );
 
     /* Tell the routed person straight away — the whole point of the category is
@@ -2563,12 +2586,12 @@ app.post('/api/help-tickets', requireAuth, async (req, res) => {
           ticketId: id, subject, description: description || '',
           category: cat, amount: amt, priority: priority || 'Medium',
           raisedBy: filer, ticketFor: displayName,
-          kind: route.kind, threshold: route.threshold,
+          kind: route.kind, threshold: route.threshold, ticketKind: kind,
         });
       })().catch((e) => console.error('[help-ticket] routing mail failed:', e.message));
     }
 
-    return res.status(201).json({ id, routedTo: route?.owner || '', routing: route?.kind || '' });
+    return res.status(201).json({ id, kind, routedTo: route?.owner || '', routing: route?.kind || '' });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -2597,6 +2620,7 @@ app.patch('/api/help-tickets', requireAuth, async (req, res) => {
             category: t.category || '', amount: t.amount, priority: t.priority || 'Medium',
             raisedBy: t.submitted_by || '', ticketFor: t.name || '',
             kind: t.routing || 'approval', threshold: 0,
+            ticketKind: t.kind || (t.category ? 'payment' : 'ticket'),
             transferredBy: req.session.user?.name || '',
           });
         })().catch((e) => console.error('[help-ticket] transfer mail failed:', e.message));
