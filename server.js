@@ -18,6 +18,7 @@ const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const path = require('path');
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 const { Readable } = require('stream');
 
 let _mailer = null;
@@ -171,6 +172,44 @@ async function q(text, params) {
   return rows;
 }
 
+/* ── Sequential ids ───────────────────────────────────────────────────────────
+   Ids across this app were minted as `prefix + (SELECT COUNT(*) + 1)`. That is
+   only ever correct while nothing is deleted: the moment a row goes the count
+   drops, and the next insert mints an id that is already taken — which the
+   primary key rejects, so the user gets a 500. Reopening a checklist task
+   deletes its completion row, so "complete a task, reopen it, complete another"
+   was a reproducible crash; the same held for holidays, leaves, vendors and
+   every IMS ledger entry once the owner deleted one.
+
+   Counting from the largest id in USE is stable under deletes. The lookup is
+   deliberately `ORDER BY LENGTH(id), id` rather than a numeric CAST so it
+   behaves the same on MySQL and Postgres, and reads one row instead of the whole
+   table. `table` and `prefix` are always literals from the call sites below,
+   never anything that came in on a request. */
+async function nextSeqId(table, prefix, width) {
+  const rows = await q(
+    `SELECT id FROM ${table} WHERE id LIKE '${prefix}%' ORDER BY LENGTH(id) DESC, id DESC LIMIT 1`);
+  const last = parseInt(String(rows[0]?.id || '').slice(prefix.length).replace(/[^0-9]/g, ''), 10) || 0;
+  return prefix + String(last + 1).padStart(width, '0');
+}
+
+/* Mint an id and run the insert with it, re-minting if two writers happened to
+   read the same maximum at the same moment. Deriving the id from MAX fixes the
+   delete case above on its own; this covers the concurrent one. */
+async function withSeqId(table, prefix, width, run) {
+  let lastErr;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const id = await nextSeqId(table, prefix, width);
+    try { await run(id); return id; }
+    catch (e) {
+      lastErr = e;
+      if (e && (e.code === 'ER_DUP_ENTRY' || e.code === '23505')) continue;
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+
 // Tagged-template sql helper
 async function sql(strings, ...values) {
   let text = '';
@@ -255,6 +294,17 @@ const SCHEMA = [
   `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS ticket_date DATE DEFAULT NULL`,
   `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS name VARCHAR(255) DEFAULT NULL`,
   `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS transferred_to VARCHAR(255) DEFAULT NULL`,
+  // What kind of spend or work the ticket is about, and — for the tiered
+  // categories — how much it comes to. Together these decide who the ticket is
+  // routed to and mailed to; see DEFAULT_EXPENSE_AUTHORITY. Blank category means an
+  // ordinary help ticket that routes to nobody in particular, which is what
+  // every row raised before this existed is.
+  `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS category VARCHAR(64) DEFAULT ''`,
+  `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS amount DECIMAL(15,2) DEFAULT NULL`,
+  // 'approval' — the routed person has to say yes. 'inquiry' — they are only
+  // being told (repairs under the threshold). Stamped at raise time and kept,
+  // so a later change to the matrix never rewrites what an old ticket asked for.
+  `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS routing VARCHAR(16) DEFAULT ''`,
   `CREATE TABLE IF NOT EXISTS announcements (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, message TEXT DEFAULT NULL, posted_by VARCHAR(255) NOT NULL DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS vendor_submissions (id VARCHAR(16) PRIMARY KEY, business_name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', phone VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', gst_no VARCHAR(32) DEFAULT '', address TEXT DEFAULT NULL, products TEXT DEFAULT NULL, notes TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS pr_requisitions (id VARCHAR(16) PRIMARY KEY, pr_no VARCHAR(64) NOT NULL, filled_by VARCHAR(255) NOT NULL DEFAULT '', vendors TEXT DEFAULT NULL, vendor_other VARCHAR(255) DEFAULT '', department TEXT DEFAULT NULL, department_other VARCHAR(255) DEFAULT '', accessory_product TEXT DEFAULT NULL, brazing_product TEXT DEFAULT NULL, cnc_product VARCHAR(255) DEFAULT '', consumable_product TEXT DEFAULT NULL, electric_product TEXT DEFAULT NULL, packing_product TEXT DEFAULT NULL, pressing_product TEXT DEFAULT NULL, washing_product TEXT DEFAULT NULL, welding_product TEXT DEFAULT NULL, new_product VARCHAR(255) DEFAULT '', current_stock VARCHAR(64) NOT NULL DEFAULT '', quantity_required VARCHAR(64) NOT NULL DEFAULT '', previous_rate VARCHAR(64) NOT NULL DEFAULT '', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -887,9 +937,48 @@ async function syncUsers_gs() {
   } catch (err) { console.error('[Sheets] Users sync failed:', err.message); }
 }
 
+/* ── Shared-template serialisation ────────────────────────────────────────────
+   PO, PR, GRN, PI and the order sheet are all produced the same way: clear a
+   single shared template tab, write this document into it, pause for the sheet
+   to recalculate, read the total back, then export that tab as the PDF. That
+   sequence takes several seconds and nothing guarded it. Two people raising the
+   same kind of document inside that window interleaved — the second write landed
+   on top of the first, so the FIRST user's PDF came back containing the SECOND
+   user's document, filed under the first one's number. The next-number lookup
+   has the same read-then-write shape, so they could also be handed the same
+   PO/PR/GRN/PI number.
+
+   There is one Node process, so one in-process queue per template makes each of
+   these atomic. The lock is held until the response finishes, with a ceiling so
+   a wedged request can never block the queue permanently. */
+const _sheetLocks = new Map();
+function withSheetLock(key, fn) {
+  const prev = _sheetLocks.get(key) || Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  _sheetLocks.set(key, next.catch(() => {}));
+  return next;
+}
+function sheetSerialised(key, timeoutMs = 120000) {
+  return (req, res, next) => withSheetLock(key, () => new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (done) return; done = true; clearTimeout(timer); resolve(); };
+    const timer = setTimeout(finish, timeoutMs);
+    res.on('finish', finish);
+    res.on('close', finish);
+    next();
+  }));
+}
+
 // ── Backup helpers ────────────────────────────────────────────────────────────
+/* TIMESTAMPTZ is a Postgres type; MySQL/MariaDB has no such thing, so this
+   CREATE failed outright on the production database and dev_backups never
+   existed. Every caller wraps createBackup() in `.catch(() => null)`, so the
+   failure was silent — and the Developer panel's "this takes a backup first"
+   promise in front of Delete All Tasks / Delete Users was not true. LONGTEXT
+   rather than TEXT because a full delegations+masters+users dump goes past
+   TEXT's 64KB limit and would otherwise be truncated into invalid JSON. */
 async function ensureBackupTable() {
-  await pool.query(`CREATE TABLE IF NOT EXISTS dev_backups (id VARCHAR(64) PRIMARY KEY, label VARCHAR(128) NOT NULL DEFAULT '', data TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), expires_at TIMESTAMPTZ NOT NULL)`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS dev_backups (id VARCHAR(64) PRIMARY KEY, label VARCHAR(128) NOT NULL DEFAULT '', data LONGTEXT NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, expires_at DATETIME NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 }
 
 async function createBackup(label='auto') {
@@ -900,7 +989,10 @@ async function createBackup(label='auto') {
   const hols = await q('SELECT * FROM holidays').catch(()=>[]);
   const data = JSON.stringify({ delegations:dels, masters, users, holidays:hols });
   const id = 'BKP_'+Date.now()+'_'+Math.random().toString(36).slice(2,6).toUpperCase();
-  await pool.query("INSERT INTO dev_backups (id,label,data,expires_at) VALUES ($1,$2,$3,(NOW()+INTERVAL '15 DAY'))", [id,label,data]);
+  // `INTERVAL '15 DAY'` is Postgres syntax too — the expiry is computed here
+  // instead so the statement is plain SQL on either engine.
+  const expires = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
+  await pool.query('INSERT INTO dev_backups (id,label,data,expires_at) VALUES ($1,$2,$3,$4)', [id,label,data,expires]);
   return id;
 }
 
@@ -938,6 +1030,13 @@ class DbSessionStore extends session.Store {
   // Every stored session for one user — this is what signs them out everywhere.
   destroyByUser(userId) {
     return pool.query('DELETE FROM user_sessions WHERE user_id = $1', [String(userId)]);
+  }
+
+  // Same, but leaves the caller's own session alone. Used when somebody changes
+  // their OWN password from Profile: every other device is signed out, the tab
+  // they are sitting in is not.
+  destroyByUserExcept(userId, keepSid) {
+    return pool.query('DELETE FROM user_sessions WHERE user_id = $1 AND sid <> $2', [String(userId), String(keepSid || '')]);
   }
 
   // Everyone except one session. Used for the bulk sign-out, where keeping the
@@ -991,15 +1090,31 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.set('trust proxy', 1);
 const sessionStore = USE_DB ? new DbSessionStore() : null;
+// The session secret used to fall back to a literal committed to this file, so
+// anyone with the source could sign their own session cookies. There is no safe
+// default for this: a random per-boot secret signs everybody out on each deploy,
+// which is disruptive but is the only failure mode that isn't a forgeable one.
+// Set NEXTAUTH_SECRET in .env.local and the warning goes away.
+const SESSION_SECRET = process.env.NEXTAUTH_SECRET || process.env.SESSION_SECRET
+  || crypto.randomBytes(32).toString('hex');
+if (!process.env.NEXTAUTH_SECRET && !process.env.SESSION_SECRET) {
+  console.error('[SECURITY] NEXTAUTH_SECRET is not set — falling back to a random per-boot session secret. '
+    + 'Every restart will sign all users out. Set NEXTAUTH_SECRET in .env.local to fix this.');
+}
+
 app.use(session({
   store: sessionStore || undefined,
-  secret: process.env.NEXTAUTH_SECRET || 'fallback-secret-change-me',
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
-    secure: false,
+    // 'auto' marks the cookie Secure only on an HTTPS request — with
+    // `trust proxy` set above that reads X-Forwarded-Proto, so production
+    // gets a Secure cookie while plain-HTTP local dev still works. A flat
+    // `false` let the session cookie travel over HTTP in production.
+    secure: 'auto',
     maxAge: SESSION_TTL_MS,
   },
 }));
@@ -1161,6 +1276,61 @@ async function sendLeaveDecisionEmail({ toEmail, toName, status, decidedBy, leav
     console.log('[email] Leave decision notification sent to:', toEmail);
   } catch (e) {
     console.error('[email] Failed to send leave decision notification:', e.message);
+  }
+}
+
+/* Sent to whoever a help ticket is routed to — by its category when it is
+   raised, or by hand when an admin transfers it. Borrows the leave mails' shell
+   rather than growing a third set of table markup.
+
+   `kind` is the difference that matters to the person reading it: 'approval'
+   asks them to decide, 'inquiry' only tells them (an office repair under the
+   threshold, which nobody has to approve). Saying so in the subject line stops
+   an inquiry sitting in somebody's inbox waiting for a sign-off that was never
+   being asked for. */
+async function sendHelpTicketEmail({
+  toEmail, toName, ticketId, subject, description, category, amount, priority,
+  raisedBy, ticketFor, kind, threshold, transferredBy,
+}) {
+  const mailer = getMailer();
+  if (!mailer || !toEmail) {
+    console.log('[email] help ticket not sent — mailer:', !!mailer, '| to:', toEmail || '(none)');
+    return;
+  }
+  const inquiry = kind === 'inquiry';
+  const rupees = (v) => {
+    const n = toAmount(v);
+    return n === null ? '' : '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  };
+  try {
+    await mailer.sendMail({
+      from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+      to: toEmail,
+      subject: `${inquiry ? 'For your information' : 'Approval needed'} — ${category ? category + ': ' : ''}${String(subject).slice(0, 60)}`,
+      html: _leaveMailHtml({
+        heading: inquiry ? 'Help Ticket — For Your Information' : 'Help Ticket Awaiting Your Approval',
+        colour: inquiry ? '#0f766e' : '#0150AA',
+        lead: transferredBy
+          ? `Hi <b>${toName || 'there'}</b>, <b>${transferredBy}</b> has transferred this help ticket to you.`
+          : `Hi <b>${toName || 'there'}</b>, a help ticket has been raised under <b>${category || 'Help'}</b>, which you are the authority for.`,
+        rows: [
+          ['Ticket', ticketId],
+          ['Issue', subject],
+          ['Details', description],
+          ['Category', category],
+          ['Amount', rupees(amount)],
+          ['Raised By', raisedBy],
+          ['Ticket For', ticketFor && ticketFor !== raisedBy ? ticketFor : ''],
+          ['Priority', priority],
+        ],
+        footer: inquiry
+          ? `This is an inquiry only — no approval is needed from you${threshold ? ` for anything under ${rupees(threshold)}` : ''}. Please look into it.`
+          : 'Open <b>Help Tickets</b> in the ERP to work it and mark it resolved.',
+      }),
+    });
+    console.log('[email] Help ticket notification sent to:', toEmail, '| kind:', kind || 'approval');
+  } catch (e) {
+    console.error('[email] Failed to send help ticket notification:', e.message);
   }
 }
 
@@ -1331,6 +1501,28 @@ async function sendDailyGreetings() {
 setInterval(() => { sendDailyGreetings().catch((e) => console.error('[greetings]', e.message)); }, 30 * 60 * 1000);
 setTimeout(() => { sendDailyGreetings().catch((e) => console.error('[greetings]', e.message)); }, 60 * 1000);
 
+/* ── Brute-force throttle ─────────────────────────────────────────────────────
+   Neither the login form nor the developer password had any attempt limit, so
+   both were open to being guessed at machine speed — the developer secret in
+   particular is a human-typed password guarding "delete every task/user".
+   In-memory on purpose: one process, and a counter that resets on restart is
+   still worth far more than no counter at all. */
+const _rateBuckets = new Map();
+function rateAllow(key, max, windowMs) {
+  const now = Date.now();
+  const b = _rateBuckets.get(key);
+  if (!b || now > b.reset) { _rateBuckets.set(key, { n: 1, reset: now + windowMs }); return true; }
+  if (b.n >= max) return false;
+  b.n++;
+  return true;
+}
+function rateClear(key) { _rateBuckets.delete(key); }
+// Buckets are tiny but must not accumulate forever on a long-lived process.
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, b] of _rateBuckets) if (now > b.reset) _rateBuckets.delete(k);
+}, 10 * 60 * 1000).unref?.();
+
 // ── Middleware ────────────────────────────────────────────────────────────────
 function requireAuth(req, res, next) {
   if (!req.session?.user) return res.status(401).json({ error: 'Not authenticated' });
@@ -1373,6 +1565,33 @@ function isSuperAdmin(user) {
   const want = String(SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
   if (!want) return false;
   return String(user?.email || '').trim().toLowerCase() === want;
+}
+
+/* Because the owner is identified by an email address rather than a user id,
+   that address is a privilege in itself and has to be treated as reserved:
+   whoever can write it into a users row can promote themselves to owner. These
+   two are what the Users and Profile routes check before letting an email
+   through. */
+const RESERVED_EMAIL_MSG = 'That email address is reserved and cannot be assigned from here.';
+
+function isSuperAdminEmail(email) {
+  const want = String(SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
+  if (!want || email === undefined || email === null) return false;
+  return String(email).trim().toLowerCase() === want;
+}
+
+// True only for the row that already holds the owner's address, so editing the
+// real owner (renaming them, fixing a phone number) keeps working.
+async function isSuperAdminUserId(id) {
+  if (!id) return false;
+  try {
+    if (USE_DB) {
+      const rows = await q('SELECT email FROM users WHERE id = $1', [id]);
+      return isSuperAdminEmail(rows[0]?.email);
+    }
+    const store = await readStoreJson();
+    return isSuperAdminEmail((store.users || []).find(u => u.id === id)?.email);
+  } catch { return false; }
 }
 
 // The real gate. Hiding the button in the UI is cosmetic — without this guard
@@ -1430,6 +1649,72 @@ function normDept(d) {
   return (d || '').trim().toLowerCase();
 }
 
+/* ── Write-side scoping ───────────────────────────────────────────────────────
+   GET /api/delegations and GET /api/masters carefully scope what each role can
+   SEE — Admin everything, HOD their department, everyone else their own. The
+   matching writes had no scope at all: PATCH and DELETE took an id and trusted
+   it, so any signed-in user could mark somebody else's task done, approve their
+   own, retarget a whole task list or delete any row in the table. These two are
+   the write-side mirror of that read scoping. Keep them in step with it. */
+
+// Names on the HOD's own team, resolved from the database by user id — never
+// from the session's (up to 30-day-old) department string. Empty set for anyone
+// who isn't an HOD.
+async function hodTeamNames(userId) {
+  if (!userId) return new Set();
+  try {
+    if (USE_DB) {
+      const rows = await q(
+        `SELECT LOWER(TRIM(name)) AS n FROM users
+           WHERE LOWER(TRIM(department)) = (SELECT LOWER(TRIM(department)) FROM users WHERE id = $1)`,
+        [userId]);
+      return new Set(rows.map(r => r.n));
+    }
+    const store = await readStoreJson();
+    const me = (store.users || []).find(u => u.id === userId);
+    return new Set((store.users || [])
+      .filter(u => normDept(u.department) === normDept(me?.department))
+      .map(u => (u.name || '').trim().toLowerCase()));
+  } catch { return new Set(); }
+}
+
+// May this user write to this delegation row at all? Accepts either the DB
+// shape (doer_id/delegated_by) or the store shape (doerId/delegatedBy).
+function canWriteDelegation(user, row) {
+  if (!row) return false;
+  if (isAdminUser(user)) return true;
+  const uid   = user?.id;
+  const uname = (user?.name || '').trim().toLowerCase();
+  const doer  = String(row.doer || '').trim().toLowerCase();
+  if ((row.doer_id ?? row.doerId) === uid) return true;
+  if (doer && doer === uname) return true;
+  if ((row.delegated_by ?? row.delegatedBy) === uid) return true;
+  return false;
+}
+
+// Same question for a checklist master, which is owned by whoever it is
+// assigned to.
+function canWriteMaster(user, row) {
+  if (!row) return false;
+  if (isAdminUser(user)) return true;
+  const assigned = String(row.assigned_to ?? row.assignedTo ?? '').trim().toLowerCase();
+  return !!assigned && assigned === (user?.name || '').trim().toLowerCase();
+}
+
+/* Bulk transfer hands one person's work to another, so the caller has to be
+   entitled to every row it touches. This is checked SEPARATELY from the
+   "Transfer Task" feature flag on purpose: userCanUseFeature() fails open for
+   an account with no permissions object stored (the frontend's hasFeature()
+   does the same), and most existing accounts are exactly that — so the flag
+   alone would not have stopped an ordinary user from emptying somebody else's
+   task list onto their own. */
+function transferAllowed(user, rows) {
+  if (isAdminUser(user)) return true;
+  return Array.isArray(rows) && rows.length > 0 && rows.every((r) => canWriteDelegation(user, r));
+}
+
+const FORBIDDEN = { error: 'You do not have permission to do this' };
+
 // req.session.user never carries `permissions` itself (only /api/auth/session
 // fetches it fresh, see below) — so any route-level feature gate needs its
 // own fresh lookup, scoped to just the one column rather than pulling in
@@ -1466,9 +1751,23 @@ async function userCanUseFeature(user, page, feat) {
   return pageFeats.includes(feat);
 }
 
+/* The developer secret used to be read from ?secret=... — which put it in the
+   hosting layer's access logs, the browser's history and every proxy in between,
+   in plain text, on every developer-panel call. It travels in a header now (see
+   public/js/pages/developer.js). Compared in constant time, and fail-closed when
+   DEVELOPER_SECRET is unset so an unconfigured deployment has no developer panel
+   rather than an open one. */
+function timingSafeEq(a, b) {
+  const ab = Buffer.from(String(a || ''), 'utf8');
+  const bb = Buffer.from(String(b || ''), 'utf8');
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
 function checkSecret(req) {
-  const secret = req.query.secret;
-  return secret && secret === process.env.DEVELOPER_SECRET;
+  const want = process.env.DEVELOPER_SECRET || '';
+  if (!want) return false;
+  return timingSafeEq(req.get('x-developer-secret') || '', want);
 }
 
 // ── Auth routes ───────────────────────────────────────────────────────────────
@@ -1478,6 +1777,14 @@ app.post('/api/auth/login', async (req, res) => {
     if (!email || !password) return res.status(400).json({ error: 'email and password required' });
     email = email.trim();
     name = (name || '').trim();
+
+    // Counted per IP+email and cleared the moment a login succeeds, so only
+    // runs of FAILURES accumulate — a person typing their own password wrong
+    // twice never notices this exists.
+    const rlKey = 'login:' + (req.ip || '') + ':' + email.toLowerCase();
+    if (!rateAllow(rlKey, 10, 15 * 60 * 1000)) {
+      return res.status(429).json({ error: 'Too many failed sign-in attempts. Please try again in 15 minutes.' });
+    }
 
     // Check app_active
     let appActive = true;
@@ -1537,6 +1844,7 @@ app.post('/api/auth/login', async (req, res) => {
       ? user.roles.split(',').map(r => r.trim()).filter(Boolean)
       : ['User'];
 
+    rateClear(rlKey);
     req.session.user = {
       id: user.id,
       name: user.name,
@@ -1875,11 +2183,43 @@ app.post('/api/delegations', requireAuth, async (req, res) => {
 app.patch('/api/delegations', requireAuth, async (req, res) => {
   try {
     const body = req.body;
+    const sessUser = req.session?.user;
+
+    /* Permission checks that don't need the row itself live here, above the
+       storage split, so the JSON-store path and the database path can never
+       drift apart on who is allowed to do what. The row-scope check
+       (canWriteDelegation) still happens inside each branch, since that is
+       where the row gets loaded. */
+    if (body.action === 'transfer') {
+      // "Transfer Task" on All Tasks — the UI shows it to Admin/HOD or to a user
+      // explicitly granted the feature. Reassigning other people's work is
+      // exactly what this route does, so it enforces the same gate.
+      if (!await userCanUseFeature(sessUser, 'all-tasks', 'transfer')) return res.status(403).json(FORBIDDEN);
+    } else {
+      // Deciding an approval is the Approvals screen's job, and that screen only
+      // renders for Admin/HOD — a doer must not be able to approve their own
+      // task by posting the field directly.
+      if (body.approval !== undefined && !isAdminUser(sessUser)) return res.status(403).json(FORBIDDEN);
+      // Editing the CONTENT of a task is the "Edit Task" feature. Marking done,
+      // reopening and shifting are not: those are the doer's own workflow and
+      // travel with a status (the Shift modal sends dueDate + remarks alongside
+      // one), so they keep working for a user with no edit permission.
+      const EDIT_FIELDS = ['description', 'client', 'priority', 'url', 'doer', 'doerId'];
+      if (EDIT_FIELDS.some((k) => body[k] !== undefined)
+          && !await userCanUseFeature(sessUser, 'all-tasks', 'edit')) {
+        return res.status(403).json(FORBIDDEN);
+      }
+    }
+
     if (!USE_DB) {
       const store = await readStore();
       if (body.action==='transfer') {
         const { fromDoer, toDoer, toDoerId, taskIds } = body;
         if (!fromDoer||!toDoer) return res.status(400).json({ error:'fromDoer and toDoer required' });
+        const affected = taskIds?.length
+          ? (store.delegations||[]).filter(d => taskIds.includes(d.id))
+          : (store.delegations||[]).filter(d => d.doer === fromDoer && d.status !== 'done');
+        if (!transferAllowed(sessUser, affected)) return res.status(403).json(FORBIDDEN);
         const transferredBy = req.session?.user?.name||null;
         const idSet = taskIds?.length ? new Set(taskIds) : null;
         store.delegations = (store.delegations||[]).map(d => {
@@ -1891,6 +2231,7 @@ app.patch('/api/delegations', requireAuth, async (req, res) => {
       }
       const del = (store.delegations||[]).find(d=>d.id===body.id);
       if (!del) return res.status(404).json({ error:'Not found' });
+      if (!canWriteDelegation(sessUser, del)) return res.status(403).json(FORBIDDEN);
       let newStatus = body.status;
       if (newStatus) del.status = newStatus;
       if (newStatus==='done') del.completedAt = new Date().toISOString();
@@ -1906,6 +2247,10 @@ app.patch('/api/delegations', requireAuth, async (req, res) => {
     if (body.action==='transfer') {
       const { fromDoer, toDoer, toDoerId, taskIds } = body;
       if (!fromDoer||!toDoer) return res.status(400).json({ error:'fromDoer and toDoer required' });
+      const affected = taskIds?.length
+        ? await q(`SELECT * FROM delegations WHERE id IN (${taskIds.map((_, i) => '$' + (i + 1)).join(',')})`, taskIds)
+        : await q(`SELECT * FROM delegations WHERE doer = $1 AND status <> 'done'`, [fromDoer]);
+      if (!transferAllowed(sessUser, affected)) return res.status(403).json(FORBIDDEN);
       const transferredBy = req.session?.user?.name||null;
       if (taskIds?.length) {
         const placeholders = taskIds.map((_,i)=>'$'+(i+4)).join(',');
@@ -1917,13 +2262,22 @@ app.patch('/api/delegations', requireAuth, async (req, res) => {
     }
 
     if (!body.id) return res.status(400).json({ error:'id required' });
+
+    // Load first, then decide. Without this the route took an id on trust.
+    const [target] = await q('SELECT * FROM delegations WHERE id = $1', [body.id]);
+    if (!target) return res.status(404).json({ error:'Not found' });
+    if (!canWriteDelegation(sessUser, target)) return res.status(403).json(FORBIDDEN);
+
     const status = body.status ?? null;
     // COALESCE can't express "clear this field" (a null param means "don't touch"),
     // so reopening (status set to anything other than 'done') needs its own branch.
     const completedAtSql = status === 'done' ? 'NOW()' : status ? 'NULL' : 'completed_at';
     await pool.query(
-      `UPDATE delegations SET status=COALESCE($1,status), description=COALESCE($2,description), due_date=COALESCE($3,due_date), client=COALESCE($4,client), priority=COALESCE($5,priority), approval=COALESCE($6,approval), url=COALESCE($7,url), remarks=COALESCE($8,remarks), completed_at=${completedAtSql} WHERE id=$9`,
-      [status, body.description??null, body.dueDate??null, body.client??null, body.priority??null, body.approval??null, body.url??null, body.remarks??null, body.id]
+      // doer/doer_id are part of this statement because the Edit Task modal has
+      // always sent them (see all-tasks.js) and they were silently dropped here —
+      // picking a new assignee in Edit appeared to save and changed nothing.
+      `UPDATE delegations SET status=COALESCE($1,status), description=COALESCE($2,description), due_date=COALESCE($3,due_date), client=COALESCE($4,client), priority=COALESCE($5,priority), approval=COALESCE($6,approval), url=COALESCE($7,url), remarks=COALESCE($8,remarks), doer=COALESCE($9,doer), doer_id=COALESCE($10,doer_id), completed_at=${completedAtSql} WHERE id=$11`,
+      [status, body.description??null, body.dueDate??null, body.client??null, body.priority??null, body.approval??null, body.url??null, body.remarks??null, body.doer??null, body.doerId??null, body.id]
     );
     const result = await q('SELECT * FROM delegations WHERE id = $1', [body.id]);
     if (!result.length) return res.status(404).json({ error:'Not found' });
@@ -1939,16 +2293,212 @@ app.delete('/api/delegations', requireAuth, async (req, res) => {
   try {
     const id = req.query.id;
     if (!id) return res.status(400).json({ error:'id required' });
+    const sessUser = req.session?.user;
+    // The UI shows Delete behind the "Delete Task" feature and only on rows the
+    // user can see. This route accepted any id from anyone.
+    if (!await userCanUseFeature(sessUser, 'all-tasks', 'delete')) return res.status(403).json(FORBIDDEN);
     if (!USE_DB) {
       const store = await readStore();
+      const row = (store.delegations||[]).find(d=>d.id===id);
+      if (!row) return res.status(404).json({ error:'Not found' });
+      if (!canWriteDelegation(sessUser, row)) return res.status(403).json(FORBIDDEN);
       store.delegations = (store.delegations||[]).filter(d=>d.id!==id);
       await writeStore(store);
       return res.json({ success:true });
     }
     await ensureSchema();
+    const [row] = await q('SELECT * FROM delegations WHERE id = $1', [id]);
+    if (!row) return res.status(404).json({ error:'Not found' });
+    if (!canWriteDelegation(sessUser, row)) return res.status(403).json(FORBIDDEN);
     await pool.query('DELETE FROM delegations WHERE id = $1', [id]);
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+/* ── Approval authority ───────────────────────────────────────────────────────
+   Who signs off what, as settled by management. Two matrices, both kept in
+   app_config rather than in this file: people move jobs and thresholds get
+   revised, and neither should need a deploy. The constants below are only the
+   seed — written once on first read and never consulted again after that, the
+   same way `departments` is seeded from FACTORY_DEPARTMENTS.
+
+   Leave, Accounts team: up to 2 days is decided inside the department, by the
+   Senior Accountant and above; 3 days or more needs Paresh Sir. Matched on the
+   applicant's department rather than their designation, because department is
+   the field every employee record actually carries.
+
+   Expense: one named owner per kind of spend. Common office repairs are the one
+   tiered row — below ₹5,000 Mahendrabhai is sent an inquiry mail and there is
+   nothing to approve, at ₹5,000 and above it goes to Management. */
+
+const DEFAULT_LEAVE_AUTHORITY = [
+  {
+    department: 'Accounts',        // matched case-insensitively, as a substring
+    withinTeamApprover: 'Jayesh Udani',
+    escalateFromDays: 3,
+    escalateTo: 'Paresh Sir',
+  },
+];
+
+const DEFAULT_EXPENSE_AUTHORITY = [
+  { category: 'IT',                   owner: 'Saloni Anchan' },
+  { category: 'Internet',             owner: 'Brinda Kapur' },
+  { category: 'AC',                   owner: 'Sajil Shah' },
+  // inquiryBelow set makes this row tiered: an amount is required to route it.
+  { category: 'Common Office Repair', owner: 'Mahendrabhai', inquiryBelow: 5000, aboveOwner: 'Management' },
+];
+
+async function readAuthority(key, seed) {
+  try {
+    const rows = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [key]);
+    if (rows.length) {
+      const parsed = JSON.parse(rows[0].value);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.error('[authority] could not read', key, '—', e.message);
+    return seed;
+  }
+  await writeAuthority(key, seed).catch(() => {});
+  return seed;
+}
+
+async function writeAuthority(key, value) {
+  const json = JSON.stringify(value);
+  await pool.query(
+    `INSERT INTO app_config ("key","value") VALUES ($1,$2) ON CONFLICT ("key") DO UPDATE SET "value"=$3`,
+    [key, json, json],
+  );
+}
+
+/* A matrix names the person the office calls them by — "Mahendrabhai",
+   "Paresh Sir" — which is very often not the full name on their login row. An
+   exact match first, then the first word as a prefix, and only when that lands
+   on exactly one person: routing a ticket to the wrong Jayesh is worse than
+   routing it to a plain name with no address behind it. */
+async function userByName(name) {
+  const raw = String(name || '').replace(/\s+/g, ' ').trim();
+  if (!raw || !USE_DB) return null;
+  const exact = await q('SELECT id, name, email FROM users WHERE LOWER(name) = LOWER($1) LIMIT 1', [raw]).catch(() => []);
+  if (exact[0]) return exact[0];
+  const first = raw.split(' ')[0];
+  if (first.length < 3) return null;
+  const like = await q('SELECT id, name, email FROM users WHERE LOWER(name) LIKE LOWER($1)', [first + '%']).catch(() => []);
+  return like.length === 1 ? like[0] : null;
+}
+
+/* The leave tier for one applicant, or null when their department has no tier
+   and the ordinary approver chain should decide. `escalated` is the whole point
+   of the return value: an escalated tier is mandatory and overrides whoever the
+   applicant has named, while an un-escalated one is only a fallback — "approval
+   as per authority" means the authority already recorded on the user wins. */
+async function leaveAuthorityFor(department, days) {
+  const dept = String(department || '').trim().toLowerCase();
+  if (!dept) return null;
+  const matrix = await readAuthority('leave_authority', DEFAULT_LEAVE_AUTHORITY);
+  const tier = matrix.find((t) => t.department && dept.includes(String(t.department).toLowerCase()));
+  if (!tier) return null;
+  const from = Number(tier.escalateFromDays) || 0;
+  const escalated = !!from && Number(days) >= from;
+  const named = escalated ? tier.escalateTo : tier.withinTeamApprover;
+  if (!named) return null;
+  const who = await userByName(named);
+  return { name: who?.name || String(named), email: who?.email || '', escalated, thresholdDays: from };
+}
+
+/* A rupee figure, or null when there isn't one. Not Number() on its own:
+   Number(null), Number('') and Number(' ') are all 0, so an untouched amount
+   box would arrive as a perfectly valid ₹0 and route a repair as an inquiry
+   nobody had to approve. Negatives are not an amount either. */
+function toAmount(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/* Where a ticket goes, given its category and amount. Returns null for a
+   category nobody owns — an ordinary help ticket, which still lands in the
+   admin queue exactly as it always did. */
+function expenseRouteFor(matrix, category, amount) {
+  const cat = String(category || '').trim().toLowerCase();
+  if (!cat) return null;
+  const row = matrix.find((r) => String(r.category || '').trim().toLowerCase() === cat);
+  if (!row) return null;
+  const below = Number(row.inquiryBelow) || 0;
+  if (!below) return { owner: String(row.owner || ''), kind: 'approval', threshold: 0 };
+  // Tiered, and the amount is what decides the tier — so no amount is not a
+  // routing decision, it is an unanswerable question. The write path refuses
+  // one of these before it ever gets here; null keeps that true for any other
+  // caller rather than quietly picking the no-approval-needed side.
+  const amt = toAmount(amount);
+  if (amt === null) return null;
+  return amt >= below
+    ? { owner: String(row.aboveOwner || ''), kind: 'approval', threshold: below }
+    : { owner: String(row.owner || ''),      kind: 'inquiry',  threshold: below };
+}
+
+// True when the category cannot be routed without knowing the amount, so the
+// write path can refuse rather than guess which side of the threshold it is on.
+function expenseNeedsAmount(matrix, category) {
+  const cat = String(category || '').trim().toLowerCase();
+  const row = matrix.find((r) => String(r.category || '').trim().toLowerCase() === cat);
+  return !!(row && Number(row.inquiryBelow));
+}
+
+// Read by the Help Ticket page to build its Category dropdown, and by the
+// Approval Authority editor. Everyone can read it — knowing that AC work goes
+// to Sajil Shah is not a secret, and the dropdown is useless without it.
+app.get('/api/approval-authority', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    res.json({
+      leave:   await readAuthority('leave_authority',   DEFAULT_LEAVE_AUTHORITY),
+      expense: await readAuthority('expense_authority', DEFAULT_EXPENSE_AUTHORITY),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Whole-matrix replace rather than a per-row patch, so deleting a row on the
+// editor screen actually deletes it. Either key may be omitted to leave that
+// matrix alone.
+app.put('/api/approval-authority', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await ensureSchema();
+    const body = req.body || {};
+    if (Array.isArray(body.expense)) {
+      const rows = body.expense
+        .map((r) => ({
+          category:     String(r.category || '').trim(),
+          owner:        String(r.owner || '').trim(),
+          inquiryBelow: Number(r.inquiryBelow) || 0,
+          aboveOwner:   String(r.aboveOwner || '').trim(),
+        }))
+        .filter((r) => r.category);
+      // Two rows with the same category would make routing depend on array
+      // order, which nobody editing this screen can see.
+      const seen = new Set();
+      for (const r of rows) {
+        const k = r.category.toLowerCase();
+        if (seen.has(k)) return res.status(400).json({ error: `Duplicate category: ${r.category}` });
+        seen.add(k);
+      }
+      await writeAuthority('expense_authority', rows);
+    }
+    if (Array.isArray(body.leave)) {
+      const rows = body.leave
+        .map((r) => ({
+          department:         String(r.department || '').trim(),
+          withinTeamApprover: String(r.withinTeamApprover || '').trim(),
+          escalateFromDays:   Number(r.escalateFromDays) || 0,
+          escalateTo:         String(r.escalateTo || '').trim(),
+        }))
+        .filter((r) => r.department);
+      await writeAuthority('leave_authority', rows);
+    }
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Help Tickets ─────────────────────────────────────────────────────────────
@@ -1957,9 +2507,17 @@ app.get('/api/help-tickets', requireAuth, async (req, res) => {
     await ensureSchema();
     const user = req.session.user;
     const isAdmin = (user.roles||[]).includes('Admin') || (user.roles||[]).includes('HOD');
+    /* Non-admins see their own tickets and the ones routed to them. The second
+       half matters now that a ticket is routed by category: the person who owns
+       AC work is mailed about it and is usually not an Admin, so without this
+       they would get a mail about a ticket they cannot open. Matched on name
+       because transferred_to holds a name — see the note on PATCH. */
     const rows = isAdmin
       ? await q('SELECT * FROM help_tickets ORDER BY created_at DESC', [])
-      : await q('SELECT * FROM help_tickets WHERE submitted_by_id=$1 ORDER BY created_at DESC', [user.id]);
+      : await q(
+          'SELECT * FROM help_tickets WHERE submitted_by_id=$1 OR LOWER(transferred_to)=LOWER($2) ORDER BY created_at DESC',
+          [user.id, user.name || ''],
+        );
     return res.json(rows);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -1967,17 +2525,50 @@ app.get('/api/help-tickets', requireAuth, async (req, res) => {
 app.post('/api/help-tickets', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
-    const { subject, description, priority, name, date, filedBy } = req.body;
+    const { subject, description, priority, name, date, filedBy, category, amount } = req.body;
     if (!subject) return res.status(400).json({ error: 'Subject required' });
     const user = req.session.user;
     const id = 'HT' + Date.now().toString(36).toUpperCase();
     const displayName = name || user.name;
     const filer = filedBy || user.name;
+
+    /* Route it. A tiered category is refused without an amount rather than
+       guessed at — a repair with no figure on it could belong on either side of
+       the ₹5,000 line, and picking one silently is how the wrong person ends up
+       approving spend they had no authority over. */
+    const cat = String(category || '').trim();
+    const amt = toAmount(amount);
+    const matrix = await readAuthority('expense_authority', DEFAULT_EXPENSE_AUTHORITY);
+    if (cat && expenseNeedsAmount(matrix, cat) && amt === null) {
+      return res.status(400).json({ error: `A valid amount is required for ${cat} tickets — it decides who approves it.` });
+    }
+    const route = expenseRouteFor(matrix, cat, amt);
+
     await pool.query(
-      'INSERT INTO help_tickets (id,subject,description,priority,status,submitted_by,submitted_by_id,ticket_date,name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-      [id, subject, description||'', priority||'Medium', 'open', filer, user.id, date||null, displayName]
+      'INSERT INTO help_tickets (id,subject,description,priority,status,submitted_by,submitted_by_id,ticket_date,name,category,amount,routing,transferred_to) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',
+      [id, subject, description||'', priority||'Medium', 'open', filer, user.id, date||null, displayName,
+       cat, amt, route?.kind || '', route?.owner || null]
     );
-    return res.status(201).json({ id });
+
+    /* Tell the routed person straight away — the whole point of the category is
+       that they hear about it directly rather than waiting for an admin to pass
+       it on. Fire-and-forget: the ticket is already stored and must not fail, or
+       make the person raising it wait, because SMTP was slow. */
+    if (route?.owner) {
+      (async () => {
+        const who = await userByName(route.owner);
+        const address = await notifyAddressFor(who?.id, who?.email || '');
+        await sendHelpTicketEmail({
+          toEmail: address, toName: route.owner,
+          ticketId: id, subject, description: description || '',
+          category: cat, amount: amt, priority: priority || 'Medium',
+          raisedBy: filer, ticketFor: displayName,
+          kind: route.kind, threshold: route.threshold,
+        });
+      })().catch((e) => console.error('[help-ticket] routing mail failed:', e.message));
+    }
+
+    return res.status(201).json({ id, routedTo: route?.owner || '', routing: route?.kind || '' });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -1987,7 +2578,29 @@ app.patch('/api/help-tickets', requireAuth, async (req, res) => {
     const { id, status, transferred_to } = req.body;
     if (!id) return res.status(400).json({ error: 'id required' });
     if (transferred_to !== undefined) {
+      /* transferred_to holds a name, not an id — it predates this change and the
+         Transfer dropdown posts the name it shows. Left as it is rather than
+         migrated, because the GET above and the mail below both resolve it back
+         to a login the same way. */
       await pool.query('UPDATE help_tickets SET transferred_to=$1 WHERE id=$2', [transferred_to||null, id]);
+      // A hand transfer notifies exactly like an automatic route does; being
+      // told is not something that should depend on how the ticket got to you.
+      if (transferred_to) {
+        (async () => {
+          const t = (await q('SELECT * FROM help_tickets WHERE id=$1', [id]))[0];
+          if (!t) return;
+          const who = await userByName(transferred_to);
+          const address = await notifyAddressFor(who?.id, who?.email || '');
+          await sendHelpTicketEmail({
+            toEmail: address, toName: transferred_to,
+            ticketId: id, subject: t.subject, description: t.description || '',
+            category: t.category || '', amount: t.amount, priority: t.priority || 'Medium',
+            raisedBy: t.submitted_by || '', ticketFor: t.name || '',
+            kind: t.routing || 'approval', threshold: 0,
+            transferredBy: req.session.user?.name || '',
+          });
+        })().catch((e) => console.error('[help-ticket] transfer mail failed:', e.message));
+      }
     } else {
       await pool.query('UPDATE help_tickets SET status=COALESCE($1,status) WHERE id=$2', [status??null, id]);
     }
@@ -2171,17 +2784,39 @@ app.get('/api/masters', requireAuth, async (req, res) => {
 // as separate rows (each its own id), matching the "Daily (365 tasks/year)" etc. labels
 // the Add Checklist form has always shown. Without an end date the series defaults to one
 // year forward, which is where those per-year counts come from.
-function addChecklistInterval(dateStr, freq) {
-  const d = new Date(dateStr + 'T00:00:00Z');
-  switch (String(freq || 'daily').toLowerCase()) {
-    case 'weekly': d.setUTCDate(d.getUTCDate() + 7); break;
-    case 'alternative_week': case 'alternate_week': d.setUTCDate(d.getUTCDate() + 14); break;
-    case 'monthly': d.setUTCMonth(d.getUTCMonth() + 1); break;
-    case 'quarterly': d.setUTCMonth(d.getUTCMonth() + 3); break;
-    case 'yearly': d.setUTCFullYear(d.getUTCFullYear() + 1); break;
-    case 'daily': default: d.setUTCDate(d.getUTCDate() + 1); break;
-  }
+function _checklistPlusDays(startDate, days) {
+  const d = new Date(startDate + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+/* Months added to the SERIES START, clamped to the length of the target month.
+
+   Stepping a JS Date forward one month at a time overflows: 31 January plus a
+   month is "31 February", which the Date silently turns into 3 March. Each step
+   then compounded, so a monthly checklist starting on the 29th, 30th or 31st
+   walked a few days further from its own date every month — and a quarterly one
+   drifted faster. Measuring every occurrence from the start date instead means
+   31 Jan → 28 Feb → 31 Mar → 30 Apr, which is what "monthly on the 31st" means. */
+function _checklistPlusMonths(startDate, months) {
+  const d = new Date(startDate + 'T00:00:00Z');
+  const wantDay = d.getUTCDate();
+  const target = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months, 1));
+  const lastOfMonth = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(wantDay, lastOfMonth));
+  return target.toISOString().slice(0, 10);
+}
+
+// The i-th occurrence of a series, always measured from the start date.
+function checklistDateAt(startDate, freq, i) {
+  switch (String(freq || 'daily').toLowerCase()) {
+    case 'weekly': return _checklistPlusDays(startDate, 7 * i);
+    case 'alternative_week': case 'alternate_week': return _checklistPlusDays(startDate, 14 * i);
+    case 'monthly': return _checklistPlusMonths(startDate, i);
+    case 'quarterly': return _checklistPlusMonths(startDate, 3 * i);
+    case 'yearly': return _checklistPlusMonths(startDate, 12 * i);
+    case 'daily': default: return _checklistPlusDays(startDate, i);
+  }
 }
 function defaultChecklistSeriesEnd(startDate) {
   const d = new Date(startDate + 'T00:00:00Z');
@@ -2193,10 +2828,10 @@ const CHECKLIST_MAX_OCCURRENCES = 400; // safety cap, well above a 365-day daily
 function generateChecklistDates(startDate, endDate, freq) {
   const end = endDate || defaultChecklistSeriesEnd(startDate);
   const dates = [];
-  let cur = startDate;
-  while (cur <= end && dates.length < CHECKLIST_MAX_OCCURRENCES) {
-    dates.push(cur);
-    cur = addChecklistInterval(cur, freq);
+  for (let i = 0; i < CHECKLIST_MAX_OCCURRENCES; i++) {
+    const d = checklistDateAt(startDate, freq, i);
+    if (d > end) break;
+    dates.push(d);
   }
   return dates;
 }
@@ -2270,10 +2905,20 @@ app.patch('/api/masters', requireAuth, async (req, res) => {
   try {
     const body = req.body;
     if (!body.id) return res.status(400).json({ error:'id required' });
+    const sessUser = req.session?.user;
+    // Bulk Transfer sends assignedTo alone; the Edit Checklist modal sends the
+    // task text too. They are two different permissions in the UI, so they are
+    // two different permissions here. Checked before the storage split so both
+    // paths agree.
+    const isReassign = body.assignedTo !== undefined && body.task === undefined;
+    if (!await userCanUseFeature(sessUser, 'all-tasks', isReassign ? 'transfer' : 'edit')) {
+      return res.status(403).json(FORBIDDEN);
+    }
     if (!USE_DB) {
       const store = await readStore();
       const m = (store.masters||[]).find(x=>x.id===body.id);
       if (!m) return res.status(404).json({ error:'Not found' });
+      if (!canWriteMaster(sessUser, m)) return res.status(403).json(FORBIDDEN);
       if (body.task) m.task=body.task;
       if (body.assignedTo) m.assignedTo=body.assignedTo.trim();
       if (body.frequency) m.frequency=body.frequency;
@@ -2286,6 +2931,8 @@ app.patch('/api/masters', requireAuth, async (req, res) => {
     }
     await ensureSchema();
     const before = await q('SELECT assigned_to, task FROM masters WHERE id=$1', [body.id]);
+    if (!before.length) return res.status(404).json({ error:'Not found' });
+    if (!canWriteMaster(sessUser, before[0])) return res.status(403).json(FORBIDDEN);
     const prevAssignee = before[0]?.assigned_to || '';
     const assignedTo = body.assignedTo !== undefined ? body.assignedTo.trim() : undefined;
     const dept = body.department == null ? null : await canonicalDept(body.department);
@@ -2303,13 +2950,21 @@ app.delete('/api/masters', requireAuth, async (req, res) => {
   try {
     const id = req.query.id;
     if (!id) return res.status(400).json({ error:'id required' });
+    const sessUser = req.session?.user;
+    if (!await userCanUseFeature(sessUser, 'all-tasks', 'delete')) return res.status(403).json(FORBIDDEN);
     if (!USE_DB) {
       const store = await readStore();
+      const row = (store.masters||[]).find(m=>m.id===id);
+      if (!row) return res.status(404).json({ error:'Not found' });
+      if (!canWriteMaster(sessUser, row)) return res.status(403).json(FORBIDDEN);
       store.masters = (store.masters||[]).filter(m=>m.id!==id);
       await writeStore(store);
       return res.json({ success:true });
     }
     await ensureSchema();
+    const [row] = await q('SELECT assigned_to FROM masters WHERE id = $1', [id]);
+    if (!row) return res.status(404).json({ error:'Not found' });
+    if (!canWriteMaster(sessUser, row)) return res.status(403).json(FORBIDDEN);
     await pool.query('DELETE FROM masters WHERE id = $1', [id]);
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
@@ -2369,13 +3024,20 @@ app.delete('/api/masters/by-date', requireAuth, requireAdmin, async (req, res) =
 // ── Checklist Completions ─────────────────────────────────────────────────────
 app.post('/api/checklist-completions', requireAuth, async (req, res) => {
   try {
-    const { masterId, doer } = req.body;
+    const { masterId } = req.body;
     if (!masterId) return res.status(400).json({ error:'masterId required' });
     if (!USE_DB) return res.json({ success:true });
     await ensureSchema();
-    const { rows:c } = await pool.query('SELECT COUNT(*) AS cnt FROM checklist_completions');
-    const id = 'CC'+(Number(c[0].cnt)+1).toString().padStart(3,'0');
-    await pool.query('INSERT INTO checklist_completions (id,master_id,doer,completed_at,date) VALUES ($1,$2,$3,NOW(),CURRENT_DATE)', [id,masterId,doer||'']);
+    const sessUser = req.session?.user;
+    const [master] = await q('SELECT assigned_to FROM masters WHERE id = $1', [masterId]);
+    if (!master) return res.status(404).json({ error:'Checklist task not found' });
+    if (!canWriteMaster(sessUser, master)) return res.status(403).json(FORBIDDEN);
+    // Who completed it is the signed-in user, not whatever the request claimed —
+    // `doer` used to be taken straight off the body, so a completion could be
+    // filed under anybody's name.
+    const doer = sessUser?.name || '';
+    await withSeqId('checklist_completions', 'CC', 3, (id) =>
+      pool.query('INSERT INTO checklist_completions (id,master_id,doer,completed_at,date) VALUES ($1,$2,$3,NOW(),CURRENT_DATE)', [id,masterId,doer||'']));
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -2415,6 +3077,9 @@ app.delete('/api/checklist-completions', requireAuth, async (req, res) => {
     if (!masterId) return res.status(400).json({ error:'masterId required' });
     if (!USE_DB) return res.json({ success:true });
     await ensureSchema();
+    const [master] = await q('SELECT assigned_to FROM masters WHERE id = $1', [masterId]);
+    if (!master) return res.status(404).json({ error:'Checklist task not found' });
+    if (!canWriteMaster(req.session?.user, master)) return res.status(403).json(FORBIDDEN);
     await pool.query('DELETE FROM checklist_completions WHERE master_id=$1', [masterId]);
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
@@ -2572,6 +3237,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
   }
 
   if (!body.name||!body.email) return res.status(400).json({ error:'Name and email required' });
+  if (isSuperAdminEmail(body.email)) return res.status(403).json({ error: RESERVED_EMAIL_MSG });
 
   if (!USE_DB) {
     const store = await readStore();
@@ -2590,13 +3256,16 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
     await ensureSchema();
     const ex = await q('SELECT id FROM users WHERE LOWER(email) = $1 AND LOWER(name) = $2', [body.email.trim().toLowerCase(), body.name.trim().toLowerCase()]);
     if (ex.length) return res.status(400).json({ error: 'A user with this name and email already exists' });
-    const last = await q('SELECT id FROM users ORDER BY id DESC LIMIT 1');
-    const lastNum = last.length ? (parseInt((last[0].id||'U000').replace(/[^0-9]/g,''))||0) : 0;
-    const id = 'U'+(lastNum+1).toString().padStart(3,'0');
     const roles = body.roles?.length ? body.roles : ['User'];
     const hash = body.password ? await bcrypt.hash(body.password, 10) : null;
     const perms = defaultPermissionsFor(roles);
-    await pool.query('INSERT INTO users (id,name,email,phone,department,branch,leave_approver,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,NOW())', [id,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',await canonicalDept(body.department),body.branch||'',body.leave_approver||null,roles.join(','),hash,perms?JSON.stringify(perms):null]);
+    const dept = await canonicalDept(body.department);
+    /* The id came from `ORDER BY id DESC LIMIT 1`, which is a STRING sort: past
+       U999, 'U999' sorts above 'U1000', so every user created after that got a
+       duplicate id. The bulk-import path directly above always did this
+       numerically — the two halves of the same screen disagreed. */
+    const id = await withSeqId('users', 'U', 3, (newId) =>
+      pool.query('INSERT INTO users (id,name,email,phone,department,branch,leave_approver,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,NOW())', [newId,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',dept,body.branch||'',body.leave_approver||null,roles.join(','),hash,perms?JSON.stringify(perms):null]));
     if (body.picture) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,id]);
@@ -2616,6 +3285,13 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
   try {
     const body = req.body;
     if (!body.id) return res.status(400).json({ error:'id required' });
+    // Without this, any Admin or HOD could point a user row (their own
+    // included) at the owner's login address and inherit every owner-only
+    // guard in the app — isSuperAdmin() matches on email alone. The row that
+    // ALREADY holds that address can still be edited normally.
+    if (isSuperAdminEmail(body.email) && !(await isSuperAdminUserId(body.id))) {
+      return res.status(403).json({ error: RESERVED_EMAIL_MSG });
+    }
     if (!USE_DB) {
       const store = await readStore();
       const user = (store.users||[]).find(u=>u.id===body.id);
@@ -2656,6 +3332,12 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
       const permStr = body.permissions === null ? null : JSON.stringify(body.permissions);
       await pool.query('UPDATE users SET permissions=$1 WHERE id=$2', [permStr, body.id]);
     }
+    // Deactivating somebody has to actually lock them out. Their session is not
+    // re-checked against the users row on each request, so without this an
+    // account switched off in the morning kept working until its session aged out.
+    if (body.active !== undefined && !body.active && sessionStore) {
+      await sessionStore.destroyByUser(body.id).catch(() => {});
+    }
     const result = await q('SELECT * FROM users WHERE id = $1', [body.id]);
     if (!result.length) return res.status(404).json({ error:'Not found' });
     syncUsers_gs().catch(()=>{});
@@ -2675,6 +3357,9 @@ app.delete('/api/users', requireAuth, requireAdmin, async (req, res) => {
   }
   await ensureSchema();
   await pool.query('DELETE FROM users WHERE id = $1', [id]);
+  // Same reasoning as deactivation above — a deleted user with a live session
+  // was still a signed-in user.
+  if (sessionStore) await sessionStore.destroyByUser(id).catch(() => {});
   syncUsers_gs().catch(()=>{});
   return res.json({ success:true });
 });
@@ -2695,6 +3380,11 @@ app.post('/api/users/set-password', requireAuth, requireAdmin, async (req, res) 
   }
   await ensureSchema();
   await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash,userId]);
+  // A reset that leaves the old sessions alive isn't a reset: requireAuth only
+  // looks at the session, never back at the users row, so before this the
+  // account stayed usable on every device it was already signed in on for the
+  // full 30-day session lifetime.
+  if (sessionStore) await sessionStore.destroyByUser(userId).catch(() => {});
   return res.json({ success:true });
 });
 
@@ -2741,18 +3431,16 @@ app.post('/api/holidays', requireAuth, requireAdmin, async (req, res) => {
       for (const row of b.bulk) {
         const date=normDate(row.date); const name=(row.name||'').trim();
         if (!date||!name) { skipped++; continue; }
-        const { rows:c } = await pool.query('SELECT COUNT(*) AS cnt FROM holidays');
-        const id = 'H'+(Number(c[0].cnt)+1).toString().padStart(3,'0');
-        await pool.query('INSERT INTO holidays (id,date,name,type) VALUES ($1,$2,$3,$4)', [id,date,name,row.type||'Holiday']);
+        await withSeqId('holidays', 'H', 3, (id) =>
+          pool.query('INSERT INTO holidays (id,date,name,type) VALUES ($1,$2,$3,$4)', [id,date,name,row.type||'Holiday']));
         inserted++;
       }
       return res.status(201).json({ success:true, inserted, skipped });
     }
     const date=normDate(b.date); const name=(b.name||'').trim();
     if (!date||!name) return res.status(400).json({ error:'date and name required' });
-    const { rows:c } = await pool.query('SELECT COUNT(*) AS cnt FROM holidays');
-    const id = 'H'+(Number(c[0].cnt)+1).toString().padStart(3,'0');
-    await pool.query('INSERT INTO holidays (id,date,name,type) VALUES ($1,$2,$3,$4)', [id,date,name,b.type||'Holiday']);
+    const id = await withSeqId('holidays', 'H', 3, (newId) =>
+      pool.query('INSERT INTO holidays (id,date,name,type) VALUES ($1,$2,$3,$4)', [newId,date,name,b.type||'Holiday']));
     return res.status(201).json({ success:true, id });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -2794,10 +3482,33 @@ app.post('/api/leaves', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
     const body = req.body;
-    if (!body.userName||!body.fromDate||!body.toDate) return res.status(400).json({ error:'userName, fromDate, toDate required' });
-    const c = await q('SELECT COUNT(*) AS cnt FROM leaves');
-    const id = 'LV'+(Number(c[0].cnt)+1).toString().padStart(4,'0');
-    await pool.query('INSERT INTO leaves (id,user_id,user_name,type,from_date,to_date,reason,status,approver) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)', [id,body.userId||null,body.userName,body.type||'Leave',body.fromDate,body.toDate,body.reason||'','pending',body.approver||'HOD']);
+    if (!body.fromDate||!body.toDate) return res.status(400).json({ error:'fromDate and toDate required' });
+    // Who is applying is the signed-in user. userId/userName used to be taken
+    // from the request, so anybody could file leave in somebody else's name.
+    const me = req.session?.user;
+    body.userId = me?.id || null;
+    body.userName = me?.name || body.userName;
+    /* employee_id and total_days are filled in here because the HR module keys
+       off them: payroll's LOP calculation and the leave-balance ledger both join
+       `leaves` on employee_id and read total_days, so a row written without them
+       is invisible to both — approved unpaid leave would never reach the payslip
+       and no balance would ever move. Nothing in the UI posts here any more (the
+       Leave screens all use /api/hr/leaves, which sets these itself), but the
+       route is still reachable and must not create rows the HR side cannot see. */
+    let employeeId = null;
+    if (body.userId) {
+      try {
+        const [emp] = await q('SELECT id FROM hr_employees WHERE user_id = $1', [body.userId]);
+        employeeId = emp?.id || null;
+      } catch {}
+    }
+    const dayCount = (() => {
+      const a = new Date(body.fromDate + 'T00:00:00Z'), b = new Date(body.toDate + 'T00:00:00Z');
+      if (isNaN(a) || isNaN(b) || b < a) return 0;
+      return Math.round((b - a) / 86400000) + 1;
+    })();
+    const id = await withSeqId('leaves', 'LV', 4, (newId) =>
+      pool.query('INSERT INTO leaves (id,user_id,user_name,employee_id,type,total_days,from_date,to_date,reason,status,approver) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [newId,body.userId||null,body.userName,employeeId,body.type||'Leave',dayCount,body.fromDate,body.toDate,body.reason||'','pending',body.approver||'HOD']));
     return res.status(201).json({ success:true, id });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -2829,10 +3540,17 @@ app.patch('/api/leaves', requireAuth, requireAdmin, async (req, res) => {
 // deployment stores its private key — see the note above _normalizeGooglePrivateKey.
 const hrms = mountHrms(app, {
   pool, q, ensureSchema, requireAuth, requireAdmin, requireSuperAdmin, isAdminUser, getGoogleAuth,
+  // Shared so leave ids are minted the same way as every other id in the app —
+  // from the largest one in use, not from COUNT(*). See nextSeqId.
+  withSeqId,
   // Leave mail lives here with the app's other notifications rather than in the
   // HR module, so there is one mailer and one house style for every email the
   // app sends. See sendLeaveRequestEmail.
   notifyAddressFor, sendLeaveRequestEmail, sendLeaveDecisionEmail,
+  // The department leave tiers (see DEFAULT_LEAVE_AUTHORITY). Handed over the
+  // same way the mailers are: the matrix is company policy and belongs with the
+  // rest of it here, while the HR module owns only the decision to consult it.
+  leaveAuthorityFor,
   // The HR module stores departments in its own tables (hr_employees, hr_payslips)
   // but must spell them the way the rest of the app does — so it shares this
   // file's canonicaliser and the departments master behind it, rather than
@@ -2855,16 +3573,17 @@ app.get('/api/clients', requireAuth, async (req, res) => {
 app.post('/api/clients', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
+    // client-master.js puts Add, Edit and Delete behind one flag (_canEdit =
+    // _hasFeature('add')), so all three routes check that same feature.
+    if (!await userCanUseFeature(req.session?.user, 'client-master', 'add')) return res.status(403).json(FORBIDDEN);
     const b = req.body;
     if (!b.name?.trim()) return res.status(400).json({ error:'name required' });
-    const c = await q('SELECT COUNT(*) AS cnt FROM clients');
-    const id = 'VN'+(Number(c[0].cnt)+1).toString().padStart(4,'0');
-    await pool.query(
+    const id = await withSeqId('clients', 'VN', 4, (newId) => pool.query(
       `INSERT INTO clients (id,name,contact_person,mobile,email,state,district,address,pin,status,bank_name,account_holder,account_no,ifsc_code,branch_name,division)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-      [id, b.name.trim(), b.contactPerson||'', b.mobile||'', b.email||'', b.state||'', b.district||'', b.address||'', b.pin||'',
+      [newId, b.name.trim(), b.contactPerson||'', b.mobile||'', b.email||'', b.state||'', b.district||'', b.address||'', b.pin||'',
        b.status||'active', b.bankName||'', b.accountHolder||'', b.accountNo||'', b.ifscCode||'', b.branchName||'', b.division||'']
-    );
+    ));
     return res.status(201).json({ success:true, id });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -2872,6 +3591,7 @@ app.post('/api/clients', requireAuth, async (req, res) => {
 app.patch('/api/clients', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
+    if (!await userCanUseFeature(req.session?.user, 'client-master', 'add')) return res.status(403).json(FORBIDDEN);
     const b = req.body;
     if (!b.id) return res.status(400).json({ error:'id required' });
     await pool.query(
@@ -2891,6 +3611,7 @@ app.patch('/api/clients', requireAuth, async (req, res) => {
 app.delete('/api/clients', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
+    if (!await userCanUseFeature(req.session?.user, 'client-master', 'add')) return res.status(403).json(FORBIDDEN);
     const id = req.query.id;
     if (!id) return res.status(400).json({ error:'id required' });
     await pool.query('DELETE FROM clients WHERE id = $1', [id]);
@@ -3913,7 +4634,7 @@ async function _exportSheetTabPdf(spreadsheetId, sourceSheetId, colRange) {
 // POST /api/po-creation — fills the live template tab for the chosen format,
 // exports it as a PDF (saved to Drive), and logs the PO in "ERP PO Log". This
 // IS the database write; nothing is stored locally.
-app.post('/api/po-creation', requireAuth, async (req, res) => {
+app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res) => {
   try {
     const cfg = PO_FORMAT_CONFIG[req.body?.format];
     if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
@@ -3926,6 +4647,12 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     const keyField = cfg.items.keyField || 'itemCode';
     const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it[keyField] || '').trim());
     if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
+    // The template has a fixed number of item rows and anything past the last
+    // one used to be dropped without a word — the user was told the PO had
+    // been created while lines were missing from the PDF and from the log's own
+    // Form JSON. Refusing is the only honest answer.
+    const poCapacity = cfg.items.lastRow - cfg.items.firstRow + 1;
+    if (cleanItems.length > poCapacity) return res.status(400).json({ error: `This PO format fits ${poCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one PO.` });
 
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
@@ -3949,7 +4676,11 @@ app.post('/api/po-creation', requireAuth, async (req, res) => {
     // when 0 — since they feed the sheet's own Total formula and must never
     // carry over a previous PO's numbers.
     const data = [];
-    const put = (a1, value) => { if (value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
+    // Written even when blank: a skipped cell keeps whatever the PREVIOUS
+    // document left in it, which is how one PO's payment terms ended up printed
+    // on the next one. Item rows and summary cells are cleared before the write;
+    // header cells are not, so they have to be overwritten explicitly.
+    const put = (a1, value) => { if (a1) data.push({ range: `'${tab}'!${a1}`, values: [[value === undefined || value === null ? '' : value]] }); };
     put(cfg.header.poNo, poNoFormatted);
     put(cfg.header.date, date);
     // Service PO has no P.R. NO cell at all (services are raised as a PO
@@ -4355,7 +5086,7 @@ app.post('/api/pr-creation/items', requireAuth, async (req, res) => {
 // POST /api/pr-creation — fills the live template tab for the chosen format,
 // exports it as a PDF (saved to Drive), and logs the PR in "ERP PR Log". This
 // IS the database write; nothing is stored locally.
-app.post('/api/pr-creation', requireAuth, async (req, res) => {
+app.post('/api/pr-creation', requireAuth, sheetSerialised('pr'), async (req, res) => {
   try {
     const cfg = PR_FORMAT_CONFIG[req.body?.format];
     if (!cfg) return res.status(400).json({ error: 'Unknown PR format' });
@@ -4369,6 +5100,12 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
     if (!requestedBy || !party) return res.status(400).json({ error: 'Requested By and ' + cfg.partyLabel + ' are required' });
     const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemCode || '').trim());
     if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
+    // The template has a fixed number of item rows and anything past the last
+    // one used to be dropped without a word — the user was told the PR had
+    // been created while lines were missing from the PDF and from the log's own
+    // Form JSON. Refusing is the only honest answer.
+    const prCapacity = cfg.items.lastRow - cfg.items.firstRow + 1;
+    if (cleanItems.length > prCapacity) return res.status(400).json({ error: `This PR format fits ${prCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one PR.` });
 
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
@@ -4389,7 +5126,11 @@ app.post('/api/pr-creation', requireAuth, async (req, res) => {
 
     // 2) Write header fields and item rows in one batch.
     const data = [];
-    const put = (a1, value) => { if (a1 && value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
+    // Written even when blank: a skipped cell keeps whatever the PREVIOUS
+    // document left in it, which is how one PO's payment terms ended up printed
+    // on the next one. Item rows and summary cells are cleared before the write;
+    // header cells are not, so they have to be overwritten explicitly.
+    const put = (a1, value) => { if (a1) data.push({ range: `'${tab}'!${a1}`, values: [[value === undefined || value === null ? '' : value]] }); };
     put(cfg.header.prNo, prNoFormatted);
     put(cfg.header.requestedBy, requestedBy);
     put(cfg.header.vendorName, party);
@@ -4965,12 +5706,18 @@ app.get('/api/grn-creation/items', requireAuth, async (req, res) => {
 // POST /api/grn-creation — fills the live "GRN" template tab, exports it as a
 // PDF (saved to Drive), and logs it in "ERP GRN Log". This IS the database
 // write; nothing is stored locally.
-app.post('/api/grn-creation', requireAuth, async (req, res) => {
+app.post('/api/grn-creation', requireAuth, sheetSerialised('grn'), async (req, res) => {
   try {
     const { date, madeBy, prNo, vendorName, poNo, billNo, billRecvDate, deptHead, items, cgst, sgst, roundOff, comments } = req.body;
     if (!date || !vendorName || !madeBy) return res.status(400).json({ error: 'Date, Vendor Name and Made By are required' });
     const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemNo || '').trim());
     if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
+    // The template has a fixed number of item rows and anything past the last
+    // one used to be dropped without a word — the user was told the GRN had
+    // been created while lines were missing from the PDF and from the log's own
+    // Form JSON. Refusing is the only honest answer.
+    const grnCapacity = GRN_ITEMS.lastRow - GRN_ITEMS.firstRow + 1;
+    if (cleanItems.length > grnCapacity) return res.status(400).json({ error: `A GRN fits ${grnCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one GRN.` });
 
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
@@ -5002,7 +5749,11 @@ app.post('/api/grn-creation', requireAuth, async (req, res) => {
     // previous GRN's numbers. Comments is likewise always written (possibly
     // blank) so a previous GRN's note can't linger on this one.
     const data = [];
-    const put = (a1, value) => { if (value !== undefined && value !== null && value !== '') data.push({ range: `'${tab}'!${a1}`, values: [[value]] }); };
+    // Written even when blank: a skipped cell keeps whatever the PREVIOUS
+    // document left in it, which is how one PO's payment terms ended up printed
+    // on the next one. Item rows and summary cells are cleared before the write;
+    // header cells are not, so they have to be overwritten explicitly.
+    const put = (a1, value) => { if (a1) data.push({ range: `'${tab}'!${a1}`, values: [[value === undefined || value === null ? '' : value]] }); };
     put(GRN_HEADER_CELLS.grNo, nextGrNo);
     put(GRN_HEADER_CELLS.madeBy, madeBy);
     put(GRN_HEADER_CELLS.prNo, prNo);
@@ -6088,7 +6839,7 @@ function _piFormFromBody(b, user, cleanItems) {
 // POST /api/proforma-invoice — User stage. No rate/price field is ever read
 // from the body here, by design: pricing is a separate, permission-gated
 // step (PUT /price below).
-app.post('/api/proforma-invoice', requireAuth, async (req, res) => {
+app.post('/api/proforma-invoice', requireAuth, sheetSerialised('pi'), async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.date || !String(b.buyerName || '').trim()) return res.status(400).json({ error: 'Date and Consignee Name are required' });
@@ -6205,7 +6956,7 @@ app.delete('/api/consignee-master', requireAuth, requireSuperAdmin, async (req, 
 // and loses the thread. So this issues the NEXT REVISION of the same number
 // ("VTV/052/25-26" -> "VTV/052/25-26 R1"), marks the parent Superseded, and
 // leaves the parent's own PDF in place as the record of what was first offered.
-app.post('/api/proforma-invoice/revise', requireAuth, async (req, res) => {
+app.post('/api/proforma-invoice/revise', requireAuth, sheetSerialised('pi'), async (req, res) => {
   try {
     const piNo = String(req.query.piNo || '').trim();
     if (!piNo) return res.status(400).json({ error: 'piNo is required' });
@@ -6343,7 +7094,7 @@ async function _closePiPricingStep(piNo, userName) {
 // PI's own stored Form JSON for buyer/item/qty details (the template tab may
 // belong to a different, newer PI by now), merges in rate/GST/freight, does
 // a full re-fill + re-export, then updates the SAME log row in place.
-app.put('/api/proforma-invoice/price', requireAuth, async (req, res) => {
+app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi'), async (req, res) => {
   try {
     const piNo = req.query.piNo;
     if (!piNo) return res.status(400).json({ error: 'piNo is required' });
@@ -6719,7 +7470,7 @@ async function _piFormByNo(sheets, piNo) {
 // POST /api/order-sheet — raises the Order Sheet for one PI: fills the tab,
 // exports the PDF and logs the order. Body carries only the order-side fields;
 // everything about the customer and the goods comes from the PI.
-app.post('/api/order-sheet', requireAuth, async (req, res) => {
+app.post('/api/order-sheet', requireAuth, sheetSerialised('order'), async (req, res) => {
   try {
     const b = req.body || {};
     const piNo = String(b.piNo || '').trim();
@@ -7302,21 +8053,28 @@ async function _imsCreateTxn(direction, body, user) {
     );
   }
 
-  const cnt = await q('SELECT COUNT(*) AS c FROM ims_transactions WHERE direction=$1', [direction]);
-  const id = direction + String(Number(cnt[0]?.c || 0) + 1).padStart(6, '0');
   // source is only meaningful for the Trading category (see IMS_SOURCES) —
   // Stores/ALU entries just get '', same as before this column existed.
   const source = IMS_SOURCES.includes(body.source) ? body.source : '';
   // The Inward/Outward forms can post a department typed straight into the
   // "+ Add new department" box, so it is canonicalised here rather than trusted.
   const department = await canonicalDept(body.department);
-  await pool.query(
+  const id = await withSeqId('ims_transactions', direction, 6, (newId) => pool.query(
     `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, size, quantity, uom, department, remarks, status, created_by, source)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Active',$11,$12)`,
-    [id, txnDate, direction, itemCode, body.description || '', size, quantity, body.uom || '', department, body.remarks || '', user, source]
-  );
+    [newId, txnDate, direction, itemCode, body.description || '', size, quantity, body.uom || '', department, body.remarks || '', user, source]
+  ));
   const delta = direction === 'IN' ? quantity : -quantity;
-  await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, itemCode]);
+  // current_stock is a stored running balance that is never recomputed from the
+  // ledger, so if this second statement fails the two are permanently and
+  // silently out of step. There is no usable transaction across this pool, so
+  // the entry is backed out instead and the caller is told it failed.
+  try {
+    await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, itemCode]);
+  } catch (e) {
+    await pool.query('DELETE FROM ims_transactions WHERE id=$1', [id]).catch(() => {});
+    throw e;
+  }
   return id;
 }
 
@@ -7332,7 +8090,15 @@ async function _imsCancelTxn(id, direction) {
   // in quantity and was added exactly like IN, so it reverses the same way.
   // Skipping this would let current_stock silently drift from reality.
   const delta = direction === 'OUT' ? Number(row.quantity) : -Number(row.quantity);
-  await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, row.item_code]);
+  // Same reasoning as _imsCreateTxn: if the balance cannot be moved, put the row
+  // back to Active rather than leaving a "Cancelled" entry whose quantity is
+  // still counted in current_stock.
+  try {
+    await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, row.item_code]);
+  } catch (e) {
+    await pool.query(`UPDATE ims_transactions SET status='Active' WHERE id=$1`, [id]).catch(() => {});
+    throw e;
+  }
 }
 
 // Owner-only delete of one ledger entry — see SUPER_ADMIN_EMAIL.
@@ -7374,17 +8140,20 @@ async function _imsPhysicalStockUpdate(body, user) {
   const systemStock = Number(item.current_stock) || 0;
   const variance = Math.round((physicalStock - systemStock) * 100) / 100;
 
-  const cnt = await q(`SELECT COUNT(*) AS c FROM ims_transactions WHERE direction='ADJ'`);
-  const id = 'ADJ' + String(Number(cnt[0]?.c || 0) + 1).padStart(6, '0');
   const remarksNote = `Physical count: ${physicalStock} (system was ${systemStock}, variance ${variance > 0 ? '+' : ''}${variance}).`
     + (body.remarks ? ` ${body.remarks}` : '');
-  await pool.query(
+  const id = await withSeqId('ims_transactions', 'ADJ', 6, (newId) => pool.query(
     `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, size, quantity, uom, department, remarks, status, created_by, source)
      VALUES ($1,$2,'ADJ',$3,$4,$5,$6,$7,'',$8,'Active',$9,'')`,
-    [id, txnDate, itemCode, item.description || '', item.size || '', variance, item.uom || '', remarksNote, user]
-  );
+    [newId, txnDate, itemCode, item.description || '', item.size || '', variance, item.uom || '', remarksNote, user]
+  ));
   if (variance !== 0) {
-    await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [variance, itemCode]);
+    try {
+      await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [variance, itemCode]);
+    } catch (e) {
+      await pool.query('DELETE FROM ims_transactions WHERE id=$1', [id]).catch(() => {});
+      throw e;
+    }
   }
   return { id, systemStock, physicalStock, variance };
 }
@@ -7523,6 +8292,21 @@ app.put('/api/ims/physical-stock/cancel', requireAuth, async (req, res) => {
 
 // ── MIS ───────────────────────────────────────────────────────────────────────
 const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('en-IN', {day:'2-digit',month:'2-digit',year:'numeric'}) : '—';
+
+/* Completion percentage, less a penalty for whatever ran late.
+
+   This was written `((completed / total) - 1) * 100 - (delayed / total) * 50`,
+   which subtracts a flat 100 points from every score. Somebody who finished
+   every task on time scored 0; somebody who finished none scored -100. The whole
+   report only ever produced numbers between -150 and 0, and no arrangement of
+   the underlying work could produce a positive one. The `- 1` was the bug.
+
+   Note for whoever reads the first report after this ships: every score moves up
+   by exactly 100 points. Nothing about the work changed. */
+function misScore({ total = 0, completed = 0, delayed = 0 }) {
+  if (!total) return 0;
+  return Math.round((completed / total) * 100 - (delayed / total) * 50);
+}
 // A masters row is one dated occurrence of a recurring checklist, never a template
 // (see the comment above addChecklistInterval) — so a checklist MIS has to scope to
 // the occurrences that actually land in the report window. Counting the series
@@ -7540,6 +8324,27 @@ app.get('/api/mis', requireAuth, async (req, res) => {
   const { start, end, employee } = req.query;
   const type = req.query.type || 'Delegation MIS';
   if (!start||!end) return res.status(400).json({ error:'start and end required' });
+
+  /* This route had no scoping of any kind: every other list in the app decides
+     what a role may see, but MIS handed any signed-in user the whole company's
+     scores, task descriptions and client names. Same rule as the task lists —
+     true Admin sees everyone, an HOD their own department, everybody else
+     themselves. `misScope` is null when there is nothing to restrict. */
+  const misUser = req.session.user;
+  let misScope = null;
+  if (!(isTrueAdminUser(misUser) || isSuperAdmin(misUser))) {
+    misScope = isHODUser(misUser)
+      ? await hodTeamNames(misUser.id)
+      : new Set([(misUser.name || '').trim().toLowerCase()]);
+  }
+  // Applied to the RAW rows, before the per-employee totals and the summary are
+  // built off them, so a scoped caller's headline numbers match their table.
+  const misKeep = (rows, nameOf) => misScope
+    ? rows.filter((r) => misScope.has(String(nameOf(r) || '').trim().toLowerCase()))
+    : rows;
+  if (employee && misScope && !misScope.has(String(employee).trim().toLowerCase())) {
+    return res.status(403).json(FORBIDDEN);
+  }
 
   const from = new Date(start); const to = new Date(end); to.setHours(23,59,59);
   const now = new Date();
@@ -7561,10 +8366,10 @@ app.get('/api/mis', requireAuth, async (req, res) => {
         }));
         return res.json({ rows, summary: {} });
       }
-      const misRows = await fmsSheet.getFmsMisRows(start, end);
+      const misRows = misKeep(await fmsSheet.getFmsMisRows(start, end), (e) => e.name);
       const rows = misRows.map(e => ({
         ...e, revised: 0,
-        score: e.total > 0 ? Math.round(((e.completed / e.total) - 1) * 100 - (e.delayed / e.total) * 50) : 0,
+        score: misScore(e),
       }));
       const summary = {
         'Total Steps': misRows.reduce((s, e) => s + e.total, 0),
@@ -7591,7 +8396,7 @@ app.get('/api/mis', requireAuth, async (req, res) => {
         return res.json({ rows, summary:{} });
       }
       if (type==='Delegation MIS'||type==='All MIS') {
-        const data = (store.delegations||[]).filter(d => { const due=d.dueDate?new Date(d.dueDate):null; if(due) return due>=from&&due<=to; return new Date(d.createdAt)>=from&&new Date(d.createdAt)<=to; });
+        const data = misKeep((store.delegations||[]).filter(d => { const due=d.dueDate?new Date(d.dueDate):null; if(due) return due>=from&&due<=to; return new Date(d.createdAt)>=from&&new Date(d.createdAt)<=to; }), (d) => d.doer);
         const empMap={};
         for (const t of data) {
           const name=t.doer||'Unknown';
@@ -7601,7 +8406,7 @@ app.get('/api/mis', requireAuth, async (req, res) => {
           else if (t.status==='revise'||t.status==='revise_requested') { e.revised++; e.pending++; if(t.dueDate&&new Date(t.dueDate)<now) e.delayed++; }
           else { e.pending++; if(t.dueDate&&new Date(t.dueDate)<now) e.delayed++; }
         }
-        const rows = Object.values(empMap).map(e=>({...e,score:e.total>0?Math.round(((e.completed/e.total)-1)*100-(e.delayed/e.total)*50):0}));
+        const rows = Object.values(empMap).map(e=>({...e,score:misScore(e)}));
         const summary = {'Total Tasks':data.length,'Employees':rows.length,'Completed':data.filter(d=>d.status==='done').length,'Pending':data.filter(d=>d.status!=='done').length,'Delayed':data.filter(d=>d.status!=='done'&&d.dueDate&&new Date(d.dueDate)<now).length,'Period':`${fmtDate(fromISO)} – ${fmtDate(toISO)}`};
         return res.json({ rows, summary, view:'employee' });
       }
@@ -7611,9 +8416,9 @@ app.get('/api/mis', requireAuth, async (req, res) => {
         return res.json({ rows, summary:{} });
       }
       if (type==='Checklist MIS') {
-        const masters=(store.masters||[]).filter(m=>inChecklistWindow(m,from,to)); const empMap={};
+        const masters=misKeep((store.masters||[]).filter(m=>inChecklistWindow(m,from,to)), (m) => m.assignedTo); const empMap={};
         for (const m of masters) { const name=m.assignedTo||'Unknown'; if(!empMap[name]) empMap[name]={name,total:0,completed:0,pending:0,revised:0,delayed:0}; empMap[name].total++; empMap[name].pending++; }
-        const rows=Object.values(empMap).map(e=>({...e,score:e.total>0?Math.round(((e.completed/e.total)-1)*100):0}));
+        const rows=Object.values(empMap).map(e=>({...e,score:misScore(e)}));
         const summary={'Total Checklists':masters.length,'Employees':rows.length,'Completions':0,'Period':`${fmtDate(fromISO)} – ${fmtDate(toISO)}`};
         return res.json({ rows, summary, view:'employee' });
       }
@@ -7627,7 +8432,7 @@ app.get('/api/mis', requireAuth, async (req, res) => {
       return res.json({ rows, summary:{} });
     }
     if (type==='Delegation MIS'||type==='All MIS') {
-      const data = await q(`SELECT doer, status, due_date FROM delegations WHERE (due_date IS NOT NULL AND due_date BETWEEN $1 AND $2) OR (due_date IS NULL AND created_at BETWEEN $3 AND $4) ORDER BY doer ASC`, [fromDT,toDT,fromDT,toDT]);
+      const data = misKeep(await q(`SELECT doer, status, due_date FROM delegations WHERE (due_date IS NOT NULL AND due_date BETWEEN $1 AND $2) OR (due_date IS NULL AND created_at BETWEEN $3 AND $4) ORDER BY doer ASC`, [fromDT,toDT,fromDT,toDT]), (d) => d.doer);
       const empMap={};
       for (const t of data) {
         const name=t.doer||'Unknown';
@@ -7637,7 +8442,7 @@ app.get('/api/mis', requireAuth, async (req, res) => {
         else if (t.status==='revise'||t.status==='revise_requested') { e.revised++; e.pending++; if(t.due_date&&new Date(t.due_date)<now) e.delayed++; }
         else { e.pending++; if(t.due_date&&new Date(t.due_date)<now) e.delayed++; }
       }
-      const rows=Object.values(empMap).map(e=>({...e,score:e.total>0?Math.round(((e.completed/e.total)-1)*100-(e.delayed/e.total)*50):0}));
+      const rows=Object.values(empMap).map(e=>({...e,score:misScore(e)}));
       const summary={'Total Tasks':data.length,'Employees':rows.length,'Completed':data.filter(d=>d.status==='done').length,'Pending':data.filter(d=>d.status!=='done').length,'Delayed':data.filter(d=>d.status!=='done'&&d.due_date&&new Date(d.due_date)<now).length,'Period':`${fmtDate(fromDT)} – ${fmtDate(toDT)}`};
       return res.json({ rows, summary, view:'employee' });
     }
@@ -7655,15 +8460,16 @@ app.get('/api/mis', requireAuth, async (req, res) => {
       return res.json({ rows, summary:{} });
     }
     if (type==='Checklist MIS') {
-      const [masters, completions] = await Promise.all([
+      const [mastersRaw, completions] = await Promise.all([
         q('SELECT id, task, assigned_to, frequency FROM masters WHERE (start_date IS NOT NULL AND start_date BETWEEN $1 AND $2) OR (start_date IS NULL AND created_at BETWEEN $3 AND $4) ORDER BY assigned_to, start_date, id', [start,end,fromDT,toDT]),
         q('SELECT master_id FROM checklist_completions WHERE date BETWEEN $1 AND $2', [start,end]).catch(()=>[]),
       ]);
+      const masters = misKeep(mastersRaw, (m) => m.assigned_to);
       const doneSet={};
       for (const c of completions) doneSet[c.master_id]=(doneSet[c.master_id]||0)+1;
       const empMap={};
       for (const m of masters) { const name=m.assigned_to||'Unknown'; if(!empMap[name]) empMap[name]={name,total:0,completed:0,pending:0,revised:0,delayed:0}; empMap[name].total++; if(doneSet[m.id]>0) empMap[name].completed++; else empMap[name].pending++; }
-      const rows=Object.values(empMap).map(e=>({...e,score:e.total>0?Math.round(((e.completed/e.total)-1)*100):0}));
+      const rows=Object.values(empMap).map(e=>({...e,score:misScore(e)}));
       const summary={'Total Checklists':masters.length,'Employees':rows.length,'Completions':completions.length,'Period':`${fmtDate(fromDT)} – ${fmtDate(toDT)}`};
       return res.json({ rows, summary, view:'employee' });
     }
@@ -7700,7 +8506,12 @@ app.patch('/api/profile', requireAuth, async (req, res) => {
     if (!id) return res.status(401).json({ error:'Not authenticated' });
     const body = req.body;
     try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
-    await pool.query(`UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), phone=COALESCE($3,phone) WHERE id=$4`, [body.name??null,body.email??null,body.phone??null,id]);
+    // email is deliberately NOT updatable here. It is the login identity AND
+    // the thing isSuperAdmin() matches on, so letting anyone set their own
+    // meant any signed-in user could type the owner's address, sign back in and
+    // hold every owner-only permission in the app. Changing a login address is
+    // an admin action now (Users → Edit), which enforces the same reservation.
+    await pool.query(`UPDATE users SET name=COALESCE($1,name), phone=COALESCE($2,phone) WHERE id=$3`, [body.name??null,body.phone??null,id]);
     if (body.picture!==undefined) {
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,id]);
       // Only on a real upload — clearing the photo shouldn't archive anything.
@@ -7716,6 +8527,9 @@ app.patch('/api/profile', requireAuth, async (req, res) => {
       if (!currentOk) return res.status(400).json({ error:'Current password is incorrect' });
       const hash = await bcrypt.hash(body.newPassword, 10);
       await pool.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash,id]);
+      // Changing your own password signs out your other devices but not the tab
+      // you are doing it in.
+      if (sessionStore) await sessionStore.destroyByUserExcept(id, req.sessionID).catch(() => {});
     }
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
@@ -7723,6 +8537,10 @@ app.patch('/api/profile', requireAuth, async (req, res) => {
 
 // ── Developer: access ─────────────────────────────────────────────────────────
 app.get('/api/developer/access', async (req, res) => {
+  // This is the developer panel's sign-in check, so it is the one that gets guessed at.
+  if (!rateAllow('dev:' + (req.ip || ''), 10, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many attempts. Please try again in 15 minutes.' });
+  }
   if (!checkSecret(req)) return res.status(401).json({ error:'Unauthorized' });
   try {
     const { rows } = await pool.query(`SELECT "value" FROM app_config WHERE "key" = 'access_enabled'`);
@@ -7800,8 +8618,12 @@ app.post('/api/developer/restore', async (req, res) => {
     await pool.query('DELETE FROM delegations');
     if (backup.delegations?.length) {
       for (const d of backup.delegations) {
-        await pool.query(`INSERT INTO delegations (id,description,doer_id,doer,delegated_by,due_date,client,status,type,priority,approval,url,remarks,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status`,
-          [d.id||'',d.description||'',d.doer_id||null,d.doer||'',d.delegated_by||null,d.due_date||null,d.client||'',['pending','done','revise','revise_requested','approval_pending'].includes(d.status)?d.status:'pending',d.type||'delegation',d.priority||'Low',d.approval||'No Approval',d.url||'',d.remarks||'',d.created_at||new Date()]
+        // completed_at / transferred_* are restored too. createBackup() does a
+        // SELECT * so they were always IN the backup; leaving them out of this
+        // statement meant a restore silently wiped every completion timestamp
+        // and every transfer trail.
+        await pool.query(`INSERT INTO delegations (id,description,doer_id,doer,delegated_by,due_date,client,status,type,priority,approval,url,remarks,created_at,completed_at,transferred_from,transferred_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status`,
+          [d.id||'',d.description||'',d.doer_id||null,d.doer||'',d.delegated_by||null,d.due_date||null,d.client||'',['pending','done','revise','revise_requested','approval_pending'].includes(d.status)?d.status:'pending',d.type||'delegation',d.priority||'Low',d.approval||'No Approval',d.url||'',d.remarks||'',d.created_at||new Date(),d.completed_at||null,d.transferred_from||null,d.transferred_by||null]
         ).catch(()=>{});
       }
     }
@@ -7814,8 +8636,11 @@ app.post('/api/developer/restore', async (req, res) => {
     await pool.query('DELETE FROM users');
     if (backup.users?.length) {
       for (const u of backup.users) {
-        await pool.query(`INSERT INTO users (id,name,email,phone,department,roles,active,password_hash,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name`,
-          [u.id||'',u.name||'',u.email||'',u.phone||'',u.department||'',u.roles||'User',u.active!=null?u.active:1,u.password_hash||null,u.created_at||new Date()]
+        // branch / leave_approver / permissions / picture are restored as well.
+        // Without them a restore handed everybody back their login and took away
+        // their page access, their reporting line and their photo.
+        await pool.query(`INSERT INTO users (id,name,email,phone,department,branch,leave_approver,roles,active,password_hash,permissions,picture,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name`,
+          [u.id||'',u.name||'',u.email||'',u.phone||'',u.department||'',u.branch||'',u.leave_approver||null,u.roles||'User',u.active!=null?u.active:1,u.password_hash||null,u.permissions||null,u.picture||null,u.created_at||new Date()]
         ).catch(()=>{});
       }
     }
@@ -7846,12 +8671,24 @@ app.post('/api/developer/reset-users', async (req, res) => {
       return res.json({ success:true });
     }
 
-    if (mode==='users') {
-      await pool.query("DELETE FROM users WHERE NOT ('Admin' = ANY(string_to_array(roles, ',')))");
-      return res.json({ success:true });
+    /* string_to_array()/ANY() are Postgres. On MySQL both of these threw, so
+       "Delete non-admin users" and "Delete admin users" answered 500 and did
+       nothing. The role test is done here instead, which also makes it exact —
+       a LIKE '%Admin%' would have matched a role named "SubAdmin". */
+    const roleList = (r) => String(r || '').split(',').map((s) => s.trim());
+    if (mode==='users' || mode==='admins') {
+      const all = await q('SELECT id, roles FROM users');
+      const wantAdmin = mode === 'admins';
+      const victims = all.filter((u) => roleList(u.roles).includes('Admin') === wantAdmin).map((u) => u.id);
+      for (const vid of victims) {
+        await pool.query('DELETE FROM users WHERE id = $1', [vid]);
+        if (sessionStore) await sessionStore.destroyByUser(vid).catch(() => {});
+      }
+      if (mode==='users') return res.json({ success:true, deleted: victims.length });
+    } else {
+      await pool.query('DELETE FROM users');
+      if (sessionStore) await sessionStore.destroyAllExcept(req.sessionID).catch(() => {});
     }
-    if (mode==='admins') { await pool.query("DELETE FROM users WHERE 'Admin' = ANY(string_to_array(roles, ','))"); }
-    else { await pool.query('DELETE FROM users'); }
     const hash = await bcrypt.hash(NEW_ADMIN.password, 10);
     await pool.query('INSERT INTO users (id,name,email,phone,department,roles,active,password_hash,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,NOW())', [NEW_ADMIN.id,NEW_ADMIN.name,NEW_ADMIN.email,'','Administration',NEW_ADMIN.roles,hash]);
     return res.json({ success:true, admin:{ email:NEW_ADMIN.email, password:NEW_ADMIN.password } });
@@ -7906,9 +8743,14 @@ const MIGRATE_USERS = [
   {id:'U034',name:'Saloni',email:'saloni@lallubhaiamichand.com',phone:'',department:'CXO',roles:'Admin',active:1,password_hash:'$2b$10$I6naUIg8PYam1dg8ZCo3.uPvJ9BogTgTNrBy1l.wCJzMmUQQrw/3G'},
 ];
 
+// One-time bootstrap that overwrites the users table from the hard-coded list
+// above. Its key used to be a literal in this file — i.e. no key at all for
+// anyone with the source. Fail-closed behind MIGRATE_KEY now; leave that unset
+// (it should be) and the route is simply dead.
 app.get('/api/migrate', async (req, res) => {
   const key = req.query.key;
-  if (key!=='migrate-lallubhai-2026') return res.status(401).json({ error:'Unauthorized' });
+  const want = process.env.MIGRATE_KEY || '';
+  if (!want || !timingSafeEq(key, want)) return res.status(401).json({ error:'Unauthorized' });
   try {
     await ensureSchema();
     const results={ users:0, delegations:0, masters:0, holidays:0, errors:[] };
@@ -7932,23 +8774,21 @@ app.get('/api/db-test', async (req, res) => {
   } catch (err) { return res.status(500).json({ ok:false, error:err.message, code:err.code }); }
 });
 
-// ── Setup passwords ───────────────────────────────────────────────────────────
-app.get('/api/setup-passwords', async (req, res) => {
-  try {
-    await ensureSchema();
-    const hash = await bcrypt.hash('India@123', 10);
-    await pool.query('UPDATE users SET password_hash = $1', [hash]);
-    const rows = await q('SELECT COUNT(*) AS c FROM users WHERE password_hash IS NOT NULL');
-    return res.json({ ok:true, updated:Number(rows[0].c), password:'India@123' });
-  } catch (err) { return res.status(500).json({ ok:false, error:err.message }); }
-});
+/* REMOVED: GET /api/setup-passwords
+   It took no authentication of any kind and reset EVERY user's password to a
+   literal in this file, so the whole ERP could be taken over by opening one URL.
+   There is no gated version of this worth keeping — a single account's password
+   is set from Users → Set Password, which is admin-only. */
 
 // ── Master control panel ──────────────────────────────────────────────────────
-const MASTER_KEY = process.env.MASTER_KEY || 'emarketing-master-2026';
+// No hard-coded fallback: the previous one was committed to this file, so anyone
+// reading the source could disable the entire app with a single GET. Unset means
+// the panel is unreachable rather than open to everybody.
+const MASTER_KEY = process.env.MASTER_KEY || '';
 
 app.get('/api/master', async (req, res) => {
   const key = req.query.key;
-  if (key!==MASTER_KEY) return res.status(401).json({ error:'Unauthorized' });
+  if (!MASTER_KEY || !timingSafeEq(key, MASTER_KEY)) return res.status(401).json({ error:'Unauthorized' });
   await ensureSchema();
   const { rows } = await pool.query(`SELECT "value" FROM app_config WHERE "key" = 'app_active'`);
   const isActive = rows.length===0 ? true : rows[0].value==='true';

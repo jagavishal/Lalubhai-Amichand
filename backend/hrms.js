@@ -437,6 +437,14 @@ function suggestStatutory({ basic = 0, gross = 0, branch = '' } = {}) {
    ===================================================================== */
 function mountHrms(app, ctx) {
   const { pool, q, requireAuth, requireAdmin, requireSuperAdmin, isAdminUser } = ctx;
+  // Falls back to the old COUNT(*) scheme only when this module is mounted
+  // without server.js (tests), where nothing is ever deleted anyway.
+  const withSeqId = ctx.withSeqId || (async (table, prefix, width, run) => {
+    const c = await q(`SELECT COUNT(*) AS cnt FROM ${table}`);
+    const id = prefix + String(Number(c[0]?.cnt || 0) + 1).padStart(width, '0');
+    await run(id);
+    return id;
+  });
   // Department spelling is owned by server.js (one master list, one casing rule)
   // — the fallbacks keep this module working standalone in tests, where ctx
   // carries only the database handles.
@@ -1550,6 +1558,32 @@ function mountHrms(app, ctx) {
            was raised against even if the setting changes afterwards. */
         let approverName = String(b.approver_name || '').trim();
         let approverEmail = String(b.approver_email || '').trim();
+
+        /* Departments with a leave tier are handled before any of that. An
+           escalated tier — Accounts, three days or more — is company policy and
+           overrides every other source including an approver named on the
+           request, because the whole point of the rule is that a long absence
+           cannot be signed off inside the department. An un-escalated tier is
+           only a last-resort fallback: "approval as per authority" means the
+           approver already recorded against the user is the authority. */
+        /* The employee master is the department of record, but plenty of office
+           staff apply before anyone has made them an employee row — for those
+           the login's own department is what there is. Only ever the session
+           user's own, and only when the request is for themselves: an Admin
+           raising one against an employee id that does not resolve must not
+           quietly have their own department's rule applied to it. */
+        const applicantDept = emp?.department
+          || (employeeId ? '' : (req.session?.user?.department || ''));
+        const tier = ctx.leaveAuthorityFor
+          ? await ctx.leaveAuthorityFor(applicantDept, days).catch(() => null)
+          : null;
+        let tierNote = null;
+        if (tier?.escalated) {
+          approverName = tier.name;
+          approverEmail = tier.email;
+          tierNote = `${days} day(s) — this needs ${tier.name}'s approval, so it has been sent there.`;
+        }
+
         if (!approverName) {
           const applicantId = b.userId || emp?.user_id || req.session?.user?.id || '';
           const link = applicantId
@@ -1569,19 +1603,28 @@ function mountHrms(app, ctx) {
             ).catch(() => []))[0];
             if (mgr) { approverName = mgr.name || ''; approverEmail = mgr.email || ''; }
           }
+          // Still nobody named, and the department has a tier — its within-team
+          // approver is a better answer than falling through to plain "HOD".
+          if (!approverName && tier && !tier.escalated) {
+            approverName = tier.name;
+            approverEmail = tier.email;
+          }
         }
 
-        const cnt = await q(`SELECT COUNT(*) AS cnt FROM leaves`);
-        const id = 'LV' + pad(Number(cnt[0]?.cnt || 0) + 1, 4);
-        await pool.query(
+        /* Was 'LV' + (COUNT(*) + 1). Leave rows do get deleted — a rejected or
+           withdrawn request, a cleanup — and the moment one does, the count drops
+           and the next application is minted with an id that already exists, so
+           the primary key rejects it and the employee sees a 500. Minted from the
+           highest id in use instead. */
+        const id = await withSeqId('leaves', 'LV', 4, (newId) => pool.query(
           `INSERT INTO leaves (id, user_id, user_name, employee_id, type, leave_type, half_day, total_days,
                                from_date, to_date, reason, status, approver, approver_email, approver_name)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13,$14)`,
-          [id, b.userId || req.session?.user?.id || null,
+          [newId, b.userId || req.session?.user?.id || null,
            b.userName || emp?.name || req.session?.user?.name || 'Unknown',
            employeeId || null, 'Leave', code, halfDay, days, from, to, b.reason || '',
            approverName || b.approver || 'HOD', approverEmail, approverName],
-        );
+        ));
         /* Tell the approver. Fire-and-forget on purpose: SMTP is somebody
            else's server and can be slow or down, and a leave request that is
            already safely stored must not fail — or make the applicant wait —
@@ -1612,7 +1655,10 @@ function mountHrms(app, ctx) {
           })().catch((e) => console.error('[hrms] leave request mail failed:', e.message));
         }
 
-        res.json({ success: true, id, days, warning });
+        // `notice` is separate from `warning`: a warning is about the balance
+        // and is the applicant's problem, a notice explains why the request
+        // went somewhere other than their usual approver.
+        res.json({ success: true, id, days, warning, notice: tierNote, approver: approverName });
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -1837,10 +1883,16 @@ function mountHrms(app, ctx) {
            that falls outside the person's employment. Collected as a set of
            dates rather than a running total, because those reasons overlap —
            an unpaid leave day that HR also marked Absent is one lost day, not
-           two, and a naive sum would dock the salary twice. Half days are the
-           one thing that cannot collide, so they add separately. */
+           two, and a naive sum would dock the salary twice.
+
+           Half days are collected as a set of DATES for the same reason. They
+           used to be summed into a running total on the assumption that they
+           "cannot collide" — but an unpaid half-day leave and an attendance row
+           marked Half Day on that same date each added 0.5, so one half day off
+           was docked as a whole day. A half day on a date that is already a full
+           day of loss now costs nothing extra, too. */
         const lopDates = new Set();
-        let lopHalves = 0;
+        const lopHalfDates = new Set();
         const inMonth = (d) => d >= from && d <= to;
         const doj = isoDate(e.doj), dol = isoDate(e.dol);
 
@@ -1851,7 +1903,7 @@ function mountHrms(app, ctx) {
           if (!unpaid.has(l.leave_type)) continue;
           const days = dateRange(isoDate(l.from_date), isoDate(l.to_date)).filter(inMonth);
           if (String(l.half_day || 'full') === 'full') days.forEach((d) => lopDates.add(d));
-          else lopHalves += 0.5;
+          else if (days.length) lopHalfDates.add(days[0]);
         }
 
         // Present days count only days actually worked. Leave, holidays and
@@ -1861,7 +1913,7 @@ function mountHrms(app, ctx) {
         for (const a of (attByEmp[e.id] || [])) {
           const day = isoDate(a.att_date);
           if (a.status === 'Present' || a.status === 'Remote') presentDays += 1;
-          else if (a.status === 'Half Day') { presentDays += 0.5; lopHalves += 0.5; }
+          else if (a.status === 'Half Day') { presentDays += 0.5; lopHalfDates.add(day); }
           else if (a.status === 'Absent') lopDates.add(day);
         }
 
@@ -1871,6 +1923,9 @@ function mountHrms(app, ctx) {
           const days = dateRange(isoDate(l.from_date), isoDate(l.to_date)).filter(inMonth);
           leaveDays += String(l.half_day || 'full') === 'full' ? days.length : 0.5;
         }
+        // One half-day charge per date, and none at all on a date already lost in full.
+        let lopHalves = 0;
+        for (const d of lopHalfDates) if (!lopDates.has(d)) lopHalves += 0.5;
         const lop = Math.min(money(lopDates.size + lopHalves), mdays);
 
         // Maharashtra charges 300 of professional tax in February against 200

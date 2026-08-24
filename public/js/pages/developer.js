@@ -6,6 +6,14 @@ window.Pages.developer = {
     if (!el) return;
 
     // ── State ──────────────────────────────────────────────────────────────────
+    /* The secret travels in a header, never in the URL: a query string ends up
+       in the hosting layer's access logs, the browser's history and any proxy
+       in between — in plain text, on every call this page makes. */
+    const devHeaders = (s, json) => Object.assign(
+      { 'x-developer-secret': s },
+      json ? { 'Content-Type': 'application/json' } : {},
+    );
+
     let password      = '';
     let showPass      = false;
     let authed        = false;
@@ -580,7 +588,7 @@ window.Pages.developer = {
             errorMsg = '';
             reRenderBody();
             try {
-              const res = await fetch(`/api/developer/access?secret=${encodeURIComponent(password)}`);
+              const res = await fetch('/api/developer/access', { headers: devHeaders(password) });
               const d   = await res.json();
               if (!res.ok) {
                 errorMsg = 'Wrong password. Try again.';
@@ -776,9 +784,9 @@ window.Pages.developer = {
       errorMsg = '';
       reRenderBody();
       try {
-        const res = await fetch(`/api/developer/access?secret=${encodeURIComponent(secret)}`, {
+        const res = await fetch('/api/developer/access', {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: devHeaders(secret, true),
           body:    JSON.stringify({ enabled: !enabled }),
         });
         const d = await res.json();
@@ -797,7 +805,7 @@ window.Pages.developer = {
       errorMsg  = '';
       reRenderModals();
       try {
-        const res = await fetch(`/api/developer/reset?secret=${encodeURIComponent(secret)}`, { method: 'POST' });
+        const res = await fetch('/api/developer/reset', { method: 'POST', headers: devHeaders(secret) });
         if (res.ok) {
           resetDone  = true;
           resetOpen  = false;
@@ -819,7 +827,7 @@ window.Pages.developer = {
       loadingBackups = true;
       reRenderBody();
       try {
-        const res = await fetch(`/api/developer/backups?secret=${encodeURIComponent(secret)}`);
+        const res = await fetch('/api/developer/backups', { headers: devHeaders(secret) });
         const d   = await res.json();
         if (res.ok) backups = d.backups || [];
       } catch { /* ignore */ }
@@ -834,9 +842,9 @@ window.Pages.developer = {
       errorMsg       = '';
       reRenderBody();
       try {
-        const res = await fetch(`/api/developer/restore?secret=${encodeURIComponent(secret)}`, {
+        const res = await fetch('/api/developer/restore', {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: devHeaders(secret, true),
           body:    JSON.stringify({ id }),
         });
         const d = await res.json();
@@ -855,9 +863,9 @@ window.Pages.developer = {
       errorMsg      = '';
       reRenderModals();
       try {
-        const res = await fetch(`/api/developer/reset-users?secret=${encodeURIComponent(secret)}`, {
+        const res = await fetch('/api/developer/reset-users', {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: devHeaders(secret, true),
           body:    JSON.stringify({ mode }),
         });
         const d = await res.json();
@@ -883,7 +891,7 @@ window.Pages.developer = {
       errorMsg  = '';
       reRenderBody();
       try {
-        const res = await fetch(`/api/developer/export?secret=${encodeURIComponent(secret)}`);
+        const res = await fetch('/api/developer/export', { headers: devHeaders(secret) });
         if (!res.ok) { errorMsg = 'Export failed'; exporting = false; reRenderBody(); return; }
         const data = await res.json();
         const date = new Date().toISOString().slice(0, 10);

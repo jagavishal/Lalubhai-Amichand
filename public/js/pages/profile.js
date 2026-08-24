@@ -138,7 +138,7 @@ window.Pages.profile = {
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
               ${this._fieldHtml('name',              'Full Name',           f.name,              'text',     '')}
-              ${this._fieldHtml('email',             'Email Address',       f.email,             'email',    '')}
+              ${this._fieldHtml('email',             'Email Address',       f.email,             'email',    'Login address — ask an admin to change this', '', true)}
               ${this._fieldHtml('phone',             'Phone Number',        f.phone,             'text',     '')}
               ${this._fieldHtml('notificationEmail', 'Notification Email',  f.notificationEmail, 'email',    'Real Gmail/Outlook for task notifications', 'yourrealemail@gmail.com')}
             </div>
@@ -393,7 +393,7 @@ window.Pages.profile = {
   },
 
   /* ── field HTML helper ─────────────────────────────────── */
-  _fieldHtml(id, label, value, type, hint, placeholder) {
+  _fieldHtml(id, label, value, type, hint, placeholder, readOnly) {
     const isPass = type === 'password';
     const inputId = `profile-field-${id}`;
     const eyeId   = `profile-eye-${id}`;
@@ -408,7 +408,8 @@ window.Pages.profile = {
           type="${inputType}"
           value="${val}"
           placeholder="${ph}"
-          class="input${isPass ? ' pr-10' : ''}"
+          ${readOnly ? 'readonly' : ''}
+          class="input${isPass ? ' pr-10' : ''}${readOnly ? ' bg-slate-50 text-slate-500 cursor-not-allowed' : ''}"
         />
         ${isPass ? `
         <button type="button" id="${eyeId}" tabindex="-1"
@@ -612,7 +613,6 @@ window.Pages.profile = {
         // Patch cached me object
         if (this._me) {
           this._me.name  = f.name;
-          this._me.email = f.email;
           this._me.phone = f.phone;
         }
         // Re-render to reflect cleared password fields

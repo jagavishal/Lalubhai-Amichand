@@ -172,6 +172,49 @@ window.Sidebar = {
     } catch { return 0; }
   },
 
+  /* May this user open this route at all?
+
+     The sidebar has always decided what to SHOW; nothing decided what could be
+     OPENED, so a restricted user only had to type the page name into the URL.
+     This is the single answer to that question, used both to build the menu
+     below and by the router before it renders anything. Unknown routes are
+     allowed through so the page modules stay free to add routes that have no
+     menu entry (and an unknown one just renders nothing).
+
+     The two exceptions are the sidebar's own, unchanged: the owner is never
+     restricted, and an account with no saved permissions record still sees
+     everything. */
+  canAccess(route, user) {
+    const u = user || window.currentUser;
+    if (!u) return false;
+    if (u.isSuperAdmin) return true;
+
+    const roles = u.roles || [];
+    const isAdmin = Array.isArray(roles)
+      ? roles.includes('Admin') || roles.includes('HOD')
+      : String(roles).includes('Admin') || String(roles).includes('HOD');
+
+    let item = null;
+    for (const sec of this._sections) {
+      const found = sec.items.find(i => i.route === route);
+      if (found) { item = found; break; }
+    }
+    if (!item) return true;
+
+    if (item.adminOnly && !isAdmin) return false;
+    if (item.flag && !((u.featureFlags || {})[item.flag])) return false;
+    if (item.alwaysShow) return true;
+
+    const permissions = u.permissions || null;
+    if (!permissions || !permissions.pages) return true;
+    const routeAliases = route.startsWith('ims')
+      ? [route, 'ims', 'inward', 'outward']
+      : route === 'hr-leave'
+      ? ['hr-leave', 'leave-tracker']
+      : [route];
+    return routeAliases.some(r => permissions.pages.includes(r));
+  },
+
   _buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions, featureFlags) {
     if (item.adminOnly && !isAdmin) return '';
     if (item.flag && !(featureFlags || {})[item.flag]) return '';

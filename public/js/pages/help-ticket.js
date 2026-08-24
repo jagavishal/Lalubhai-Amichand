@@ -3,8 +3,12 @@ window.Pages = window.Pages || {};
 window.Pages['help-ticket'] = (() => {
   let _tickets   = [];
   let _users     = [];
+  // The expense/leave authority matrices, as served by /api/approval-authority.
+  // The Category dropdown is built from them, so an admin adding a row on the
+  // authority screen adds a category here without a code change.
+  let _authority = { expense: [], leave: [] };
   let _modalOpen = false;
-  let _form      = { name: '', filedBy: '', subject: '', description: '', date: '', priority: 'Medium' };
+  let _form      = { name: '', filedBy: '', subject: '', description: '', date: '', priority: 'Medium', category: '', amount: '' };
   let _saving    = false;
 
   const isAdmin = () => {
@@ -35,15 +39,58 @@ window.Pages['help-ticket'] = (() => {
     Low:    { bg: '#f0fdf4', color: '#16a34a' },
   };
 
+  /* Mirrors toAmount() on the server, and for the same reason: Number('') is 0,
+     so an untouched amount box would read as a genuine ₹0 and preview a route
+     nobody asked for. */
+  function toAmount(v) {
+    if (v === null || v === undefined) return null;
+    const s = String(v).trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
+  function money(v) {
+    const n = toAmount(v);
+    return n === null ? '' : '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  }
+
+  const catRow = (category) => (_authority.expense || [])
+    .find(r => String(r.category || '').toLowerCase() === String(category || '').trim().toLowerCase());
+
+  // A category with a threshold cannot be routed without a figure — the server
+  // refuses one without it, so the form asks for it rather than letting the
+  // submit fail.
+  const needsAmount = (category) => !!(catRow(category) && Number(catRow(category).inquiryBelow));
+
+  /* Who this will go to, shown under the form so nobody is surprised by where
+     their ticket landed. Display only — the server routes it again on write and
+     that result is the one stored. */
+  function routePreview(category, amount) {
+    const row = catRow(category);
+    if (!row) return null;
+    const below = Number(row.inquiryBelow) || 0;
+    if (!below) return { owner: row.owner || '', kind: 'approval', threshold: 0 };
+    const amt = toAmount(amount);
+    if (amt === null) return null;
+    return amt >= below
+      ? { owner: row.aboveOwner || '', kind: 'approval', threshold: below }
+      : { owner: row.owner || '',      kind: 'inquiry',  threshold: below };
+  }
+
   async function loadData() {
     try {
-      const [tRes, uRes] = await Promise.all([
+      const [tRes, uRes, aRes] = await Promise.all([
         fetch('/api/help-tickets'),
         fetch('/api/users'),
+        fetch('/api/approval-authority'),
       ]);
       _tickets = tRes.ok ? await tRes.json() : [];
       _users   = uRes.ok ? await uRes.json() : [];
-    } catch { _tickets = []; _users = []; }
+      // Categories are optional furniture — a failure here must still leave a
+      // usable ticket form, just without the dropdown.
+      _authority = aRes.ok ? await aRes.json() : { expense: [], leave: [] };
+    } catch { _tickets = []; _users = []; _authority = { expense: [], leave: [] }; }
   }
 
   async function updateStatus(id, status) {
@@ -74,14 +121,22 @@ window.Pages['help-ticket'] = (() => {
   async function submitTicket() {
     if (!_form.subject.trim()) { Utils.showToast('Issue required', 'error'); return; }
     if (!_form.date)           { Utils.showToast('Date required', 'error'); return; }
+    if (needsAmount(_form.category) && toAmount(_form.amount) === null) {
+      Utils.showToast(`A valid amount is required for ${_form.category} — it decides who approves it`, 'error');
+      return;
+    }
     _saving = true; renderModal();
     try {
-      await Utils.apiFetch('/api/help-tickets', { method: 'POST', body: JSON.stringify(_form) });
+      const r = await Utils.apiFetch('/api/help-tickets', { method: 'POST', body: JSON.stringify(_form) });
       _modalOpen = false; _saving = false;
-      _form = { name: '', filedBy: '', subject: '', description: '', date: '', priority: 'Medium' };
+      _form = { name: '', filedBy: '', subject: '', description: '', date: '', priority: 'Medium', category: '', amount: '' };
       renderModal();
       await loadData(); renderPage();
-      Utils.showToast('Ticket submitted');
+      Utils.showToast(
+        r?.routedTo
+          ? `Ticket sent to ${r.routedTo}${r.routing === 'inquiry' ? ' as an inquiry' : ' for approval'}`
+          : 'Ticket submitted',
+      );
     } catch (e) {
       _saving = false; renderModal();
       Utils.showToast(e.message || 'Failed', 'error');
@@ -141,6 +196,27 @@ window.Pages['help-ticket'] = (() => {
     });
   }
 
+  /* The line under the Category/Amount row that says where this is going. Silent
+     for a general ticket, and for a tiered category with no amount yet — there
+     is genuinely nothing to say until the figure decides it. */
+  function routeHintHtml() {
+    if (!_form.category) return '';
+    const row = catRow(_form.category);
+    // A category the matrix no longer has — it was removed while this form was
+    // open. Nothing truthful to say about where it goes, so say nothing.
+    if (!row) return '';
+    const r = routePreview(_form.category, _form.amount);
+    if (!r) {
+      return `<div style="font-size:11.5px;color:#b45309;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:8px 11px;">
+        Enter the amount — under ${money(row?.inquiryBelow)} this is an inquiry to ${esc(row?.owner||'—')}, at ${money(row?.inquiryBelow)} and above it needs ${esc(row?.aboveOwner||'management')} approval.
+      </div>`;
+    }
+    const inq = r.kind === 'inquiry';
+    return `<div style="font-size:11.5px;color:${inq?'#0f766e':'#1d4ed8'};background:${inq?'#f0fdfa':'#eff6ff'};border:1px solid ${inq?'#99f6e4':'#bfdbfe'};border-radius:8px;padding:8px 11px;">
+      ${inq ? 'Inquiry mail to' : 'Goes for approval to'} <b>${esc(r.owner || '—')}</b>${inq ? ' — no approval needed' : ''}.
+    </div>`;
+  }
+
   /* ── New Ticket modal ───────────────────────────────────────────── */
   function renderModal() {
     const ex = document.getElementById('ht-modal');
@@ -187,6 +263,20 @@ window.Pages['help-ticket'] = (() => {
               <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Date <span style="color:#ef4444">*</span></label>
               <input id="ht-date" type="date" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${esc(_form.date)}" />
             </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div>
+                <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Category</label>
+                <select id="ht-category" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;">
+                  <option value="">— General —</option>
+                  ${(_authority.expense||[]).map(r => `<option value="${esc(r.category)}" ${_form.category===r.category?'selected':''}>${esc(r.category)}</option>`).join('')}
+                </select>
+              </div>
+              <div>
+                <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Amount (₹)${needsAmount(_form.category)?' <span style="color:#ef4444">*</span>':''}</label>
+                <input id="ht-amount" type="number" min="0" step="1" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;" value="${esc(_form.amount)}" placeholder="${needsAmount(_form.category)?'Required':'Optional'}" />
+              </div>
+            </div>
+            ${routeHintHtml()}
             <div>
               <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Priority</label>
               <select id="ht-priority" style="width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;">
@@ -208,8 +298,157 @@ window.Pages['help-ticket'] = (() => {
     document.getElementById('ht-subject')?.addEventListener('input',  e => { _form.subject  = e.target.value; });
     document.getElementById('ht-date')?.addEventListener('change',    e => { _form.date     = e.target.value; });
     document.getElementById('ht-priority')?.addEventListener('change',e => { _form.priority = e.target.value; });
+    // Both re-render: the hint under them, and whether Amount is starred, are
+    // both answers to what these two now hold.
+    document.getElementById('ht-category')?.addEventListener('change', e => { _form.category = e.target.value; renderModal(); });
+    document.getElementById('ht-amount')?.addEventListener('change',   e => { _form.amount   = e.target.value; renderModal(); });
     document.getElementById('ht-submit')?.addEventListener('click', submitTicket);
-    setTimeout(() => document.getElementById('ht-subject')?.focus(), 50);
+    // Only when the modal is first opened. It re-renders on every category and
+    // amount change now, and pulling the caret back into Issue each time would
+    // make the form unusable.
+    if (!ex) setTimeout(() => document.getElementById('ht-subject')?.focus(), 50);
+  }
+
+  /* ── Approval Authority editor (admin) ──────────────────────────────
+     The two matrices behind every routing decision, editable in one place so a
+     staffing change is an edit here and never a deploy. Rows are read out of
+     the DOM into the draft before every re-render, so adding or removing one
+     does not throw away what has been typed into the others. */
+  let _authDraft = null;
+
+  const AU_INPUT = 'width:100%;padding:7px 9px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12.5px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;';
+  const AU_TH    = 'font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;color:#94a3b8;text-align:left;padding:0 0 4px;';
+
+  function _readAuthDraft() {
+    const box = document.getElementById('ht-auth-body');
+    if (!box) return;
+    _authDraft.expense = [...box.querySelectorAll('[data-exp-row]')].map(tr => ({
+      category:     tr.querySelector('[data-f="category"]').value,
+      owner:        tr.querySelector('[data-f="owner"]').value,
+      inquiryBelow: tr.querySelector('[data-f="inquiryBelow"]').value,
+      aboveOwner:   tr.querySelector('[data-f="aboveOwner"]').value,
+    }));
+    _authDraft.leave = [...box.querySelectorAll('[data-lv-row]')].map(tr => ({
+      department:         tr.querySelector('[data-f="department"]').value,
+      withinTeamApprover: tr.querySelector('[data-f="withinTeamApprover"]').value,
+      escalateFromDays:   tr.querySelector('[data-f="escalateFromDays"]').value,
+      escalateTo:         tr.querySelector('[data-f="escalateTo"]').value,
+    }));
+  }
+
+  function _authBodyHtml() {
+    const names = _users.filter(u => u.active !== false)
+      .map(u => `<option value="${esc(u.name || '')}"></option>`).join('');
+    const cell = (f, v, extra = '') => `<td style="padding:3px 4px;"><input data-f="${f}" style="${AU_INPUT}" value="${esc(v ?? '')}" ${extra}/></td>`;
+    const kill = (kind, i) => `<td style="padding:3px 0 3px 4px;width:26px;"><button data-kill="${kind}" data-i="${i}" title="Remove" style="width:24px;height:24px;border-radius:6px;border:1px solid #fecaca;background:#fef2f2;color:#dc2626;cursor:pointer;line-height:1;font-size:13px;">×</button></td>`;
+
+    return `
+      <datalist id="ht-auth-names">${names}</datalist>
+
+      <div style="font-size:12px;font-weight:700;color:#0f172a;margin:0 0 2px;">Expense &amp; work authority</div>
+      <div style="font-size:11.5px;color:#94a3b8;margin-bottom:8px;">Who a help ticket in each category goes to. Leave the threshold blank for a category with one owner; set it and the ticket becomes an inquiry to the owner below that amount, and an approval by the second name at or above it.</div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="${AU_TH}">Category</th><th style="${AU_TH}">Owner</th>
+          <th style="${AU_TH}">Threshold ₹</th><th style="${AU_TH}">At / above goes to</th><th></th>
+        </tr></thead>
+        <tbody>${(_authDraft.expense || []).map((r, i) => `<tr data-exp-row>
+          ${cell('category', r.category)}
+          ${cell('owner', r.owner, 'list="ht-auth-names"')}
+          ${cell('inquiryBelow', Number(r.inquiryBelow) ? r.inquiryBelow : '', 'type="number" min="0" step="1" placeholder="—"')}
+          ${cell('aboveOwner', r.aboveOwner, 'list="ht-auth-names" placeholder="—"')}
+          ${kill('exp', i)}
+        </tr>`).join('') || '<tr><td colspan="5" style="padding:10px 4px;font-size:12px;color:#94a3b8;">No categories — every ticket stays general.</td></tr>'}</tbody>
+      </table>
+      <button data-add="exp" style="margin-top:6px;padding:5px 11px;border-radius:7px;border:1px dashed #cbd5e1;background:#f8fafc;color:#475569;font-size:11.5px;font-weight:600;cursor:pointer;">+ Add category</button>
+
+      <div style="height:1px;background:#f1f5f9;margin:18px 0 14px;"></div>
+
+      <div style="font-size:12px;font-weight:700;color:#0f172a;margin:0 0 2px;">Leave escalation by department</div>
+      <div style="font-size:11.5px;color:#94a3b8;margin-bottom:8px;">A request of this many days or more must go to the named person, whatever approver the applicant has set. Shorter requests keep their usual approver, and fall back to the within-team name only when none is set. Department is matched loosely — “Accounts” catches “Accounts Dept.”</div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr>
+          <th style="${AU_TH}">Department</th><th style="${AU_TH}">Within team</th>
+          <th style="${AU_TH}">Escalate from (days)</th><th style="${AU_TH}">Escalate to</th><th></th>
+        </tr></thead>
+        <tbody>${(_authDraft.leave || []).map((r, i) => `<tr data-lv-row>
+          ${cell('department', r.department)}
+          ${cell('withinTeamApprover', r.withinTeamApprover, 'list="ht-auth-names"')}
+          ${cell('escalateFromDays', Number(r.escalateFromDays) ? r.escalateFromDays : '', 'type="number" min="0" step="1" placeholder="—"')}
+          ${cell('escalateTo', r.escalateTo, 'list="ht-auth-names"')}
+          ${kill('lv', i)}
+        </tr>`).join('') || '<tr><td colspan="5" style="padding:10px 4px;font-size:12px;color:#94a3b8;">No department rules — every request uses its usual approver.</td></tr>'}</tbody>
+      </table>
+      <button data-add="lv" style="margin-top:6px;padding:5px 11px;border-radius:7px;border:1px dashed #cbd5e1;background:#f8fafc;color:#475569;font-size:11.5px;font-weight:600;cursor:pointer;">+ Add department</button>`;
+  }
+
+  function _renderAuthBody() {
+    const box = document.getElementById('ht-auth-body');
+    if (!box) return;
+    box.innerHTML = _authBodyHtml();
+    box.querySelectorAll('[data-kill]').forEach(btn => btn.addEventListener('click', () => {
+      _readAuthDraft();
+      const list = btn.dataset.kill === 'exp' ? _authDraft.expense : _authDraft.leave;
+      list.splice(Number(btn.dataset.i), 1);
+      _renderAuthBody();
+    }));
+    box.querySelectorAll('[data-add]').forEach(btn => btn.addEventListener('click', () => {
+      _readAuthDraft();
+      if (btn.dataset.add === 'exp') _authDraft.expense.push({ category: '', owner: '', inquiryBelow: '', aboveOwner: '' });
+      else _authDraft.leave.push({ department: '', withinTeamApprover: '', escalateFromDays: '', escalateTo: '' });
+      _renderAuthBody();
+    }));
+  }
+
+  async function saveAuthority() {
+    _readAuthDraft();
+    const expense = _authDraft.expense.filter(r => String(r.category).trim());
+    const leave   = _authDraft.leave.filter(r => String(r.department).trim());
+    // Caught here as well as on the server, so the person editing sees which
+    // category they duplicated rather than a bare error toast.
+    const seen = new Set();
+    for (const r of expense) {
+      const k = String(r.category).trim().toLowerCase();
+      if (seen.has(k)) { Utils.showToast(`Duplicate category: ${r.category}`, 'error'); return; }
+      seen.add(k);
+    }
+    try {
+      await Utils.apiFetch('/api/approval-authority', { method: 'PUT', body: JSON.stringify({ expense, leave }) });
+      document.getElementById('ht-auth-modal')?.remove();
+      await loadData(); renderPage();
+      Utils.showToast('Approval authority saved');
+    } catch (e) { Utils.showToast(e.message || 'Failed', 'error'); }
+  }
+
+  function openAuthorityModal() {
+    document.getElementById('ht-auth-modal')?.remove();
+    // A copy, so cancelling leaves the loaded matrices untouched.
+    _authDraft = JSON.parse(JSON.stringify({
+      expense: _authority.expense || [], leave: _authority.leave || [],
+    }));
+    document.body.insertAdjacentHTML('beforeend', `
+      <div id="ht-auth-modal" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);backdrop-filter:blur(4px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
+        <div style="background:#fff;border-radius:20px;box-shadow:0 20px 48px rgba(0,0,0,0.14);width:100%;max-width:720px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;" onclick="event.stopPropagation()">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid #f1f5f9;">
+            <div>
+              <div style="font-size:15px;font-weight:700;color:#0f172a;">Approval Authority</div>
+              <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">Who signs off what. Changes apply to tickets and leave raised from now on.</div>
+            </div>
+            <button id="ht-auth-close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;color:#64748b;cursor:pointer;font-size:15px;line-height:1;">×</button>
+          </div>
+          <div id="ht-auth-body" style="padding:18px 22px;overflow-y:auto;"></div>
+          <div style="padding:14px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;">
+            <button id="ht-auth-cancel" class="btn-secondary">Cancel</button>
+            <button id="ht-auth-save" class="btn-primary">Save</button>
+          </div>
+        </div>
+      </div>`);
+    const close = () => document.getElementById('ht-auth-modal')?.remove();
+    document.getElementById('ht-auth-modal').addEventListener('click', close);
+    document.getElementById('ht-auth-close').addEventListener('click', close);
+    document.getElementById('ht-auth-cancel').addEventListener('click', close);
+    document.getElementById('ht-auth-save').addEventListener('click', saveAuthority);
+    _renderAuthBody();
   }
 
   /* ── Page render ────────────────────────────────────────────────── */
@@ -224,7 +463,11 @@ window.Pages['help-ticket'] = (() => {
       const displayName = t.name || t.submitted_by || '—';
       const displayDate = t.ticket_date ? fmt(t.ticket_date) : fmt(t.created_at);
       const transferredBadge = t.transferred_to
-        ? `<div style="font-size:10px;color:#3b82f6;margin-top:2px;">→ ${esc(t.transferred_to)}</div>` : '';
+        ? `<div style="font-size:10px;color:#3b82f6;margin-top:2px;">→ ${esc(t.transferred_to)}${t.routing === 'inquiry' ? ' (inquiry)' : ''}</div>` : '';
+      const categoryCell = t.category
+        ? `<div style="font-size:11.5px;font-weight:600;color:#334155;">${esc(t.category)}</div>${
+            money(t.amount) ? `<div style="font-size:10.5px;color:#64748b;margin-top:1px;">${money(t.amount)}</div>` : ''}`
+        : '<span style="font-size:11.5px;color:#cbd5e1;">General</span>';
 
       const statusCell = (admin && t.status !== 'resolved')
         ? `<select class="ht-status-sel" data-id="${esc(t.id)}" style="font-size:11px;font-weight:600;border:1.5px solid ${ss.color}33;border-radius:7px;padding:3px 8px;cursor:pointer;background:${ss.bg};color:${ss.color};">
@@ -253,6 +496,7 @@ window.Pages['help-ticket'] = (() => {
         <td style="padding:11px 14px;font-size:13px;color:#374151;max-width:240px;">
           <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(t.subject||'')}">${esc(t.subject||'—')}</div>
         </td>
+        <td style="padding:11px 14px;white-space:nowrap;">${categoryCell}</td>
         <td style="padding:11px 14px;font-size:12px;color:#64748b;white-space:nowrap;">${displayDate}</td>
         <td style="padding:11px 14px;">
           <span style="font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;background:${ps.bg};color:${ps.color}">${esc(t.priority||'Medium')}</span>
@@ -271,10 +515,16 @@ window.Pages['help-ticket'] = (() => {
             <h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Help Tickets</h1>
             <p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Submit issues or requests to the admin team</p>
           </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+          ${admin ? `<button id="ht-authority-btn" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;cursor:pointer;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>
+            Approval Authority
+          </button>` : ''}
           <button id="ht-new-btn" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;background:linear-gradient(135deg,#0150AA,#013D82);color:#fff;border:none;cursor:pointer;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
             New Ticket
           </button>
+          </div>
         </div>
         <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
           <div style="overflow-x:auto;">
@@ -283,19 +533,21 @@ window.Pages['help-ticket'] = (() => {
                 <tr>
                   <th style="${thStyle}">Name</th>
                   <th style="${thStyle}">Issue</th>
+                  <th style="${thStyle}">Category</th>
                   <th style="${thStyle}">Date</th>
                   <th style="${thStyle}">Priority</th>
                   <th style="${thStyle}">Status</th>
                   ${admin ? '<th style="' + thStyle + '">Action</th>' : ''}
                 </tr>
               </thead>
-              <tbody>${rows || '<tr><td colspan="' + (admin?6:5) + '" style="padding:48px;text-align:center;color:#94a3b8;">No tickets yet</td></tr>'}</tbody>
+              <tbody>${rows || '<tr><td colspan="' + (admin?7:6) + '" style="padding:48px;text-align:center;color:#94a3b8;">No tickets yet</td></tr>'}</tbody>
             </table>
           </div>
         </div>
       </div>`;
 
     document.getElementById('ht-new-btn')?.addEventListener('click', () => { _modalOpen = true; renderModal(); });
+    document.getElementById('ht-authority-btn')?.addEventListener('click', openAuthorityModal);
     el.querySelectorAll('.ht-status-sel').forEach(sel => {
       sel.addEventListener('change', () => updateStatus(sel.dataset.id, sel.value));
     });

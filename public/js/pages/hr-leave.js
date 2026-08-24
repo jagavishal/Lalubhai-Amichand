@@ -507,7 +507,12 @@ window.Pages['hr-leave'] = (() => {
         // The next open must not show a stale balance.
         Object.keys(_balCache).forEach((k) => delete _balCache[k]);
         H.closeModal('hrla');
-        H.toast(r.warning || `Leave requested — ${r.days} day(s)`, r.warning ? 'warning' : 'success');
+        // r.notice says the request was escalated past the usual approver by a
+        // department rule; worth reading even when the balance is fine, so it
+        // is shown alongside the warning rather than instead of it.
+        const line = [r.notice, r.warning].filter(Boolean).join(' ')
+          || `Leave requested — ${r.days} day(s)${r.approver ? ` — with ${r.approver}` : ''}`;
+        H.toast(line, r.warning ? 'warning' : (r.notice ? 'info' : 'success'));
         if (typeof onDone === 'function') { onDone(); return; }
         await loadRequests();
         render();

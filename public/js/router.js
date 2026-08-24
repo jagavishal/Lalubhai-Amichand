@@ -13,6 +13,17 @@ window.Router = {
     if (!window.currentUser && page !== 'login') { this.navigate('login'); return; }
     if (window.currentUser && page === 'login')  { this.navigate('dashboard'); return; }
 
+    /* Page access was enforced only by leaving links out of the sidebar, which
+       is decoration — anybody could type #users or #hr-payroll and the module
+       rendered. Sidebar.canAccess is the same rule the menu is built from, so
+       the two cannot drift. (The API is the real gate; this stops a restricted
+       user from landing on a screen that would then fail request by request.) */
+    if (page !== 'dashboard' && window.Sidebar?.canAccess && !window.Sidebar.canAccess(page)) {
+      window.Utils?.showToast?.('You do not have access to that page', 'error');
+      this.navigate('dashboard');
+      return;
+    }
+
     document.querySelectorAll('[data-route]').forEach(el =>
       el.classList.toggle('nav-active', el.dataset.route === page));
 
