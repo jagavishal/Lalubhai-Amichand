@@ -83,7 +83,33 @@ window.Pages['hr-org-chart'] = (() => {
      reporting tree needs — nobody has two managers, so the subtrees can
      never overlap and the tidier algorithms have nothing left to fix. */
 
-  const BOX_W = 132, BOX_H = 58, GAP_X = 12, GAP_Y = 44, PAD = 26;
+  const BOX_W = 132, BOX_H = 58, GAP_X = 12, GAP_Y = 44, PAD = 26, TITLE_H = 46;
+
+  /* Drawn on its own dark canvas rather than in the page's own light card. It
+     is how everybody here already reads an org chart, the boxes separate from
+     each other far better against dark than a grid of near-white rectangles
+     does, and the exported PNG lands on a slide without being re-styled. Held
+     as one table so the chart and the export can never drift apart. */
+  const C = {
+    canvas: '#0f172a',
+    title: '#64748b',
+    edge: '#334155',
+    box: '#1e293b',
+    boxLine: '#334155',
+    name: '#e2e8f0',
+    role: '#94a3b8',
+    mgmt: '#312e5f',
+    mgmtLine: '#6d5bd0',
+    root: '#2563eb',
+    rootLine: '#60a5fa',
+    rootName: '#ffffff',
+    rootRole: '#bfdbfe',
+    hit: '#2563eb',
+    hitLine: '#93c5fd',
+    badge: '#0f172a',
+    badgeLine: '#475569',
+    badgeText: '#cbd5e1',
+  };
 
   /* Text has to be wrapped before it is written, because SVG will not do it.
      Measured on a canvas with the same font so the wrap matches what renders,
@@ -164,10 +190,11 @@ window.Pages['hr-org-chart'] = (() => {
     const shut = _collapsed.has(n.id) && direct;
     const x = p.x, y = p.y;
 
-    const fill = n.isCompany ? '#1e40af' : n.loginOnly ? '#ede9fe' : n._hit ? '#fef9c3' : '#f8fafc';
-    const stroke = n.isCompany ? '#1e40af' : n.loginOnly ? '#c4b5fd' : n._hit ? '#fbbf24' : '#dbe3ec';
-    const nameFill = n.isCompany ? '#ffffff' : '#0f172a';
-    const roleFill = n.isCompany ? '#c7d7fe' : '#64748b';
+    const hit = n._hit, top = n.isCompany;
+    const fill = top ? C.root : hit ? C.hit : n.loginOnly ? C.mgmt : C.box;
+    const stroke = top ? C.rootLine : hit ? C.hitLine : n.loginOnly ? C.mgmtLine : C.boxLine;
+    const nameFill = top || hit ? C.rootName : C.name;
+    const roleFill = top || hit ? C.rootRole : C.role;
 
     const nameLines = wrap(n.name, NAME_FONT, BOX_W - 16, 2);
     const roleText = n.isCompany ? 'Company' : (n.designation || n.department || '—');
@@ -180,7 +207,7 @@ window.Pages['hr-org-chart'] = (() => {
     // A tab down the left edge, tinted from the name — the only thing that
     // tells two same-shaped boxes apart at a glance when the chart is zoomed out.
     if (!n.isCompany) {
-      out += `<path d="M${x + 1} ${y + 9}a8 8 0 0 1 8-8h0v56h0a8 8 0 0 1-8-8z" fill="hsl(${hue(n.name)} 58% 62%)" opacity=".9"/>`;
+      out += `<path d="M${x + 1} ${y + 9}a8 8 0 0 1 8-8h0v56h0a8 8 0 0 1-8-8z" fill="hsl(${hue(n.name)} 62% 58%)"/>`;
     }
     for (const line of nameLines) {
       out += `<text x="${x + BOX_W / 2}" y="${ty}" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="11" font-weight="700" fill="${nameFill}">${H.esc(line)}</text>`;
@@ -194,8 +221,8 @@ window.Pages['hr-org-chart'] = (() => {
       // The count doubles as the collapse handle, so a branch can be folded
       // away without a second control cluttering every box.
       const cx = x + BOX_W - 13, cy = y + BOX_H - 3;
-      out += `<circle cx="${cx}" cy="${cy}" r="9" fill="${shut ? '#1e40af' : '#ffffff'}" stroke="${shut ? '#1e40af' : '#cbd5e1'}" stroke-width="1.2"/>`;
-      out += `<text x="${cx}" y="${cy + 3.5}" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="700" fill="${shut ? '#ffffff' : '#475569'}">${shut ? countAll(n) : direct}</text>`;
+      out += `<circle cx="${cx}" cy="${cy}" r="9" fill="${shut ? C.root : C.badge}" stroke="${shut ? C.rootLine : C.badgeLine}" stroke-width="1.2"/>`;
+      out += `<text x="${cx}" y="${cy + 3.5}" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="700" fill="${shut ? '#ffffff' : C.badgeText}">${shut ? countAll(n) : direct}</text>`;
     }
     out += `<title>${H.esc(n.name)}${n.designation ? '\n' + H.esc(n.designation) : ''}${n.department ? '\n' + H.esc(n.department) : ''}${direct ? `\n${direct} direct, ${countAll(n)} in all` : ''}</title>`;
     return out + '</g>';
@@ -205,14 +232,16 @@ window.Pages['hr-org-chart'] = (() => {
     const roots = visibleRoots();
     if (!roots.length) return null;
     const { tree, placed, width, height } = layout({ ...rooted(), reports: roots });
-    const w = width + PAD * 2, h = height + PAD * 2;
+    const w = width + PAD * 2, h = height + PAD * 2 + TITLE_H;
     const boxes = placed.slice().sort((a, b) => a.depth - b.depth).map(boxSvg).join('');
+    const title = H.esc(_data?.company || 'Organization Structure');
     return {
       w, h,
       svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"${forExport ? '' : ' class="ocs-svg"'}>
-        <rect width="${w}" height="${h}" fill="#ffffff"/>
-        <g transform="translate(${PAD} ${PAD})">
-          <path d="${edges(tree)}" fill="none" stroke="#cbd5e1" stroke-width="1.2" stroke-linecap="round"/>
+        <rect width="${w}" height="${h}" fill="${C.canvas}"/>
+        <text x="${w / 2}" y="30" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="${C.title}">${title} — Organization Structure</text>
+        <g transform="translate(${PAD} ${PAD + TITLE_H})">
+          <path d="${edges(tree)}" fill="none" stroke="${C.edge}" stroke-width="1.2" stroke-linecap="round"/>
           ${boxes}
         </g>
       </svg>`,
@@ -336,7 +365,7 @@ window.Pages['hr-org-chart'] = (() => {
     const wrap = document.querySelector('.ocs-wrap');
     const c = chartSvg(false);
     if (!wrap || !c) return null;
-    return Math.max(0.2, Math.min(1, (wrap.clientWidth - 24) / c.w));
+    return Math.max(0.2, Math.min(1, wrap.clientWidth / c.w));
   }
 
   function fit() {
@@ -420,7 +449,7 @@ window.Pages['hr-org-chart'] = (() => {
       canvas.width = c.w * scale;
       canvas.height = c.h * scale;
       const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = C.canvas;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(url);
@@ -477,7 +506,7 @@ window.Pages['hr-org-chart'] = (() => {
     .oc-zoom button:hover { background:#fff; color:var(--color-primary-strong); }
 
     /* ── Chart ── */
-    .ocs-wrap { background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:12px;
+    .ocs-wrap { background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:0;
                 overflow:auto; max-height:74vh; }
     .ocs-pan { position:relative; }
     .ocs-scale { transform-origin:0 0; position:absolute; top:0; left:0; }
