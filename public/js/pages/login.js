@@ -973,9 +973,13 @@ window.Pages.login = {
     }
 
     // Greeting — fires once, on the first click or keypress anywhere on the page.
-    function greetOnce() {
+    function greetOnce(e) {
       if (greeted) return;
       greeted = true;
+      // If that first gesture landed in a field, the field's own prompt is
+      // about to speak — stay quiet rather than talk over it.
+      const t = e && e.target;
+      if (t && t.closest && t.closest('input, textarea, select')) return;
       say(greeting + '. Welcome to Lallubhai Amichand. Please sign in.');
     }
     if (synth) {
@@ -1024,10 +1028,20 @@ window.Pages.login = {
       if (clearAfter) setTimeout(() => node.classList.remove(cls), clearAfter);
     }
 
-    if (emailInput) emailInput.addEventListener('focus', () => mood(null));
-    if (nameInput)  nameInput.addEventListener('focus',  () => mood(null));
+    // Each field asks for what it wants as soon as it takes focus.
+    if (emailInput) emailInput.addEventListener('focus', () => {
+      mood(null);
+      say('Please enter your email id.');
+    });
+    if (nameInput)  nameInput.addEventListener('focus',  () => {
+      mood(null);
+      say('Please enter your name.');
+    });
     if (passInput) {
-      passInput.addEventListener('focus', () => mood('shy'));
+      passInput.addEventListener('focus', () => {
+        mood('shy');
+        say('Please enter your password.');
+      });
       passInput.addEventListener('blur',  () => mood(null));
     }
 
@@ -1115,7 +1129,12 @@ window.Pages.login = {
       } catch (err) {
         const failMsg = err && err.message ? err.message : 'Invalid email or password';
         showError(failMsg);
-        say('Login failed. ' + failMsg + '.');
+        // Bad credentials is the everyday case — say so plainly instead of
+        // reading the server's generic wording out loud. Anything else (locked
+        // out, app disabled) is spoken as-is, since the detail matters there.
+        say(/invalid credentials|invalid email or password/i.test(failMsg)
+          ? 'Password incorrect.'
+          : 'Login failed. ' + failMsg);
         setLoading(false);
         mood('angry');
         safe(() => replay(cardEl, 'lg-shake', 700));
