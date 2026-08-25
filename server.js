@@ -186,11 +186,25 @@ async function q(text, params) {
    behaves the same on MySQL and Postgres, and reads one row instead of the whole
    table. `table` and `prefix` are always literals from the call sites below,
    never anything that came in on a request. */
-async function nextSeqId(table, prefix, width) {
+async function nextSeqId(table, prefix, width, bump = 0) {
+  /* Read a window rather than a single row, and take the maximum from the ids
+     that are actually `prefix + digits`.
+
+     Reading one row assumed the top of `ORDER BY LENGTH(id) DESC, id DESC` was
+     the highest number. It is not, the moment a table holds one id that is not
+     prefix+digits: a longer or letter-bearing id sorts to the top, and stripping
+     its non-digits then yields a SMALLER number than the real maximum. With
+     'LV0098-OLD' sitting in leaves next to LV0001..LV0099, this proposed LV0099
+     for every new leave request, which the primary key refused. */
   const rows = await q(
-    `SELECT id FROM ${table} WHERE id LIKE '${prefix}%' ORDER BY LENGTH(id) DESC, id DESC LIMIT 1`);
-  const last = parseInt(String(rows[0]?.id || '').slice(prefix.length).replace(/[^0-9]/g, ''), 10) || 0;
-  return prefix + String(last + 1).padStart(width, '0');
+    `SELECT id FROM ${table} WHERE id LIKE '${prefix}%' ORDER BY LENGTH(id) DESC, id DESC LIMIT 200`);
+  let last = 0;
+  for (const r of rows) {
+    const id = String(r.id || '');
+    const tail = id.startsWith(prefix) ? id.slice(prefix.length) : '';
+    if (tail && /^[0-9]+$/.test(tail)) last = Math.max(last, parseInt(tail, 10) || 0);
+  }
+  return prefix + String(last + 1 + bump).padStart(width, '0');
 }
 
 /* Mint an id and run the insert with it, re-minting if two writers happened to
@@ -199,7 +213,11 @@ async function nextSeqId(table, prefix, width) {
 async function withSeqId(table, prefix, width, run) {
   let lastErr;
   for (let attempt = 0; attempt < 5; attempt++) {
-    const id = await nextSeqId(table, prefix, width);
+    // Each retry asks for the NEXT number, not the same one again. Re-reading
+    // the table only helps when another writer has committed in between; when
+    // the collision is with a row that was already there, minting from the same
+    // maximum returns the same id five times and fails anyway.
+    const id = await nextSeqId(table, prefix, width, attempt);
     try { await run(id); return id; }
     catch (e) {
       lastErr = e;
