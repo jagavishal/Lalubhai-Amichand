@@ -1587,22 +1587,41 @@ function mountHrms(app, ctx) {
             warning = `Only ${available} ${code} left — ${money(days - available)} day(s) will be treated as loss of pay.`;
           }
         }
-        /* Who this request goes to. Three sources, in order of how deliberate
-           they are: the approver named on the applicant's user record (Users →
-           Add/Edit → Leave Approver), then the employee's reporting manager,
-           then plain "HOD" as the app has always defaulted to. Resolved once,
-           here, and stamped onto the row — so a request keeps the approver it
-           was raised against even if the setting changes afterwards. */
+        /* Who this request goes to. The approver picked on the applicant's
+           user record (Users → Add/Edit → Leave Approver) is the single
+           source when it is set — management's instruction: whoever is chosen
+           there is who the request and its mail go to, over anything the
+           payload carries and over the department tier. Everything below the
+           first block only runs for applicants nobody has picked an approver
+           for yet. Resolved once, here, and stamped onto the row — so a
+           request keeps the approver it was raised against even if the
+           setting changes afterwards. */
         let approverName = String(b.approver_name || '').trim();
         let approverEmail = String(b.approver_email || '').trim();
 
-        /* Departments with a leave tier are handled before any of that. An
-           escalated tier — Accounts, three days or more — is company policy and
-           overrides every other source including an approver named on the
-           request, because the whole point of the rule is that a long absence
-           cannot be signed off inside the department. An un-escalated tier is
-           only a last-resort fallback: "approval as per authority" means the
-           approver already recorded against the user is the authority. */
+        /* The applicant's LOGIN. The employee row's link first, then the id
+           the payload names — and the session only when the request is the
+           person's own. It used to start from the session, so HR raising a
+           request on somebody's behalf silently used HR's OWN leave approver. */
+        const applicantLoginId = emp?.user_id
+          || String(b.userId || '').trim()
+          || (!isAdminUser(user) || !employeeId || (await selfEmployee(user))?.id === employeeId
+                ? user?.id || '' : '');
+
+        let pickedApprover = null;
+        if (applicantLoginId) {
+          const link = (await q(`SELECT leave_approver FROM users WHERE id = $1`, [applicantLoginId]).catch(() => []))[0];
+          if (link?.leave_approver) {
+            pickedApprover = (await q(
+              `SELECT name, email FROM users WHERE id = $1 AND active = 1`,
+              [link.leave_approver],
+            ).catch(() => []))[0] || null;
+          }
+        }
+
+        /* The department tier (Accounts, three days or more) now applies only
+           when no approver was picked on the Users page — an explicit pick is
+           the newer, more deliberate instruction and wins. */
         /* The employee master is the department of record, but plenty of office
            staff apply before anyone has made them an employee row — for those
            the login's own department is what there is. Only ever the session
@@ -1615,24 +1634,20 @@ function mountHrms(app, ctx) {
           ? await ctx.leaveAuthorityFor(applicantDept, days).catch(() => null)
           : null;
         let tierNote = null;
-        if (tier?.escalated) {
+
+        if (pickedApprover) {
+          approverName = pickedApprover.name || '';
+          approverEmail = pickedApprover.email || '';
+        } else if (tier?.escalated) {
           approverName = tier.name;
           approverEmail = tier.email;
           tierNote = `${days} day(s) — this needs ${tier.name}'s approval, so it has been sent there.`;
         }
 
         if (!approverName) {
-          const applicantId = b.userId || emp?.user_id || req.session?.user?.id || '';
-          const link = applicantId
-            ? (await q(`SELECT leave_approver FROM users WHERE id = $1`, [applicantId]).catch(() => []))[0]
-            : null;
-          if (link?.leave_approver) {
-            const who = (await q(`SELECT name, email FROM users WHERE id = $1`, [link.leave_approver]).catch(() => []))[0];
-            if (who) { approverName = who.name || ''; approverEmail = who.email || ''; }
-          }
-          // Nobody named — fall back to the reporting line the employee record
-          // already carries. It holds a code on records this app created and a
-          // plain name on the ones imported from the sheet.
+          // Nobody picked and no tier — fall back to the reporting line the
+          // employee record already carries. It holds a code on records this
+          // app created and a plain name on the ones imported from the sheet.
           if (!approverName && emp?.reporting_to) {
             const mgr = (await q(
               `SELECT name, email FROM hr_employees WHERE id = $1 OR LOWER(name) = LOWER($2) LIMIT 1`,
