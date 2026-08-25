@@ -2472,7 +2472,10 @@ function mountHrms(app, ctx) {
         const sortTree = (n) => { n.reports.sort(byDepth); n.reports.forEach(sortTree); };
         roots.sort(byDepth); roots.forEach(sortTree);
 
-        res.json({ roots, total: emps.length, managers: roots.filter((r) => r.loginOnly).length });
+        // The company name crowns the chart, so the page does not have to
+        // hard-code what the business is called.
+        const company = (await getSettings().catch(() => ({})))?.hr_company_name || 'Company';
+        res.json({ company, roots, total: emps.length, managers: roots.filter((r) => r.loginOnly).length });
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
   }
