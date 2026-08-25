@@ -8,8 +8,8 @@
 -- payroll generation on its own — everywhere the app looks, it looks at
 -- status = 'Active'.
 --
--- Their logins are switched off too, so neither can sign in; force_logout_after
--- kicks out any session that is already open (checked per request).
+-- Their logins are switched off too, so neither can sign in; deleting their
+-- user_sessions rows ends any session that is already open.
 -- =============================================================================
 
 UPDATE hr_employees
@@ -18,9 +18,16 @@ UPDATE hr_employees
  WHERE LOWER(TRIM(name)) IN ('shubham tanaji sable', 'sumesh magesh kamble');
 
 UPDATE users
-   SET active = 0,
-       force_logout_after = NOW()
+   SET active = 0
  WHERE LOWER(TRIM(name)) IN ('shubham tanaji sable', 'sumesh magesh kamble');
+
+-- Any session already open is ended too — the app signs people out by deleting
+-- their rows here (see /api/users/signout-all), not via a users column.
+DELETE FROM user_sessions
+ WHERE user_id IN (
+   SELECT id FROM users
+    WHERE LOWER(TRIM(name)) IN ('shubham tanaji sable', 'sumesh magesh kamble')
+ );
 
 -- ── Check before you close the tab ───────────────────────────────────────────
 
