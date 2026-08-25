@@ -335,8 +335,28 @@ window.Pages['hr-org-chart'] = (() => {
   function repaint() {
     const body = document.getElementById('oc-body');
     if (!body) return;
+    const wrap = body.querySelector('.ocs-wrap');
+    const keep = wrap ? { l: wrap.scrollLeft, t: wrap.scrollTop, w: wrap.scrollWidth } : null;
     body.innerHTML = bodyHtml();
     bindTree();
+    // Hold the viewer's place across a redraw. Zooming keeps whatever was in
+    // the middle of the pane in the middle of it, instead of throwing them
+    // back to the left edge of a chart several screens wide.
+    const next = body.querySelector('.ocs-wrap');
+    if (next && keep && keep.w) {
+      const ratio = next.scrollWidth / keep.w;
+      next.scrollLeft = (keep.l + next.clientWidth / 2) * ratio - next.clientWidth / 2;
+      next.scrollTop = keep.t * ratio;
+    }
+  }
+
+  /* The company box sits over the middle of a chart that is several screens
+     wide, so on a plain left-aligned scroll the top of the tree is the one
+     thing you cannot see. Open centred on it. */
+  function centreOnRoot() {
+    const wrap = document.querySelector('.ocs-wrap');
+    if (!wrap) return;
+    wrap.scrollLeft = Math.max(0, (wrap.scrollWidth - wrap.clientWidth) / 2);
   }
 
   /* ── Events ───────────────────────────────────────────────────────── */
@@ -373,6 +393,7 @@ window.Pages['hr-org-chart'] = (() => {
     if (z == null) return;
     _zoom = z;
     repaint();
+    centreOnRoot();
   }
 
   /* What the page opens at. Fitting a wide tree outright would shrink 11px
@@ -385,6 +406,7 @@ window.Pages['hr-org-chart'] = (() => {
     if (z == null) return;
     _zoom = Math.max(0.55, z);
     repaint();
+    centreOnRoot();
   }
 
   function setZoom(z) {
