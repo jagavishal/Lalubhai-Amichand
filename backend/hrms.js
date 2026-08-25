@@ -44,7 +44,7 @@ const HR_SCHEMA = [
      marital_status VARCHAR(32) DEFAULT '',
      experience VARCHAR(64) DEFAULT '',
      qualification VARCHAR(255) DEFAULT '',
-     reporting_to VARCHAR(16) DEFAULT '',
+     reporting_to VARCHAR(255) DEFAULT '',
      emergency_name VARCHAR(255) DEFAULT '',
      emergency_phone VARCHAR(64) DEFAULT '',
      uan VARCHAR(32) DEFAULT '',
@@ -240,6 +240,14 @@ const HR_SCHEMA = [
      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_hrdoc_emp ON hr_documents (employee_id)`,
+
+  /* reporting_to was sized for an employee code (MUM014) but is also allowed to
+     hold a manager's plain name — which VARCHAR(16) silently cut in half, so
+     "MAHENDRA CHANDULAL SHAH" was stored as "MAHENDRA CHANDUL" and matched
+     nobody. Widened to hold a name. Both dialects are attempted; the one that
+     does not apply is logged and stepped over. */
+  `ALTER TABLE hr_employees MODIFY reporting_to VARCHAR(255) DEFAULT ''`,
+  `ALTER TABLE hr_employees ALTER COLUMN reporting_to TYPE VARCHAR(255)`,
 
   /* The Leave Tracker predates the HRMS and its rows must keep working, so the
      leave request table is extended rather than replaced: `type` stays whatever

@@ -24,6 +24,13 @@
 -- anything that did not match -- read them, do not just run and walk away.
 -- =============================================================================
 
+-- reporting_to was sized for an employee code (MUM014), not a name: at
+-- VARCHAR(16) "MAHENDRA CHANDULAL SHAH" is stored as "MAHENDRA CHANDUL" and
+-- matches nobody, so all seven peons would drop out of the tree. The app widens
+-- this column on its next start too; doing it here as well means the order the
+-- two are run in does not matter.
+ALTER TABLE hr_employees MODIFY reporting_to VARCHAR(255) DEFAULT '';
+
 DROP TABLE IF EXISTS hr_reporting_seed;
 CREATE TABLE hr_reporting_seed (
   emp    VARCHAR(255) NOT NULL,
