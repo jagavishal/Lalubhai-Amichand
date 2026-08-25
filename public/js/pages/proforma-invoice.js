@@ -1913,16 +1913,26 @@ window.Pages['proforma-invoice'] = (() => {
     };
   }
 
+  // ?all=1 keeps the fully-shipped orders in the answer. They are not offered
+  // for ticking — _plShippable filters them out — but having them here is what
+  // lets the empty tick-list say which of the two empty states it is in: no
+  // order sheets raised at all, or every one of them already shipped. Guessing
+  // wrong there sent someone looking for a bug that was not one.
   async function _plLoadPending() {
     _plPendingLoaded = false;
     _plPendingError = '';
     try {
-      _plPending = await Utils.apiFetch('/api/packing-list/pending') || [];
+      _plPending = await Utils.apiFetch('/api/packing-list/pending?all=1') || [];
     } catch (e) {
       _plPending = [];
       _plPendingError = e.message || 'Failed to load orders pending dispatch';
     }
     _plPendingLoaded = true;
+  }
+
+  // The orders with something still to ship — the only ones worth ticking.
+  function _plShippable() {
+    return _plPending.filter(o => o.balanceQty > 0);
   }
 
   function _plPickedOrders() {
@@ -1956,7 +1966,11 @@ window.Pages['proforma-invoice'] = (() => {
         productCategory: D.productCategory || '',
       },
     };
-    if (_plPendingLoaded) _plApplyPreselect();
+    // Always re-read the orders when the form opens. They were being fetched
+    // once and kept for the life of the page, so an order sheet raised after
+    // this page loaded never showed up — and the empty list it left behind
+    // looked exactly like "there is nothing to pack".
+    _plPendingLoaded = false;
     _view = 'packing';
     renderPage();
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1968,10 +1982,13 @@ window.Pages['proforma-invoice'] = (() => {
     if (!_plNew || !_plNew.preselect) return;
     const orderNo = _plNew.preselect;
     _plNew.preselect = '';
-    if (_plPending.some(o => o.orderNo === orderNo) && !_plNew.picked.includes(orderNo)) {
-      _plNew.picked = _plNew.picked.concat([orderNo]);
-    } else if (!_plPending.some(o => o.orderNo === orderNo)) {
+    // Against the shippable ones, not every order the server sent back — a
+    // fully-shipped order is in _plPending now (see _plLoadPending) but must
+    // still not be tickable.
+    if (!_plShippable().some(o => o.orderNo === orderNo)) {
       Utils.showToast('Order ' + orderNo + ' has nothing left to ship', 'warning');
+    } else if (!_plNew.picked.includes(orderNo)) {
+      _plNew.picked = _plNew.picked.concat([orderNo]);
     }
   }
 
@@ -2046,12 +2063,36 @@ window.Pages['proforma-invoice'] = (() => {
     + '</label>';
   }
 
+  // A Refresh sits at the top of the list because an order raised in another
+  // tab while this form was open would otherwise never appear — the list is
+  // read when the form opens, and a stale empty one reads exactly like "there
+  // is nothing to pack".
+  function _plOrderDdHeadHtml(countText) {
+    return '<div style="position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:8px;'
+      + 'padding:7px 11px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+      + '<span style="font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">' + esc(countText) + '</span>'
+      + '<button type="button" id="pl-order-refresh" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:11.5px;font-weight:700;padding:2px 4px;">Refresh</button>'
+    + '</div>';
+  }
+
   function _plOrderDdHtml() {
-    const note = (text, color) => '<div style="padding:14px;text-align:center;color:' + color + ';font-size:12.5px;">' + esc(text) + '</div>';
+    const note = (text, color) => '<div style="padding:14px;text-align:center;color:' + color + ';font-size:12.5px;line-height:1.5;">' + esc(text) + '</div>';
     if (!_plPendingLoaded) return note('Loading orders…', '#94a3b8');
-    if (_plPendingError) return note(_plPendingError, '#ef4444');
-    if (!_plPending.length) return note('Every order raised is fully shipped — there is nothing left to pack.', '#94a3b8');
-    return _plPending.map(_plOrderOptionHtml).join('');
+    if (_plPendingError) return _plOrderDdHeadHtml('Could not load') + note(_plPendingError, '#ef4444');
+    // Two different empty states, and saying the wrong one is worse than
+    // saying nothing: "everything is shipped" when in fact no order sheet has
+    // ever been raised sends someone hunting for a fault that is not there.
+    if (!_plPending.length) {
+      return _plOrderDdHeadHtml('No orders')
+        + note('No Order Sheets have been raised yet. Raise one from a priced PI on the PI List, then come back.', '#94a3b8');
+    }
+    const rows = _plShippable();
+    if (!rows.length) {
+      return _plOrderDdHeadHtml('0 of ' + _plPending.length)
+        + note('All ' + _plPending.length + ' order' + (_plPending.length > 1 ? 's are' : ' is') + ' fully shipped — there is nothing left to pack.', '#94a3b8');
+    }
+    return _plOrderDdHeadHtml(rows.length + ' of ' + _plPending.length + ' still to ship')
+      + rows.map(_plOrderOptionHtml).join('');
   }
 
   function _plOrderNoField() {
@@ -2097,7 +2138,16 @@ window.Pages['proforma-invoice'] = (() => {
       e.stopPropagation();                       // do not trip the close-on-document handler
       if (dd.style.display === 'block') _plCloseOrderDd(); else open();
     });
-    dd.addEventListener('click', (e) => e.stopPropagation());
+    dd.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!e.target.closest('#pl-order-refresh')) return;
+      dd.innerHTML = '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading orders…</div>';
+      _plLoadPending().then(() => {
+        if (_view !== 'packing' || !_plNew) return;
+        _plNew.pickerOpen = true;
+        renderPage();
+      });
+    });
     dd.addEventListener('change', (e) => {
       const box = e.target.closest('.pl-order-pick');
       if (!box) return;
