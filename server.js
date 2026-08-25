@@ -1205,9 +1205,50 @@ async function notifyAddressFor(userId, fallbackEmail) {
   }
 }
 
+/* ── Deciding a leave from the email ──────────────────────────────────────────
+   The approver is usually not sitting in the ERP when the mail arrives, and
+   asking them to log in to press one button is how requests sit for three days.
+   The mail therefore carries Approve and Reject links of its own.
+
+   They are signed, not secret-by-obscurity: an HMAC over the request id, the
+   decision and the approver's address, using the same secret that signs the
+   session cookies. Nobody can mint a link for a request that is not theirs, and
+   nobody can change 'reject' to 'approve' in the address bar without the
+   signature falling apart.
+
+   The link itself only ever OPENS a page. Mail providers follow links in
+   messages to scan them, so a GET that decided the request would let a spam
+   filter approve somebody's leave — the deciding is done by a form POST from
+   the page the link opens. */
+const APP_ORIGIN = (process.env.APP_ORIGIN || 'https://laltdoffice.com').replace(/\/+$/, '');
+
+function leaveTokenFor(id, decision, email) {
+  const body = [String(id), String(decision), String(email || '').trim().toLowerCase()].join('|');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url').slice(0, 32);
+  return Buffer.from(body, 'utf8').toString('base64url') + '.' + sig;
+}
+
+function readLeaveToken(token) {
+  const [raw, sig] = String(token || '').split('.');
+  if (!raw || !sig) return null;
+  let body;
+  try { body = Buffer.from(raw, 'base64url').toString('utf8'); } catch { return null; }
+  const [id, decision, email] = body.split('|');
+  if (!id || !decision) return null;
+  const want = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url').slice(0, 32);
+  // Constant-time, so a wrong signature cannot be narrowed down a byte at a
+  // time by timing the replies.
+  const a = Buffer.from(sig), b = Buffer.from(want);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  return { id, decision, email };
+}
+
+const leaveActionUrl = (id, decision, email) =>
+  `${APP_ORIGIN}/leave-action?t=${encodeURIComponent(leaveTokenFor(id, decision, email))}`;
+
 // Shared shell so the two mails below read as one family and neither has to
 // carry its own table markup.
-function _leaveMailHtml({ heading, colour, lead, rows, footer }) {
+function _leaveMailHtml({ heading, colour, lead, rows, footer, actions }) {
   const cells = rows
     .filter(([, v]) => v !== undefined && v !== null && String(v) !== '')
     .map(([k, v]) => `<tr>
@@ -1219,9 +1260,30 @@ function _leaveMailHtml({ heading, colour, lead, rows, footer }) {
       <h2 style="color:${colour};margin:0 0 16px">${heading}</h2>
       <p style="color:#374151">${lead}</p>
       <table style="width:100%;border-collapse:collapse;margin:16px 0">${cells}</table>
+      ${actions || ''}
       ${footer ? `<p style="color:#374151">${footer}</p>` : ''}
       <p style="color:#94a3b8;font-size:12px;margin-top:24px">This is an automated notification from the Lallubhai Amichand ERP.</p>
     </div>`;
+}
+
+/* Bulletproof-ish buttons: a table with a background colour and a padded link,
+   which is the one construction Outlook, Gmail and Apple Mail all render the
+   same. No images, so nothing breaks when a client blocks them. */
+function _leaveMailButtons(leaveId, email) {
+  const btn = (label, colour, href) => `<td style="padding:0 6px 0 0">
+      <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:separate">
+        <tr><td style="background:${colour};border-radius:6px">
+          <a href="${href}" style="display:inline-block;padding:11px 26px;font-family:Arial,sans-serif;
+             font-size:14px;font-weight:bold;color:#ffffff;text-decoration:none">${label}</a>
+        </td></tr>
+      </table>
+    </td>`;
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0 8px">
+      <tr>
+        ${btn('Approve', '#16a34a', leaveActionUrl(leaveId, 'Approved', email))}
+        ${btn('Reject', '#dc2626', leaveActionUrl(leaveId, 'Rejected', email))}
+      </tr>
+    </table>`;
 }
 
 // The office inbox is copied on every leave request, so HR has the whole
@@ -1231,7 +1293,7 @@ function _leaveMailHtml({ heading, colour, lead, rows, footer }) {
 const LEAVE_REQUEST_CC = (process.env.LEAVE_REQUEST_CC || 'inquiry@laltd.in').trim();
 
 // Sent to the approver the moment a request is raised.
-async function sendLeaveRequestEmail({ toEmail, toName, applicantName, leaveType, fromDate, toDate, days, halfDay, reason, balanceNote }) {
+async function sendLeaveRequestEmail({ leaveId, toEmail, toName, applicantName, leaveType, fromDate, toDate, days, halfDay, reason, balanceNote }) {
   const mailer = getMailer();
   // The copy is the point of record, so a request with no approver address
   // still goes out — to the office inbox alone rather than nowhere at all.
@@ -1260,7 +1322,10 @@ async function sendLeaveRequestEmail({ toEmail, toName, applicantName, leaveType
           ['Reason', reason],
           ['Balance', balanceNote],
         ],
-        footer: 'Open <b>Leave Management</b> in the ERP to approve or reject it.',
+        actions: leaveId ? _leaveMailButtons(leaveId, toEmail) : '',
+        footer: leaveId
+          ? 'Either button opens a page asking you to confirm — no login needed.'
+          : 'Open <b>Leave Management</b> in the ERP to approve or reject it.',
       }),
     });
     console.log('[email] Leave request notification sent to:', toEmail || cc, cc && toEmail ? '| cc: ' + cc : '');
@@ -3626,6 +3691,131 @@ const hrms = mountHrms(app, {
   // file's canonicaliser and the departments master behind it, rather than
   // keeping the sheet's casing. See the block above canonicalDept.
   canonicalDept, listDepartments,
+});
+
+
+/* ── Approve / reject straight from the notification email ────────────────────
+   Deliberately outside requireAuth: the point is that the approver does not
+   have to log in. The signed token IS the authorisation, and it names one
+   request and one decision — see leaveTokenFor.
+
+   GET only shows the request and a confirm button. POST is what decides it.
+   Mail providers fetch links in messages to scan them; if GET decided, a spam
+   filter could approve somebody's leave on their behalf. */
+function _leaveActionPage({ title, tone, lead, rows, form, note }) {
+  const colour = tone === 'good' ? '#16a34a' : tone === 'bad' ? '#dc2626' : '#0150AA';
+  const cells = (rows || []).filter(([, v]) => v != null && String(v) !== '')
+    .map(([k, v]) => `<tr><th>${escHtml(k)}</th><td>${escHtml(String(v))}</td></tr>`).join('');
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>${escHtml(title)} — Lallubhai Amichand ERP</title>
+<style>
+  body { margin:0; background:#f1f5f9; font-family:system-ui,-apple-system,'Segoe UI',Arial,sans-serif;
+         color:#0f172a; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:20px; }
+  .card { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:28px 30px;
+          max-width:460px; width:100%; box-shadow:0 1px 3px rgba(15,23,42,.06); }
+  h1 { font-size:19px; margin:0 0 10px; color:${colour}; }
+  p  { font-size:14px; line-height:1.55; color:#475569; margin:0 0 14px; }
+  table { width:100%; border-collapse:collapse; margin:16px 0 20px; font-size:13.5px; }
+  th { text-align:left; font-weight:600; color:#334155; background:#f8fafc; padding:8px 10px; width:132px; }
+  td { padding:8px 10px; color:#475569; }
+  button { font:inherit; font-size:14px; font-weight:700; color:#fff; background:${colour};
+           border:0; border-radius:8px; padding:12px 26px; cursor:pointer; }
+  button:hover { filter:brightness(.94); }
+  .note { font-size:12px; color:#94a3b8; margin:18px 0 0; }
+  a { color:#0150AA; }
+</style></head><body><div class="card">
+  <h1>${escHtml(title)}</h1>
+  <p>${lead}</p>
+  ${cells ? `<table>${cells}</table>` : ''}
+  ${form || ''}
+  <p class="note">${note || 'Lallubhai Amichand ERP'}</p>
+</div></body></html>`;
+}
+
+async function _leaveForToken(token) {
+  const claim = readLeaveToken(token);
+  if (!claim) return { error: 'This link is not valid. It may have been altered in transit — open Leave Management in the ERP instead.' };
+  const row = (await q(`SELECT * FROM leaves WHERE id = $1`, [claim.id]).catch(() => []))[0];
+  if (!row) return { error: 'That leave request no longer exists.' };
+  return { claim, row };
+}
+
+/* leaves.from_date comes back as a Date on Postgres and a string on MySQL, so
+   it is normalised here rather than trusting either. */
+const _leaveDay = (v) => {
+  if (!v) return '';
+  const d = v instanceof Date ? v : new Date(String(v));
+  return isNaN(d.getTime()) ? String(v).slice(0, 10) : d.toISOString().slice(0, 10);
+};
+
+const _leaveRows = (row) => [
+  ['Employee', row.user_name],
+  ['Leave Type', row.leave_type || row.type],
+  ['From', _leaveDay(row.from_date)],
+  ['To', _leaveDay(row.to_date) === _leaveDay(row.from_date) ? '' : _leaveDay(row.to_date)],
+  ['Days', row.total_days],
+  ['Reason', row.reason],
+];
+
+const _leaveDecided = (row) => !/^pending$/i.test(String(row.status || ''));
+
+const _alreadyPage = (row) => _leaveActionPage({
+  title: 'Already decided', tone: 'plain',
+  lead: `This request was already marked <b>${escHtml(row.status)}</b>${row.decided_by ? ' by ' + escHtml(row.decided_by) : ''}. Nothing more to do.`,
+  rows: _leaveRows(row),
+});
+
+app.get('/leave-action', async (req, res) => {
+  try {
+    await ensureSchema();
+    const { error, claim, row } = await _leaveForToken(req.query.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    if (_leaveDecided(row)) return res.send(_alreadyPage(row));
+
+    const good = /^approved$/i.test(claim.decision);
+    const other = good ? 'Rejected' : 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? 'Approve this leave request?' : 'Reject this leave request?',
+      tone: good ? 'good' : 'bad',
+      lead: `You are about to mark <b>${escHtml(row.user_name)}</b>'s request as <b>${escHtml(claim.decision)}</b>.`,
+      rows: _leaveRows(row),
+      form: `<form method="POST" action="/leave-action">
+               <input type="hidden" name="t" value="${escHtml(String(req.query.t))}">
+               <button type="submit">Yes, ${good ? 'approve' : 'reject'} it</button>
+             </form>`,
+      note: `Meant to do the opposite? <a href="/leave-action?t=${encodeURIComponent(leaveTokenFor(row.id, other, claim.email))}">Switch to ${other}</a>.`,
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Something went wrong', tone: 'bad', lead: escHtml(e.message) }));
+  }
+});
+
+app.post('/leave-action', async (req, res) => {
+  try {
+    await ensureSchema();
+    const { error, claim, row } = await _leaveForToken(req.body?.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    // Deciding twice is a double-click or a forwarded mail, not an error worth
+    // an error page — and it must never move the balance a second time.
+    if (_leaveDecided(row)) return res.send(_alreadyPage(row));
+
+    const status = /^approved$/i.test(claim.decision) ? 'Approved' : 'Rejected';
+    const by = row.approver_name || claim.email || 'Approver (by email)';
+    await hrms.applyLeaveDecision(row.id, status, by);
+
+    const good = status === 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? 'Approved' : 'Rejected',
+      tone: good ? 'good' : 'bad',
+      lead: `<b>${escHtml(row.user_name)}</b>'s leave has been marked <b>${status.toLowerCase()}</b>. They have been emailed.`,
+      rows: _leaveRows(row),
+      note: 'You can close this tab.',
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Could not record the decision', tone: 'bad', lead: escHtml(e.message) }));
+  }
 });
 
 // ── FMS (Flow Management System) API — see fmsSheet.js wiring further down,

@@ -1662,6 +1662,10 @@ function mountHrms(app, ctx) {
               ? await ctx.notifyAddressFor(approverUser?.id, loginEmail)
               : loginEmail;
             await ctx.sendLeaveRequestEmail({
+              // Carries the Approve / Reject buttons in the mail. Without an id
+              // there is nothing to sign a link against, so the mail falls back
+              // to telling them to open the ERP.
+              leaveId: id,
               toEmail: address,
               toName: approverName,
               applicantName: emp?.name || b.userName || req.session?.user?.name || 'An employee',
