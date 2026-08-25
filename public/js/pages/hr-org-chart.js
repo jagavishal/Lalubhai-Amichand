@@ -83,32 +83,32 @@ window.Pages['hr-org-chart'] = (() => {
      reporting tree needs — nobody has two managers, so the subtrees can
      never overlap and the tidier algorithms have nothing left to fix. */
 
-  const BOX_W = 132, BOX_H = 58, GAP_X = 12, GAP_Y = 44, PAD = 26, TITLE_H = 46;
+  const BOX_W = 108, BOX_H = 104, GAP_X = 9, GAP_Y = 46, PAD = 24, TITLE_H = 58;
 
   /* Drawn on its own dark canvas rather than in the page's own light card. It
-     is how everybody here already reads an org chart, the boxes separate from
-     each other far better against dark than a grid of near-white rectangles
-     does, and the exported PNG lands on a slide without being re-styled. Held
-     as one table so the chart and the export can never drift apart. */
+     is how everybody here already reads an org chart, and the exported PNG
+     lands on a slide without being restyled.
+
+     Every box is the same blue. The temptation is to tint them by rank or by
+     person, but a chart of forty boxes in forty shades reads as forty separate
+     things — the hierarchy is already drawn by the lines, and letting the
+     colour say nothing is what makes the shape legible. The only box that
+     differs is one the search has found. */
   const C = {
-    canvas: '#0f172a',
-    title: '#64748b',
-    edge: '#334155',
-    box: '#1e293b',
-    boxLine: '#334155',
-    name: '#e2e8f0',
-    role: '#94a3b8',
-    mgmt: '#312e5f',
-    mgmtLine: '#6d5bd0',
-    root: '#2563eb',
-    rootLine: '#60a5fa',
-    rootName: '#ffffff',
-    rootRole: '#bfdbfe',
-    hit: '#2563eb',
-    hitLine: '#93c5fd',
-    badge: '#0f172a',
-    badgeLine: '#475569',
-    badgeText: '#cbd5e1',
+    canvas: '#111114',
+    title: '#8b8b93',
+    edge: '#4b5563',
+    box: '#4a5cf6',
+    boxLine: '#8b98fb',
+    name: '#ffffff',
+    role: '#cbd5ff',
+    hit: '#fbbf24',
+    hitLine: '#fde68a',
+    hitName: '#1c1917',
+    hitRole: '#57534e',
+    badge: '#111114',
+    badgeLine: '#8b98fb',
+    badgeText: '#ffffff',
   };
 
   /* Text has to be wrapped before it is written, because SVG will not do it.
@@ -144,8 +144,9 @@ window.Pages['hr-org-chart'] = (() => {
     return lines.length ? lines : [''];
   }
 
-  const NAME_FONT = '700 11px system-ui, -apple-system, "Segoe UI", sans-serif';
-  const ROLE_FONT = '500 9px system-ui, -apple-system, "Segoe UI", sans-serif';
+  const NAME_FONT = '700 12px system-ui, -apple-system, "Segoe UI", sans-serif';
+  const ROLE_FONT = '400 10.5px system-ui, -apple-system, "Segoe UI", sans-serif';
+  const NAME_LH = 14, ROLE_LH = 12.5;
 
   function layout(root) {
     const placed = [];
@@ -189,40 +190,38 @@ window.Pages['hr-org-chart'] = (() => {
     const direct = (n.reports || []).length;
     const shut = _collapsed.has(n.id) && direct;
     const x = p.x, y = p.y;
+    const hit = !!n._hit;
 
-    const hit = n._hit, top = n.isCompany;
-    const fill = top ? C.root : hit ? C.hit : n.loginOnly ? C.mgmt : C.box;
-    const stroke = top ? C.rootLine : hit ? C.hitLine : n.loginOnly ? C.mgmtLine : C.boxLine;
-    const nameFill = top || hit ? C.rootName : C.name;
-    const roleFill = top || hit ? C.rootRole : C.role;
+    const fill = hit ? C.hit : C.box;
+    const stroke = hit ? C.hitLine : C.boxLine;
+    const nameFill = hit ? C.hitName : C.name;
+    const roleFill = hit ? C.hitRole : C.role;
 
-    const nameLines = wrap(n.name, NAME_FONT, BOX_W - 16, 2);
-    const roleText = n.isCompany ? 'Company' : (n.designation || n.department || '—');
-    const roleLines = wrap(roleText, ROLE_FONT, BOX_W - 14, 2);
-    const block = nameLines.length * 12 + roleLines.length * 11;
-    let ty = y + (BOX_H - block) / 2 + 9;
+    const nameLines = wrap(n.name, NAME_FONT, BOX_W - 14, 3);
+    const roleText = n.isCompany ? 'Company' : (n.designation || n.department || '');
+    const roleLines = roleText ? wrap(roleText, ROLE_FONT, BOX_W - 12, 3) : [];
+    const block = nameLines.length * NAME_LH + roleLines.length * ROLE_LH;
+    let ty = y + (BOX_H - block) / 2 + 11;
 
+    const F = "system-ui, -apple-system, 'Segoe UI', sans-serif";
     let out = `<g class="ocs-node${direct ? ' is-toggle' : ''}"${direct ? ` data-toggle="${H.esc(n.id)}"` : ''}>`;
-    out += `<rect x="${x}" y="${y}" width="${BOX_W}" height="${BOX_H}" rx="8" fill="${fill}" stroke="${stroke}" stroke-width="1.2"/>`;
-    // A tab down the left edge, tinted from the name — the only thing that
-    // tells two same-shaped boxes apart at a glance when the chart is zoomed out.
-    if (!n.isCompany) {
-      out += `<path d="M${x + 1} ${y + 9}a8 8 0 0 1 8-8h0v56h0a8 8 0 0 1-8-8z" fill="hsl(${hue(n.name)} 62% 58%)"/>`;
-    }
+    out += `<rect x="${x}" y="${y}" width="${BOX_W}" height="${BOX_H}" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="1.4"/>`;
     for (const line of nameLines) {
-      out += `<text x="${x + BOX_W / 2}" y="${ty}" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="11" font-weight="700" fill="${nameFill}">${H.esc(line)}</text>`;
-      ty += 12;
+      out += `<text x="${x + BOX_W / 2}" y="${ty}" text-anchor="middle" font-family="${F}" font-size="12" font-weight="700" fill="${nameFill}">${H.esc(line)}</text>`;
+      ty += NAME_LH;
     }
+    ty += 1;
     for (const line of roleLines) {
-      out += `<text x="${x + BOX_W / 2}" y="${ty}" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="9" font-weight="500" fill="${roleFill}">${H.esc(line)}</text>`;
-      ty += 11;
+      out += `<text x="${x + BOX_W / 2}" y="${ty}" text-anchor="middle" font-family="${F}" font-size="10.5" fill="${roleFill}">${H.esc(line)}</text>`;
+      ty += ROLE_LH;
     }
     if (direct) {
-      // The count doubles as the collapse handle, so a branch can be folded
-      // away without a second control cluttering every box.
-      const cx = x + BOX_W - 13, cy = y + BOX_H - 3;
-      out += `<circle cx="${cx}" cy="${cy}" r="9" fill="${shut ? C.root : C.badge}" stroke="${shut ? C.rootLine : C.badgeLine}" stroke-width="1.2"/>`;
-      out += `<text x="${cx}" y="${cy + 3.5}" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="700" fill="${shut ? '#ffffff' : C.badgeText}">${shut ? countAll(n) : direct}</text>`;
+      // The count doubles as the collapse handle, so a branch folds away
+      // without a second control on every box. Sat on the bottom edge rather
+      // than inside, where it would eat a line of the name.
+      const cx = x + BOX_W - 14, cy = y + BOX_H;
+      out += `<circle cx="${cx}" cy="${cy}" r="9.5" fill="${shut ? C.badgeLine : C.badge}" stroke="${C.badgeLine}" stroke-width="1.4"/>`;
+      out += `<text x="${cx}" y="${cy + 3.5}" text-anchor="middle" font-family="${F}" font-size="9.5" font-weight="700" fill="${shut ? C.canvas : C.badgeText}">${shut ? countAll(n) : direct}</text>`;
     }
     out += `<title>${H.esc(n.name)}${n.designation ? '\n' + H.esc(n.designation) : ''}${n.department ? '\n' + H.esc(n.department) : ''}${direct ? `\n${direct} direct, ${countAll(n)} in all` : ''}</title>`;
     return out + '</g>';
@@ -234,12 +233,11 @@ window.Pages['hr-org-chart'] = (() => {
     const { tree, placed, width, height } = layout({ ...rooted(), reports: roots });
     const w = width + PAD * 2, h = height + PAD * 2 + TITLE_H;
     const boxes = placed.slice().sort((a, b) => a.depth - b.depth).map(boxSvg).join('');
-    const title = H.esc(_data?.company || 'Organization Structure');
     return {
       w, h,
       svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"${forExport ? '' : ' class="ocs-svg"'}>
         <rect width="${w}" height="${h}" fill="${C.canvas}"/>
-        <text x="${w / 2}" y="30" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="15" font-weight="600" fill="${C.title}">${title} — Organization Structure</text>
+        <text x="${w / 2}" y="38" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="21" font-weight="700" fill="${C.title}">Organization Structure</text>
         <g transform="translate(${PAD} ${PAD + TITLE_H})">
           <path d="${edges(tree)}" fill="none" stroke="${C.edge}" stroke-width="1.2" stroke-linecap="round"/>
           ${boxes}
@@ -397,14 +395,15 @@ window.Pages['hr-org-chart'] = (() => {
   }
 
   /* What the page opens at. Fitting a wide tree outright would shrink 11px
-     names to four pixels, so the opening zoom stops at the point the boxes are
-     still readable and the chart scrolls sideways instead. Pressing Fit still
+     names to seven pixels. Twenty-six columns cannot be both wholly on screen
+     and legible on a laptop — so the opening zoom stops where the text is still
+     readable and the chart scrolls sideways instead. Pressing Fit still
      gives the whole thing at once for anyone who wants the shape rather than
      the names. */
   function openZoom() {
     const z = fitZoom();
     if (z == null) return;
-    _zoom = Math.max(0.55, z);
+    _zoom = Math.max(0.75, z);
     repaint();
     centreOnRoot();
   }
@@ -528,7 +527,7 @@ window.Pages['hr-org-chart'] = (() => {
     .oc-zoom button:hover { background:#fff; color:var(--color-primary-strong); }
 
     /* ── Chart ── */
-    .ocs-wrap { background:#0f172a; border:1px solid #1e293b; border-radius:12px; padding:0;
+    .ocs-wrap { background:#111114; border:1px solid #26262c; border-radius:12px; padding:0;
                 overflow:auto; max-height:74vh; }
     .ocs-pan { position:relative; }
     .ocs-scale { transform-origin:0 0; position:absolute; top:0; left:0; }
