@@ -32,11 +32,14 @@
 ALTER TABLE hr_employees MODIFY reporting_to VARCHAR(255) DEFAULT '';
 
 DROP TABLE IF EXISTS hr_reporting_seed;
+-- COLLATE matches hr_employees explicitly: MariaDB 11's server default is
+-- utf8mb4_uca1400_ai_ci, and joining that against the app's utf8mb4_unicode_ci
+-- columns fails with "Illegal mix of collations".
 CREATE TABLE hr_reporting_seed (
   emp    VARCHAR(255) NOT NULL,
   mgr    VARCHAR(255) NOT NULL,
   mgr_id VARCHAR(16) DEFAULT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO hr_reporting_seed (emp, mgr) VALUES
   -- Admin
