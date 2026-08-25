@@ -148,9 +148,26 @@ window.Pages['hr-org-chart'] = (() => {
   const ROLE_FONT = '400 10.5px system-ui, -apple-system, "Segoe UI", sans-serif';
   const NAME_LH = 14, ROLE_LH = 12.5;
 
+  /* A team of people who manage nobody is stacked in a column under its
+     manager instead of spread across the page. Seven peons side by side cost
+     seven columns and shrink the whole drawing to fit them; stacked they cost
+     one, and the chart goes from thirty columns to eight — which is the
+     difference between a picture of the company and a readable one.
+
+     Only applied when every child is a leaf. A manager with managers under
+     them still branches sideways, because that is the shape worth seeing. A
+     lone report stacks too — otherwise two managers side by side, one with
+     three reports and one with a single report, would be drawn in two
+     different styles for no reason a reader could name. */
+  const STACK_W = 208, STACK_H = 38, STACK_GAP = 5, STACK_INDENT = 20, STACK_TOP = 16;
+  const GROUP_W = Math.max(BOX_W, STACK_INDENT + STACK_W);
+
   function layout(root) {
     const placed = [];
     let cursor = 0;
+    let deepest = 0;
+
+    const isLeaf = (k) => _collapsed.has(k.id) || !(k.reports || []).length;
 
     /* Each node carries the chain it hangs off as |root|paresh|mahendra|, its
        own id included. Hovering anybody is then "light everything whose chain
@@ -159,34 +176,63 @@ window.Pages['hr-org-chart'] = (() => {
     const walk = (n, depth, above) => {
       const anc = above + n.id + '|';
       const kids = _collapsed.has(n.id) ? [] : (n.reports || []);
-      const node = {
-        ref: n, depth, anc, y: depth * (BOX_H + GAP_Y),
-        kids: kids.map((k) => walk(k, depth + 1, anc)),
-      };
-      if (!node.kids.length) { node.x = cursor; cursor += BOX_W + GAP_X; }
-      else node.x = (node.kids[0].x + node.kids[node.kids.length - 1].x) / 2;
+      const node = { ref: n, depth, anc, y: depth * (BOX_H + GAP_Y), kids: [], stack: false, w: BOX_W, h: BOX_H };
+
+      if (!kids.length) {
+        node.x = cursor;
+        cursor += BOX_W + GAP_X;
+      } else if (kids.every(isLeaf)) {
+        node.stack = true;
+        node.x = cursor;
+        node.kids = kids.map((k, i) => {
+          const kid = {
+            ref: k, depth: depth + 1, anc: anc + k.id + '|', kids: [], stacked: true,
+            w: STACK_W, h: STACK_H,
+            x: cursor + STACK_INDENT,
+            y: node.y + BOX_H + STACK_TOP + i * (STACK_H + STACK_GAP),
+          };
+          placed.push(kid);
+          return kid;
+        });
+        node.bottom = node.kids[node.kids.length - 1].y + STACK_H;
+        cursor += GROUP_W + GAP_X;
+      } else {
+        node.kids = kids.map((k) => walk(k, depth + 1, anc));
+        node.x = (node.kids[0].x + node.kids[node.kids.length - 1].x) / 2;
+      }
+
+      deepest = Math.max(deepest, node.bottom || (node.y + BOX_H));
       placed.push(node);
       return node;
     };
 
     const tree = walk(root, 0, '|');
-    const width = Math.max(cursor - GAP_X, BOX_W);
-    const depth = Math.max(...placed.map((p) => p.depth));
-    return { tree, placed, width, height: (depth + 1) * BOX_H + depth * GAP_Y };
+    for (const p of placed) deepest = Math.max(deepest, p.y + p.h);
+    return { tree, placed, width: Math.max(cursor - GAP_X, BOX_W), height: deepest };
   }
 
   /* Elbow connectors: straight down out of the parent, along a shared
      horizontal rail, then straight down into each child. One rail per parent
-     rather than a curve per child — it stays readable when seven peons hang
-     off one box, which a fan of curves does not. */
+     rather than a curve per child.
+
+     A stacked team gets a spine instead — down the left of the column, with a
+     stub into each row. Same idea turned on its side. */
   function edges(node) {
     if (!node.kids.length) return '';
-    const px = node.x + BOX_W / 2, py = node.y + BOX_H;
-    const rail = py + GAP_Y / 2;
-    let d = `M${px} ${py}V${rail}`;
-    const xs = node.kids.map((k) => k.x + BOX_W / 2);
-    d += `M${Math.min(...xs, px)} ${rail}H${Math.max(...xs, px)}`;
-    for (const k of node.kids) d += `M${k.x + BOX_W / 2} ${rail}V${k.y}`;
+    let d;
+    if (node.stack) {
+      const sx = node.x + STACK_INDENT / 2;
+      const last = node.kids[node.kids.length - 1];
+      d = `M${node.x + BOX_W / 2} ${node.y + BOX_H}V${node.y + BOX_H + STACK_TOP / 2}` +
+          `H${sx}V${last.y + STACK_H / 2}`;
+      for (const k of node.kids) d += `M${sx} ${k.y + STACK_H / 2}H${k.x}`;
+    } else {
+      const px = node.x + BOX_W / 2, py = node.y + BOX_H;
+      const rail = py + GAP_Y / 2;
+      const xs = node.kids.map((k) => k.x + BOX_W / 2);
+      d = `M${px} ${py}V${rail}M${Math.min(...xs, px)} ${rail}H${Math.max(...xs, px)}`;
+      for (const k of node.kids) d += `M${k.x + BOX_W / 2} ${rail}V${k.y}`;
+    }
     // Tagged with the parent's own chain rather than drawn as one path for the
     // whole tree, so the lines under a branch dim and light along with it.
     return `<path class="ocs-edge" data-anc="${H.esc(node.anc)}" d="${d}" fill="none" stroke="${C.edge}" stroke-width="1.4" stroke-linecap="round"/>`
@@ -197,37 +243,46 @@ window.Pages['hr-org-chart'] = (() => {
     const n = p.ref;
     const direct = (n.reports || []).length;
     const shut = _collapsed.has(n.id) && direct;
-    const x = p.x, y = p.y;
+    const x = p.x, y = p.y, w = p.w, h = p.h;
     const hit = !!n._hit;
+    const row = !!p.stacked;
 
     const fill = hit ? C.hit : C.box;
     const stroke = hit ? C.hitLine : C.boxLine;
     const nameFill = hit ? C.hitName : C.name;
     const roleFill = hit ? C.hitRole : C.role;
-
-    const nameLines = wrap(n.name, NAME_FONT, BOX_W - 14, 3);
-    const roleText = n.isCompany ? 'Company' : (n.designation || n.department || '');
-    const roleLines = roleText ? wrap(roleText, ROLE_FONT, BOX_W - 12, 3) : [];
-    const block = nameLines.length * NAME_LH + roleLines.length * ROLE_LH;
-    let ty = y + (BOX_H - block) / 2 + 11;
-
     const F = "system-ui, -apple-system, 'Segoe UI', sans-serif";
+
     let out = `<g class="ocs-node${direct ? ' is-toggle' : ''}" data-anc="${H.esc(p.anc)}" data-id="${H.esc(n.id)}"${direct ? ` data-toggle="${H.esc(n.id)}"` : ''}>`;
-    out += `<rect x="${x}" y="${y}" width="${BOX_W}" height="${BOX_H}" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="1.4"/>`;
-    for (const line of nameLines) {
-      out += `<text x="${x + BOX_W / 2}" y="${ty}" text-anchor="middle" font-family="${F}" font-size="12" font-weight="700" fill="${nameFill}" class="n">${H.esc(line)}</text>`;
-      ty += NAME_LH;
+    out += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="1.4"/>`;
+
+    const roleText = n.isCompany ? 'Company' : (n.designation || n.department || '');
+    if (row) {
+      // One line each, left-aligned: a stacked row is read down a list, and a
+      // ragged left edge is what makes a list hard to read.
+      const [name] = wrap(n.name, NAME_FONT, w - 18, 1);
+      const [role] = roleText ? wrap(roleText, ROLE_FONT, w - 18, 1) : [''];
+      out += `<text x="${x + 9}" y="${y + (role ? 16 : 23)}" font-family="${F}" font-size="12" font-weight="700" fill="${nameFill}" class="n">${H.esc(name)}</text>`;
+      if (role) out += `<text x="${x + 9}" y="${y + 29}" font-family="${F}" font-size="10.5" fill="${roleFill}" class="r">${H.esc(role)}</text>`;
+    } else {
+      const nameLines = wrap(n.name, NAME_FONT, w - 14, 3);
+      const roleLines = roleText ? wrap(roleText, ROLE_FONT, w - 12, 3) : [];
+      let ty = y + (h - (nameLines.length * NAME_LH + roleLines.length * ROLE_LH)) / 2 + 11;
+      for (const line of nameLines) {
+        out += `<text x="${x + w / 2}" y="${ty}" text-anchor="middle" font-family="${F}" font-size="12" font-weight="700" fill="${nameFill}" class="n">${H.esc(line)}</text>`;
+        ty += NAME_LH;
+      }
+      ty += 1;
+      for (const line of roleLines) {
+        out += `<text x="${x + w / 2}" y="${ty}" text-anchor="middle" font-family="${F}" font-size="10.5" fill="${roleFill}" class="r">${H.esc(line)}</text>`;
+        ty += ROLE_LH;
+      }
     }
-    ty += 1;
-    for (const line of roleLines) {
-      out += `<text x="${x + BOX_W / 2}" y="${ty}" text-anchor="middle" font-family="${F}" font-size="10.5" fill="${roleFill}" class="r">${H.esc(line)}</text>`;
-      ty += ROLE_LH;
-    }
+
     if (direct) {
       // The count doubles as the collapse handle, so a branch folds away
-      // without a second control on every box. Sat on the bottom edge rather
-      // than inside, where it would eat a line of the name.
-      const cx = x + BOX_W - 14, cy = y + BOX_H;
+      // without a second control on every box.
+      const cx = x + w - 14, cy = y + h;
       out += `<circle cx="${cx}" cy="${cy}" r="9.5" fill="${shut ? C.badgeLine : C.badge}" stroke="${C.badgeLine}" stroke-width="1.4"/>`;
       out += `<text x="${cx}" y="${cy + 3.5}" text-anchor="middle" font-family="${F}" font-size="9.5" font-weight="700" fill="${shut ? C.canvas : C.badgeText}">${shut ? countAll(n) : direct}</text>`;
     }
@@ -240,7 +295,7 @@ window.Pages['hr-org-chart'] = (() => {
     if (!roots.length) return null;
     const { tree, placed, width, height } = layout({ ...rooted(), reports: roots });
     const w = width + PAD * 2, h = height + PAD * 2 + TITLE_H;
-    const boxes = placed.slice().sort((a, b) => a.depth - b.depth).map(boxSvg).join('');
+    const boxes = placed.slice().sort((a, b) => a.depth - b.depth || a.y - b.y).map(boxSvg).join('');
     return {
       w, h,
       svg: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"${forExport ? '' : ' class="ocs-svg"'}>
