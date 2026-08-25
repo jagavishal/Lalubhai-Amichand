@@ -42,6 +42,7 @@ window.Sidebar = {
     // three only cover what the sidebar did not already have a mark for:
     // an ID card (Employee Master), a clock-in (Attendance), a rupee note
     // (Payroll) and a person-with-chart (HR Reports).
+    orgchart:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="5" rx="1.2"/><rect x="2" y="17" width="6" height="5" rx="1.2"/><rect x="16" y="17" width="6" height="5" rx="1.2"/><path d="M12 7v4M5 17v-2h14v2M12 11v4"/></svg>',
     hremployees:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="9" cy="10" r="2.2"/><path d="M5.5 16a3.6 3.6 0 0 1 7 0"/><path d="M15 9h4M15 13h4"/></svg>',
     hrattendance: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 1.8"/></svg>',
     hrpayroll:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M9 10h6M9 13h4M11 10v6"/><path d="m13.5 13 2.5 3"/></svg>',
@@ -141,6 +142,12 @@ window.Sidebar = {
     // ordinary employee still has somewhere to check in and collect a slip.
     { title: 'HR Section', items: [
       { route: 'hr-employees',  label: 'Employee Master', icon: 'hremployees', adminOnly: true },
+      // Not adminOnly: knowing who to ask, and who signs off your leave, is
+      // exactly the thing an ordinary employee needs this page for. alwaysShow
+      // because every user permissioned before this page existed has an explicit
+      // pages list that cannot mention it — without this the page would be
+      // invisible to everyone but the users who have no permission record at all.
+      { route: 'hr-org-chart',  label: 'Company Tree',    icon: 'orgchart', alwaysShow: true },
       { route: 'hr-attendance', label: 'Attendance',      icon: 'hrattendance' },
       { route: 'hr-leave',      label: 'Leave Management', icon: 'leave' },
       { route: 'hr-payroll',    label: 'Payroll',         icon: 'hrpayroll' },

@@ -1602,6 +1602,18 @@ function mountHrms(app, ctx) {
               [emp.reporting_to, emp.reporting_to],
             ).catch(() => []))[0];
             if (mgr) { approverName = mgr.name || ''; approverEmail = mgr.email || ''; }
+            // Most reporting lines end at a director or business manager who
+            // has a login but no employee record — they draw no salary here.
+            // Without this the request would fall through to plain 'HOD' and
+            // nobody would be mailed, which is exactly the case the reporting
+            // sheet exists to cover.
+            if (!approverName) {
+              const boss = (await q(
+                `SELECT name, email FROM users WHERE LOWER(name) = LOWER($1) AND active = 1 LIMIT 1`,
+                [emp.reporting_to],
+              ).catch(() => []))[0];
+              if (boss) { approverName = boss.name || ''; approverEmail = boss.email || ''; }
+            }
           }
           // Still nobody named, and the department has a tier — its within-team
           // approver is a better answer than falling through to plain "HOD".
@@ -2399,24 +2411,68 @@ function mountHrms(app, ctx) {
     // The reporting tree, straight off hr_employees.reporting_to — the sheet
     // maintained a separate OrganizationChart tab that could and did drift
     // from the master, so this is derived rather than stored.
+    //
+    // Half the company's reporting lines end at a director or business manager
+    // who has a login but was never given an employee record — they draw no
+    // salary here, so there is nothing for hr_employees to hold. Resolving a
+    // manager against `users` as well means those people appear as the branch
+    // they actually are, instead of every one of their reports being stranded
+    // at the top of the tree as its own root.
     app.get('/api/hr/org-chart', requireAuth, hrReady, async (req, res) => {
       try {
-        const emps = await q(
-          `SELECT id, name, designation, department, branch, reporting_to, avatar_url
-             FROM hr_employees WHERE status = 'Active' ORDER BY name ASC`);
+        const [emps, logins] = await Promise.all([
+          q(`SELECT id, name, designation, department, branch, reporting_to, avatar_url
+               FROM hr_employees WHERE status = 'Active' ORDER BY name ASC`),
+          q(`SELECT id, name, email, department FROM users WHERE active = 1`).catch(() => []),
+        ]);
+
         const byId = new Map(emps.map((e) => [e.id, { ...e, reports: [] }]));
         const byName = new Map(emps.map((e) => [String(e.name).trim().toLowerCase(), e.id]));
-        const roots = [];
+
+        // Managers who exist only as a login. Keyed 'user:<id>' so a synthetic
+        // node can never collide with a real employee code.
+        const loginByName = new Map(logins.map((u) => [String(u.name || '').trim().toLowerCase(), u]));
+        const managerNode = (key) => {
+          const u = loginByName.get(key);
+          if (!u) return null;
+          const nid = 'user:' + u.id;
+          if (!byId.has(nid)) {
+            byId.set(nid, {
+              id: nid, name: u.name, designation: u.department || 'Management',
+              department: u.department || '', branch: '', reporting_to: '',
+              avatar_url: '', loginOnly: true, email: u.email || '', reports: [],
+            });
+          }
+          return nid;
+        };
+
         for (const e of emps) {
           const node = byId.get(e.id);
           // reporting_to holds a code on records this app created and a plain
           // name on the ones imported from the sheet; accept either.
           const key = String(e.reporting_to || '').trim();
-          const parentId = byId.has(key) ? key : byName.get(key.toLowerCase());
+          const lower = key.toLowerCase();
+          const parentId = byId.has(key) ? key : (byName.get(lower) || managerNode(lower));
           if (parentId && parentId !== e.id && byId.has(parentId)) byId.get(parentId).reports.push(node);
-          else roots.push(node);
+          else node.orphan = true;
         }
-        res.json({ roots, total: emps.length });
+
+        // Roots are whatever nothing else claims. Walking down from them and
+        // promoting anything the walk never reaches keeps a mistyped pair of
+        // mutual managers (A reports to B, B reports to A) visible as two
+        // branches instead of silently dropping both from the page.
+        const roots = [...byId.values()].filter((n) => n.orphan || n.loginOnly);
+        const seen = new Set();
+        const walk = (n) => { if (seen.has(n.id)) return; seen.add(n.id); n.reports.forEach(walk); };
+        roots.forEach(walk);
+        for (const n of byId.values()) if (!seen.has(n.id)) { n.cycle = true; roots.push(n); walk(n); }
+
+        const byDepth = (a, b) => (b.reports.length - a.reports.length)
+          || String(a.name || '').localeCompare(String(b.name || ''));
+        const sortTree = (n) => { n.reports.sort(byDepth); n.reports.forEach(sortTree); };
+        roots.sort(byDepth); roots.forEach(sortTree);
+
+        res.json({ roots, total: emps.length, managers: roots.filter((r) => r.loginOnly).length });
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
   }
