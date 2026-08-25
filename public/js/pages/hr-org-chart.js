@@ -152,11 +152,16 @@ window.Pages['hr-org-chart'] = (() => {
     const placed = [];
     let cursor = 0;
 
-    const walk = (n, depth) => {
+    /* Each node carries the chain it hangs off as |root|paresh|mahendra|, its
+       own id included. Hovering anybody is then "light everything whose chain
+       contains |them|" — one string test per box, no tree walking, and it
+       covers the whole branch however deep it runs. */
+    const walk = (n, depth, above) => {
+      const anc = above + n.id + '|';
       const kids = _collapsed.has(n.id) ? [] : (n.reports || []);
       const node = {
-        ref: n, depth, y: depth * (BOX_H + GAP_Y),
-        kids: kids.map((k) => walk(k, depth + 1)),
+        ref: n, depth, anc, y: depth * (BOX_H + GAP_Y),
+        kids: kids.map((k) => walk(k, depth + 1, anc)),
       };
       if (!node.kids.length) { node.x = cursor; cursor += BOX_W + GAP_X; }
       else node.x = (node.kids[0].x + node.kids[node.kids.length - 1].x) / 2;
@@ -164,7 +169,7 @@ window.Pages['hr-org-chart'] = (() => {
       return node;
     };
 
-    const tree = walk(root, 0);
+    const tree = walk(root, 0, '|');
     const width = Math.max(cursor - GAP_X, BOX_W);
     const depth = Math.max(...placed.map((p) => p.depth));
     return { tree, placed, width, height: (depth + 1) * BOX_H + depth * GAP_Y };
@@ -182,7 +187,10 @@ window.Pages['hr-org-chart'] = (() => {
     const xs = node.kids.map((k) => k.x + BOX_W / 2);
     d += `M${Math.min(...xs, px)} ${rail}H${Math.max(...xs, px)}`;
     for (const k of node.kids) d += `M${k.x + BOX_W / 2} ${rail}V${k.y}`;
-    return d + node.kids.map(edges).join('');
+    // Tagged with the parent's own chain rather than drawn as one path for the
+    // whole tree, so the lines under a branch dim and light along with it.
+    return `<path class="ocs-edge" data-anc="${H.esc(node.anc)}" d="${d}" fill="none" stroke="${C.edge}" stroke-width="1.4" stroke-linecap="round"/>`
+      + node.kids.map(edges).join('');
   }
 
   function boxSvg(p) {
@@ -204,15 +212,15 @@ window.Pages['hr-org-chart'] = (() => {
     let ty = y + (BOX_H - block) / 2 + 11;
 
     const F = "system-ui, -apple-system, 'Segoe UI', sans-serif";
-    let out = `<g class="ocs-node${direct ? ' is-toggle' : ''}"${direct ? ` data-toggle="${H.esc(n.id)}"` : ''}>`;
+    let out = `<g class="ocs-node${direct ? ' is-toggle' : ''}" data-anc="${H.esc(p.anc)}" data-id="${H.esc(n.id)}"${direct ? ` data-toggle="${H.esc(n.id)}"` : ''}>`;
     out += `<rect x="${x}" y="${y}" width="${BOX_W}" height="${BOX_H}" rx="5" fill="${fill}" stroke="${stroke}" stroke-width="1.4"/>`;
     for (const line of nameLines) {
-      out += `<text x="${x + BOX_W / 2}" y="${ty}" text-anchor="middle" font-family="${F}" font-size="12" font-weight="700" fill="${nameFill}">${H.esc(line)}</text>`;
+      out += `<text x="${x + BOX_W / 2}" y="${ty}" text-anchor="middle" font-family="${F}" font-size="12" font-weight="700" fill="${nameFill}" class="n">${H.esc(line)}</text>`;
       ty += NAME_LH;
     }
     ty += 1;
     for (const line of roleLines) {
-      out += `<text x="${x + BOX_W / 2}" y="${ty}" text-anchor="middle" font-family="${F}" font-size="10.5" fill="${roleFill}">${H.esc(line)}</text>`;
+      out += `<text x="${x + BOX_W / 2}" y="${ty}" text-anchor="middle" font-family="${F}" font-size="10.5" fill="${roleFill}" class="r">${H.esc(line)}</text>`;
       ty += ROLE_LH;
     }
     if (direct) {
@@ -359,7 +367,42 @@ window.Pages['hr-org-chart'] = (() => {
 
   /* ── Events ───────────────────────────────────────────────────────── */
 
+  /* Hovering anybody lights them and everything under them, and drops the rest
+     back. On a chart of forty boxes the shape is visible but a single reporting
+     line is not; this is what makes one readable without zooming in.
+
+     Delegated from the <svg> rather than bound per box, so it survives a redraw
+     and costs one listener instead of forty. */
+  function bindHover() {
+    const svg = document.querySelector('#oc-body .ocs-svg');
+    if (!svg) return;
+    const all = svg.querySelectorAll('[data-anc]');
+
+    const light = (id) => {
+      const key = '|' + id + '|';
+      svg.classList.add('is-focus');
+      all.forEach((el) => el.classList.toggle('is-lit', (el.dataset.anc || '').includes(key)));
+    };
+    const clear = () => {
+      svg.classList.remove('is-focus');
+      all.forEach((el) => el.classList.remove('is-lit'));
+    };
+
+    svg.addEventListener('mousemove', (e) => {
+      const g = e.target.closest('.ocs-node');
+      if (g) light(g.dataset.id); else clear();
+    });
+    svg.addEventListener('mouseleave', clear);
+    // Touch has no hover, so a tap lights the branch and a tap on the canvas
+    // puts it out. The collapse handle keeps its own click.
+    svg.addEventListener('click', (e) => {
+      const g = e.target.closest('.ocs-node');
+      if (g) light(g.dataset.id); else clear();
+    });
+  }
+
   function bindTree() {
+    bindHover();
     document.querySelectorAll('#oc-body [data-toggle]').forEach((node) => {
       const hit = (e) => {
         e.stopPropagation();
@@ -383,7 +426,9 @@ window.Pages['hr-org-chart'] = (() => {
     const wrap = document.querySelector('.ocs-wrap');
     const c = chartSvg(false);
     if (!wrap || !c) return null;
-    return Math.max(0.2, Math.min(1, wrap.clientWidth / c.w));
+    // Both dimensions, so "fit" means the whole chart is on screen rather than
+    // merely as wide as the pane with the bottom row cut off.
+    return Math.max(0.15, Math.min(1, wrap.clientWidth / c.w, wrap.clientHeight / c.h));
   }
 
   function fit() {
@@ -394,19 +439,11 @@ window.Pages['hr-org-chart'] = (() => {
     centreOnRoot();
   }
 
-  /* What the page opens at. Fitting a wide tree outright would shrink 11px
-     names to seven pixels. Twenty-six columns cannot be both wholly on screen
-     and legible on a laptop — so the opening zoom stops where the text is still
-     readable and the chart scrolls sideways instead. Pressing Fit still
-     gives the whole thing at once for anyone who wants the shape rather than
-     the names. */
-  function openZoom() {
-    const z = fitZoom();
-    if (z == null) return;
-    _zoom = Math.max(0.75, z);
-    repaint();
-    centreOnRoot();
-  }
+  /* The page opens on the whole chart. A tree this wide cannot be both wholly
+     on screen and comfortably readable, and the way out is not to pick one: at
+     rest you get the shape, and hovering anybody lights their whole branch and
+     names it in a tooltip. Zoom in when you want to read the rest. */
+  function openZoom() { fit(); }
 
   function setZoom(z) {
     _zoom = Math.max(0.25, Math.min(2, Math.round(z * 20) / 20));
@@ -527,13 +564,31 @@ window.Pages['hr-org-chart'] = (() => {
     .oc-zoom button:hover { background:#fff; color:var(--color-primary-strong); }
 
     /* ── Chart ── */
+    /* A fixed pane so "fit" has a height to fit into, with the drawing centred
+       in it — a short tree otherwise sits against the top edge with a band of
+       empty black under it. margin:auto inside a flex container still lets the
+       pane scroll once the chart is zoomed past it. */
     .ocs-wrap { background:#111114; border:1px solid #26262c; border-radius:12px; padding:0;
-                overflow:auto; max-height:74vh; }
-    .ocs-pan { position:relative; }
+                overflow:auto; height:74vh; display:flex; }
+    .ocs-pan { position:relative; margin:auto; flex:none; }
     .ocs-scale { transform-origin:0 0; position:absolute; top:0; left:0; }
     .ocs-svg { display:block; }
     .ocs-node.is-toggle { cursor:pointer; }
-    .ocs-node.is-toggle:hover rect { stroke:var(--color-primary); stroke-width:1.8; }
+
+    /* Only while something is hovered. At rest every box keeps the fill written
+       into the SVG itself, which is also what the PNG exports with — the dimming
+       is a reading aid on the page, not part of the drawing. */
+    .ocs-svg .ocs-node rect, .ocs-svg .ocs-node circle,
+    .ocs-svg .ocs-node text, .ocs-svg .ocs-edge { transition:fill .12s, stroke .12s, opacity .12s; }
+    .ocs-svg.is-focus .ocs-node rect   { fill:#1b1f36; stroke:#2b3157; }
+    .ocs-svg.is-focus .ocs-node circle { fill:#1b1f36; stroke:#2b3157; }
+    .ocs-svg.is-focus .ocs-node text   { fill:#565d80; }
+    .ocs-svg.is-focus .ocs-edge        { stroke:#2b3157; }
+    .ocs-svg.is-focus .ocs-node.is-lit rect   { fill:#4a5cf6; stroke:#8b98fb; }
+    .ocs-svg.is-focus .ocs-node.is-lit circle { fill:#111114; stroke:#8b98fb; }
+    .ocs-svg.is-focus .ocs-node.is-lit text.n { fill:#ffffff; }
+    .ocs-svg.is-focus .ocs-node.is-lit text.r { fill:#cbd5ff; }
+    .ocs-svg.is-focus .ocs-edge.is-lit        { stroke:#8b98fb; }
 
     /* ── List ── */
     .oc-wrap { background:#fff; border:1px solid #e2e8f0; border-radius:12px;
