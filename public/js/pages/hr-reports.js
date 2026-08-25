@@ -131,13 +131,29 @@ window.Pages['hr-reports'] = (() => {
       </div>`;
     };
 
+    /* Attendance is usually marked at the end of the day, so for most of the
+       working day the count list is empty — but the leave register already
+       knows who is out. Showing both means the card answers "who is missing
+       today" from first thing in the morning instead of only after marking. */
     const today = d.todayAttendance || [];
+    const onLeave = d.todayLeave || [];
     const todayCard = `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--color-primary);margin-bottom:12px;">Attendance Today</div>
       ${today.length
         ? today.map((x) => `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dotted #e2e8f0;font-size:12.5px;">
             <span>${H.statusPill(x.name)}</span><b style="color:#0f172a;">${x.count}</b></div>`).join('')
         : '<div style="font-size:12.5px;color:#94a3b8;padding:10px 0;">Nobody has been marked yet today.</div>'}
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:700;
+           text-transform:uppercase;letter-spacing:.07em;color:var(--color-primary);margin:14px 0 9px;
+           padding-top:13px;border-top:1px solid #e2e8f0;">
+        <span>On Leave Today</span><span style="color:#94a3b8;">${onLeave.length || ''}</span>
+      </div>
+      ${onLeave.length
+        ? onLeave.map((x) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dotted #e2e8f0;font-size:12.5px;">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334155;">${H.esc(x.name)}</span>
+            <span style="white-space:nowrap;color:#64748b;font-size:11.5px;">${H.esc(x.type)}${x.half ? ' · Half day' : ''}</span>
+          </div>`).join('')
+        : '<div style="font-size:12.5px;color:#94a3b8;padding:2px 0 6px;">Everyone is in — no approved leave today.</div>'}
     </div>`;
 
     return `
@@ -178,6 +194,8 @@ window.Pages['hr-reports'] = (() => {
         ...(_data.byBranch || []).map((x) => ['Branch', x.name, x.count]),
         ...(_data.byGender || []).map((x) => ['Gender', x.name, x.count]),
         ...(_data.byDesignation || []).map((x) => ['Designation', x.name, x.count]),
+        ...(_data.todayAttendance || []).map((x) => ['Attendance Today', x.name, x.count]),
+        ...(_data.todayLeave || []).map((x) => ['On Leave Today', x.name, x.type + (x.half ? ' (half day)' : '')]),
       ];
       H.downloadCsv('HR Overview.csv', ['Group', 'Item', 'Value'], rows);
     } else {

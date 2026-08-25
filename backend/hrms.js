@@ -2198,9 +2198,20 @@ function mountHrms(app, ctx) {
 
         if (type === 'summary') {
           const todayIso = isoDate(now);
-          const [pendingLeave, todayAtt, runs] = await Promise.all([
+          const [pendingLeave, todayAtt, todayLeave, runs] = await Promise.all([
             q(`SELECT COUNT(*) AS cnt FROM leaves WHERE status IN ('pending','Pending')`).catch(() => [{ cnt: 0 }]),
             q(`SELECT status, COUNT(*) AS cnt FROM hr_attendance WHERE att_date = $1 GROUP BY status`, [todayIso]).catch(() => []),
+            // Who is away right now. Attendance is marked at the end of the day
+            // (often not at all), so on most mornings the card above is empty
+            // while the leave register already knows exactly who is out — which
+            // is the one thing anyone opening this page before lunch wants.
+            // Approved only: a request nobody has decided on is not an absence.
+            // $1/$2 are the same date; the MySQL translator maps $N positionally
+            // so a repeated placeholder would lose a parameter.
+            q(`SELECT COALESCE(e.name, l.user_name) AS name, l.leave_type, l.half_day
+                 FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
+                WHERE LOWER(l.status) = 'approved' AND l.from_date <= $1 AND l.to_date >= $2
+                ORDER BY name ASC`, [todayIso, todayIso]).catch(() => []),
             q(`SELECT * FROM hr_payroll_runs ORDER BY year DESC, month DESC LIMIT 1`).catch(() => []),
           ]);
           const tenures = active.map((e) => yearsSince(e.doj)).filter((v) => v != null);
@@ -2220,6 +2231,11 @@ function mountHrms(app, ctx) {
             byGender: groupCount(active, 'gender'),
             byDesignation: groupCount(active, 'designation').slice(0, 12),
             todayAttendance: todayAtt.map((r) => ({ name: r.status, count: Number(r.cnt) })),
+            todayLeave: todayLeave.map((r) => ({
+              name: r.name || '—',
+              type: r.leave_type || 'CL',
+              half: String(r.half_day || 'full') !== 'full',
+            })),
           });
         }
 
