@@ -252,6 +252,18 @@ const HR_SCHEMA = [
   /* The Leave Tracker predates the HRMS and its rows must keep working, so the
      leave request table is extended rather than replaced: `type` stays whatever
      the old page wrote, `leave_type` carries the HRMS's PL/CL/SL/EL/LWP. */
+  /* Policy documents — the code of conduct, the leave rules, POSH. Stored as
+     rows rather than files so they open on a phone, are searchable, and an
+     Admin can correct a line without a round-trip through a PDF. */
+  `CREATE TABLE IF NOT EXISTS hr_policies (
+     id VARCHAR(32) PRIMARY KEY,
+     title VARCHAR(255) NOT NULL,
+     body TEXT,
+     sort_order INT NOT NULL DEFAULT 0,
+     updated_by VARCHAR(255) DEFAULT '',
+     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
   `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS employee_id VARCHAR(16) DEFAULT NULL`,
   `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS leave_type VARCHAR(8) DEFAULT 'CL'`,
   `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS half_day VARCHAR(16) DEFAULT 'full'`,
@@ -261,6 +273,9 @@ const HR_SCHEMA = [
   `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS approver_comments TEXT DEFAULT NULL`,
   `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS balance_after DECIMAL(6,2) DEFAULT NULL`,
   `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS decided_by VARCHAR(255) DEFAULT ''`,
+  // Who covers the work while they are away — picked on the Apply form, shown
+  // wherever "on leave today" is shown, so nobody has to ask around.
+  `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS backup_name VARCHAR(255) DEFAULT ''`,
   `CREATE INDEX idx_leaves_emp ON leaves (employee_id)`,
 
   /* The holiday calendar gains the three things the sheet's HolidayList had
@@ -445,6 +460,10 @@ function suggestStatutory({ basic = 0, gross = 0, branch = '' } = {}) {
    ===================================================================== */
 function mountHrms(app, ctx) {
   const { pool, q, requireAuth, requireAdmin, requireSuperAdmin, isAdminUser } = ctx;
+  // Everything the Employee Master page calls. An Admin passes as before; a
+  // non-admin passes when Users → Access granted them the page — the grant
+  // would be decorative if the sidebar showed the page and every request 403'd.
+  const empMaster = ctx.requireEmployeeMaster || requireAdmin;
   // Falls back to the old COUNT(*) scheme only when this module is mounted
   // without server.js (tests), where nothing is ever deleted anyway.
   const withSeqId = ctx.withSeqId || (async (table, prefix, width, run) => {
@@ -517,6 +536,16 @@ function mountHrms(app, ctx) {
           `INSERT INTO hr_leave_types (code, name, annual_quota, paid, carry_forward, max_carry, sort_order)
            VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (code) DO NOTHING`,
           [t.code, t.name, t.annual_quota, t.paid, t.carry_forward, t.max_carry, t.sort_order],
+        ).catch(() => {});
+      }
+      // DO NOTHING on purpose: this text is the starting version, and an
+      // Admin's edits from the HR Policies page must survive every deploy.
+      const { POLICIES } = require('./hr-policies-seed.js');
+      for (const pol of POLICIES) {
+        await pool.query(
+          `INSERT INTO hr_policies (id, title, body, sort_order) VALUES ($1,$2,$3,$4)
+           ON CONFLICT (id) DO NOTHING`,
+          [pol.id, pol.title, pol.body, pol.sort_order],
         ).catch(() => {});
       }
     })().catch((e) => { console.error('[hrms] seed failed:', e.message); });
@@ -821,7 +850,7 @@ function mountHrms(app, ctx) {
        Aadhar and salary-bearing detail. The light directory every other HR
        screen needs for its dropdowns is /api/hr/masters, which returns names
        and departments and nothing else. */
-    app.get('/api/hr/employees', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.get('/api/hr/employees', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         const { status, branch, department, q: search } = req.query;
         const where = [];
@@ -1006,7 +1035,7 @@ function mountHrms(app, ctx) {
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    app.post('/api/hr/employees', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.post('/api/hr/employees', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         const b = req.body || {};
         if (!String(b.name || '').trim()) return res.status(400).json({ error: 'Employee name is required' });
@@ -1042,7 +1071,7 @@ function mountHrms(app, ctx) {
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    app.patch('/api/hr/employees', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.patch('/api/hr/employees', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         const b = req.body || {};
         const id = String(b.id || '').trim();
@@ -1083,7 +1112,7 @@ function mountHrms(app, ctx) {
 
     /* ── Salary structure ─────────────────────────────────────────── */
 
-    app.get('/api/hr/salary-structure', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.get('/api/hr/salary-structure', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         const employeeId = String(req.query.employeeId || '').trim();
         if (!employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -1095,7 +1124,7 @@ function mountHrms(app, ctx) {
 
     // Always an insert — a revision is a new effective-dated row, never an
     // edit of the old one, so a payslip already issued keeps its basis.
-    app.post('/api/hr/salary-structure', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.post('/api/hr/salary-structure', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         const b = req.body || {};
         const employeeId = String(b.employeeId || b.employee_id || '').trim();
@@ -1124,7 +1153,7 @@ function mountHrms(app, ctx) {
 
     // What PF/ESIC/PT would be under the statutory formulas, for the form's
     // "suggest" button. Advisory only — see suggestStatutory.
-    app.get('/api/hr/statutory-suggest', requireAuth, requireAdmin, (req, res) => {
+    app.get('/api/hr/statutory-suggest', requireAuth, empMaster, (req, res) => {
       res.json(suggestStatutory({
         basic: req.query.basic, gross: req.query.gross, branch: req.query.branch,
       }));
@@ -1132,7 +1161,7 @@ function mountHrms(app, ctx) {
 
     /* ── Documents ────────────────────────────────────────────────── */
 
-    app.post('/api/hr/documents', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.post('/api/hr/documents', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         const b = req.body || {};
         if (!b.employeeId) return res.status(400).json({ error: 'employeeId is required' });
@@ -1147,7 +1176,7 @@ function mountHrms(app, ctx) {
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    app.delete('/api/hr/documents', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.delete('/api/hr/documents', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         await pool.query(`DELETE FROM hr_documents WHERE id = $1`, [String(req.query.id || '')]);
         res.json({ success: true });
@@ -1166,7 +1195,7 @@ function mountHrms(app, ctx) {
       'Assets issued (laptop / SIM / ID card)', 'Induction and policy briefing', 'Reporting manager introduction',
     ];
 
-    app.post('/api/hr/onboarding', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.post('/api/hr/onboarding', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         const b = req.body || {};
         const employeeId = String(b.employeeId || '').trim();
@@ -1196,7 +1225,7 @@ function mountHrms(app, ctx) {
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    app.patch('/api/hr/onboarding', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.patch('/api/hr/onboarding', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         const b = req.body || {};
         if (!b.id) return res.status(400).json({ error: 'id is required' });
@@ -1209,7 +1238,7 @@ function mountHrms(app, ctx) {
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    app.delete('/api/hr/onboarding', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.delete('/api/hr/onboarding', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         await pool.query(`DELETE FROM hr_onboarding WHERE id = $1`, [String(req.query.id || '')]);
         res.json({ success: true });
@@ -1218,7 +1247,7 @@ function mountHrms(app, ctx) {
 
     /* ── Exit / full & final ──────────────────────────────────────── */
 
-    app.get('/api/hr/exits', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.get('/api/hr/exits', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         const rows = await q(
           `SELECT x.*, e.name, e.designation, e.department, e.branch, e.doj
@@ -1234,7 +1263,7 @@ function mountHrms(app, ctx) {
     // Recording an exit also retires the employee: status goes Inactive and
     // dol is set, which is what every headcount and payroll query keys off.
     // Doing it here means nobody can leave the two records disagreeing.
-    app.post('/api/hr/exits', requireAuth, requireAdmin, hrReady, async (req, res) => {
+    app.post('/api/hr/exits', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         const b = req.body || {};
         const employeeId = String(b.employeeId || '').trim();
@@ -1638,12 +1667,13 @@ function mountHrms(app, ctx) {
            highest id in use instead. */
         const id = await withSeqId('leaves', 'LV', 4, (newId) => pool.query(
           `INSERT INTO leaves (id, user_id, user_name, employee_id, type, leave_type, half_day, total_days,
-                               from_date, to_date, reason, status, approver, approver_email, approver_name)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13,$14)`,
+                               from_date, to_date, reason, status, approver, approver_email, approver_name, backup_name)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13,$14,$15)`,
           [newId, b.userId || req.session?.user?.id || null,
            b.userName || emp?.name || req.session?.user?.name || 'Unknown',
            employeeId || null, 'Leave', code, halfDay, days, from, to, b.reason || '',
-           approverName || b.approver || 'HOD', approverEmail, approverName],
+           approverName || b.approver || 'HOD', approverEmail, approverName,
+           String(b.backup_name || '').trim().slice(0, 255)],
         ));
         /* Tell the approver. Fire-and-forget on purpose: SMTP is somebody
            else's server and can be slow or down, and a leave request that is
@@ -1683,6 +1713,27 @@ function mountHrms(app, ctx) {
         // and is the applicant's problem, a notice explains why the request
         // went somewhere other than their usual approver.
         res.json({ success: true, id, days, warning, notice: tierNote, approver: approverName });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    /* Who is away today, for the dashboard. requireAuth only — knowing a
+       colleague is out, and who covers for them, is exactly what every employee
+       opens the dashboard to find out. Names and the backup, nothing more. */
+    app.get('/api/hr/on-leave-today', requireAuth, hrReady, async (req, res) => {
+      try {
+        const todayIso = isoDate(new Date());
+        const rows = await q(
+          `SELECT COALESCE(e.name, l.user_name) AS name, l.leave_type, l.half_day, l.backup_name, l.to_date
+             FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
+            WHERE LOWER(l.status) = 'approved' AND l.from_date <= $1 AND l.to_date >= $2
+            ORDER BY name ASC`, [todayIso, todayIso]).catch(() => []);
+        res.json(rows.map((r) => ({
+          name: r.name || '—',
+          type: r.leave_type || 'CL',
+          half: String(r.half_day || 'full') !== 'full',
+          backup: r.backup_name || '',
+          till: isoDate(r.to_date) || '',
+        })));
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -2232,7 +2283,7 @@ function mountHrms(app, ctx) {
             // Approved only: a request nobody has decided on is not an absence.
             // $1/$2 are the same date; the MySQL translator maps $N positionally
             // so a repeated placeholder would lose a parameter.
-            q(`SELECT COALESCE(e.name, l.user_name) AS name, l.leave_type, l.half_day
+            q(`SELECT COALESCE(e.name, l.user_name) AS name, l.leave_type, l.half_day, l.backup_name
                  FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
                 WHERE LOWER(l.status) = 'approved' AND l.from_date <= $1 AND l.to_date >= $2
                 ORDER BY name ASC`, [todayIso, todayIso]).catch(() => []),
@@ -2259,6 +2310,7 @@ function mountHrms(app, ctx) {
               name: r.name || '—',
               type: r.leave_type || 'CL',
               half: String(r.half_day || 'full') !== 'full',
+              backup: r.backup_name || '',
             })),
           });
         }
@@ -2496,6 +2548,29 @@ function mountHrms(app, ctx) {
      Settings, user linking, and the one-time import from the old sheet
      =================================================================== */
   function mountAdminRoutes() {
+
+    /* ── Policies ── read by every employee, edited by Admin. ── */
+    app.get('/api/hr/policies', requireAuth, hrReady, async (req, res) => {
+      try {
+        res.json(await q(`SELECT id, title, body, sort_order, updated_by, updated_at
+                            FROM hr_policies ORDER BY sort_order ASC, title ASC`));
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/hr/policies', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        const b = req.body || {};
+        const id = String(b.id || '').trim();
+        if (!id) return res.status(400).json({ error: 'id is required' });
+        const r = await pool.query(
+          `UPDATE hr_policies SET title = COALESCE($1, title), body = COALESCE($2, body),
+                  updated_by = $3, updated_at = NOW() WHERE id = $4`,
+          [b.title ?? null, b.body ?? null, req.session?.user?.name || '', id],
+        );
+        if (!r.rowCount) return res.status(404).json({ error: 'No such policy' });
+        res.json({ success: true });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
 
     app.get('/api/hr/settings', requireAuth, requireAdmin, hrReady, async (req, res) => {
       try { res.json(await getSettings()); }

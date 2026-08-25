@@ -149,9 +149,12 @@ window.Pages['hr-reports'] = (() => {
         <span>On Leave Today</span><span style="color:#94a3b8;">${onLeave.length || ''}</span>
       </div>
       ${onLeave.length
-        ? onLeave.map((x) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dotted #e2e8f0;font-size:12.5px;">
-            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334155;">${H.esc(x.name)}</span>
-            <span style="white-space:nowrap;color:#64748b;font-size:11.5px;">${H.esc(x.type)}${x.half ? ' · Half day' : ''}</span>
+        ? onLeave.map((x) => `<div style="padding:6px 0;border-bottom:1px dotted #e2e8f0;font-size:12.5px;">
+            <div style="display:flex;justify-content:space-between;gap:10px;">
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334155;">${H.esc(x.name)}</span>
+              <span style="white-space:nowrap;color:#64748b;font-size:11.5px;">${H.esc(x.type)}${x.half ? ' · Half day' : ''}</span>
+            </div>
+            ${x.backup ? `<div style="font-size:11px;color:#7c3aed;">covered by ${H.esc(x.backup)}</div>` : ''}
           </div>`).join('')
         : '<div style="font-size:12.5px;color:#94a3b8;padding:2px 0 6px;">Everyone is in — no approved leave today.</div>'}
     </div>`;

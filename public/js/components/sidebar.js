@@ -42,6 +42,7 @@ window.Sidebar = {
     // three only cover what the sidebar did not already have a mark for:
     // an ID card (Employee Master), a clock-in (Attendance), a rupee note
     // (Payroll) and a person-with-chart (HR Reports).
+    policies:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h8M9 11h6"/></svg>',
     orgchart:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="5" rx="1.2"/><rect x="2" y="17" width="6" height="5" rx="1.2"/><rect x="16" y="17" width="6" height="5" rx="1.2"/><path d="M12 7v4M5 17v-2h14v2M12 11v4"/></svg>',
     hremployees:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="9" cy="10" r="2.2"/><path d="M5.5 16a3.6 3.6 0 0 1 7 0"/><path d="M15 9h4M15 13h4"/></svg>',
     hrattendance: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 1.8"/></svg>',
@@ -152,6 +153,10 @@ window.Sidebar = {
       { route: 'hr-leave',      label: 'Leave Management', icon: 'leave' },
       { route: 'hr-payroll',    label: 'Payroll',         icon: 'hrpayroll' },
       { route: 'hr-reports',    label: 'HR Reports',      icon: 'hrreports',  adminOnly: true },
+      // alwaysShow for the same reason as Company Tree: users permissioned
+      // before this page existed have an explicit pages list that cannot
+      // mention it, and the policy book is for everyone by definition.
+      { route: 'hr-policies',   label: 'HR Policies',     icon: 'policies', alwaysShow: true },
     ]},
     { title: 'Accounts', items: [
       { route: 'client-master',  label: 'Vendor Master',  icon: 'clientmaster' },
@@ -208,11 +213,14 @@ window.Sidebar = {
     }
     if (!item) return true;
 
-    if (item.adminOnly && !isAdmin) return false;
-    if (item.flag && !((u.featureFlags || {})[item.flag])) return false;
-    if (item.alwaysShow) return true;
-
     const permissions = u.permissions || null;
+    // An explicit page grant from Users → Access outranks adminOnly: HR staff
+    // who are not Admins can be handed Employee Master without being handed
+    // everything else an Admin sees. Absence of a grant keeps it hidden.
+    const granted = !!(permissions && permissions.pages && permissions.pages.includes(route));
+    if (item.adminOnly && !isAdmin && !granted) return false;
+    if (item.flag && !((u.featureFlags || {})[item.flag])) return false;
+    if (item.alwaysShow || (item.adminOnly && granted)) return true;
     if (!permissions || !permissions.pages) return true;
     const routeAliases = route.startsWith('ims')
       ? [route, 'ims', 'inward', 'outward']
@@ -223,7 +231,10 @@ window.Sidebar = {
   },
 
   _buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions, featureFlags) {
-    if (item.adminOnly && !isAdmin) return '';
+    // Same grant-outranks-adminOnly rule as canAccess above — the menu and the
+    // router must never disagree about who can open a page.
+    const grantedAdminPage = !!(permissions && permissions.pages && permissions.pages.includes(item.route));
+    if (item.adminOnly && !isAdmin && !grantedAdminPage) return '';
     if (item.flag && !(featureFlags || {})[item.flag]) return '';
     // 'inward'/'outward' were their own toggleable pages once, and 'ims' was
     // the single combined page before the per-book split (see users.js). A

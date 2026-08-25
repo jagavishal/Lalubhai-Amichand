@@ -210,6 +210,35 @@ window.Pages.dashboard = (function () {
 
      Everything else about a person's HR record (punch times, balances,
      salary, payslips) lives on their Profile, not here. */
+  /* Today's absentees, from the leave register. Its own fetch rather than a
+     rider on /api/dashboard — the strip is decoration, and a slow or failing
+     HR module must never hold up or break the task board. */
+  async function _paintOnLeave() {
+    const box = document.getElementById('db-onleave');
+    if (!box) return;
+    const rows = await Utils.apiFetch('/api/hr/on-leave-today').catch(() => null);
+    if (!Array.isArray(rows) || !rows.length) return;
+    const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    box.style.display = '';
+    box.innerHTML = `
+      <div class="card" style="padding:12px 16px;border-left:3px solid #7c3aed;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#7c3aed;white-space:nowrap;">
+            On Leave Today · ${rows.length}
+          </span>
+          ${rows.map((r) => `
+            <span style="display:inline-flex;align-items:baseline;gap:6px;background:#f5f3ff;border:1px solid #ede9fe;
+                  border-radius:99px;padding:4px 12px;font-size:12.5px;">
+              <b style="color:#0f172a;">${esc(r.name)}</b>
+              <span style="color:#7c3aed;font-size:11px;font-weight:600;">${esc(r.type)}${r.half ? ' · half day' : ''}</span>
+              ${r.backup
+                ? `<span style="color:#475569;font-size:11.5px;">→ covered by <b>${esc(r.backup)}</b></span>`
+                : ''}
+            </span>`).join('')}
+        </div>
+      </div>`;
+  }
+
   function _openLeaveModal() {
     const page = window.Pages && window.Pages['hr-leave'];
     if (page && typeof page.applyLeave === 'function') page.applyLeave();
@@ -253,6 +282,7 @@ window.Pages.dashboard = (function () {
     _state.userFilter  = 'All';
 
     _renderShell(el, admin, hod);
+    _paintOnLeave();
     } catch(err) {
       el.innerHTML = `<div style="padding:2rem;color:#dc2626;font-size:14px;">❌ Dashboard error: ${err.message}</div>`;
       console.error('Dashboard render error:', err);
@@ -382,6 +412,10 @@ window.Pages.dashboard = (function () {
         </div>
 
         <!-- Stat cards -->
+        <!-- Who is away today, and who covers for them. Filled by _paintOnLeave()
+             after the shell renders; stays empty (and invisible) when nobody is out. -->
+        <div id="db-onleave" style="display:none;margin-bottom:16px;"></div>
+
         <div id="db-stat-cards" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1rem;margin-bottom:20px;">
           <div class="card db-stat-card active" data-filter="All" title="Show all pending tasks" style="padding:20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Pending</div>

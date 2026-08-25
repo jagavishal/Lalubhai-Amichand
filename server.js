@@ -1477,30 +1477,45 @@ function istToday() {
 // anything. Change it in app_config under 'greetings_hour'.
 const GREETINGS_DEFAULT_HOUR = 10;
 
-async function sendGreetingEmail({ toEmail, toName, kind, years }) {
+async function sendGreetingEmail({ toEmail, toName, kind, years, occasion, bcc }) {
   const mailer = getMailer();
   const cc = GREETINGS_CC && GREETINGS_CC.toLowerCase() !== String(toEmail || '').toLowerCase() ? GREETINGS_CC : '';
   if (!mailer || (!toEmail && !cc)) return false;
   const birthday = kind === 'birthday';
-  const subject = birthday
+  const festival = kind === 'occasion';
+  const subject = festival
+    ? `Happy ${occasion}!`
+    : birthday
     ? `Happy Birthday, ${toName}!`
     : `Happy Work Anniversary, ${toName}! — ${years} year${years === 1 ? '' : 's'}`;
-  const body = birthday
+  const body = festival
+    ? `Wishing you and your family a very happy <b>${occasion}</b>. May the day bring you joy and prosperity.`
+    : birthday
     ? `Wishing you a very happy birthday and a wonderful year ahead.`
     : `Today marks <b>${years} year${years === 1 ? '' : 's'}</b> with Lallubhai Amichand Limited. `
       + `Thank you for everything you have brought to the team.`;
+  const heading = festival ? `Happy ${occasion}` : birthday ? 'Happy Birthday' : 'Happy Work Anniversary';
+  const colour = festival ? '#b45309' : birthday ? '#b45309' : '#0150AA';
+  const emoji = festival ? '&#127882;' : birthday ? '&#127874;' : '&#127881;';
+  // The company-wide copy rides in BCC: everyone hears about the day without
+  // forty addresses being shown to forty people, and one send covers the lot.
+  const bccList = (bcc || []).filter((a) => a && a.toLowerCase() !== String(toEmail || '').toLowerCase()
+    && a.toLowerCase() !== cc.toLowerCase());
   try {
     await mailer.sendMail({
       from: `"Lallubhai Amichand" <${process.env.SMTP_USER}>`,
       to: toEmail || cc,
       ...(toEmail && cc ? { cc } : {}),
+      ...(bccList.length ? { bcc: bccList.join(', ') } : {}),
       subject,
       html: `
         <div style="font-family:Arial,sans-serif;max-width:520px;padding:28px;border:1px solid #e2e8f0;border-radius:10px;text-align:center">
-          <div style="font-size:40px;line-height:1">${birthday ? '&#127874;' : '&#127881;'}</div>
-          <h2 style="color:${birthday ? '#b45309' : '#0150AA'};margin:12px 0 14px">${birthday ? 'Happy Birthday' : 'Happy Work Anniversary'}</h2>
-          <p style="color:#374151;font-size:15px;margin:0 0 8px">Dear <b>${toName}</b>,</p>
-          <p style="color:#374151;font-size:14px;line-height:1.6;margin:0">${body}</p>
+          <div style="font-size:40px;line-height:1">${emoji}</div>
+          <h2 style="color:${colour};margin:12px 0 14px">${heading}</h2>
+          ${festival
+            ? `<p style="color:#374151;font-size:14px;line-height:1.6;margin:0">${body}</p>`
+            : `<p style="color:#374151;font-size:15px;margin:0 0 8px">Dear <b>${toName}</b>,</p>
+          <p style="color:#374151;font-size:14px;line-height:1.6;margin:0">${body}</p>`}
           <p style="color:#94a3b8;font-size:12px;margin-top:26px">From everyone at Lallubhai Amichand Limited</p>
         </div>`,
     });
@@ -1509,6 +1524,23 @@ async function sendGreetingEmail({ toEmail, toName, kind, years }) {
     console.error('[greetings] send failed for', toEmail || cc, '—', e.message);
     return false;
   }
+}
+
+/* Everybody's best mailbox — the whole company hears about a birthday, an
+   anniversary or a festival, not just the person it belongs to. Profile's real
+   address first for the same reason the leave mail prefers it: several logins
+   are shared department inboxes. */
+async function allStaffAddresses() {
+  const rows = await q(
+    `SELECT u.email AS login_email, p.notification_email
+       FROM users u LEFT JOIN profile p ON p.user_id = u.id
+      WHERE u.active = 1`).catch(() => []);
+  const out = new Set();
+  for (const r of rows) {
+    const a = String(r.notification_email || '').trim() || String(r.login_email || '').trim();
+    if (a && /@/.test(a)) out.add(a.toLowerCase());
+  }
+  return [...out];
 }
 
 async function sendDailyGreetings() {
@@ -1569,6 +1601,8 @@ async function sendDailyGreetings() {
     return;
   }
 
+  const everyone = await allStaffAddresses();
+
   let sent = 0;
   for (const r of rows) {
     // Only whoever the day actually belongs to. `md` is today's MM-DD in IST;
@@ -1584,13 +1618,27 @@ async function sendDailyGreetings() {
       || String(r.login_email || '').trim()
       || String(r.email || '').trim();
 
-    if (dobMatch && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'birthday' })) sent++;
+    if (dobMatch && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'birthday', bcc: everyone })) sent++;
     if (dojMatch) {
       const years = year - Number(toDateStr(r.doj).slice(0, 4));
-      // Not on the joining day itself, and never a negative for a future date.
-      if (years >= 1 && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'anniversary', years })) sent++;
+      // Five years and above only — management's call: the early anniversaries
+      // pass quietly, the milestones are marked in front of the whole company.
+      if (years >= 5 && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'anniversary', years, bcc: everyone })) sent++;
     }
   }
+
+  /* Festivals, off the same holiday calendar the dashboard shows. One mail per
+     occasion to the whole company; two branches sharing a date under the same
+     name still mean one greeting. */
+  try {
+    const hols = await q(`SELECT DISTINCT name FROM holidays WHERE date = $1`, [iso]);
+    for (const h of hols) {
+      const name = String(h.name || '').trim();
+      if (!name) continue;
+      if (await sendGreetingEmail({ kind: 'occasion', occasion: name, toEmail: GREETINGS_CC, bcc: everyone })) sent++;
+    }
+  } catch (e) { console.error('[greetings] occasion lookup failed:', e.message); }
+
   if (sent) console.log('[greetings]', sent, 'greeting(s) sent for', iso);
 }
 
@@ -1848,6 +1896,20 @@ async function userCanUseFeature(user, page, feat) {
   const pageFeats = perms.features[page];
   if (!pageFeats) return false;
   return pageFeats.includes(feat);
+}
+
+/* Route-level mirror of the sidebar's "an explicit page grant outranks
+   adminOnly" rule. Admin/HOD pass as always; anyone else passes only when
+   Users → Access has granted them that page. Used where a whole page's API
+   surface (Employee Master) can be handed to a non-admin. */
+function requireAdminOrPage(page) {
+  return async (req, res, next) => {
+    const user = req.session?.user;
+    if (isAdminUser(user)) return next();
+    const perms = await getUserPermissions(user?.id);
+    if (perms && perms.pages && perms.pages.includes(page)) return next();
+    res.status(403).json({ error: 'Forbidden' });
+  };
 }
 
 /* The developer secret used to be read from ?secret=... — which put it in the
@@ -3268,9 +3330,29 @@ app.get('/api/users', requireAuth, async (req, res) => {
     return res.json((store.users||[]).map(({ password_hash, ...u }) => u));
   }
   await ensureSchema();
-  const rows = await q('SELECT * FROM users ORDER BY id');
-  return res.json(rows.map(({ password_hash, ...u }) => ({ ...u, permissions: parsePermissions(u.permissions) })));
+  // notifEmail rides along from the profile table. The edit form has carried a
+  // "Notification Email" field since it existed; without this join it always
+  // reopened blank, whatever had been saved.
+  const rows = await q(`SELECT u.*, p.notification_email AS notif_email
+                          FROM users u LEFT JOIN profile p ON p.user_id = u.id ORDER BY u.id`);
+  return res.json(rows.map(({ password_hash, notif_email, ...u }) =>
+    ({ ...u, notifEmail: notif_email || '', permissions: parsePermissions(u.permissions) })));
 });
+
+/* The Users form's "Notification Email" writes here — the same profile row the
+   person can set themselves from Profile, and the same one every mailer reads
+   through notifyAddressFor. For years the form collected this field and the
+   server dropped it on the floor, which is why leave approvals kept going to
+   dead @laltd.in inboxes no matter what was typed in. */
+async function saveNotifEmail(userId, value) {
+  if (!USE_DB || !userId) return;
+  const v = String(value || '').trim();
+  await pool.query(
+    `INSERT INTO profile (user_id, notification_email) VALUES ($1,$2)
+     ON CONFLICT (user_id) DO UPDATE SET notification_email = $3`,
+    [userId, v, v],
+  );
+}
 
 // The DB stores permissions as a JSON TEXT column — routes that SELECT * and forward the
 // row straight to the client must parse it, or the frontend receives a raw string, "perm.pages"
@@ -3380,6 +3462,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
     }
     const result = await q('SELECT * FROM users WHERE id = $1', [id]);
     syncUsers_gs().catch(()=>{});
+    if (body.notifEmail !== undefined) await saveNotifEmail(id, body.notifEmail);
     const { password_hash, ...created } = result[0];
     return res.status(201).json({ ...created, permissions: parsePermissions(created.permissions) });
   } catch(e) {
@@ -3457,6 +3540,8 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
       `UPDATE users SET ${sets.join(', ')} WHERE id=?`.replace(/\?/g, () => '$' + (++ph)),
       vals,
     );
+    // The Notification Email box on the same form. Sent as '' to clear.
+    if (body.notifEmail !== undefined) await saveNotifEmail(body.id, body.notifEmail);
     if (body.picture!==undefined) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,body.id]);
@@ -3675,6 +3760,9 @@ app.patch('/api/leaves', requireAuth, requireAdmin, async (req, res) => {
 // deployment stores its private key — see the note above _normalizeGooglePrivateKey.
 const hrms = mountHrms(app, {
   pool, q, ensureSchema, requireAuth, requireAdmin, requireSuperAdmin, isAdminUser, getGoogleAuth,
+  // Employee Master can be granted to a non-admin from Users → Access; its
+  // routes gate on this instead of requireAdmin. See requireAdminOrPage.
+  requireEmployeeMaster: requireAdminOrPage('hr-employees'),
   // Shared so leave ids are minted the same way as every other id in the app —
   // from the largest one in use, not from COUNT(*). See nextSeqId.
   withSeqId,

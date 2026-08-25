@@ -53,10 +53,16 @@ window.Pages['hr-employees'] = (() => {
 
   /* ── List view ────────────────────────────────────────────────────── */
 
+  /* Admin, or explicitly granted this page from Users → Access — the grant is
+     supposed to hand over the whole screen, buttons included, not a read-only
+     shadow of it. The server enforces the same rule (see requireAdminOrPage). */
+  const canManage = () => H.isAdmin()
+    || !!((window.currentUser?.permissions?.pages || []).includes('hr-employees'));
+
   function render() {
     const el = document.getElementById('main-content');
     if (!el) return;
-    const admin = H.isAdmin();
+    const admin = canManage();
 
     // The import is a bulk write over the whole HR database, so it is owner-only
     // (requireSuperAdmin on the route). It used to be offered to every Admin and
@@ -258,7 +264,7 @@ window.Pages['hr-employees'] = (() => {
     const p = _profile;
     if (!p) return;
     const e = p.employee;
-    const admin = H.isAdmin();
+    const admin = canManage();
 
     const TABS = [
       { key: 'overview', label: 'Overview' },
@@ -538,7 +544,7 @@ window.Pages['hr-employees'] = (() => {
   function bindProfile() {
     const rerender = () => {
       const box = document.getElementById('hrep-body');
-      if (box) { box.innerHTML = profileTabBody(H.isAdmin()); bindProfileBody(); }
+      if (box) { box.innerHTML = profileTabBody(canManage()); bindProfileBody(); }
       document.querySelectorAll('[data-hrep-tab]').forEach((b) => {
         const on = b.dataset.hrepTab === _profileTab;
         b.style.fontWeight = on ? '700' : '500';
@@ -557,7 +563,7 @@ window.Pages['hr-employees'] = (() => {
   async function refreshProfile() {
     _profile = await H.api(`/api/hr/employees/${encodeURIComponent(_profile.employee.id)}`);
     const box = document.getElementById('hrep-body');
-    if (box) { box.innerHTML = profileTabBody(H.isAdmin()); bindProfileBody(); }
+    if (box) { box.innerHTML = profileTabBody(canManage()); bindProfileBody(); }
   }
 
   function bindProfileBody() {

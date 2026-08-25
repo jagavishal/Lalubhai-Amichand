@@ -396,6 +396,9 @@ window.Pages['hr-leave'] = (() => {
         <div id="hrla-days" style="${H.CONTROL}background:#f8fafc;display:flex;align-items:baseline;gap:8px;
              font-weight:700;color:#0f172a;">—</div>
       </div>
+      ${H.select('hrla-backup', 'Backup Person', '',
+        emps, { placeholder: 'Who covers your work — optional', span: 2,
+                hint: 'Shown on the dashboard next to your name while you are away' })}
       ${H.textarea('hrla-reason', 'Reason', '', { rows: 3 })}
       <div id="hrla-bal" style="grid-column:1/-1;"></div>
     `);
@@ -501,6 +504,13 @@ window.Pages['hr-leave'] = (() => {
           employeeId: admin ? H.val('hrla-emp') : undefined,
           leave_type: H.val('hrla-type'), half_day: H.val('hrla-half'),
           from_date: H.val('hrla-from'), to_date: H.val('hrla-to'), reason: H.val('hrla-reason'),
+          // The picker holds employee ids; the row stores the display name, so
+          // every screen that lists today's leave can show it without a join.
+          backup_name: (() => {
+            const v = H.val('hrla-backup');
+            const e = (_masters.employees || []).find((x) => x.id === v);
+            return e ? e.name : '';
+          })(),
         };
         if (admin && !payload.employeeId) { H.toast('Pick an employee', 'error'); throw new Error('validation'); }
         const r = await H.post('/api/hr/leaves', payload);
