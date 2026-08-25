@@ -7778,7 +7778,20 @@ function _plOrderLines(order, packed) {
 // combine "AL NASR TR. CO." with "Al Nasr Tr Co" would be refusing a shipment
 // that is genuinely one consignment.
 function _plBuyerKey(name) {
-  return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  return String(name || '')
+    // "M/s." is a courtesy title, not part of the name, and their party names
+    // carry it inconsistently — the Zam Zam and Saif Plus lists have it, the
+    // Golden Ship House one does not. Two orders for the same buyer must not
+    // be kept off one container over it.
+    //
+    // Matched on the RAW string, before the punctuation below is flattened to
+    // spaces, so the slash is still there to match on: a company genuinely
+    // called "MS Traders" keeps its name, where a looser /^m\s*s\b/ would eat
+    // the "MS" and merge it with an unrelated "Traders".
+    .replace(/^\s*(?:m\/s|messrs)\.?\s*/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 }
 
 // GET /api/packing-list/pending — every order that still has goods to ship,

@@ -113,6 +113,11 @@ window.Pages['proforma-invoice'] = (() => {
   let _plNew = null;
   let _plSaving = false;
   let _packingDefaults = null;
+  // The "click anywhere else to close the Order No. picker" handler lives on
+  // document, so it is bound ONCE for the life of the module rather than on
+  // every render — the form repaints each time an order is ticked, and a
+  // per-render binding would stack up a new listener each time.
+  let _plDocCloseBound = false;
 
   // Revision state — set while the Create tab is being used to re-issue an
   // existing PI rather than raise a new one. { piNo, status } of the parent.
@@ -1942,6 +1947,9 @@ window.Pages['proforma-invoice'] = (() => {
       // New button. It cannot be picked yet — the pending orders may not have
       // arrived — so renderPage applies it once they have.
       preselect: String(orderNo || '').trim(),
+      // Whether the Order No. tick-list is showing. Kept in state, not in the
+      // DOM, so it survives the repaint each tick causes.
+      pickerOpen: false,
       header: {
         plDate: _today(), invoiceNo: '', cha: '',
         containerSize: D.containerSize || '',
@@ -2008,34 +2016,109 @@ window.Pages['proforma-invoice'] = (() => {
       + '</datalist>');
   }
 
-  function _plOrderCardHtml(o) {
+  /* ── the Order No. field IS the order picker ──────────────────────────
+     The printed document's header carries "ORDER NO :- P00595, P00660", so
+     that is where picking them belongs: clicking the field drops a tick-list
+     of every order with something left to ship. Each row shows the party and
+     the balance, because two orders for different buyers look identical by
+     number alone — and orders for a DIFFERENT party than the one already
+     picked are shown greyed and untickable, since a packing list ships to one
+     consignee (the server refuses a mixed one outright). ───────────────── */
+  function _plOrderOptionHtml(o) {
     const locked = _plLockedBuyerKey();
     const picked = _plNew.picked.includes(o.orderNo);
     const blocked = !!locked && !picked && o.buyerKey !== locked;
-    return '<label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1.5px solid ' + (picked ? 'var(--color-primary)' : '#e2e8f0') + ';border-radius:10px;background:' + (blocked ? '#f8fafc' : '#fff') + ';cursor:' + (blocked ? 'not-allowed' : 'pointer') + ';opacity:' + (blocked ? '.5' : '1') + ';">'
-      + '<input type="checkbox" class="pl-order-pick" data-order="' + esc(o.orderNo) + '"' + (picked ? ' checked' : '') + (blocked ? ' disabled' : '') + ' style="margin-top:2px;" />'
+    return '<label style="display:flex;gap:9px;align-items:flex-start;padding:8px 11px;border-bottom:1px solid #f1f5f9;'
+      + 'background:' + (picked ? '#f0f9ff' : '#fff') + ';cursor:' + (blocked ? 'not-allowed' : 'pointer') + ';opacity:' + (blocked ? '.5' : '1') + ';">'
+      + '<input type="checkbox" class="pl-order-pick" data-order="' + esc(o.orderNo) + '"' + (picked ? ' checked' : '') + (blocked ? ' disabled' : '') + ' style="margin-top:2px;flex:none;" />'
       + '<div style="min-width:0;flex:1;">'
         + '<div style="font-size:12.5px;font-weight:700;color:#0f172a;">' + esc(o.orderNo) + '</div>'
-        + '<div style="font-size:11.5px;color:#64748b;margin-top:2px;">' + esc(o.buyer || '—') + '</div>'
-        + '<div style="font-size:11px;color:#94a3b8;margin-top:3px;">'
+        + '<div style="font-size:11.5px;color:#64748b;margin-top:1px;">' + esc(o.buyer || '—') + '</div>'
+        + '<div style="font-size:11px;color:#94a3b8;margin-top:2px;">'
           + esc(o.orderDate || '') + (o.piNo ? ' · ' + esc(o.piNo) : '')
         + '</div>'
-        + '<div style="font-size:11.5px;margin-top:4px;font-weight:600;color:' + (o.packedQty ? '#b45309' : '#15803d') + ';">'
+        + '<div style="font-size:11.5px;margin-top:3px;font-weight:600;color:' + (o.packedQty ? '#b45309' : '#15803d') + ';">'
           + 'Balance ' + esc(o.balanceQty) + ' of ' + esc(o.orderedQty)
           + (o.packedQty ? ' · ' + esc(o.packedQty) + ' already shipped' : '')
         + '</div>'
-        + (blocked ? '<div style="font-size:11px;color:#ef4444;margin-top:4px;">Different party — not on this packing list</div>' : '')
+        + (blocked ? '<div style="font-size:11px;color:#ef4444;margin-top:3px;">Different party — not on this packing list</div>' : '')
       + '</div>'
     + '</label>';
   }
 
-  function _plOrderPickerHtml() {
-    if (!_plPendingLoaded) return '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading orders…</div>';
-    if (_plPendingError) return '<div style="padding:14px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_plPendingError) + '</div>';
-    if (!_plPending.length) return '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:12.5px;">Every order raised is fully shipped — there is nothing left to pack.</div>';
-    return '<div id="pl-order-picker" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;">'
-      + _plPending.map(_plOrderCardHtml).join('')
-    + '</div>';
+  function _plOrderDdHtml() {
+    const note = (text, color) => '<div style="padding:14px;text-align:center;color:' + color + ';font-size:12.5px;">' + esc(text) + '</div>';
+    if (!_plPendingLoaded) return note('Loading orders…', '#94a3b8');
+    if (_plPendingError) return note(_plPendingError, '#ef4444');
+    if (!_plPending.length) return note('Every order raised is fully shipped — there is nothing left to pack.', '#94a3b8');
+    return _plPending.map(_plOrderOptionHtml).join('');
+  }
+
+  function _plOrderNoField() {
+    const picked = _plNew.picked;
+    const empty = !picked.length;
+    return _fieldWrap('Order No.', ''
+      + '<div id="pl-order-no" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1.5px solid '
+        + (empty ? '#cbd5e1' : 'var(--color-primary)') + ';border-radius:8px;font-size:13px;cursor:pointer;background:#fff;'
+        + (empty ? 'border-style:dashed;' : '') + '">'
+        + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:'
+          + (empty ? '#94a3b8' : '#1e293b') + ';font-weight:' + (empty ? '400' : '600') + ';">'
+          + esc(empty ? 'Click to tick the orders going in' : picked.join(', ')) + '</span>'
+        + (empty ? '' : '<span style="flex:none;padding:1px 7px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);font-size:11px;font-weight:700;">' + picked.length + '</span>')
+        + '<span style="flex:none;color:#94a3b8;font-size:10px;">▼</span>'
+      + '</div>'
+      + '<div id="pl-order-dd" style="display:none;position:fixed;z-index:60;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:340px;overflow-y:auto;"></div>');
+  }
+
+  function _plCloseOrderDd() {
+    const dd = document.getElementById('pl-order-dd');
+    if (dd) dd.style.display = 'none';
+    if (_plNew) _plNew.pickerOpen = false;
+  }
+
+  function _plBindOrderPicker() {
+    const field = document.getElementById('pl-order-no');
+    const dd = document.getElementById('pl-order-dd');
+    if (!field || !dd) return;
+
+    const open = () => {
+      dd.innerHTML = _plOrderDdHtml();
+      const rect = field.getBoundingClientRect();
+      dd.style.top = (rect.bottom + 3) + 'px';
+      dd.style.left = rect.left + 'px';
+      // The field sits in a narrow grid column; the list needs room for a
+      // party name and a balance line, so it is allowed to be wider.
+      dd.style.width = Math.max(rect.width, 320) + 'px';
+      dd.style.display = 'block';
+      _plNew.pickerOpen = true;
+    };
+
+    field.addEventListener('click', (e) => {
+      e.stopPropagation();                       // do not trip the close-on-document handler
+      if (dd.style.display === 'block') _plCloseOrderDd(); else open();
+    });
+    dd.addEventListener('click', (e) => e.stopPropagation());
+    dd.addEventListener('change', (e) => {
+      const box = e.target.closest('.pl-order-pick');
+      if (!box) return;
+      // Everything typed so far survives the re-render the new line table
+      // forces — see the note on _plNew.
+      _plHarvest();
+      const orderNo = box.dataset.order;
+      _plNew.picked = box.checked
+        ? _plNew.picked.concat([orderNo])
+        : _plNew.picked.filter(n => n !== orderNo);
+      // Ticking a second order should not mean re-opening the list to tick a
+      // third, so the repaint below puts it straight back.
+      _plNew.pickerOpen = true;
+      renderPage();
+    });
+
+    if (!_plDocCloseBound) {
+      _plDocCloseBound = true;
+      document.addEventListener('click', _plCloseOrderDd);
+    }
+    if (_plNew.pickerOpen) open();
   }
 
   // Column set of the line table, in the order the printed document has them.
@@ -2065,7 +2148,7 @@ window.Pages['proforma-invoice'] = (() => {
   function _plLinesHtml() {
     const orders = _plPickedOrders();
     if (!orders.length) {
-      return '<div style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px;border:1px dashed #e2e8f0;border-radius:10px;">Pick an order above and its lines appear here.</div>';
+      return '<div style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px;border:1px dashed #e2e8f0;border-radius:10px;">Tick the orders in the Order No. box above and their lines appear here.</div>';
     }
     const ro = 'padding:5px 7px;font-size:11.5px;white-space:nowrap;';
     const calc = 'padding:5px 7px;font-size:11.5px;white-space:nowrap;text-align:right;color:#475569;background:#f8fafc;';
@@ -2121,7 +2204,6 @@ window.Pages['proforma-invoice'] = (() => {
     const h = _plNew.header;
     const lead = _plPickedOrders()[0];
     const D = _packingDefaults || {};
-    const orderNos = _plNew.picked.join(', ');
     return '<form id="pl-form" style="display:flex;flex-direction:column;gap:16px;">'
       + '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
         + '<div>'
@@ -2140,14 +2222,11 @@ window.Pages['proforma-invoice'] = (() => {
         + _textField('pl-date', 'Date', { type: 'date', value: h.plDate })
         + _plListField('pl-container-size', 'Container Size', h.containerSize, D.containerSizeOptions, 'e.g. 20 FT HC')
         + _textField('pl-cha', 'CHA', { value: h.cha })
+        + _plOrderNoField()
         + _readonlyField('pl-party', 'Party Name', (lead && lead.buyer) || '— pick an order —')
-        + _readonlyField('pl-order-nos', 'Order No.', orderNos || '— pick an order —')
         + _readonlyField('pl-total-cartons', 'Total Cartons', '0 NOS')
       + '</div>'
       + _plListField('pl-category', 'Product Category (the band above the table)', h.productCategory, D.productCategoryOptions, 'e.g. ALUMINIUM UTENSILS (QUEEN BRAND)')
-
-      + _sectionTitle('Orders in this Container')
-      + _plOrderPickerHtml()
 
       + _sectionTitle('Carton Count')
       + _plLinesHtml()
@@ -2226,23 +2305,7 @@ window.Pages['proforma-invoice'] = (() => {
   function _plBindForm() {
     document.getElementById('pl-form-cancel').addEventListener('click', _plCancelForm);
     document.getElementById('pl-form').addEventListener('submit', _plSubmit);
-    // The party name and the order list in the header are read off the picked
-    // orders, so a change there has to repaint the whole form.
-    const picker = document.getElementById('pl-order-picker');
-    if (picker) {
-      picker.addEventListener('change', (e) => {
-        const box = e.target.closest('.pl-order-pick');
-        if (!box) return;
-        // Everything typed so far survives the re-render the new line table
-        // forces — see the note on _plNew.
-        _plHarvest();
-        const orderNo = box.dataset.order;
-        _plNew.picked = box.checked
-          ? _plNew.picked.concat([orderNo])
-          : _plNew.picked.filter(n => n !== orderNo);
-        renderPage();
-      });
-    }
+    _plBindOrderPicker();
 
     const tbody = document.getElementById('pl-lines-tbody');
     if (tbody) {
