@@ -3337,14 +3337,42 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
     // Left null when the form didn't send the field at all (COALESCE keeps what is
     // stored); an empty string still clears it, as before.
     const dept = body.department == null ? null : await canonicalDept(body.department);
+    /* Built as a list rather than one interpolated string, because the numbers
+       on the placeholders have to ASCEND in the order they appear in the text.
+       pgToMysql rewrites every $N to a bare '?', so MySQL binds by where a
+       placeholder sits, not by the number on it. This statement used to append
+       an optional ', leave_approver=$9' AFTER the SET list but BEFORE 'WHERE
+       id=$8' — so on MariaDB the last two arguments swapped, and picking a
+       Leave Approver ran
+
+         UPDATE users SET name='<edited user>', ... WHERE id='<the approver>'
+
+       against the approver's own row. It only ever surfaced as "Duplicate entry
+       ... for key 'users_name_email_key'" because that index refused to give two
+       rows the same name and email; without it the approver's name, email,
+       phone, department and branch would have been silently overwritten.
+
+       leave_approver is a plain assignment rather than COALESCE, so clearing it
+       (picking "— None —") actually clears it. COALESCE would read the null as
+       "leave alone" and the field could never be unset. */
+    const sets = [
+      'name=COALESCE(?,name)', 'email=COALESCE(?,email)', 'phone=COALESCE(?,phone)',
+      'department=COALESCE(?,department)', 'branch=COALESCE(?,branch)',
+      'roles=COALESCE(?,roles)', 'active=COALESCE(?,active)',
+    ];
+    const vals = [
+      body.name??null, body.email??null, body.phone??null, dept, body.branch??null, roles,
+      body.active===undefined?null:(body.active?1:0),
+    ];
+    if (body.leave_approver!==undefined) {
+      sets.push('leave_approver=?');
+      vals.push(body.leave_approver||null);
+    }
+    vals.push(body.id);
+    let ph = 0;
     await pool.query(
-      // leave_approver is set with a plain assignment rather than COALESCE, so
-      // clearing it (picking "— None —") actually clears it. COALESCE would
-      // read the null as "leave alone" and the field could never be unset.
-      `UPDATE users SET name=COALESCE($1,name), email=COALESCE($2,email), phone=COALESCE($3,phone), department=COALESCE($4,department), branch=COALESCE($5,branch), roles=COALESCE($6,roles), active=COALESCE($7,active)${body.leave_approver===undefined?'':', leave_approver=$9'} WHERE id=$8`,
-      body.leave_approver===undefined
-        ? [body.name??null,body.email??null,body.phone??null,dept,body.branch??null,roles,body.active===undefined?null:(body.active?1:0),body.id]
-        : [body.name??null,body.email??null,body.phone??null,dept,body.branch??null,roles,body.active===undefined?null:(body.active?1:0),body.id,body.leave_approver||null]
+      `UPDATE users SET ${sets.join(', ')} WHERE id=?`.replace(/\?/g, () => '$' + (++ph)),
+      vals,
     );
     if (body.picture!==undefined) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
