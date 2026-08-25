@@ -89,6 +89,31 @@ window.Pages['proforma-invoice'] = (() => {
   // second copy of what the server decides.
   let _orderDefaults = null;
 
+  // Packing List tab state — the fourth view, and the end of the chain:
+  // PI → Order Sheet → Packing List. Two things shape it and neither is true
+  // of the tabs above:
+  //   * one packing list can ship SEVERAL orders (same consignee), so the
+  //     create form starts with an order picker rather than a single parent;
+  //   * an order rarely goes out in one lot, so every line is packed against
+  //     a balance the server computes from all the live packing lists.
+  let _pklRows = [];
+  let _pklLoaded = false;
+  let _pklLoadError = '';
+  let _pklFBuyer = '';
+  let _pklFFrom = '';
+  let _pklFTo = '';
+  // Orders that still have something left to ship, from /packing-list/pending.
+  let _plPending = [];
+  let _plPendingLoaded = false;
+  let _plPendingError = '';
+  // null while the list is showing; otherwise the create form's whole state.
+  // Values are held HERE rather than read off the DOM at the end, because
+  // picking another order re-renders the line table and would otherwise throw
+  // away everything already typed into it.
+  let _plNew = null;
+  let _plSaving = false;
+  let _packingDefaults = null;
+
   // Revision state — set while the Create tab is being used to re-issue an
   // existing PI rather than raise a new one. { piNo, status } of the parent.
   let _reviseOf = null;
@@ -142,6 +167,7 @@ window.Pages['proforma-invoice'] = (() => {
       if (data.priceDefault) _priceDefault = data.priceDefault;
       if (data.defaults) _defaults = data.defaults;
       if (data.orderDefaults) _orderDefaults = data.orderDefaults;
+      if (data.packingDefaults) _packingDefaults = data.packingDefaults;
       if (data.maxItems) _maxItems = data.maxItems;
       _mastersLoaded = true;
       const el = document.getElementById('pic-next-no');
@@ -817,6 +843,7 @@ window.Pages['proforma-invoice'] = (() => {
       + _tabTab('Create PI', _view === 'create', 'class="pic-create-tab"')
       + _tabTab('PI List', _view === 'list', 'class="pic-list-tab"')
       + _tabTab('Order Sheets', _view === 'orders', 'class="pic-orders-tab"')
+      + _tabTab('Packing List', _view === 'packing', 'class="pic-packing-tab"')
     + '</div>';
   }
 
@@ -1416,9 +1443,14 @@ window.Pages['proforma-invoice'] = (() => {
     if (document.getElementById('pil-body')) _pilRenderTable();
   }
 
+  // Open is what raising the order sets; the middle two are written back by
+  // the Packing List tab as shipments go out against it (see
+  // _plSyncOrderStatuses in server.js).
   function _osStatusPillHtml(status) {
     const styles = {
       Open: 'background:#f0fdf4;color:#15803d;',
+      'Partly Packed': 'background:#fffbeb;color:#b45309;',
+      Packed: 'background:#eff6ff;color:#1d4ed8;',
       Cancelled: 'background:#f1f5f9;color:#64748b;',
     };
     return '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;'
@@ -1483,6 +1515,12 @@ window.Pages['proforma-invoice'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">' + (r.totalQty ? esc(r.totalQty) : '<span style="color:#cbd5e1;">—</span>') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+          // Straight into a new Packing List with this order already ticked —
+          // the common case is shipping one order, and the picker is still
+          // there for the times it is two or three.
+          + (r.status === 'Cancelled' || r.status === 'Packed'
+            ? ''
+            : '<button type="button" class="osl-pack-btn" data-order="' + esc(r.orderNo) + '" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:700;padding:2px 6px;">Pack</button>')
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
             : '<button type="button" class="osl-cancel-btn" data-order="' + esc(r.orderNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
@@ -1508,6 +1546,8 @@ window.Pages['proforma-invoice'] = (() => {
     if (!body || body.dataset.actionsBound) return;
     body.dataset.actionsBound = '1';
     body.addEventListener('click', async (e) => {
+      const packBtn = e.target.closest('.osl-pack-btn');
+      if (packBtn) { _plStartNew(packBtn.dataset.order); return; }
       const cancelBtn = e.target.closest('.osl-cancel-btn');
       if (cancelBtn) {
         const ok = await Utils.showConfirm('Order ' + cancelBtn.dataset.order + ' will be marked Cancelled. This can\'t be undone.', { title: 'Cancel Order Sheet', confirmText: 'Cancel Order', danger: true });
@@ -1668,6 +1708,631 @@ window.Pages['proforma-invoice'] = (() => {
     }
   }
 
+  /* ── Packing List — list view ──────────────────────────────────────────
+     The end of the chain: PI → Order Sheet → Packing List. Read-only history
+     off the "ERP Packing List Log" tab, same shape as the two lists above.
+     Two columns are its own: the export INVOICE NO. the document is raised
+     under (their LA-07 / LA-14 / LA-16 series), and an Orders column that is
+     a list rather than a single number. ─────────────────────────────────── */
+  function _pklFilteredRows() {
+    return _pklRows.filter(r => {
+      if (_pklFBuyer) {
+        const q = _pklFBuyer.toLowerCase();
+        if (!(r.buyer || '').toLowerCase().includes(q) && !(r.plNo || '').toLowerCase().includes(q)
+          && !(r.invoiceNo || '').toLowerCase().includes(q)
+          && !(r.orderNos || '').toLowerCase().includes(q) && !(r.piNos || '').toLowerCase().includes(q)) return false;
+      }
+      if (_pklFFrom && (r.plDate || '') < _pklFFrom) return false;
+      if (_pklFTo && (r.plDate || '') > _pklFTo) return false;
+      return true;
+    });
+  }
+
+  async function _pklLoad() {
+    _pklLoaded = false;
+    _pklLoadError = '';
+    _pklRenderTable();
+    try {
+      _pklRows = await Utils.apiFetch('/api/packing-list/list') || [];
+    } catch (e) {
+      _pklRows = [];
+      _pklLoadError = e.message || 'Failed to load Packing Lists';
+    }
+    _pklLoaded = true;
+    _pklRenderTable();
+  }
+
+  function _pklStatusPillHtml(status) {
+    const styles = {
+      Open: 'background:#f0fdf4;color:#15803d;',
+      Cancelled: 'background:#f1f5f9;color:#64748b;',
+    };
+    return '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;'
+      + (styles[status] || styles.Open) + '">' + esc(status || 'Open') + '</span>';
+  }
+
+  const _PKL_COLS = ['Packing List No', 'Date', 'Invoice No', 'Orders Shipped', 'Party', 'Status', 'Packed Qty', 'Cartons', 'PDF', 'Actions'];
+
+  function _pklFilterBarHtml() {
+    return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
+      + '<input type="text" id="pkl-q" value="' + esc(_pklFBuyer) + '" placeholder="Search packing list no, invoice no, order no or party…" style="flex:1;min-width:220px;' + _inputStyle + '" />'
+      + '<input type="date" id="pkl-from" value="' + esc(_pklFFrom) + '" style="' + _inputStyle + 'width:auto;" />'
+      + '<span style="align-self:center;font-size:12px;color:#94a3b8;">to</span>'
+      + '<input type="date" id="pkl-to" value="' + esc(_pklFTo) + '" style="' + _inputStyle + 'width:auto;" />'
+      + '<button type="button" id="pkl-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
+      + '<button type="button" id="pkl-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
+    + '</div>';
+  }
+
+  function _pklListHtml() {
+    return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;">'
+        + '<p style="font-size:12.5px;color:#64748b;margin:0;">The export department’s own packing list. One list can ship several orders for the same party, and a line can go part-shipped — the balance stays on the order for the next one.</p>'
+        + '<div style="display:flex;align-items:center;gap:10px;">'
+          + '<span id="pkl-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
+          + '<button type="button" id="pkl-new" style="padding:8px 16px;border-radius:8px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;">+ New Packing List</button>'
+        + '</div>'
+      + '</div>'
+      + _pklFilterBarHtml()
+      + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+        + '<table style="width:100%;border-collapse:collapse;min-width:1020px;">'
+          + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+            + _PKL_COLS.map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+          + '</tr></thead>'
+          + '<tbody id="pkl-body"><tr><td colspan="' + _PKL_COLS.length + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+        + '</table>'
+      + '</div>';
+  }
+
+  function _pklRenderTable() {
+    const body = document.getElementById('pkl-body');
+    const countEl = document.getElementById('pkl-count');
+    if (!body) return;
+    const span = _PKL_COLS.length;
+    const notice = (html, color) => {
+      body.innerHTML = '<tr><td colspan="' + span + '" style="padding:16px;text-align:center;color:' + color + ';font-size:12.5px;">' + html + '</td></tr>';
+      if (countEl) countEl.textContent = '';
+    };
+    if (!_pklLoaded) return notice('Loading…', '#94a3b8');
+    if (_pklLoadError) return notice(esc(_pklLoadError), '#ef4444');
+
+    const rows = _pklFilteredRows();
+    if (countEl) countEl.textContent = rows.length + ' of ' + _pklRows.length;
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="' + span + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">'
+        + (_pklRows.length ? 'No Packing Lists match these filters' : 'No Packing Lists raised yet') + '</td></tr>';
+      return;
+    }
+    const num = (v) => v ? esc(v) : '<span style="color:#cbd5e1;">—</span>';
+    body.innerHTML = rows.map(r => ''
+      + '<tr style="border-bottom:1px solid #f1f5f9;">'
+        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.plNo) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + esc(r.plDate) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:600;white-space:nowrap;">' + num(r.invoiceNo) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12px;line-height:1.5;">' + esc(r.orderNos || '—') + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + _pklStatusPillHtml(r.status) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">' + num(r.totalQty) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">' + num(r.totalCartons) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+          + (r.status === 'Cancelled'
+            ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
+            : '<button type="button" class="pkl-cancel-btn" data-pl="' + esc(r.plNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
+          + Utils.ownerDeleteBtn('pkl-delete-btn', 'pl', r.plNo)
+        + '</td>'
+      + '</tr>').join('');
+  }
+
+  function _pklBindListBar() {
+    const q = document.getElementById('pkl-q');
+    if (!q) return;
+    q.addEventListener('input', (e) => { _pklFBuyer = e.target.value; _pklRenderTable(); });
+    document.getElementById('pkl-from').addEventListener('change', (e) => { _pklFFrom = e.target.value; _pklRenderTable(); });
+    document.getElementById('pkl-to').addEventListener('change', (e) => { _pklFTo = e.target.value; _pklRenderTable(); });
+    document.getElementById('pkl-clear').addEventListener('click', () => {
+      _pklFBuyer = ''; _pklFFrom = ''; _pklFTo = '';
+      q.value = ''; document.getElementById('pkl-from').value = ''; document.getElementById('pkl-to').value = '';
+      _pklRenderTable();
+    });
+    document.getElementById('pkl-refresh').addEventListener('click', _pklLoad);
+    document.getElementById('pkl-new').addEventListener('click', () => _plStartNew());
+
+    const body = document.getElementById('pkl-body');
+    if (!body || body.dataset.actionsBound) return;
+    body.dataset.actionsBound = '1';
+    body.addEventListener('click', async (e) => {
+      const cancelBtn = e.target.closest('.pkl-cancel-btn');
+      if (cancelBtn) {
+        const ok = await Utils.showConfirm('Packing List ' + cancelBtn.dataset.pl + ' will be marked Cancelled, and the quantities on it go back onto the orders as still to ship.', { title: 'Cancel Packing List', confirmText: 'Cancel Packing List', danger: true });
+        if (!ok) return;
+        try {
+          await Utils.apiFetch('/api/packing-list/cancel?plNo=' + encodeURIComponent(cancelBtn.dataset.pl), { method: 'PUT' });
+          Utils.showToast('Packing List ' + cancelBtn.dataset.pl + ' cancelled', 'success');
+          await _pklLoad();
+        } catch (err) { Utils.showToast(err.message || 'Failed to cancel', 'error'); }
+        return;
+      }
+      const delBtn = e.target.closest('.pkl-delete-btn');
+      if (delBtn) {
+        const plNo = delBtn.dataset.pl;
+        if (!(await Utils.ownerDeleteConfirm('Packing List ' + plNo + ' (its number can then be re-issued to a new one)'))) return;
+        try {
+          await Utils.apiFetch('/api/packing-list?plNo=' + encodeURIComponent(plNo), { method: 'DELETE' });
+          Utils.showToast('Packing List ' + plNo + ' deleted', 'success');
+          await _pklLoad();
+        } catch (err) { Utils.showToast(err.message || 'Failed to delete', 'error'); }
+      }
+    });
+  }
+
+  /* ── Packing List — create form ────────────────────────────────────────
+     Two steps on one screen. First pick the orders going into this shipment
+     (several are normal, as long as they are for one party); then COUNT THE
+     CARTONS. The document is carton-driven — cartons × pcs-per-carton is the
+     packed quantity, and the per-carton weights and CBM multiply up the same
+     way — so this form asks for exactly what the packer has in front of them
+     and computes the rest live, the way their own sheet does.
+
+     Nothing is read off the DOM until submit EXCEPT when the picked set
+     changes: picking another order re-renders the line table, so what has been
+     typed is harvested into _plNew.values first and seeded straight back in. */
+
+  function _plLineKey(orderNo, lineIdx) { return orderNo + '#' + lineIdx; }
+
+  // Round the way the printed sheet does, so what is shown here and what is
+  // filed are the same number.
+  function _plRound(v, dp) {
+    const f = Math.pow(10, dp);
+    return Math.round((_num(v)) * f) / f;
+  }
+
+  // A line the form has not seen before starts from the order's own figures.
+  // Cartons FLOOR the balance rather than rounding it up — a rounded-up carton
+  // count would ship more than the order has left and be refused on submit.
+  // Whatever the floor leaves behind is the part carton, and the packer says
+  // what is in it by typing over Packed Qty.
+  function _plSeedValues(line) {
+    const perCarton = _num(line.perCartonHint);
+    const cartons = perCarton > 0 ? Math.floor(line.balanceQty / perCarton) : 0;
+    return {
+      barcode: '',
+      cartons: cartons > 0 ? String(cartons) : '',
+      perCarton: perCarton > 0 ? String(perCarton) : '',
+      packedQty: '',
+      netPerCarton: line.netPerCartonHint ? String(line.netPerCartonHint) : '',
+      grossPerCarton: '',
+      cbmPerCarton: line.cbmPerCartonHint ? String(line.cbmPerCartonHint) : '',
+      // Packed Qty follows cartons × pcs-per-carton until the packer types
+      // over it — the only way their format can express a part carton.
+      auto: { packedQty: true },
+    };
+  }
+
+  async function _plLoadPending() {
+    _plPendingLoaded = false;
+    _plPendingError = '';
+    try {
+      _plPending = await Utils.apiFetch('/api/packing-list/pending') || [];
+    } catch (e) {
+      _plPending = [];
+      _plPendingError = e.message || 'Failed to load orders pending dispatch';
+    }
+    _plPendingLoaded = true;
+  }
+
+  function _plPickedOrders() {
+    if (!_plNew) return [];
+    return _plNew.picked.map(no => _plPending.find(o => o.orderNo === no)).filter(Boolean);
+  }
+
+  // Which party this packing list is locked to, once anything is picked. The
+  // server refuses a mixed-party packing list outright; the picker greys the
+  // others out so nobody gets that far.
+  function _plLockedBuyerKey() {
+    const first = _plPickedOrders()[0];
+    return first ? first.buyerKey : '';
+  }
+
+  function _plStartNew(orderNo) {
+    const D = _packingDefaults || {};
+    _plNew = {
+      picked: [],
+      values: {},
+      // Set when the form was opened from an order row rather than from the
+      // New button. It cannot be picked yet — the pending orders may not have
+      // arrived — so renderPage applies it once they have.
+      preselect: String(orderNo || '').trim(),
+      header: {
+        plDate: _today(), invoiceNo: '', cha: '',
+        containerSize: D.containerSize || '',
+        productCategory: D.productCategory || '',
+      },
+    };
+    if (_plPendingLoaded) _plApplyPreselect();
+    _view = 'packing';
+    renderPage();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Consumes _plNew.preselect once — a second pass must not re-tick an order
+  // the user has since unticked.
+  function _plApplyPreselect() {
+    if (!_plNew || !_plNew.preselect) return;
+    const orderNo = _plNew.preselect;
+    _plNew.preselect = '';
+    if (_plPending.some(o => o.orderNo === orderNo) && !_plNew.picked.includes(orderNo)) {
+      _plNew.picked = _plNew.picked.concat([orderNo]);
+    } else if (!_plPending.some(o => o.orderNo === orderNo)) {
+      Utils.showToast('Order ' + orderNo + ' has nothing left to ship', 'warning');
+    }
+  }
+
+  function _plCancelForm() {
+    _plNew = null;
+    renderPage();
+  }
+
+  // Reads the form back into _plNew so a re-render does not lose it.
+  function _plHarvest() {
+    if (!_plNew) return;
+    const dateEl = document.getElementById('pl-date');
+    if (dateEl) {
+      const h = _plNew.header;
+      h.plDate = dateEl.value;
+      h.invoiceNo = document.getElementById('pl-invoice-no').value;
+      h.containerSize = document.getElementById('pl-container-size').value;
+      h.cha = document.getElementById('pl-cha').value;
+      h.productCategory = document.getElementById('pl-category').value;
+    }
+    document.querySelectorAll('#pl-lines-tbody .pl-line-row').forEach(row => {
+      const key = row.dataset.key;
+      const v = _plNew.values[key] || (_plNew.values[key] = { auto: {} });
+      row.querySelectorAll('[data-field]').forEach(el => { v[el.dataset.field] = el.value; });
+      const qtyEl = row.querySelector('[data-field="packedQty"]');
+      if (qtyEl) v.auto.packedQty = qtyEl.dataset.auto === '1';
+    });
+  }
+
+  /* ── header fields ────────────────────────────────────────────────────
+     Container Size and the product-category band are free text with their
+     usual answers offered — "20 FT HC" and "ALUMINIUM UTENSILS (QUEEN BRAND)"
+     cover almost every shipment, but the band has always been typed per
+     container and must stay typeable. ─────────────────────────────────── */
+  function _plListField(id, label, value, options, placeholder) {
+    const listId = id + '-list';
+    return _fieldWrap(label, ''
+      + '<input type="text" id="' + id + '" list="' + listId + '" value="' + esc(value || '') + '"'
+      + ' placeholder="' + esc(placeholder || '') + '" style="' + _inputStyle + '" />'
+      + '<datalist id="' + listId + '">'
+        + (options || []).map(o => '<option value="' + esc(o) + '"></option>').join('')
+      + '</datalist>');
+  }
+
+  function _plOrderCardHtml(o) {
+    const locked = _plLockedBuyerKey();
+    const picked = _plNew.picked.includes(o.orderNo);
+    const blocked = !!locked && !picked && o.buyerKey !== locked;
+    return '<label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1.5px solid ' + (picked ? 'var(--color-primary)' : '#e2e8f0') + ';border-radius:10px;background:' + (blocked ? '#f8fafc' : '#fff') + ';cursor:' + (blocked ? 'not-allowed' : 'pointer') + ';opacity:' + (blocked ? '.5' : '1') + ';">'
+      + '<input type="checkbox" class="pl-order-pick" data-order="' + esc(o.orderNo) + '"' + (picked ? ' checked' : '') + (blocked ? ' disabled' : '') + ' style="margin-top:2px;" />'
+      + '<div style="min-width:0;flex:1;">'
+        + '<div style="font-size:12.5px;font-weight:700;color:#0f172a;">' + esc(o.orderNo) + '</div>'
+        + '<div style="font-size:11.5px;color:#64748b;margin-top:2px;">' + esc(o.buyer || '—') + '</div>'
+        + '<div style="font-size:11px;color:#94a3b8;margin-top:3px;">'
+          + esc(o.orderDate || '') + (o.piNo ? ' · ' + esc(o.piNo) : '')
+        + '</div>'
+        + '<div style="font-size:11.5px;margin-top:4px;font-weight:600;color:' + (o.packedQty ? '#b45309' : '#15803d') + ';">'
+          + 'Balance ' + esc(o.balanceQty) + ' of ' + esc(o.orderedQty)
+          + (o.packedQty ? ' · ' + esc(o.packedQty) + ' already shipped' : '')
+        + '</div>'
+        + (blocked ? '<div style="font-size:11px;color:#ef4444;margin-top:4px;">Different party — not on this packing list</div>' : '')
+      + '</div>'
+    + '</label>';
+  }
+
+  function _plOrderPickerHtml() {
+    if (!_plPendingLoaded) return '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading orders…</div>';
+    if (_plPendingError) return '<div style="padding:14px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_plPendingError) + '</div>';
+    if (!_plPending.length) return '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:12.5px;">Every order raised is fully shipped — there is nothing left to pack.</div>';
+    return '<div id="pl-order-picker" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;">'
+      + _plPending.map(_plOrderCardHtml).join('')
+    + '</div>';
+  }
+
+  // Column set of the line table, in the order the printed document has them.
+  const _PL_LINE_COLS = [
+    { label: 'Order No.', kind: 'ro' },
+    { label: 'Item Code', kind: 'ro' },
+    { label: 'Description', kind: 'ro', wide: true },
+    { label: 'Size', kind: 'ro' },
+    { label: 'Size (MM)', kind: 'ro' },
+    { label: 'Barcode', kind: 'in', field: 'barcode' },
+    { label: 'Carton No.', kind: 'calc' },
+    { label: 'Ordered', kind: 'ro' },
+    { label: 'Already Packed', kind: 'ro' },
+    { label: 'Balance', kind: 'ro' },
+    { label: 'Total Cartons', kind: 'in', field: 'cartons' },
+    { label: 'Pcs / Carton', kind: 'in', field: 'perCarton' },
+    { label: 'Packed Qty', kind: 'in', field: 'packedQty' },
+    { label: 'Net Wt / Carton', kind: 'in', field: 'netPerCarton' },
+    { label: 'Gr. Wt / Carton', kind: 'in', field: 'grossPerCarton' },
+    { label: 'CBM / Carton', kind: 'in', field: 'cbmPerCarton' },
+    { label: 'Total Net Wt', kind: 'calc' },
+    { label: 'Total Gr. Wt', kind: 'calc' },
+    { label: 'Total CBM', kind: 'calc' },
+    { label: 'Per Pcs Wt', kind: 'calc' },
+  ];
+
+  function _plLinesHtml() {
+    const orders = _plPickedOrders();
+    if (!orders.length) {
+      return '<div style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px;border:1px dashed #e2e8f0;border-radius:10px;">Pick an order above and its lines appear here.</div>';
+    }
+    const ro = 'padding:5px 7px;font-size:11.5px;white-space:nowrap;';
+    const calc = 'padding:5px 7px;font-size:11.5px;white-space:nowrap;text-align:right;color:#475569;background:#f8fafc;';
+    const rows = [];
+    orders.forEach(o => o.lines.forEach(line => {
+      // A line with nothing left is shown, greyed and locked — seeing that it
+      // is done is more useful than wondering where it went.
+      const done = line.balanceQty <= 0;
+      const key = _plLineKey(o.orderNo, line.lineIdx);
+      const v = _plNew.values[key] || (_plNew.values[key] = done
+        ? { barcode: '', cartons: '', perCarton: '', packedQty: '', netPerCarton: '', grossPerCarton: '', cbmPerCarton: '', auto: {} }
+        : _plSeedValues(line));
+      const cell = (f, extra) => '<td style="padding:4px 5px;"><input type="text" data-field="' + f + '" value="' + esc(v[f] == null ? '' : v[f]) + '"'
+        + (done ? ' disabled' : '') + (extra || '') + ' style="' + _cellInput + 'font-size:11.5px;padding:5px 6px;' + (done ? 'background:#f8fafc;color:#cbd5e1;' : '') + '" /></td>';
+      rows.push('<tr class="pl-line-row" data-key="' + esc(key) + '" data-order="' + esc(o.orderNo) + '" data-line="' + line.lineIdx + '" data-balance="' + line.balanceQty + '" style="border-bottom:1px solid #f1f5f9;' + (done ? 'opacity:.55;' : '') + '">'
+        + '<td style="' + ro + 'font-weight:600;color:#475569;">' + esc(o.orderNo) + '</td>'
+        + '<td style="' + ro + '">' + esc(line.modelNo) + '</td>'
+        + '<td style="padding:5px 7px;font-size:11.5px;min-width:150px;">' + esc(line.itemName) + '</td>'
+        + '<td style="' + ro + '">' + esc(line.size) + '</td>'
+        + '<td style="' + ro + '">' + esc(line.swg) + '</td>'
+        + cell('barcode')
+        + '<td class="pl-carton-no" style="' + calc + 'text-align:center;">—</td>'
+        + '<td style="' + ro + 'text-align:right;color:#64748b;">' + esc(line.orderedQty) + '</td>'
+        + '<td style="' + ro + 'text-align:right;color:' + (line.packedQty ? '#b45309' : '#cbd5e1') + ';">' + esc(line.packedQty || 0) + '</td>'
+        + '<td style="' + ro + 'text-align:right;font-weight:700;color:' + (done ? '#94a3b8' : '#15803d') + ';">' + esc(line.balanceQty) + '</td>'
+        + cell('cartons')
+        + cell('perCarton')
+        + cell('packedQty', ' data-auto="' + (v.auto && v.auto.packedQty ? '1' : '0') + '"')
+        + cell('netPerCarton')
+        + cell('grossPerCarton')
+        + cell('cbmPerCarton')
+        + '<td class="pl-net-total" style="' + calc + '">—</td>'
+        + '<td class="pl-gross-total" style="' + calc + '">—</td>'
+        + '<td class="pl-cbm-total" style="' + calc + '">—</td>'
+        + '<td class="pl-per-pcs" style="' + calc + '">—</td>'
+      + '</tr>');
+    }));
+    return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+      + '<table style="width:100%;border-collapse:collapse;min-width:1720px;">'
+        + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+          + _PL_LINE_COLS.map(c => '<th style="padding:6px 7px;text-align:' + (c.kind === 'calc' ? 'right' : 'left') + ';font-size:10px;color:'
+              + (c.kind === 'calc' ? '#cbd5e1' : '#94a3b8') + ';text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">'
+              + esc(c.label) + (c.kind === 'calc' ? ' *' : '') + '</th>').join('')
+        + '</tr></thead>'
+        + '<tbody id="pl-lines-tbody">' + rows.join('') + '</tbody>'
+      + '</table>'
+    + '</div>'
+    + '<div style="font-size:11px;color:#94a3b8;margin-top:6px;">* computed: Packed Qty = Cartons × Pcs/Carton · the three totals = per-carton × Cartons · Per Pcs Wt = Net Wt per Carton ÷ Pcs/Carton. Carton numbers run in one unbroken series down the document. Type over Packed Qty for a part carton.</div>'
+    + '<div id="pl-totals" style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;font-size:12.5px;color:#475569;"></div>';
+  }
+
+  function _plFormHtml() {
+    const h = _plNew.header;
+    const lead = _plPickedOrders()[0];
+    const D = _packingDefaults || {};
+    const orderNos = _plNew.picked.join(', ');
+    return '<form id="pl-form" style="display:flex;flex-direction:column;gap:16px;">'
+      + '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
+        + '<div>'
+          + '<div style="font-size:13px;font-weight:700;color:#1e40af;">New Packing List</div>'
+          + '<div style="font-size:11.5px;color:#1e40af;opacity:.85;margin-top:2px;">Pick every order going in this container — they must all be for one party. Then count the cartons; the quantities, weights, CBM and carton numbers follow from that.</div>'
+        + '</div>'
+        + '<button type="button" id="pl-form-cancel" style="padding:6px 12px;border-radius:8px;background:#fff;border:1.5px solid #bfdbfe;color:#1e40af;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Back to Packing Lists</button>'
+      + '</div>'
+
+      + _sectionTitle('Header')
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">'
+        // Issued server-side on submit, so the form cannot promise a number a
+        // concurrent packing list would take first.
+        + _readonlyField('pl-next-no', 'Packing List No.', 'Assigned on save')
+        + _textField('pl-invoice-no', 'Invoice No.', { value: h.invoiceNo, placeholder: 'e.g. LA - 14' })
+        + _textField('pl-date', 'Date', { type: 'date', value: h.plDate })
+        + _plListField('pl-container-size', 'Container Size', h.containerSize, D.containerSizeOptions, 'e.g. 20 FT HC')
+        + _textField('pl-cha', 'CHA', { value: h.cha })
+        + _readonlyField('pl-party', 'Party Name', (lead && lead.buyer) || '— pick an order —')
+        + _readonlyField('pl-order-nos', 'Order No.', orderNos || '— pick an order —')
+        + _readonlyField('pl-total-cartons', 'Total Cartons', '0 NOS')
+      + '</div>'
+      + _plListField('pl-category', 'Product Category (the band above the table)', h.productCategory, D.productCategoryOptions, 'e.g. ALUMINIUM UTENSILS (QUEEN BRAND)')
+
+      + _sectionTitle('Orders in this Container')
+      + _plOrderPickerHtml()
+
+      + _sectionTitle('Carton Count')
+      + _plLinesHtml()
+
+      + '<button type="submit" id="pl-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Packing List</button>'
+    + '</form>';
+  }
+
+  /* ── live recompute ───────────────────────────────────────────────────
+     Every derived cell on the form, recomputed from the cartons in one pass:
+     the five relations the document is built on, plus the running carton
+     serial, which depends on every row above this one and so cannot be done
+     per-row. Mirrors _plCollectLines on the server — that one is the
+     authority, this is so the packer sees the same numbers before saving. */
+  function _plRecalc() {
+    const tbody = document.getElementById('pl-lines-tbody');
+    if (!tbody) return;
+    let nextCarton = 1;
+    let tCartons = 0, tQty = 0, tNet = 0, tGross = 0, tCbm = 0, tLines = 0, over = 0;
+
+    tbody.querySelectorAll('.pl-line-row').forEach(row => {
+      const get = (f) => row.querySelector('[data-field="' + f + '"]');
+      const val = (f) => _num((get(f) || {}).value);
+      const cartons = val('cartons');
+      const perCarton = val('perCarton');
+      const qtyEl = get('packedQty');
+      const auto = qtyEl && qtyEl.dataset.auto === '1';
+      const qty = auto ? cartons * perCarton : _num(qtyEl && qtyEl.value);
+      if (auto && qtyEl && !qtyEl.disabled) qtyEl.value = qty > 0 ? String(qty) : '';
+
+      const netTotal = _plRound(val('netPerCarton') * cartons, 3);
+      const grossTotal = _plRound(val('grossPerCarton') * cartons, 3);
+      const cbmTotal = _plRound(val('cbmPerCarton') * cartons, 4);
+      const perPcs = perCarton > 0 ? _plRound(val('netPerCarton') / perCarton, 3) : 0;
+
+      // Carton numbers run as one unbroken series down the whole document.
+      let cartonNo = '—';
+      if (cartons > 0) {
+        const from = nextCarton, to = nextCarton + cartons - 1;
+        const pad = (n) => String(n).padStart(2, '0');
+        cartonNo = from === to ? pad(from) : pad(from) + '-' + pad(to);
+        nextCarton = to + 1;
+      }
+      const show = (cls, text) => { const el = row.querySelector(cls); if (el) el.textContent = text; };
+      show('.pl-carton-no', cartonNo);
+      show('.pl-net-total', netTotal ? netTotal.toFixed(3) : '—');
+      show('.pl-gross-total', grossTotal ? grossTotal.toFixed(3) : '—');
+      show('.pl-cbm-total', cbmTotal ? cbmTotal.toFixed(4) : '—');
+      show('.pl-per-pcs', perPcs ? perPcs.toFixed(3) : '—');
+
+      // Over the balance is flagged at the cell, on whichever box caused it.
+      const balance = _num(row.dataset.balance);
+      const bad = qty > balance;
+      if (bad) over++;
+      ['cartons', 'perCarton', 'packedQty'].forEach(f => {
+        const el = get(f);
+        if (el && !el.disabled) el.style.borderColor = bad ? '#ef4444' : '#e2e8f0';
+      });
+
+      if (qty > 0) { tLines++; tQty += qty; tCartons += cartons; tNet += netTotal; tGross += grossTotal; tCbm += cbmTotal; }
+    });
+
+    const cartonsEl = document.getElementById('pl-total-cartons');
+    if (cartonsEl) cartonsEl.textContent = tCartons ? tCartons + ' NOS' : '0 NOS';
+
+    const el = document.getElementById('pl-totals');
+    if (!el) return;
+    const chip = (label, value) => '<span><strong style="color:#0f172a;">' + esc(value) + '</strong> ' + esc(label) + '</span>';
+    el.innerHTML = (tLines
+      ? [chip('lines', tLines), chip('cartons', tCartons.toLocaleString('en-IN')), chip('pcs / sets', tQty.toLocaleString('en-IN')),
+         chip('kgs net', tNet.toFixed(3)), chip('kgs gross', tGross.toFixed(3)), chip('CBM', tCbm.toFixed(4))].join('')
+      : '<span style="color:#94a3b8;">No cartons counted yet.</span>')
+      + (over ? '<span style="color:#ef4444;font-weight:700;">' + over + ' line' + (over > 1 ? 's are' : ' is') + ' over the balance</span>' : '');
+  }
+
+  function _plBindForm() {
+    document.getElementById('pl-form-cancel').addEventListener('click', _plCancelForm);
+    document.getElementById('pl-form').addEventListener('submit', _plSubmit);
+    // The party name and the order list in the header are read off the picked
+    // orders, so a change there has to repaint the whole form.
+    const picker = document.getElementById('pl-order-picker');
+    if (picker) {
+      picker.addEventListener('change', (e) => {
+        const box = e.target.closest('.pl-order-pick');
+        if (!box) return;
+        // Everything typed so far survives the re-render the new line table
+        // forces — see the note on _plNew.
+        _plHarvest();
+        const orderNo = box.dataset.order;
+        _plNew.picked = box.checked
+          ? _plNew.picked.concat([orderNo])
+          : _plNew.picked.filter(n => n !== orderNo);
+        renderPage();
+      });
+    }
+
+    const tbody = document.getElementById('pl-lines-tbody');
+    if (tbody) {
+      tbody.addEventListener('input', (e) => {
+        const input = e.target.closest('[data-field]');
+        if (!input) return;
+        // Typing into Packed Qty is the packer declaring a part carton — from
+        // then on it stops following cartons × pcs-per-carton.
+        if (input.dataset.field === 'packedQty') input.dataset.auto = '0';
+        _plRecalc();
+      });
+    }
+    _plRecalc();
+  }
+
+  function _plCollectItems() {
+    return Array.from(document.querySelectorAll('#pl-lines-tbody .pl-line-row')).map(row => {
+      const get = (f) => {
+        const el = row.querySelector('[data-field="' + f + '"]');
+        return el ? el.value.trim() : '';
+      };
+      const qtyEl = row.querySelector('[data-field="packedQty"]');
+      const effective = (qtyEl && qtyEl.dataset.auto === '1')
+        ? _num(get('cartons')) * _num(get('perCarton'))
+        : _num(get('packedQty'));
+      return {
+        orderNo: row.dataset.order,
+        lineIdx: Number(row.dataset.line),
+        barcode: get('barcode'),
+        cartons: get('cartons'),
+        perCarton: get('perCarton'),
+        // Sent only when the packer overruled it; otherwise the server does
+        // the same multiplication and stays the single authority.
+        packedQty: (qtyEl && qtyEl.dataset.auto === '1') ? '' : get('packedQty'),
+        netPerCarton: get('netPerCarton'),
+        grossPerCarton: get('grossPerCarton'),
+        cbmPerCarton: get('cbmPerCarton'),
+        // Not sent — only used for the over-packing check below.
+        _qty: effective,
+        _balance: _num(row.dataset.balance),
+        _label: (row.children[1].textContent.trim() || row.children[2].textContent.trim() || 'This line') + ' on ' + row.dataset.order,
+      };
+    }).filter(it => it._qty > 0);
+  }
+
+  async function _plSubmit(e) {
+    e.preventDefault();
+    if (_plSaving) return;
+    const btn = document.getElementById('pl-submit-btn');
+    const plDate = document.getElementById('pl-date').value;
+    if (!plDate) { Utils.showToast('Date is required', 'error'); return; }
+    if (!_plNew.picked.length) { Utils.showToast('Pick at least one order to ship', 'error'); return; }
+
+    const items = _plCollectItems();
+    if (!items.length) { Utils.showToast('Count the cartons on at least one line', 'error'); return; }
+    // The server checks this again against the live balance — this is only so
+    // the user is told at the cell rather than after a round trip.
+    const over = items.find(it => it._qty > it._balance);
+    if (over) { Utils.showToast(over._label + ': only ' + over._balance + ' left to ship', 'error'); return; }
+
+    _plSaving = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+    try {
+      const body = {
+        plDate,
+        invoiceNo: document.getElementById('pl-invoice-no').value.trim(),
+        containerSize: document.getElementById('pl-container-size').value.trim(),
+        cha: document.getElementById('pl-cha').value.trim(),
+        productCategory: document.getElementById('pl-category').value.trim(),
+        items: items.map(({ _qty, _balance, _label, ...it }) => it),
+      };
+      const out = await Utils.apiFetch('/api/packing-list', { method: 'POST', body: JSON.stringify(body) });
+      Utils.showToast('Packing List ' + out.plNo + ' created — ' + out.totalCartons + ' cartons, ' + out.totalQty + ' pcs', 'success');
+      if (!out.pdfLink) Utils.showToast('The packing list is logged, but its PDF could not be filed — raise it again or export the tab by hand', 'error');
+      if (out.ordersUpdated === false) Utils.showToast('The packing list is saved, but the orders it ships could not be moved to Partly Packed / Packed', 'warning');
+      // The balances every order carries have just changed, so the pending
+      // list this form is built from has to be re-read, not reused.
+      _plNew = null;
+      _plPendingLoaded = false;
+      _view = 'packing';
+      renderPage();
+    } catch (err) {
+      Utils.showToast(err.message || 'Failed to create the Packing List', 'error');
+    } finally {
+      _plSaving = false;
+      const b2 = document.getElementById('pl-submit-btn');
+      if (b2) { b2.disabled = false; b2.textContent = 'Create Packing List'; }
+    }
+  }
+
   /* ── Render ─────────────────────────────────────────────────────────── */
   function renderPage() {
     const el = document.getElementById('main-content');
@@ -1675,9 +2340,14 @@ window.Pages['proforma-invoice'] = (() => {
 
     const isList = _view === 'list';
     const isOrders = _view === 'orders';
+    const isPacking = _view === 'packing';
     // The Order Sheets tab shows its list, or the create form once a PI has
-    // been picked from the PI List.
-    const bodyHtml = isOrders
+    // been picked from the PI List; the Packing List tab does the same, except
+    // its create form is started from the tab itself because it is not raised
+    // against one single parent document.
+    const bodyHtml = isPacking
+      ? (_plNew ? _plFormHtml() : _pklListHtml())
+      : isOrders
       ? (_osOf ? _osFormHtml() : _osListHtml())
       : isList
       ? _pilViewHtml()
@@ -1703,7 +2373,10 @@ window.Pages['proforma-invoice'] = (() => {
         + '<button type="submit" id="pic-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">' + (_reviseOf ? 'Issue Revision' : 'Create Proforma Invoice') + '</button>'
       + '</form>';
 
-    el.innerHTML = '<div style="max-width:' + (isList || isOrders ? '1200px' : '1180px') + ';margin:0 auto;padding:4px 0 40px;">'
+    // The packing form's line table is the widest thing on this page — it
+    // carries the order number, the ordered/packed/balance trio and both
+    // weights on every row — so it gets more room than the other views.
+    el.innerHTML = '<div style="max-width:' + (isPacking ? '1360px' : isList || isOrders ? '1200px' : '1180px') + ';margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Proforma Invoice / OCS</h1>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Export PI. Create captures consignee, shipping &amp; items only — the rate, its basis and its currency are added afterward by an authorized user.</p>'
@@ -1719,6 +2392,10 @@ window.Pages['proforma-invoice'] = (() => {
     // Clicking the tab by hand means "show me the orders", not "carry on with
     // the one I started" — same reasoning as the Create tab clearing a revision.
     document.querySelector('.pic-orders-tab').addEventListener('click', () => { _osOf = null; _view = 'orders'; renderPage(); });
+    // Same reasoning again: clicking the tab means "show me the packing lists",
+    // so a half-filled one is dropped rather than carried onto a tab the user
+    // thinks is the list.
+    document.querySelector('.pic-packing-tab').addEventListener('click', () => { _plNew = null; _view = 'packing'; renderPage(); });
 
     // Both views need the masters, not just Create: the Add Price screen opens
     // off the LIST, and its Price Type / Currency dropdowns are filled from
@@ -1734,6 +2411,23 @@ window.Pages['proforma-invoice'] = (() => {
       } else {
         _osBindListBar();
         _osLoad();
+      }
+      return;
+    }
+
+    if (isPacking) {
+      if (_plNew) {
+        _plBindForm();
+        // The order picker is the first thing on the form, so it cannot wait
+        // for a click to fetch. Re-render once the orders land.
+        if (!_plPendingLoaded) _plLoadPending().then(() => {
+          if (_view !== 'packing' || !_plNew) return;
+          _plApplyPreselect();
+          renderPage();
+        });
+      } else {
+        _pklBindListBar();
+        _pklLoad();
       }
       return;
     }

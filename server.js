@@ -6625,6 +6625,11 @@ app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
       // typed into the page script.
       orderDefaults: OS_FMT.DEFAULTS,
       orderMaxItems: OS_FMT.LAYOUT.itemsLastRow - OS_FMT.LAYOUT.itemsFirstRow + 1,
+      // Same again for the Packing List tab's form — its standing shipping
+      // marks, and how many lines one packing list can carry across all the
+      // orders loaded onto it.
+      packingDefaults: PL_FMT.DEFAULTS,
+      packingMaxItems: PL_FMT.LAYOUT.itemsLastRow - PL_FMT.LAYOUT.itemsFirstRow + 1,
     });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -7612,6 +7617,620 @@ app.delete('/api/order-sheet', requireAuth, requireSuperAdmin, async (req, res) 
     const orderNo = req.query.orderNo;
     if (!orderNo) return res.status(400).json({ error: 'orderNo is required' });
     await _deleteLogRowByKey(PI_CREATION_SHEET_ID, ORDER_LOG_TAB, orderNo);
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
+});
+
+// ── Packing List ──────────────────────────────────────────────────────────
+// The dispatch document — and unlike the PI and the Order Sheet, it is not a
+// new layout invented here. It reproduces the export department's OWN packing
+// list (their LA-07 / LA-14 / LA-16 sheets), so what changes is only that the
+// figures come from the orders instead of being retyped. See
+// backend/lib/packing-list-format.js for the layout and the five carton
+// relations the whole document is built on.
+//
+// Two things it does that the documents above it do not:
+//
+//   * ONE PACKING LIST, MANY ORDERS. A container is filled with whatever is
+//     ready, which is routinely lines from several orders for the same buyer —
+//     their own LA-16 does exactly this by hand. Every line carries its Order
+//     No. and the header lists them all.
+//   * PART SHIPMENTS ARE THE NORM. Each line prints the ordered quantity and
+//     the quantity actually packed. The difference is the balance still owed,
+//     and the next packing list against that order picks it up. That balance
+//     is computed HERE from every live packing list, so the same quantity
+//     cannot be shipped twice by two people working off the same order.
+//
+// It lives in the PI's own workbook on the "Packing List" tab painted by
+// scripts/build-packing-list.js, and is logged to "ERP Packing List Log" the
+// same way every order is logged to "ERP Order sheet Log".
+const PL_FMT = require('./backend/lib/packing-list-format.js');
+const PACKING_LIST_TAB = 'Packing List';
+const PACKING_LOG_TAB = 'ERP Packing List Log';
+const PACKING_NO_PREFIX = 'VTV/PL';   // "VTV/PL/001/26-27" — the PI series with PL in it
+
+function _plNoFormat(seq, fy) {
+  return `${PACKING_NO_PREFIX}/${String(seq).padStart(3, '0')}/${fy}`;
+}
+
+// Mirrors _orderSeqOf: only THIS financial year's numbers count towards the
+// next one, so the series restarts at 001 each April.
+function _plSeqOf(raw, fy) {
+  const m = /^[A-Za-z]+\/[A-Za-z]+\/(\d+)\/(\d{2}-\d{2})$/i.exec(String(raw ?? '').trim());
+  return m && m[2] === fy ? parseInt(m[1], 10) : 0;
+}
+
+// Quantities reach this file as text typed into a form cell, so "1,200" and
+// " 40 " both have to read as a number; anything that does not is 0. Every
+// balance decision below runs through here, so a quantity that cannot be
+// parsed can never quietly count as "already shipped".
+function _plNum(v) {
+  const n = parseFloat(String(v ?? '').replace(/,/g, '').trim());
+  return isNaN(n) ? 0 : n;
+}
+
+// Derived figures are rounded to the decimal places the sheet actually prints,
+// so what is stored is what the document says — no 0.30000000000000004 sitting
+// behind a cell that reads 0.300.
+function _plRound(v, dp) {
+  const f = Math.pow(10, dp);
+  return Math.round((Number(v) || 0) * f) / f;
+}
+
+// The identity one packed line carries back to the order it came from. The
+// LINE INDEX is the key, not the model number: an order's items are a stored
+// array, and the same model in two sizes is two legitimate lines that matching
+// on model alone would merge into one balance.
+function _plLineKey(orderNo, lineIdx) {
+  return String(orderNo || '').trim() + '#' + Number(lineIdx);
+}
+
+// A log tab that does not exist yet is an empty log, not an error — the first
+// packing list raised is what creates it.
+function _plEmptyRange(e) {
+  if (/unable to parse range/i.test(e.message || '')) return { data: {} };
+  throw e;
+}
+
+// One packing-list log row, parsed. Column order is PL_FMT.PACKING_LOG_HEADER.
+function _plRowFromLog(r) {
+  let form = null;
+  try { form = r[11] ? JSON.parse(r[11]) : null; } catch {}
+  return {
+    plNo: String(r[0] || '').trim(), plDate: _sheetDateToIso(r[1]), invoiceNo: r[2] || '',
+    orderNos: r[3] || '', piNos: r[4] || '', buyer: r[5] || '',
+    totalQty: r[6] || '', totalCartons: r[7] || '', pdfLink: r[8] || '',
+    createdBy: r[9] || '', createdAt: r[10] || '', form, status: r[12] || 'Open',
+  };
+}
+
+// Both logs, parsed, in one place: the pending view, the create route and the
+// order-status write-back all need exactly this pair and nothing else.
+async function _plReadLogs(sheets) {
+  const [orderRes, plRes] = await Promise.all([
+    sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' }).catch(_plEmptyRange),
+    sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:M1000`, valueRenderOption: 'FORMATTED_VALUE' }).catch(_plEmptyRange),
+  ]);
+  const orders = (orderRes.data.values || []).map(r => {
+    let form = null;
+    try { form = r[8] ? JSON.parse(r[8]) : null; } catch {}
+    return {
+      orderNo: String(r[0] || '').trim(), orderDate: _sheetDateToIso(r[1]), piNo: String(r[2] || '').trim(),
+      buyer: r[3] || '', pdfLink: r[5] || '', form, status: r[9] || PL_FMT.ORDER_STATUS.open,
+    };
+  }).filter(o => o.orderNo);
+  const packingLists = (plRes.data.values || []).map(_plRowFromLog).filter(p => p.plNo);
+  return { orders, packingLists };
+}
+
+// How much of every order line is already spoken for, keyed order#line.
+// A Cancelled packing list releases its quantity back to the order, and
+// `exceptPlNo` leaves one packing list out — which is what makes recomputing
+// an order's status after a cancel or a delete come out right.
+function _plPackedByLine(packingLists, exceptPlNo) {
+  const packed = new Map();
+  packingLists.forEach(pl => {
+    if (pl.status === 'Cancelled') return;
+    if (exceptPlNo && pl.plNo === String(exceptPlNo).trim()) return;
+    ((pl.form && pl.form.items) || []).forEach(it => {
+      const key = _plLineKey(it.orderNo, it.lineIdx);
+      packed.set(key, (packed.get(key) || 0) + _plNum(it.packedQty));
+    });
+  });
+  return packed;
+}
+
+// One order's lines with ordered / already packed / still to pack on each,
+// plus the per-carton figures the packing form starts from. The order sheet
+// holds whole-line totals (boxes, CBM, weight); the packing list works per
+// carton, so the division happens once, here, rather than in the browser.
+//
+// balanceQty is floored at 0: an order edited down after a shipment went out
+// would otherwise report a negative balance and read as if goods were owed
+// back, when what it means is "nothing more to send".
+function _plOrderLines(order, packed) {
+  return ((order.form && order.form.items) || []).map((it, i) => {
+    const orderedQty = _plNum(it.qty);
+    const packedQty = packed.get(_plLineKey(order.orderNo, i)) || 0;
+    const orderCartons = _plNum(it.boxes);
+    const orderCbm = _plNum(it.cbm);
+    const orderWeight = _plNum(it.weight);
+    return {
+      lineIdx: i,
+      modelNo: String(it.modelNo || ''), itemName: String(it.itemName || ''),
+      size: String(it.size || ''), swg: String(it.swg || ''), packing: String(it.packing || ''),
+      orderedQty, packedQty,
+      balanceQty: Math.max(0, orderedQty - packedQty),
+      orderCartons, orderCbm, orderWeight,
+      // Starting points for the packing form, not figures anyone has to trust:
+      // the packer overwrites them with what the cartons actually came to.
+      // "Per Box Dozen Packing" on the order IS pcs-per-carton; where it is
+      // blank, fall back to the order's own qty-per-box.
+      perCartonHint: _plNum(it.packing) || (orderCartons > 0 ? _plRound(orderedQty / orderCartons, 0) : 0),
+      netPerCartonHint: orderCartons > 0 ? _plRound(orderWeight / orderCartons, 3) : 0,
+      cbmPerCartonHint: orderCartons > 0 ? _plRound(orderCbm / orderCartons, 5) : 0,
+    };
+  });
+}
+
+// Two buyer names are the same buyer if they differ only by case, punctuation
+// or spacing — the order log holds whatever each PI typed, and refusing to
+// combine "AL NASR TR. CO." with "Al Nasr Tr Co" would be refusing a shipment
+// that is genuinely one consignment.
+function _plBuyerKey(name) {
+  return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// GET /api/packing-list/pending — every order that still has goods to ship,
+// each with its lines' ordered / packed / balance. This is what the create
+// form is built from: pick orders, then count the cartons actually going.
+// ?all=1 keeps fully-packed orders in the list too (for looking one up).
+app.get('/api/packing-list/pending', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const { orders, packingLists } = await _plReadLogs(sheets);
+    const packed = _plPackedByLine(packingLists);
+    const showAll = String(req.query.all || '') === '1';
+
+    const rows = orders
+      .filter(o => o.status !== PL_FMT.ORDER_STATUS.cancelled && o.form)
+      .map(o => {
+        const lines = _plOrderLines(o, packed);
+        const f = o.form || {};
+        return {
+          orderNo: o.orderNo, orderDate: o.orderDate, piNo: o.piNo,
+          buyer: f.buyerName || o.buyer || '', buyerKey: _plBuyerKey(f.buyerName || o.buyer),
+          status: o.status, pdfLink: o.pdfLink,
+          lines,
+          orderedQty: lines.reduce((s, l) => s + l.orderedQty, 0),
+          packedQty: lines.reduce((s, l) => s + l.packedQty, 0),
+          balanceQty: lines.reduce((s, l) => s + l.balanceQty, 0),
+        };
+      })
+      .filter(o => showAll || o.balanceQty > 0)
+      .reverse();
+
+    return res.json(rows);
+  } catch (e) {
+    console.error('[packing-list] pending read failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// Turns the request's lines into the packed lines that will be printed and
+// stored. Only what the PACKER counts comes from the request — barcode,
+// cartons, pcs per carton and the three per-carton figures. Every identity
+// field is re-read from the order's own stored form, which is what stops a
+// packing list from quietly describing goods the order never confirmed.
+//
+// The five derived columns are computed here rather than left as sheet
+// formulas, so the stored record and the printed page can never disagree.
+function _plCollectLines(b, ordersByNo, packed) {
+  const raw = (Array.isArray(b.items) ? b.items : [])
+    .map(it => {
+      const cartons = _plNum(it.cartons);
+      const perCarton = _plNum(it.perCarton);
+      // Cartons x pcs-per-carton is the packed quantity on every one of their
+      // sheets. An explicit figure still wins, for the part carton their
+      // format has no other way to express.
+      const given = _plNum(it.packedQty);
+      return {
+        orderNo: String(it.orderNo || '').trim(),
+        lineIdx: Number(it.lineIdx),
+        barcode: String(it.barcode || '').trim(),
+        cartons, perCarton,
+        packedQty: given > 0 ? given : cartons * perCarton,
+        netPerCarton: _plNum(it.netPerCarton),
+        grossPerCarton: _plNum(it.grossPerCarton),
+        cbmPerCarton: _plNum(it.cbmPerCarton),
+      };
+    })
+    // A line with nothing packed on it is not a short shipment, it is a line
+    // the packer left out — it must not print as a zero row.
+    .filter(it => it.packedQty > 0);
+
+  if (!raw.length) return { lines: [], error: 'Count the cartons on at least one line' };
+
+  const capacity = PL_FMT.LAYOUT.itemsLastRow - PL_FMT.LAYOUT.itemsFirstRow + 1;
+  if (raw.length > capacity) {
+    return { lines: [], error: `The Packing List template holds ${capacity} lines and this one has ${raw.length} — split it across two packing lists` };
+  }
+
+  // One row per order line. Two rows for the same one would each pass the
+  // balance check on their own and blow past it together, so the second is
+  // refused rather than quietly added to the first.
+  const seen = new Set();
+  const lines = [];
+  // _plOrderLines walks a whole order; cache it so an order contributing
+  // twenty lines is still only walked once.
+  const linesOf = new Map();
+
+  for (const it of raw) {
+    const order = ordersByNo.get(it.orderNo);
+    if (!order) return { lines: [], error: `Order ${it.orderNo || '(blank)'} is not on the order log` };
+    if (order.status === PL_FMT.ORDER_STATUS.cancelled) {
+      return { lines: [], error: `Order ${it.orderNo} is Cancelled — it cannot be shipped` };
+    }
+    if (!Number.isInteger(it.lineIdx) || it.lineIdx < 0) {
+      return { lines: [], error: `A line on order ${it.orderNo} arrived without a valid line number` };
+    }
+    if (!linesOf.has(it.orderNo)) linesOf.set(it.orderNo, _plOrderLines(order, packed));
+    const src = linesOf.get(it.orderNo)[it.lineIdx];
+    if (!src) return { lines: [], error: `Order ${it.orderNo} has no line ${it.lineIdx + 1}` };
+
+    const key = _plLineKey(it.orderNo, it.lineIdx);
+    const label = src.modelNo || src.itemName || `line ${it.lineIdx + 1}`;
+    if (seen.has(key)) return { lines: [], error: `${label} on order ${it.orderNo} is listed twice — put the whole packed quantity on one line` };
+    seen.add(key);
+
+    if (it.packedQty > src.balanceQty) {
+      return {
+        lines: [],
+        error: `${label} on order ${it.orderNo}: only ${src.balanceQty} left to ship`
+          + (src.packedQty ? ` (${src.orderedQty} ordered, ${src.packedQty} already packed)` : ` of ${src.orderedQty} ordered`),
+      };
+    }
+
+    lines.push({
+      orderNo: it.orderNo, lineIdx: it.lineIdx,
+      // Identity, straight off the order. SWG on the order sheet is the gauge
+      // in mm, which is exactly what their SIZE (MM) column holds.
+      description: src.itemName, itemCode: src.modelNo, size: src.size, sizeMm: src.swg,
+      barcode: it.barcode,
+      cartonNo: '',                       // the running range, assigned below
+      cartons: it.cartons,
+      perCarton: it.perCarton,
+      orderQty: src.orderedQty,
+      packedQty: it.packedQty,
+      netPerCarton: it.netPerCarton,
+      netTotal: _plRound(it.netPerCarton * it.cartons, 3),
+      grossPerCarton: it.grossPerCarton,
+      grossTotal: _plRound(it.grossPerCarton * it.cartons, 3),
+      cbmPerCarton: it.cbmPerCarton,
+      cbmTotal: _plRound(it.cbmPerCarton * it.cartons, 4),
+      perPcsWt: it.perCarton > 0 ? _plRound(it.netPerCarton / it.perCarton, 3) : 0,
+      // Stored alongside the quantity so the printed document can be rebuilt
+      // later exactly as it went out, even after the order is fully shipped.
+      previouslyPacked: src.packedQty,
+    });
+  }
+
+  // CARTON NO. is one unbroken serial across the whole document, line after
+  // line — computed from the carton counts rather than typed. On their own
+  // LA-16 the two had drifted apart (the column summed to 1509 while the
+  // ranges ended at 1493); computed this way they cannot.
+  // Both ends are padded to at least two digits, which is what every one of
+  // their sheets shows ("01-250", "01-120", "121-180") and keeps the two
+  // halves of a cell looking like each other when the range is small.
+  let nextCarton = 1;
+  lines.forEach(l => {
+    if (l.cartons <= 0) { l.cartonNo = ''; return; }
+    const from = nextCarton;
+    const to = nextCarton + l.cartons - 1;
+    const pad = (n) => String(n).padStart(2, '0');
+    l.cartonNo = from === to ? pad(from) : pad(from) + '-' + pad(to);
+    nextCarton = to + 1;
+  });
+
+  return { lines, error: null };
+}
+
+// Everything the printed Packing List needs, kept together so it can be
+// re-rendered later from this one blob — same discipline as _orderFormFromBody.
+//
+// Only what their document actually prints is kept. The consignee's address,
+// the ports and the payment terms are on the PI and the Order Sheet; this page
+// has never shown them, so storing them here would be storing a promise the
+// document does not make.
+function _plFormFromBody(b, orders, user, lines) {
+  const lead = orders[0] || {};
+  const f = lead.form || {};
+  const orderNos = [...new Set(lines.map(l => l.orderNo))];
+  const piNos = [...new Set(orderNos.map(no => (orders.find(o => o.orderNo === no) || {}).piNo).filter(Boolean))];
+  const D = PL_FMT.DEFAULTS;
+  return {
+    plDate: String(b.plDate || '').trim(),
+    invoiceNo: String(b.invoiceNo || '').trim(),
+    containerSize: String(b.containerSize || D.containerSize).trim(),
+    cha: String(b.cha || '').trim(),
+    productCategory: String(b.productCategory || D.productCategory).trim(),
+    orderNos,
+    piNos,
+    buyerName: String(f.buyerName || lead.buyer || '').trim(),
+    totalCartons: lines.reduce((s, l) => s + l.cartons, 0),
+    totalPackedQty: lines.reduce((s, l) => s + l.packedQty, 0),
+    madeBy: user.name || '',
+    items: lines,
+  };
+}
+
+// Fills the "Packing List" tab as a FULL rewrite of the current shipment —
+// same rule as _fillOrderTemplate: every mapped cell is written even when
+// blank, or a leftover value from the previous shipment prints on this one.
+async function _fillPackingTemplate(sheets, form, templateSheetId) {
+  const tab = PACKING_LIST_TAB;
+  const { LAYOUT: L, CELLS: C, ITEMS: IT, HEADER_LINES: HL } = PL_FMT;
+  const items = form.items || [];
+
+  await sheets.spreadsheets.values.batchClear({
+    spreadsheetId: PI_CREATION_SHEET_ID,
+    requestBody: { ranges: IT.clearRanges.map(([a, b]) => `'${tab}'!${a}${L.itemsFirstRow}:${b}${L.itemsLastRow}`) },
+  });
+
+  const data = [];
+  const putRaw = (a1, value) => data.push({ range: `'${tab}'!${a1}`, values: [[value ?? '']] });
+  const put = (a1, value) => putRaw(a1, _sheetText(value));
+
+  // The header block is written label-and-value together, the way their sheet
+  // reads it — "ORDER NO. :- P00595, P00660".
+  const headerValue = {
+    orderNos: (form.orderNos || []).join(', '),
+    containerSize: form.containerSize,
+    invoiceNo: form.invoiceNo,
+    plDate: _piDisplayDate(form.plDate),
+    totalCartons: form.totalCartons ? form.totalCartons + ' NOS' : '',
+    partyName: form.buyerName,
+    cha: form.cha,
+  };
+  HL.forEach(h => put(C[h.key], h.label + (headerValue[h.key] || '')));
+  put(C.company, PL_FMT.COMPANY);
+  put(C.department, PL_FMT.DEPARTMENT);
+  put(C.productCategory, form.productCategory);
+
+  items.forEach((it, i) => {
+    const row = L.itemsFirstRow + i;
+    if (row > L.itemsLastRow) return;   // beyond capacity — see the cap in _plCollectLines
+    put(`${IT.srNoCol}${row}`, i + 1);
+    Object.entries(IT.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
+  });
+
+  await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
+
+  // Collapse the unused tail of the table — hidden rows are left out of the
+  // PDF export — and re-show whatever the previous shipment had hidden.
+  if (templateSheetId != null) {
+    const firstIdx = L.itemsFirstRow - 1;
+    const endIdx = L.itemsLastRow;
+    const usedEnd = Math.min(firstIdx + Math.max(items.length, 1), endIdx);
+    const rowRange = (startIndex, endIndex, hidden) => ({
+      updateDimensionProperties: {
+        range: { sheetId: templateSheetId, dimension: 'ROWS', startIndex, endIndex },
+        properties: { hiddenByUser: hidden }, fields: 'hiddenByUser',
+      },
+    });
+    const requests = [rowRange(firstIdx, usedEnd, false)];
+    if (usedEnd < endIdx) requests.push(rowRange(usedEnd, endIdx, true));
+    // No photos on this document, so every used line is the same plain height.
+    requests.push({
+      updateDimensionProperties: {
+        range: { sheetId: templateSheetId, dimension: 'ROWS', startIndex: firstIdx, endIndex: endIdx },
+        properties: { pixelSize: L.itemRowHeight }, fields: 'pixelSize',
+      },
+    });
+    await sheets.spreadsheets.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { requests } });
+  }
+}
+
+// Exports the filled tab and files the PDF next to the PIs and Order Sheets.
+// LANDSCAPE, unlike the other two: nineteen columns will not go on a portrait
+// A4 at any readable scale. No =IMAGE() photos on this one either, so the
+// pause before the page is captured is shorter. Never lets a Drive/export
+// hiccup block the data write.
+async function _finishPackingSubmission(plNo, templateSheetId) {
+  await _sleep(1200);
+  try {
+    const pdfBuffer = await _exportSheetTabPdf(PI_CREATION_SHEET_ID, templateSheetId, {
+      c1: 0, c2: PL_FMT.LAYOUT.colCount, r1: 0, r2: PL_FMT.LAYOUT.lastRow, portrait: false, scale: 4,
+    });
+    // "VTV/PL/001/26-27" has slashes in it — a Drive filename must not.
+    return await safeUploadPdfToDrive(pdfBuffer, `${plNo.replace(/\//g, '-')} - Packing List.pdf`, PI_PDF_DRIVE_FOLDER_ID);
+  } catch (e) {
+    console.error('[packing-list] PDF export failed:', e.message);
+    return null;
+  }
+}
+
+async function _packingListMeta(fy) {
+  const auth = getGoogleAuth();
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: PI_CREATION_SHEET_ID });
+  const tpl = meta.data.sheets.find(s => s.properties.title === PACKING_LIST_TAB);
+  if (!tpl) throw new Error(`The "${PACKING_LIST_TAB}" tab is missing from the PI workbook — run scripts/build-packing-list.js`);
+  let maxSeq = 0;
+  try {
+    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:A`, valueRenderOption: 'FORMATTED_VALUE' });
+    for (const row of (logRes.data.values || [])) maxSeq = Math.max(maxSeq, _plSeqOf(row[0], fy));
+  } catch (e) {
+    if (!/unable to parse range/i.test(e.message || '')) console.error('[packing-list] log read for numbering failed:', e.message);
+  }
+  return { nextSeq: maxSeq + 1, templateSheetId: tpl.properties.sheetId };
+}
+
+// Writes how far along each named order now is onto the order log's Status
+// column — Open, Partly Packed or Packed, recomputed from every live packing
+// list rather than incremented, so cancelling or deleting a packing list puts
+// its orders back exactly where they were. Never touches a Cancelled order,
+// and only writes when the answer actually changed.
+async function _plSyncOrderStatuses(sheets, orderNos) {
+  const wanted = [...new Set((orderNos || []).map(n => String(n || '').trim()).filter(Boolean))];
+  if (!wanted.length) return;
+  const { orders, packingLists } = await _plReadLogs(sheets);
+  const packed = _plPackedByLine(packingLists);
+  const S = PL_FMT.ORDER_STATUS;
+  for (const orderNo of wanted) {
+    const order = orders.find(o => o.orderNo === orderNo);
+    if (!order || order.status === S.cancelled) continue;
+    const lines = _plOrderLines(order, packed);
+    const totalOrdered = lines.reduce((s, l) => s + l.orderedQty, 0);
+    const totalPacked = lines.reduce((s, l) => s + l.packedQty, 0);
+    const next = totalPacked <= 0 ? S.open
+      : (totalOrdered > 0 && totalPacked >= totalOrdered ? S.packed : S.partly);
+    if (next === order.status) continue;
+    await _setLogRowStatus(PI_CREATION_SHEET_ID, ORDER_LOG_TAB, orderNo, PL_FMT.ORDER_LOG_STATUS_COL, next);
+  }
+}
+
+// POST /api/packing-list — raises one Packing List across one or more orders:
+// fills the tab, exports the PDF, logs it and moves every order it shipped to
+// Partly Packed or Packed.
+app.post('/api/packing-list', requireAuth, sheetSerialised('packing'), async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.plDate) return res.status(400).json({ error: 'Date is required' });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const { orders, packingLists } = await _plReadLogs(sheets);
+    const ordersByNo = new Map(orders.map(o => [o.orderNo, o]));
+    const packed = _plPackedByLine(packingLists);
+
+    const { lines, error } = _plCollectLines(b, ordersByNo, packed);
+    if (error) return res.status(400).json({ error });
+
+    // One packing list is one consignment to one consignee. Combining two
+    // buyers onto it would print one party name over another's goods, so the
+    // orders have to agree on who they are going to.
+    const shipped = [...new Set(lines.map(l => l.orderNo))].map(no => ordersByNo.get(no));
+    const buyerKeys = [...new Set(shipped.map(o => _plBuyerKey((o.form && o.form.buyerName) || o.buyer)))];
+    if (buyerKeys.length > 1) {
+      return res.status(400).json({
+        error: 'A packing list ships to one consignee. These orders are for '
+          + shipped.map(o => (o.form && o.form.buyerName) || o.buyer).join(' and ')
+          + ' — raise one packing list each.',
+      });
+    }
+
+    const fy = _piFyLabel(b.plDate);
+    const { nextSeq, templateSheetId } = await _packingListMeta(fy);
+    const plNo = _plNoFormat(nextSeq, fy);
+
+    const form = _plFormFromBody(b, shipped, req.session.user, lines);
+
+    await _fillPackingTemplate(sheets, { ...form, plNo }, templateSheetId);
+    const pdfLink = await _finishPackingSubmission(plNo, templateSheetId);
+
+    await ensureLogTab(PI_CREATION_SHEET_ID, PACKING_LOG_TAB, PL_FMT.PACKING_LOG_HEADER);
+    await appendLogRow(PI_CREATION_SHEET_ID, PACKING_LOG_TAB, [
+      "'" + plNo, "'" + b.plDate, "'" + form.invoiceNo,
+      "'" + form.orderNos.join(', '), "'" + form.piNos.join(', '),
+      form.buyerName, form.totalPackedQty || '', form.totalCartons || '', pdfLink || '',
+      req.session.user.name || '', _timestampForSheet(),
+      JSON.stringify(form),
+      'Open',
+    ]);
+
+    // Reported back rather than thrown: the packing list itself is already
+    // filled, exported and logged by this point, and the order's status is a
+    // convenience that can be corrected on the sheet.
+    let ordersUpdated = true;
+    try {
+      await _plSyncOrderStatuses(sheets, form.orderNos);
+    } catch (e) {
+      ordersUpdated = false;
+      console.error('[packing-list] order status write-back failed:', e.message);
+    }
+
+    return res.json({
+      success: true, plNo, pdfLink, orderNos: form.orderNos,
+      totalQty: form.totalPackedQty, totalCartons: form.totalCartons, ordersUpdated,
+    });
+  } catch (e) {
+    console.error('[packing-list] create failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/packing-list/list — recent packing lists, newest first, capped at 200.
+app.get('/api/packing-list/list', requireAuth, async (req, res) => {
+  try {
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:M1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const rows = (result.data.values || []).map(_plRowFromLog).filter(r => r.plNo).reverse().slice(0, 200);
+    return res.json(rows);
+  } catch (e) {
+    if (/unable to parse range/i.test(e.message || '')) return res.json([]);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// Reads one packing list's log row — needed before cancelling or deleting it,
+// because the orders it shipped have to be put back afterwards.
+async function _plByNo(sheets, plNo) {
+  const { packingLists } = await _plReadLogs(sheets);
+  return packingLists.find(p => p.plNo === String(plNo).trim()) || null;
+}
+
+// PUT /api/packing-list/cancel?plNo=... — same Cancel-in-place pattern as the
+// PI and the Order Sheet: the row stays and the archived PDF is never touched.
+// The quantities it held go straight back onto the orders' balance, which is
+// the whole reason a mis-keyed packing list is cancelled rather than left.
+app.put('/api/packing-list/cancel', requireAuth, sheetSerialised('packing'), async (req, res) => {
+  try {
+    const plNo = req.query.plNo;
+    if (!plNo) return res.status(400).json({ error: 'plNo is required' });
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const row = await _plByNo(sheets, plNo);
+    await _setLogRowStatus(PI_CREATION_SHEET_ID, PACKING_LOG_TAB, plNo, PL_FMT.PACKING_LOG_STATUS_COL, 'Cancelled');
+    try {
+      await _plSyncOrderStatuses(sheets, (row && row.form && row.form.orderNos) || []);
+    } catch (e) { console.error('[packing-list] order status write-back after cancel failed:', e.message); }
+    return res.json({ success: true });
+  } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
+});
+
+// Owner-only, and worth the same warning the PI's and the order's deletes
+// carry: the next packing list number is the highest on this log plus one, so
+// deleting the most recent one hands its number to the next one raised — while
+// its PDF may already be with the shipping line.
+app.delete('/api/packing-list', requireAuth, requireSuperAdmin, sheetSerialised('packing'), async (req, res) => {
+  try {
+    const plNo = req.query.plNo;
+    if (!plNo) return res.status(400).json({ error: 'plNo is required' });
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const row = await _plByNo(sheets, plNo);
+    await _deleteLogRowByKey(PI_CREATION_SHEET_ID, PACKING_LOG_TAB, plNo);
+    try {
+      await _plSyncOrderStatuses(sheets, (row && row.form && row.form.orderNos) || []);
+    } catch (e) { console.error('[packing-list] order status write-back after delete failed:', e.message); }
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 });

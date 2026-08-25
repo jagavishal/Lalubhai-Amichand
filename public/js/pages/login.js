@@ -366,6 +366,26 @@ window.Pages.login = {
         #login-page .lg-theme-btn:hover { color: var(--color-primary-strong);
                                           border-color: var(--color-primary); transform: translateY(-1px); }
 
+        /* Voice toggle — sits to the left of the theme switch. */
+        @keyframes lgVoicePulse {
+          0%, 100% { box-shadow: 0 0 0 0 var(--color-primary-ring); }
+          50%      { box-shadow: 0 0 0 6px transparent; }
+        }
+        #login-page .lg-voice-btn {
+          position: absolute; top: 20px; right: 62px;
+          width: 34px; height: 34px; border-radius: 10px;
+          display: flex; align-items: center; justify-content: center;
+          background: var(--surface-alt); color: var(--text-secondary);
+          border: 1px solid var(--border-base); cursor: pointer;
+          transition: color .15s, border-color .15s, transform .15s, opacity .15s;
+        }
+        #login-page .lg-voice-btn:hover { color: var(--color-primary-strong);
+                                          border-color: var(--color-primary); transform: translateY(-1px); }
+        #login-page .lg-voice-btn.is-muted    { opacity: .55; }
+        #login-page .lg-voice-btn.is-speaking { color: var(--color-primary-strong);
+                                                border-color: var(--color-primary);
+                                                animation: lgVoicePulse 1.1s ease-in-out infinite; }
+
         #login-page .login-card { width: 100%; max-width: 24rem;
                                   animation: lgFadeUp .55s cubic-bezier(.16,1,.3,1) .12s both; }
         #login-page .lg-mobile-brand { display: none; }
@@ -608,6 +628,7 @@ window.Pages.login = {
         <!-- ════════ Form side ════════ -->
         <main class="lg-panel">
 
+          <button type="button" class="lg-voice-btn" id="login-voice-btn" aria-label="Toggle voice alerts" title="Voice alerts"></button>
           <button type="button" class="lg-theme-btn" id="login-theme-btn" aria-label="Toggle theme"></button>
 
           <div class="login-card">
@@ -878,6 +899,89 @@ window.Pages.login = {
     const btnText     = el.querySelector('#login-btn-text');
     const btnLoading  = el.querySelector('#login-btn-loading');
     const themeBtn    = el.querySelector('#login-theme-btn');
+    const voiceBtn    = el.querySelector('#login-voice-btn');
+
+    // ── Voice alerts ─────────────────────────────────────────────────────────
+    // Speaks the greeting and the sign-in result out loud. Browsers refuse
+    // speech before the first user gesture, so the greeting waits for one.
+    // Every call is swallowed on failure — a mute browser must never block a
+    // login. The on/off choice is remembered per browser.
+    const VOICE_KEY = 'lg_login_voice';
+    const synth     = window.speechSynthesis || null;
+
+    const SPEAKER_ON_ICON  = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M18.36 5.64a9 9 0 0 1 0 12.72"/></svg>';
+    const SPEAKER_OFF_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="m23 9-6 6"/><path d="m17 9 6 6"/></svg>';
+
+    let voiceOn = true;
+    let greeted = false;
+    try { voiceOn = localStorage.getItem(VOICE_KEY) !== 'off'; } catch (_) {}
+
+    // Prefer an Indian-English voice when the platform ships one.
+    function pickVoice() {
+      if (!synth) return null;
+      let list = [];
+      try { list = synth.getVoices() || []; } catch (_) { return null; }
+      return list.find(v => v.lang === 'en-IN')
+          || list.find(v => (v.lang || '').indexOf('en-IN') === 0)
+          || list.find(v => (v.lang || '').indexOf('en') === 0)
+          || null;
+    }
+
+    function say(text) {
+      if (!voiceOn || !synth || !text) return;
+      try {
+        synth.cancel(); // never let two alerts overlap
+        const u = new SpeechSynthesisUtterance(text);
+        const v = pickVoice();
+        if (v) u.voice = v;
+        u.lang    = (v && v.lang) || 'en-IN';
+        u.rate    = 1;
+        u.pitch   = 1;
+        u.volume  = 1;
+        u.onstart = () => { if (voiceBtn) voiceBtn.classList.add('is-speaking'); };
+        u.onend   = () => { if (voiceBtn) voiceBtn.classList.remove('is-speaking'); };
+        u.onerror = u.onend;
+        synth.speak(u);
+      } catch (_) { /* voice is a nicety, never a blocker */ }
+    }
+
+    function paintVoiceIcon() {
+      if (!voiceBtn) return;
+      voiceBtn.innerHTML = voiceOn ? SPEAKER_ON_ICON : SPEAKER_OFF_ICON;
+      voiceBtn.classList.toggle('is-muted', !voiceOn);
+      voiceBtn.setAttribute('aria-pressed', String(voiceOn));
+      voiceBtn.title = voiceOn ? 'Voice alerts on' : 'Voice alerts off';
+    }
+
+    if (voiceBtn && synth) {
+      paintVoiceIcon();
+      voiceBtn.addEventListener('click', () => {
+        voiceOn = !voiceOn;
+        try { localStorage.setItem(VOICE_KEY, voiceOn ? 'on' : 'off'); } catch (_) {}
+        if (!voiceOn) {
+          try { synth.cancel(); } catch (_) {}
+          voiceBtn.classList.remove('is-speaking');
+        }
+        paintVoiceIcon();
+        greeted = true; // this click already satisfied the browser gesture rule
+        if (voiceOn) say('Voice alerts on.');
+      });
+      // Voice lists load asynchronously on some browsers.
+      try { synth.onvoiceschanged = pickVoice; } catch (_) {}
+    } else if (voiceBtn) {
+      voiceBtn.style.display = 'none'; // browser has no speech support
+    }
+
+    // Greeting — fires once, on the first click or keypress anywhere on the page.
+    function greetOnce() {
+      if (greeted) return;
+      greeted = true;
+      say(greeting + '. Welcome to Lallubhai Amichand. Please sign in.');
+    }
+    if (synth) {
+      el.addEventListener('pointerdown', greetOnce, { once: true });
+      el.addEventListener('keydown',     greetOnce, { once: true });
+    }
 
     // Theme toggle — same light/dark switch the topbar carries inside the app.
     if (themeBtn && window.Theme) {
@@ -974,6 +1078,7 @@ window.Pages.login = {
             nameField.style.display = '';
             nameInput.focus();
             showError(json.error || 'Multiple accounts use this email — please also enter your name.');
+            say('Multiple accounts use this email. Please also enter your name.');
             setLoading(false);
             return;
           }
@@ -1002,11 +1107,15 @@ window.Pages.login = {
         // Let the mascot celebrate for a beat, then go straight in. The timer
         // is unconditional, so the app still opens if the flourish misfires.
         mood('happy');
+        const firstName = String((data.user && data.user.name) || '').trim().split(/\s+/)[0];
+        say(firstName ? ('Welcome back, ' + firstName + '.') : 'Welcome back.');
         safe(() => replay(flowerEl, 'bloom'));
         setTimeout(enterApp, 1150);
 
       } catch (err) {
-        showError(err && err.message ? err.message : 'Invalid email or password');
+        const failMsg = err && err.message ? err.message : 'Invalid email or password';
+        showError(failMsg);
+        say('Login failed. ' + failMsg + '.');
         setLoading(false);
         mood('angry');
         safe(() => replay(cardEl, 'lg-shake', 700));
