@@ -82,7 +82,10 @@ function text(sheetId, r1, r2, c1, c2, opts) {
     horizontalAlignment: opts.align || 'LEFT',
     verticalAlignment: opts.valign || 'MIDDLE',
     wrapStrategy: opts.wrap || 'WRAP',
-    textFormat: { bold: !!opts.bold, fontSize: opts.size || 9, fontFamily: 'Arial' },
+    // Sheets takes fontSize as an int32 and rejects the whole batch on a
+    // fractional one ("Invalid value ... (TYPE_INT32), 8.5"), so it is rounded
+    // here rather than trusted to every call site.
+    textFormat: { bold: !!opts.bold, fontSize: Math.round(opts.size || 9), fontFamily: 'Arial' },
   };
   if (opts.bg) format.backgroundColor = opts.bg;
   const fields = 'userEnteredFormat(horizontalAlignment,verticalAlignment,wrapStrategy,textFormat'
@@ -225,20 +228,20 @@ async function run() {
   requests.push(rowHeight(sheetId, L.categoryRow, L.categoryRow, 18));
 
   // ── item table
-  requests.push(text(sheetId, L.itemHeaderRow, L.itemHeaderRow, FC, LC, { align: 'CENTER', bold: true, size: 7.5, bg: BAND }));
+  requests.push(text(sheetId, L.itemHeaderRow, L.itemHeaderRow, FC, LC, { align: 'CENTER', bold: true, size: 7, bg: BAND }));
   requests.push(rowHeight(sheetId, L.itemHeaderRow, L.itemHeaderRow, 46));
   requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, FC, LC, { align: 'CENTER', size: 8 }));
   // Description is the one column read as prose rather than scanned as a figure.
   requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.description, ITEMS.fields.description, { align: 'LEFT', size: 8 }));
   // The two columns the whole document is read for.
-  requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.packedQty, ITEMS.fields.packedQty, { align: 'CENTER', bold: true, size: 8.5 }));
-  requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.cartons, ITEMS.fields.cartons, { align: 'CENTER', bold: true, size: 8.5 }));
+  requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.packedQty, ITEMS.fields.packedQty, { align: 'CENTER', bold: true, size: 9 }));
+  requests.push(text(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.cartons, ITEMS.fields.cartons, { align: 'CENTER', bold: true, size: 9 }));
   requests.push(rowHeight(sheetId, L.itemsFirstRow, L.itemsLastRow, L.itemRowHeight));
   ITEMS.numberFormats.forEach(nf => requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, nf.first, nf.last, nf.pattern)));
 
   // ── totals row
   requests.push(merge(sheetId, L.totalRow, L.totalRow, L.totalLabelFirst, L.totalLabelLast));
-  requests.push(text(sheetId, L.totalRow, L.totalRow, FC, LC, { align: 'CENTER', bold: true, size: 8.5, bg: SOFT }));
+  requests.push(text(sheetId, L.totalRow, L.totalRow, FC, LC, { align: 'CENTER', bold: true, size: 9, bg: SOFT }));
   requests.push(text(sheetId, L.totalRow, L.totalRow, L.totalLabelFirst, L.totalLabelLast, { align: 'RIGHT', bold: true, size: 9, bg: SOFT }));
   requests.push(rowHeight(sheetId, L.totalRow, L.totalRow, 20));
 
