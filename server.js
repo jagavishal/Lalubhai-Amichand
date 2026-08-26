@@ -1442,7 +1442,7 @@ async function sendHelpTicketEmail({
    The old HRMS spreadsheet mailed these from an Apps Script trigger; nothing
    replaced it when the module moved here, so the tab full of dates was being
    kept and never used. A sweep runs through the day and greets whoever it is
-   for, copying the office inbox on each one.
+   for, copying the office group addresses on each one.
 
    Three things this has to get right.
 
@@ -1459,7 +1459,11 @@ async function sendHelpTicketEmail({
    And it only greets the living roll: Active employees, and an anniversary only
    from the first year onward, so nobody is congratulated on joining today. */
 
-const GREETINGS_CC = (process.env.LEAVE_REQUEST_CC || 'inquiry@laltd.in').trim();
+// The office Google Groups the company-wide copy goes to — each group fans the
+// mail out to its own members, so no individual mailbox has to be listed here.
+// Override with GREETINGS_GROUPS (comma-separated) without a code change.
+const GREETINGS_GROUPS = (process.env.GREETINGS_GROUPS || 'mumbai@laltd.in, ahd@laltd.in, management@laltd.in')
+  .split(',').map((a) => a.trim()).filter(Boolean);
 
 // Today in Asia/Kolkata as { iso, md } — md is the "MM-DD" the dates are matched on.
 function istToday() {
@@ -1481,9 +1485,11 @@ function istToday() {
 // anything. Change it in app_config under 'greetings_hour'.
 const GREETINGS_DEFAULT_HOUR = 10;
 
-async function sendGreetingEmail({ toEmail, toName, kind, years, occasion, bcc }) {
+async function sendGreetingEmail({ toEmail, toName, kind, years, occasion }) {
   const mailer = getMailer();
-  const cc = GREETINGS_CC && GREETINGS_CC.toLowerCase() !== String(toEmail || '').toLowerCase() ? GREETINGS_CC : '';
+  // Every greeting is copied to the office groups; a group that IS the
+  // recipient (an employee whose address is a shared group inbox) drops out.
+  const cc = GREETINGS_GROUPS.filter((a) => a.toLowerCase() !== String(toEmail || '').toLowerCase()).join(', ');
   if (!mailer || (!toEmail && !cc)) return false;
   const birthday = kind === 'birthday';
   const festival = kind === 'occasion';
@@ -1501,16 +1507,11 @@ async function sendGreetingEmail({ toEmail, toName, kind, years, occasion, bcc }
   const heading = festival ? `Happy ${occasion}` : birthday ? 'Happy Birthday' : 'Happy Work Anniversary';
   const colour = festival ? '#b45309' : birthday ? '#b45309' : '#0150AA';
   const emoji = festival ? '&#127882;' : birthday ? '&#127874;' : '&#127881;';
-  // The company-wide copy rides in BCC: everyone hears about the day without
-  // forty addresses being shown to forty people, and one send covers the lot.
-  const bccList = (bcc || []).filter((a) => a && a.toLowerCase() !== String(toEmail || '').toLowerCase()
-    && a.toLowerCase() !== cc.toLowerCase());
   try {
     await mailer.sendMail({
       from: `"Lallubhai Amichand" <${process.env.SMTP_USER}>`,
       to: toEmail || cc,
       ...(toEmail && cc ? { cc } : {}),
-      ...(bccList.length ? { bcc: bccList.join(', ') } : {}),
       subject,
       html: `
         <div style="font-family:Arial,sans-serif;max-width:520px;padding:28px;border:1px solid #e2e8f0;border-radius:10px;text-align:center">
@@ -1528,23 +1529,6 @@ async function sendGreetingEmail({ toEmail, toName, kind, years, occasion, bcc }
     console.error('[greetings] send failed for', toEmail || cc, '—', e.message);
     return false;
   }
-}
-
-/* Everybody's best mailbox — the whole company hears about a birthday, an
-   anniversary or a festival, not just the person it belongs to. Profile's real
-   address first for the same reason the leave mail prefers it: several logins
-   are shared department inboxes. */
-async function allStaffAddresses() {
-  const rows = await q(
-    `SELECT u.email AS login_email, p.notification_email
-       FROM users u LEFT JOIN profile p ON p.user_id = u.id
-      WHERE u.active = 1`).catch(() => []);
-  const out = new Set();
-  for (const r of rows) {
-    const a = String(r.notification_email || '').trim() || String(r.login_email || '').trim();
-    if (a && /@/.test(a)) out.add(a.toLowerCase());
-  }
-  return [...out];
 }
 
 async function sendDailyGreetings() {
@@ -1605,8 +1589,6 @@ async function sendDailyGreetings() {
     return;
   }
 
-  const everyone = await allStaffAddresses();
-
   let sent = 0;
   for (const r of rows) {
     // Only whoever the day actually belongs to. `md` is today's MM-DD in IST;
@@ -1622,12 +1604,12 @@ async function sendDailyGreetings() {
       || String(r.login_email || '').trim()
       || String(r.email || '').trim();
 
-    if (dobMatch && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'birthday', bcc: everyone })) sent++;
+    if (dobMatch && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'birthday' })) sent++;
     if (dojMatch) {
       const years = year - Number(toDateStr(r.doj).slice(0, 4));
       // Five years and above only — management's call: the early anniversaries
       // pass quietly, the milestones are marked in front of the whole company.
-      if (years >= 5 && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'anniversary', years, bcc: everyone })) sent++;
+      if (years >= 5 && await sendGreetingEmail({ toEmail: to, toName: r.name, kind: 'anniversary', years })) sent++;
     }
   }
 
@@ -1639,7 +1621,8 @@ async function sendDailyGreetings() {
     for (const h of hols) {
       const name = String(h.name || '').trim();
       if (!name) continue;
-      if (await sendGreetingEmail({ kind: 'occasion', occasion: name, toEmail: GREETINGS_CC, bcc: everyone })) sent++;
+      // No toEmail — the festival mail is addressed to the office groups themselves.
+      if (await sendGreetingEmail({ kind: 'occasion', occasion: name })) sent++;
     }
   } catch (e) { console.error('[greetings] occasion lookup failed:', e.message); }
 
@@ -7543,6 +7526,23 @@ async function _closePiPricingStep(piNo, userName) {
   }
 }
 
+// The same closing move for the other two app-page steps: raising an Order
+// Sheet closes any "Order Sheet" step tracking that PI, and saving a Packing
+// List closes any "Packing List" step tracking those orders — each with the
+// same next-step email the manual Mark-as-Done path sends.
+async function _closeFmsAppPageSteps(kind, keys, userName) {
+  if (!FMS_ENABLED) return;
+  try {
+    const closed = await fmsSheet.completeAppPageSteps({ kind, keys, userName });
+    for (const done of closed) {
+      sendFmsNextStepEmail({ sheet: done.sheet, step: done.step, rowNumber: done.rowNumber, doneByName: userName })
+        .catch(e => console.error('[fms-mail] next-step notification failed:', e.message));
+    }
+  } catch (e) {
+    console.error('[fms] could not close the', kind, 'step for', keys.join(', ') + ':', e.message);
+  }
+}
+
 // PUT /api/proforma-invoice/price?piNo=... — Admin (or a User explicitly
 // granted the 'set_price' feature via Users → Access tab) stage. Loads the
 // PI's own stored Form JSON for buyer/item/qty details (the template tab may
@@ -7990,6 +7990,13 @@ app.post('/api/order-sheet', requireAuth, sheetSerialised('order'), async (req, 
       fmsTracked = false;
       console.error('[order-sheet] Order to dispatch FMS row failed:', e.message);
     }
+
+    // Raising the sheet is what completes an "Order Sheet" FMS step tracking
+    // this PI — same self-closing as the pricing step, whichever page the doer
+    // started from. Fire-and-forget, like the next-step email: the closing
+    // scans every configured FMS sheet, and that must not hold up (or time
+    // out) a save that has already succeeded.
+    _closeFmsAppPageSteps('orderSheet', [piNo], req.session.user?.name || '');
 
     return res.json({ success: true, orderNo, pdfLink, piNo, fmsTracked });
   } catch (e) {
@@ -8595,6 +8602,11 @@ app.post('/api/packing-list', requireAuth, sheetSerialised('packing'), async (re
       ordersUpdated = false;
       console.error('[packing-list] order status write-back failed:', e.message);
     }
+
+    // Saving the list is what completes a "Packing List" FMS step tracking any
+    // of these orders — same self-closing as the pricing step. Fire-and-forget
+    // for the same reason as the order-sheet route above.
+    _closeFmsAppPageSteps('packingList', form.orderNos, req.session.user?.name || '');
 
     return res.json({
       success: true, plNo, pdfLink, orderNos: form.orderNos,

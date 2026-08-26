@@ -309,34 +309,61 @@ window.FmsDoneModal = (function () {
     return !!(step && (step.piPricing || PRICING_STEP_RE.test(step.step_name || '')));
   }
 
-  function piNoForRow(step, row) {
-    if (row?.piNo) return String(row.piNo).trim();
+  /* ── the "Order Sheet" and "Packing List" steps — same idea ───────────
+     Their work also lives on the Proforma Invoice page: raising the Order
+     Sheet (for the row's PI) or saving a Packing List (for the row's Order)
+     is what fills the step's Actual cell, server-side. Done sends the doer
+     to that form; every failure falls back to the normal modal. The regexes
+     mirror the backend's (fmsSheet.js) for the same stale-server reason as
+     PRICING_STEP_RE above, anchored the same way: a creation verb before the
+     document name, or the bare document name — a step merely MENTIONING the
+     document keeps its modal. ──────────────────────────────────────────── */
+
+  const ORDER_SHEET_STEP_RE = /(raise|create|prepare|make|generate|bana)\w*\s+(the\s+)?order\s*sheet|^\s*order\s*sheet\s*(creation|banao|banana|banaye)?\s*$/i;
+  const PACKING_LIST_STEP_RE = /(raise|create|prepare|make|generate|bana)\w*\s+(the\s+)?packing\s*list|^\s*packing\s*list\s*(creation|banao|banana|banaye)?\s*$/i;
+  const ORDER_NO_RE = /^[A-Za-z]{2,6}\/ORD\/\d{1,5}\/\d{2}-\d{2}$/;
+
+  function isOrderSheetStep(step) {
+    return !isPricingStep(step)
+      && !!(step && (step.orderSheet || ORDER_SHEET_STEP_RE.test(step.step_name || '')));
+  }
+
+  function isPackingListStep(step) {
+    return !!(step && (step.packingList || PACKING_LIST_STEP_RE.test(step.step_name || '')));
+  }
+
+  // The number the target page needs, wherever it survives: the task row
+  // itself, the freshly-fetched step's pending rows, or — last resort — a
+  // value of the right shape among the row's shown columns.
+  function keyForRow(step, row, field, re) {
+    if (row?.[field]) return String(row[field]).trim();
     const pending = (step?.pending || []).find(r => r.sheetRowNumber === row?.rowNumber);
-    if (pending?.piNo) return String(pending.piNo).trim();
+    if (pending?.[field]) return String(pending[field]).trim();
     for (const d of normalizeDetails(row?.data)) {
       const v = String(d.value ?? '').trim();
-      if (PI_NO_RE.test(v)) return v;
+      if (re.test(v)) return v;
     }
     return '';
   }
 
-  async function openPricingStep({ step, row, fallback }) {
+  const piNoForRow = (step, row) => keyForRow(step, row, 'piNo', PI_NO_RE);
+  const orderNoForRow = (step, row) => keyForRow(step, row, 'orderNo', ORDER_NO_RE);
+
+  // Shared shape for all three: resolve the number, open the page's entry
+  // point, fall back to the modal on anything that would leave the doer
+  // stranded. A step with no number on its row is just an ordinary step —
+  // fall back silently; there is no failure to report.
+  async function openAppPageStep({ number, opener, args, toast, fallback }) {
     const pi = window.Pages?.['proforma-invoice'];
-    const piNo = piNoForRow(step, row);
-    // Nothing to price — a step named like a pricing step but with no PI
-    // number on the row is just an ordinary step. Fall back silently; there is
-    // no failure here to report.
-    if (!pi?.openPriceFor || !piNo) { fallback(); return; }
+    if (!pi?.[opener] || !number) { fallback(); return; }
     let result;
     try {
-      result = await pi.openPriceFor(piNo, {
-        returnTo: (window.location.hash || '').replace('#', ''),
-      });
+      result = await pi[opener](number, args);
     } catch (e) {
-      result = { ok: false, reason: e.message || 'Could not open the price screen' };
+      result = { ok: false, reason: e.message || 'Could not open that screen' };
     }
     if (result.ok) {
-      window.Utils.showToast('Add the C&F price to finish this step');
+      window.Utils.showToast(toast);
       return;
     }
     window.Utils.showToast(result.reason, 'error');
@@ -344,16 +371,30 @@ window.FmsDoneModal = (function () {
   }
 
   function open({ fmsId, step, row, onSaved }) {
+    const fallback = () => { _fmsId = fmsId; _step = step; _row = row; _onSaved = onSaved; _saving = false; _delayReason = ''; _extra = {}; render(); };
     if (isPricingStep(step)) {
-      openPricingStep({
-        step, row,
-        fallback: () => { _fmsId = fmsId; _step = step; _row = row; _onSaved = onSaved; _saving = false; _delayReason = ''; _extra = {}; render(); },
+      openAppPageStep({
+        number: piNoForRow(step, row), opener: 'openPriceFor',
+        args: { returnTo: (window.location.hash || '').replace('#', '') },
+        toast: 'Add the C&F price to finish this step', fallback,
       });
       return;
     }
-    _fmsId = fmsId; _step = step; _row = row; _onSaved = onSaved;
-    _saving = false; _delayReason = ''; _extra = {};
-    render();
+    if (isOrderSheetStep(step)) {
+      openAppPageStep({
+        number: piNoForRow(step, row), opener: 'openOrderSheetFor',
+        toast: 'Raise the Order Sheet to finish this step', fallback,
+      });
+      return;
+    }
+    if (isPackingListStep(step)) {
+      openAppPageStep({
+        number: orderNoForRow(step, row), opener: 'openPackingListFor',
+        toast: 'Save the Packing List to finish this step', fallback,
+      });
+      return;
+    }
+    fallback();
   }
 
   return { open, close };

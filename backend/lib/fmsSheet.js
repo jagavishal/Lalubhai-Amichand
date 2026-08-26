@@ -194,15 +194,51 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     return !!step && PI_FMT.FMS_TRACKER.pricingStepRe.test(step.step_name || '');
   }
 
+  // Two more steps whose work happens on another page of this app, same idea
+  // as the pricing step above: raising the Order Sheet (PI List → Create Order
+  // Sheet) and preparing the Packing List (Order Sheets → Pack). Matched on
+  // the step NAME alone, like the pricing step, and the flag only leads
+  // anywhere once the row also carries the number that page needs (PI number
+  // for the Order Sheet, Order number for the Packing List) — otherwise the
+  // step keeps its ordinary Mark-as-Done modal.
+  //
+  // Anchored the same way pricingStepRe is, and for the same reason: a
+  // creation verb before the document name (or the bare document name as the
+  // whole step) means "go and make it"; a step that merely MENTIONS the
+  // document — "Send Order Sheet PDF to buyer", "Packing List confirmation
+  // from CHA" — is ordinary follow-up work, keeps its modal, and must never
+  // be auto-closed by completeAppPageSteps() below.
+  const ORDER_SHEET_STEP_RE = /(raise|create|prepare|make|generate|bana)\w*\s+(the\s+)?order\s*sheet|^\s*order\s*sheet\s*(creation|banao|banana|banaye)?\s*$/i;
+  const PACKING_LIST_STEP_RE = /(raise|create|prepare|make|generate|bana)\w*\s+(the\s+)?packing\s*list|^\s*packing\s*list\s*(creation|banao|banana|banaye)?\s*$/i;
+  // "Order details (Sheet No.)" is what the Order-to-dispatch tracker calls
+  // its order-number column; the plain "Order No." variants cover any other
+  // sheet. Deliberately NOT matching "Order Sheet PDF" — the (details|no|…)
+  // group refuses it.
+  const ORDER_NO_HEADER_RE = /^\s*order\s*(details?|no\.?|number|#|sheet\s*no\.?)/i;
+
+  function isOrderSheetStep(step) {
+    return !!step && !isPiPricingStep(step) && ORDER_SHEET_STEP_RE.test(step.step_name || '');
+  }
+
+  function isPackingListStep(step) {
+    return !!step && PACKING_LIST_STEP_RE.test(step.step_name || '');
+  }
+
   // Which column of an already-fetched sheet holds the PI number: the header
   // the tracker actually uses, falling back to the column this app writes when
   // it opens the row (only meaningful for the tracker itself, whose header
-  // block may leave that cell blank).
+  // block may leave that cell blank). Order Sheet steps need the same number —
+  // that page is opened against a PI.
   function piNoIndex(headers, step) {
-    if (!step || !step.piPricing) return -1;
+    if (!step || !(step.piPricing || step.orderSheet)) return -1;
     const byHeader = (headers || []).findIndex(h => PI_FMT.FMS_TRACKER.piNoHeaderRe.test(h || ''));
     if (byHeader >= 0) return byHeader;
     return step.pi_no_col ? colToIdx(step.pi_no_col) : -1;
+  }
+
+  function orderNoIndex(headers, step) {
+    if (!step || !step.packingList) return -1;
+    return (headers || []).findIndex(h => ORDER_NO_HEADER_RE.test(h || ''));
   }
 
   async function getFullSteps(fmsId) {
@@ -224,15 +260,16 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
       show_cols: safeParseJson(s.show_cols, []),
       doers: doersByStep[s.id] || [],
       extraRows: extrasByStep[s.id] || [],
-      ...(isPiPricingStep(s)
-        ? {
-            piPricing: true,
-            // Only a hint for the flow this app opens rows in itself; every
-            // other sheet resolves its PI column by header, see piNoIndex().
-            ...(extractSpreadsheetId(sheet && sheet.sheet_id) === PI_FMT.FMS_TRACKER.spreadsheetId
-              ? { pi_no_col: PI_FMT.FMS_TRACKER.cols.piNo }
-              : {}),
-          }
+      ...(isPiPricingStep(s) ? { piPricing: true } : {}),
+      ...(isOrderSheetStep(s) ? { orderSheet: true } : {}),
+      ...(isPackingListStep(s) ? { packingList: true } : {}),
+      // Only a hint for the flow this app opens rows in itself; every other
+      // sheet resolves its PI column by header, see piNoIndex(). Both
+      // PI-keyed step kinds get it — the tracker's header block may leave the
+      // PI header cell blank.
+      ...((isPiPricingStep(s) || isOrderSheetStep(s))
+          && extractSpreadsheetId(sheet && sheet.sheet_id) === PI_FMT.FMS_TRACKER.spreadsheetId
+        ? { pi_no_col: PI_FMT.FMS_TRACKER.cols.piNo }
         : {}),
     }));
   }
@@ -418,10 +455,11 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     const actualIdx = colToIdx(step.actual_col);
     const hasDoerCol = !!step.doer_name_col;
     const doerIdx = hasDoerCol ? colToIdx(step.doer_name_col) : -1;
-    // Set only on a pricing step (see isPiPricingStep) — the frontend needs the
-    // PI number to open the right Add Price screen, and show_cols may well not
-    // include that column.
+    // Set only on a pricing/order-sheet/packing-list step — the frontend needs
+    // the PI (or Order) number to open the right screen, and show_cols may
+    // well not include that column.
     const piNoIdx = piNoIndex(headers, step);
+    const orderNoIdx = orderNoIndex(headers, step);
     let showCols = Array.isArray(step.show_cols) && step.show_cols.length ? step.show_cols.slice() : headers.map((_, i) => i);
     if (!showCols.includes(planIdx)) showCols = [...showCols, planIdx];
 
@@ -446,6 +484,7 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
         isMine,
         data,
         ...(piNoIdx >= 0 ? { piNo: stripZW(row[piNoIdx]) } : {}),
+        ...(orderNoIdx >= 0 ? { orderNo: stripZW(row[orderNoIdx]) } : {}),
       });
     });
 
@@ -530,6 +569,8 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
             overdue, isLate: overdue,
             status: 'pending',
             ...(step.piPricing ? { piPricing: true, piNo: r.piNo || '' } : {}),
+            ...(step.orderSheet ? { orderSheet: true, piNo: r.piNo || '' } : {}),
+            ...(step.packingList ? { packingList: true, orderNo: r.orderNo || '' } : {}),
           });
         });
       });
@@ -635,6 +676,43 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
       return { sheet, step, rowNumber, alreadyDone: false };
     }
     return null;
+  }
+
+  // The same self-closing move for the two other app-page steps (see
+  // isOrderSheetStep/isPackingListStep): raising an Order Sheet closes an
+  // "Order Sheet" step on the row whose PI number matches, and saving a
+  // Packing List closes a "Packing List" step on every row whose Order number
+  // matches — however the page was reached (from the step's Done button or on
+  // its own). A row whose Actual is already filled is left alone, same as
+  // re-pricing above. Returns the rows it closed; [] when nothing matched.
+  async function completeAppPageSteps({ kind, keys, userName }) {
+    const wanted = new Set((Array.isArray(keys) ? keys : [keys]).map(stripZW).filter(Boolean));
+    if (!wanted.size) return [];
+
+    const closed = [];
+    for (const sheet of await listFmsSheets()) {
+      // Which flows even have such a step is a DB-only question — settle it
+      // before spending a Sheets round-trip on any of them.
+      const steps = (await getFullSteps(sheet.id)).filter(s => (kind === 'orderSheet' ? s.orderSheet : s.packingList));
+      if (!steps.length) continue;
+      let data;
+      try { data = await fetchSheetData(sheet); }
+      catch (e) { console.error('[fms] sheet fetch failed for', sheet.id, e.message); continue; }
+      const { headers, dataRows, headerRow } = data;
+      for (const step of steps) {
+        const keyIdx = kind === 'orderSheet' ? piNoIndex(headers, step) : orderNoIndex(headers, step);
+        if (keyIdx < 0) continue;
+        const actualIdx = colToIdx(step.actual_col);
+        for (let i = 0; i < dataRows.length; i++) {
+          if (!wanted.has(stripZW(dataRows[i][keyIdx]))) continue;
+          if (stripZW(dataRows[i][actualIdx])) continue;
+          const rowNumber = headerRow + 1 + i;
+          await writeStepDone({ sheet, step, rowNumber, doerName: userName });
+          closed.push({ sheet, step, rowNumber });
+        }
+      }
+    }
+    return closed;
   }
 
   /* ── next-step notification ──────────────────────────────────────────── */
@@ -796,6 +874,7 @@ module.exports = function createFmsSheetLib({ q, pool, getGoogleAuth }) {
     getFmsSheetsForUser, getFmsSheetsWithStats, getStepsForTaskView,
     computePendingRows, getPendingRowsForStep, getPendingRowsForFmsSteps, getPendingAcrossSteps, getMyFmsPendingRows,
     submitIntakeRow, writeStepDone, getNextStepNotification, completePiPricingStep,
+    completeAppPageSteps,
     getFmsMisRows, getFmsMisDetailRows, getFmsPendingGroupedByDoer,
   };
 };

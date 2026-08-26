@@ -1948,7 +1948,9 @@ window.Pages['proforma-invoice'] = (() => {
     return first ? first.buyerKey : '';
   }
 
-  function _plStartNew(orderNo) {
+  // State only — _plStartNew paints it; openPackingListFor() navigates first
+  // when the doer is arriving from another page.
+  function _plSeedNew(orderNo) {
     const D = _packingDefaults || {};
     _plNew = {
       picked: [],
@@ -1972,8 +1974,11 @@ window.Pages['proforma-invoice'] = (() => {
     // looked exactly like "there is nothing to pack".
     _plPendingLoaded = false;
     _view = 'packing';
-    renderPage();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function _plStartNew(orderNo) {
+    _plSeedNew(orderNo);
+    _goToView();
   }
 
   // Consumes _plNew.preselect once — a second pass must not re-tick an order
@@ -2641,6 +2646,92 @@ window.Pages['proforma-invoice'] = (() => {
     return { ok: true };
   }
 
+  // Lands the doer where render() will keep them: unlike the price modal,
+  // _view/_osOf/_plNew survive the router's render() untouched, so no queue
+  // flag is needed — set the state, then paint or navigate.
+  function _goToView() {
+    const here = (window.location.hash || '').replace('#', '') === 'proforma-invoice';
+    if (here) { renderPage(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    else window.Router.navigate('proforma-invoice');
+  }
+
+  /* ── entry point for the FMS "Order Sheet" step ───────────────────────
+     Same contract as openPriceFor: lands the doer on the Create Order Sheet
+     form for that PI, because raising the sheet is what completes the step
+     (server-side, in POST /api/order-sheet). Resolves to { ok: false, reason }
+     instead of navigating when no order can be raised, so the caller can fall
+     back to the normal modal. ─────────────────────────────────────────── */
+  async function openOrderSheetFor(piNo) {
+    const wanted = String(piNo || '').trim();
+    if (!wanted) return { ok: false, reason: 'No PI number on this row' };
+
+    let rows, osRows;
+    try {
+      // Masters carry the form's boilerplate (default notes) — on a cold
+      // arrival from another page nothing has loaded them yet.
+      [rows, osRows] = await Promise.all([
+        Utils.apiFetch('/api/proforma-invoice/list'),
+        Utils.apiFetch('/api/order-sheet/list'),
+        _mastersLoaded ? null : _loadMasters(),
+      ]);
+      rows = rows || []; osRows = osRows || [];
+    } catch (e) {
+      return { ok: false, reason: e.message || 'Could not load Proforma Invoices' };
+    }
+    const row = rows.find(r => String(r.piNo || '').trim() === wanted);
+    if (!row) return { ok: false, reason: 'PI ' + wanted + ' is not in the PI log' };
+    if (row.status === 'Cancelled') return { ok: false, reason: 'PI ' + wanted + ' has been cancelled' };
+    if (row.status === 'Superseded') return { ok: false, reason: 'PI ' + wanted + ' has been revised — the order goes against its latest revision' };
+    if (row.status !== 'Priced' || !row.form) {
+      return { ok: false, reason: 'PI ' + wanted + ' must be priced before an Order Sheet can be raised' };
+    }
+
+    _pilRows = rows; _pilLoaded = true; _pilLoadError = '';
+    _oslRows = osRows; _oslLoaded = true; _oslLoadError = '';
+    if (_osOrderedPiNos().has(wanted)) {
+      return { ok: false, reason: 'An Order Sheet has already been raised against PI ' + wanted };
+    }
+    _osOf = { piNo: row.piNo, buyer: row.buyer, form: row.form };
+    _view = 'orders';
+    _goToView();
+    return { ok: true };
+  }
+
+  /* ── entry point for the FMS "Packing List" step ──────────────────────
+     Lands the doer on a New Packing List with that order already ticked —
+     saving the list is what completes the step (POST /api/packing-list).
+     Same fall-back contract as the two above. ──────────────────────────── */
+  async function openPackingListFor(orderNo) {
+    const wanted = String(orderNo || '').trim();
+    if (!wanted) return { ok: false, reason: 'No Order number on this row' };
+
+    let rows, pending;
+    try {
+      // Masters carry the form's defaults (container size, product category) —
+      // on a cold arrival from another page nothing has loaded them yet. The
+      // pending list is the balance truth: the order log's status is only a
+      // best-effort write-back, so 'Open' there can still mean nothing left.
+      [rows, pending] = await Promise.all([
+        Utils.apiFetch('/api/order-sheet/list'),
+        Utils.apiFetch('/api/packing-list/pending'),
+        _mastersLoaded ? null : _loadMasters(),
+      ]);
+      rows = rows || []; pending = pending || [];
+    } catch (e) {
+      return { ok: false, reason: e.message || 'Could not load Order Sheets' };
+    }
+    const row = rows.find(r => String(r.orderNo || '').trim() === wanted);
+    if (!row) return { ok: false, reason: 'Order ' + wanted + ' is not in the Order Sheet log' };
+    if (row.status === 'Cancelled') return { ok: false, reason: 'Order ' + wanted + ' has been cancelled' };
+    if (!pending.some(o => String(o.orderNo || '').trim() === wanted && o.balanceQty > 0)) {
+      return { ok: false, reason: 'Order ' + wanted + ' has nothing left to ship' };
+    }
+
+    _oslRows = rows; _oslLoaded = true; _oslLoadError = '';
+    _plStartNew(wanted);
+    return { ok: true };
+  }
+
   return {
     render() {
       if (!_priceQueued) { _priceModalRow = null; _priceReturnHash = ''; }
@@ -2648,5 +2739,7 @@ window.Pages['proforma-invoice'] = (() => {
       renderPage();
     },
     openPriceFor,
+    openOrderSheetFor,
+    openPackingListFor,
   };
 })();
