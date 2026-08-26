@@ -1295,44 +1295,66 @@ const LEAVE_REQUEST_CC = (process.env.LEAVE_REQUEST_CC || 'inquiry@laltd.in').tr
 // Sent to the approver the moment a request is raised.
 async function sendLeaveRequestEmail({ leaveId, toEmail, toName, applicantName, leaveType, fromDate, toDate, days, halfDay, reason, balanceNote, nextApproverName, firstApprovedBy }) {
   const mailer = getMailer();
-  // The copy is the point of record, so a request with no approver address
-  // still goes out — to the office inbox alone rather than nowhere at all.
   const cc = LEAVE_REQUEST_CC && LEAVE_REQUEST_CC.toLowerCase() !== String(toEmail || '').toLowerCase()
     ? LEAVE_REQUEST_CC : '';
   if (!mailer || (!toEmail && !cc)) {
     console.log('[email] leave request not sent — mailer:', !!mailer, '| to:', toEmail || '(none)');
     return;
   }
+  const subject = `Leave Request from ${applicantName} — ${leaveType} ${fromDate}${toDate && toDate !== fromDate ? ' to ' + toDate : ''}`;
+  const rows = [
+    ['Employee', applicantName],
+    ['Leave Type', leaveType],
+    ['From', fromDate],
+    ['To', toDate],
+    ['Days', String(days) + (halfDay && halfDay !== 'full' ? ` (half day — ${halfDay} half)` : '')],
+    ['Reason', reason],
+    ['Balance', balanceNote],
+    // Two-signature requests: the level-1 mail says who signs after
+    // them, the level-2 mail says whose signature it already carries.
+    ['Final Approval', nextApproverName ? `${nextApproverName} — after your approval` : ''],
+    ['Already Approved By', firstApprovedBy || ''],
+  ];
   try {
-    await mailer.sendMail({
-      from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
-      to: toEmail || cc,
-      ...(toEmail && cc ? { cc } : {}),
-      subject: `Leave Request from ${applicantName} — ${leaveType} ${fromDate}${toDate && toDate !== fromDate ? ' to ' + toDate : ''}`,
-      html: _leaveMailHtml({
-        heading: 'Leave Request Awaiting Your Approval',
-        colour: '#0150AA',
-        lead: `Hi <b>${toName || 'there'}</b>, <b>${applicantName}</b> has applied for leave and named you as the approver.`,
-        rows: [
-          ['Employee', applicantName],
-          ['Leave Type', leaveType],
-          ['From', fromDate],
-          ['To', toDate],
-          ['Days', String(days) + (halfDay && halfDay !== 'full' ? ` (half day — ${halfDay} half)` : '')],
-          ['Reason', reason],
-          ['Balance', balanceNote],
-          // Two-signature requests: the level-1 mail says who signs after
-          // them, the level-2 mail says whose signature it already carries.
-          ['Final Approval', nextApproverName ? `${nextApproverName} — after your approval` : ''],
-          ['Already Approved By', firstApprovedBy || ''],
-        ],
-        actions: leaveId ? _leaveMailButtons(leaveId, toEmail) : '',
-        footer: leaveId
-          ? 'Either button opens a page asking you to confirm — no login needed.'
-          : 'Open <b>Leave Management</b> in the ERP to approve or reject it.',
-      }),
-    });
-    console.log('[email] Leave request notification sent to:', toEmail || cc, cc && toEmail ? '| cc: ' + cc : '');
+    // The approver's mail, buttons and all — to them alone. It used to CC the
+    // office inbox on this very message, which put live Approve/Reject links
+    // in a shared mailbox; one of those logins belongs to an applicant, so
+    // people were receiving the buttons for their own requests.
+    if (toEmail) {
+      await mailer.sendMail({
+        from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+        to: toEmail,
+        subject,
+        html: _leaveMailHtml({
+          heading: 'Leave Request Awaiting Your Approval',
+          colour: '#0150AA',
+          lead: `Hi <b>${toName || 'there'}</b>, <b>${applicantName}</b> has applied for leave and named you as the approver.`,
+          rows,
+          actions: leaveId ? _leaveMailButtons(leaveId, toEmail) : '',
+          footer: leaveId
+            ? 'Either button opens a page asking you to confirm — no login needed.'
+            : 'Open <b>Leave Management</b> in the ERP to approve or reject it.',
+        }),
+      });
+      console.log('[email] Leave request notification sent to:', toEmail);
+    }
+    // The office copy is the record, never the decision: a separate mail with
+    // no buttons, so nobody outside the approver can act on the request.
+    if (cc) {
+      await mailer.sendMail({
+        from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+        to: cc,
+        subject,
+        html: _leaveMailHtml({
+          heading: 'Leave Request — Office Copy',
+          colour: '#64748b',
+          lead: `<b>${applicantName}</b> has applied for leave. ${toName ? `The request is with <b>${toName}</b> for approval.` : 'Open <b>Leave Management</b> in the ERP to assign or decide it.'}`,
+          rows,
+          footer: 'This copy is for records — the Approve/Reject buttons were sent to the approver alone.',
+        }),
+      });
+      console.log('[email] Leave request office copy sent to:', cc);
+    }
   } catch (e) {
     console.error('[email] Failed to send leave request notification:', e.message);
   }
@@ -3802,6 +3824,9 @@ const hrms = mountHrms(app, {
   // Employee Master can be granted to a non-admin from Users → Access; its
   // routes gate on this instead of requireAdmin. See requireAdminOrPage.
   requireEmployeeMaster: requireAdminOrPage('hr-employees'),
+  // The owner — the one login that still sees the whole leave register after
+  // the per-approver scoping. See the leaves list route in hrms.js.
+  isSuperAdminUser: isSuperAdmin,
   // Shared so leave ids are minted the same way as every other id in the app —
   // from the largest one in use, not from COUNT(*). See nextSeqId.
   withSeqId,

@@ -1531,10 +1531,13 @@ function mountHrms(app, ctx) {
           where.push(`(LOWER(l.approver_name) = LOWER($${params.length - 2})`
             + ` OR LOWER(l.approver_email) = LOWER($${params.length - 1}))`
             + ` AND (l.user_id IS NULL OR l.user_id <> $${params.length})`);
-        } else if (!isAdminUser(user)) {
-          // Their own requests, plus anything naming them as the approver —
-          // an approver is often not an Admin, and would otherwise be unable to
-          // see the very requests they were emailed about.
+        } else if (!(ctx.isSuperAdminUser && ctx.isSuperAdminUser(user))) {
+          /* Their own requests, plus anything naming them as the approver —
+             and NOBODY else's. This used to except every Admin/HOD, but all
+             seven approvers here carry the Admin role, so each of them saw —
+             and could decide — the whole company's queue. Management's
+             instruction: a request is visible to its applicant and its
+             current approver, and to the owner login alone beyond that. */
           const me = await selfEmployee(user);
           params.push(me?.id || NO_MATCH);
           params.push(user?.id || NO_MATCH);
@@ -1801,12 +1804,16 @@ function mountHrms(app, ctx) {
         const row = (await q(`SELECT * FROM leaves WHERE id = $1`, [id]))[0];
         if (!row) return res.status(404).json({ error: 'Leave request not found' });
         const same = (a, c) => String(a || '').trim().toLowerCase() === String(c || '').trim().toLowerCase();
-        if (!isAdminUser(user)) {
+        /* Only the request's CURRENT approver decides it — not every Admin.
+           All seven approvers here carry the Admin role, so the old admin
+           bypass meant any of them could sign off anybody's leave. The owner
+           login keeps the override for the day an approver is unreachable. */
+        if (!(ctx.isSuperAdminUser && ctx.isSuperAdminUser(user))) {
           const named = same(row.approver_name, user?.name)
             || (row.approver_email && same(row.approver_email, user?.email));
           // Nobody decides their own leave, whoever they are named as.
           if (!named || row.user_id === user?.id) {
-            return res.status(403).json({ error: 'Only this request' + String.fromCharCode(39) + 's approver, or an Admin, can decide it' });
+            return res.status(403).json({ error: 'Only this request' + String.fromCharCode(39) + 's approver can decide it' });
           }
         }
 
