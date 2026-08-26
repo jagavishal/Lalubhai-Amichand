@@ -286,6 +286,12 @@ const HR_SCHEMA = [
   `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS next_approver_email VARCHAR(255) DEFAULT ''`,
   `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS level1_by VARCHAR(255) DEFAULT ''`,
   `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS approver_mailto VARCHAR(255) DEFAULT ''`,
+  /* The stand-in for this request's approver (Users → Substitute Approver).
+     They can see and decide the request alongside the approver; when the
+     approver was already on leave at application time, the two are swapped and
+     the request is addressed to the substitute outright. */
+  `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS substitute_name VARCHAR(255) DEFAULT ''`,
+  `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS substitute_email VARCHAR(255) DEFAULT ''`,
   `CREATE INDEX idx_leaves_emp ON leaves (employee_id)`,
 
   /* The holiday calendar gains the three things the sheet's HolidayList had
@@ -1527,9 +1533,13 @@ function mountHrms(app, ctx) {
         if (String(req.query.forApprover || '') === 'me') {
           params.push(user?.name || NO_MATCH);
           params.push(user?.email || NO_MATCH);
+          params.push(user?.name || NO_MATCH);
+          params.push(user?.email || NO_MATCH);
           params.push(user?.id || NO_MATCH);
-          where.push(`(LOWER(l.approver_name) = LOWER($${params.length - 2})`
-            + ` OR LOWER(l.approver_email) = LOWER($${params.length - 1}))`
+          where.push(`(LOWER(l.approver_name) = LOWER($${params.length - 4})`
+            + ` OR LOWER(l.approver_email) = LOWER($${params.length - 3})`
+            + ` OR LOWER(l.substitute_name) = LOWER($${params.length - 2})`
+            + ` OR LOWER(l.substitute_email) = LOWER($${params.length - 1}))`
             + ` AND (l.user_id IS NULL OR l.user_id <> $${params.length})`);
         } else if (!(ctx.isSuperAdminUser && ctx.isSuperAdminUser(user))) {
           /* Their own requests, plus anything naming them as the approver —
@@ -1543,9 +1553,13 @@ function mountHrms(app, ctx) {
           params.push(user?.id || NO_MATCH);
           params.push(user?.name || NO_MATCH);
           params.push(user?.email || NO_MATCH);
-          where.push(`(l.employee_id = $${params.length - 3} OR l.user_id = $${params.length - 2}`
-            + ` OR LOWER(l.approver_name) = LOWER($${params.length - 1})`
-            + ` OR LOWER(l.approver_email) = LOWER($${params.length}))`);
+          params.push(user?.name || NO_MATCH);
+          params.push(user?.email || NO_MATCH);
+          where.push(`(l.employee_id = $${params.length - 5} OR l.user_id = $${params.length - 4}`
+            + ` OR LOWER(l.approver_name) = LOWER($${params.length - 3})`
+            + ` OR LOWER(l.approver_email) = LOWER($${params.length - 2})`
+            + ` OR LOWER(l.substitute_name) = LOWER($${params.length - 1})`
+            + ` OR LOWER(l.substitute_email) = LOWER($${params.length}))`);
         } else if (req.query.employeeId) {
           params.push(req.query.employeeId);
           where.push(`l.employee_id = $${params.length}`);
@@ -1700,6 +1714,50 @@ function mountHrms(app, ctx) {
           }
         }
 
+        /* The approver's own stand-in (Users → Substitute Approver, on the
+           APPROVER's row). Stamped on the request so the substitute can see
+           and decide it at any time — and when the approver is already on
+           approved leave today, the request is handed to the substitute
+           outright, with the original approver kept in the substitute slot so
+           they can still act once back. */
+        let substituteName = '', substituteEmail = '';
+        if (approverName) {
+          try {
+            const apUser = (await q(
+              `SELECT id, name, email, substitute_approver FROM users WHERE ${approverEmail ? 'LOWER(email) = LOWER($1)' : 'LOWER(name) = LOWER($1)'} LIMIT 1`,
+              [approverEmail || approverName],
+            ))[0];
+            if (apUser?.substitute_approver) {
+              const sub = (await q(
+                `SELECT id, name, email FROM users WHERE id = $1 AND active = 1`,
+                [apUser.substitute_approver],
+              ))[0];
+              // Nobody substitutes on their own request.
+              const applicantLogin = emp?.user_id || b.userId || '';
+              if (sub && sub.id !== applicantLogin) {
+                substituteName = sub.name || '';
+                substituteEmail = sub.email || '';
+                const todayIso = isoDate(new Date());
+                const away = (await q(
+                  `SELECT id FROM leaves WHERE LOWER(status) = 'approved'
+                      AND from_date <= $1 AND to_date >= $2
+                      AND (user_id = $3 OR LOWER(user_name) = LOWER($4)) LIMIT 1`,
+                  [todayIso, todayIso, apUser.id || '', approverName],
+                ))[0];
+                if (away) {
+                  const held = { name: approverName, email: approverEmail };
+                  approverName = substituteName;
+                  approverEmail = substituteEmail;
+                  substituteName = held.name;
+                  substituteEmail = held.email;
+                  tierNote = (tierNote ? tierNote + ' ' : '')
+                    + `${held.name} is on leave today — sent to ${approverName} as substitute approver.`;
+                }
+              }
+            }
+          } catch (e) { console.error('[hrms] substitute lookup failed:', e.message); }
+        }
+
         /* Was 'LV' + (COUNT(*) + 1). Leave rows do get deleted — a rejected or
            withdrawn request, a cleanup — and the moment one does, the count drops
            and the next application is minted with an id that already exists, so
@@ -1708,14 +1766,14 @@ function mountHrms(app, ctx) {
         const id = await withSeqId('leaves', 'LV', 4, (newId) => pool.query(
           `INSERT INTO leaves (id, user_id, user_name, employee_id, type, leave_type, half_day, total_days,
                                from_date, to_date, reason, status, approver, approver_email, approver_name, backup_name,
-                               next_approver_name, next_approver_email)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13,$14,$15,$16,$17)`,
+                               next_approver_name, next_approver_email, substitute_name, substitute_email)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13,$14,$15,$16,$17,$18,$19)`,
           [newId, b.userId || req.session?.user?.id || null,
            b.userName || emp?.name || req.session?.user?.name || 'Unknown',
            employeeId || null, 'Leave', code, halfDay, days, from, to, b.reason || '',
            approverName || b.approver || 'HOD', approverEmail, approverName,
            String(b.backup_name || '').trim().slice(0, 255),
-           nextApproverName, nextApproverEmail],
+           nextApproverName, nextApproverEmail, substituteName, substituteEmail],
         ));
         /* Tell the approver. Fire-and-forget on purpose: SMTP is somebody
            else's server and can be slow or down, and a leave request that is
@@ -1769,18 +1827,31 @@ function mountHrms(app, ctx) {
     app.get('/api/hr/on-leave-today', requireAuth, hrReady, async (req, res) => {
       try {
         const todayIso = isoDate(new Date());
-        const rows = await q(
-          `SELECT COALESCE(e.name, l.user_name) AS name, l.leave_type, l.half_day, l.backup_name, l.to_date
-             FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
-            WHERE LOWER(l.status) = 'approved' AND l.from_date <= $1 AND l.to_date >= $2
-            ORDER BY name ASC`, [todayIso, todayIso]).catch(() => []);
-        res.json(rows.map((r) => ({
+        const [onLeave, absent] = await Promise.all([
+          q(`SELECT COALESCE(e.name, l.user_name) AS name, l.leave_type, l.half_day, l.backup_name, l.to_date
+               FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
+              WHERE LOWER(l.status) = 'approved' AND l.from_date <= $1 AND l.to_date >= $2
+              ORDER BY name ASC`, [todayIso, todayIso]).catch(() => []),
+          // Marked Absent in today's attendance — away without a leave. Only
+          // what is actually marked: attendance is filled at the end of the
+          // day, and guessing absence from a missing punch would list the
+          // whole company every morning.
+          q(`SELECT e.name FROM hr_attendance a JOIN hr_employees e ON e.id = a.employee_id
+              WHERE a.att_date = $1 AND a.status = 'Absent' AND e.status = 'Active'
+              ORDER BY e.name ASC`, [todayIso]).catch(() => []),
+        ]);
+        const leave = onLeave.map((r) => ({
           name: r.name || '—',
           type: r.leave_type || 'CL',
           half: String(r.half_day || 'full') !== 'full',
           backup: r.backup_name || '',
           till: isoDate(r.to_date) || '',
-        })));
+        }));
+        const leaveNames = new Set(leave.map((x) => x.name.toLowerCase()));
+        res.json({
+          leave,
+          absent: absent.map((r) => r.name).filter((n) => n && !leaveNames.has(String(n).toLowerCase())),
+        });
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -1810,7 +1881,10 @@ function mountHrms(app, ctx) {
            login keeps the override for the day an approver is unreachable. */
         if (!(ctx.isSuperAdminUser && ctx.isSuperAdminUser(user))) {
           const named = same(row.approver_name, user?.name)
-            || (row.approver_email && same(row.approver_email, user?.email));
+            || (row.approver_email && same(row.approver_email, user?.email))
+            // The substitute stands in with full authority — that is the point.
+            || (row.substitute_name && same(row.substitute_name, user?.name))
+            || (row.substitute_email && same(row.substitute_email, user?.email));
           // Nobody decides their own leave, whoever they are named as.
           if (!named || row.user_id === user?.id) {
             return res.status(403).json({ error: 'Only this request' + String.fromCharCode(39) + 's approver can decide it' });

@@ -304,6 +304,11 @@ const SCHEMA = [
   // request falls back to the employee's reporting manager and then to plain
   // "HOD" — see POST /api/hr/leaves.
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS leave_approver VARCHAR(16) DEFAULT NULL`,
+  // Who stands in when THIS person (as an approver) is away — set on the
+  // approver's own row. Requests addressed to them while they are on approved
+  // leave go to the substitute instead, and the substitute can always see and
+  // decide their queue in the app.
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS substitute_approver VARCHAR(16) DEFAULT NULL`,
   `CREATE TABLE IF NOT EXISTS payment_entries (id VARCHAR(16) PRIMARY KEY, vendor_id VARCHAR(16) NOT NULL, amount DECIMAL(15,2) NOT NULL DEFAULT 0, txn_type VARCHAR(4) DEFAULT 'N', narration VARCHAR(500) DEFAULT '', status VARCHAR(16) DEFAULT 'draft', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, exported_at DATETIME DEFAULT NULL, batch_label VARCHAR(128) DEFAULT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_pe_status ON payment_entries (status)`,
   `CREATE INDEX idx_pe_exported ON payment_entries (exported_at)`,
@@ -3515,7 +3520,7 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
        duplicate id. The bulk-import path directly above always did this
        numerically — the two halves of the same screen disagreed. */
     const id = await withSeqId('users', 'U', 3, (newId) =>
-      pool.query('INSERT INTO users (id,name,email,phone,department,branch,leave_approver,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,NOW())', [newId,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',dept,body.branch||'',body.leave_approver||null,roles.join(','),hash,perms?JSON.stringify(perms):null]));
+      pool.query('INSERT INTO users (id,name,email,phone,department,branch,leave_approver,substitute_approver,roles,active,password_hash,permissions,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,NOW())', [newId,body.name.trim(),body.email.trim().toLowerCase(),body.phone||'',dept,body.branch||'',body.leave_approver||null,body.substitute_approver||null,roles.join(','),hash,perms?JSON.stringify(perms):null]));
     if (body.picture) {
       try { await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT DEFAULT NULL'); } catch {}
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,id]);
@@ -3553,6 +3558,7 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
       if (body.department!==undefined) user.department=await canonicalDept(body.department);
       if (body.branch!==undefined) user.branch=body.branch;
       if (body.leave_approver!==undefined) user.leave_approver=body.leave_approver||null;
+      if (body.substitute_approver!==undefined) user.substitute_approver=body.substitute_approver||null;
       if (body.roles!==undefined) user.roles=Array.isArray(body.roles)?body.roles:body.roles.split(',').map(r=>r.trim());
       if (body.active!==undefined) user.active=body.active;
       if (body.permissions!==undefined) user.permissions=body.permissions;
@@ -3594,6 +3600,10 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
     if (body.leave_approver!==undefined) {
       sets.push('leave_approver=?');
       vals.push(body.leave_approver||null);
+    }
+    if (body.substitute_approver!==undefined) {
+      sets.push('substitute_approver=?');
+      vals.push(body.substitute_approver||null);
     }
     vals.push(body.id);
     let ph = 0;

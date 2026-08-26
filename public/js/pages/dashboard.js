@@ -216,17 +216,21 @@ window.Pages.dashboard = (function () {
   async function _paintOnLeave() {
     const box = document.getElementById('db-onleave');
     if (!box) return;
-    const rows = await Utils.apiFetch('/api/hr/on-leave-today').catch(() => null);
-    if (!Array.isArray(rows) || !rows.length) return;
+    const data = await Utils.apiFetch('/api/hr/on-leave-today').catch(() => null);
+    // The endpoint used to return a bare array; accept both shapes so a
+    // half-deployed pair of files never blanks the strip.
+    const leave = Array.isArray(data) ? data : (data?.leave || []);
+    const absent = Array.isArray(data) ? [] : (data?.absent || []);
+    if (!leave.length && !absent.length) return;
     const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     box.style.display = '';
     box.innerHTML = `
-      <div class="card" style="padding:12px 16px;border-left:3px solid #7c3aed;">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <div class="card" style="padding:12px 16px;border-left:3px solid #7c3aed;display:flex;flex-direction:column;gap:8px;">
+        ${leave.length ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#7c3aed;white-space:nowrap;">
-            On Leave Today · ${rows.length}
+            On Leave Today · ${leave.length}
           </span>
-          ${rows.map((r) => `
+          ${leave.map((r) => `
             <span style="display:inline-flex;align-items:baseline;gap:6px;background:#f5f3ff;border:1px solid #ede9fe;
                   border-radius:99px;padding:4px 12px;font-size:12.5px;">
               <b style="color:#0f172a;">${esc(r.name)}</b>
@@ -235,7 +239,18 @@ window.Pages.dashboard = (function () {
                 ? `<span style="color:#475569;font-size:11.5px;">→ covered by <b>${esc(r.backup)}</b></span>`
                 : ''}
             </span>`).join('')}
-        </div>
+        </div>` : ''}
+        ${absent.length ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#dc2626;white-space:nowrap;">
+            Absent Today · ${absent.length}
+          </span>
+          ${absent.map((n) => `
+            <span style="display:inline-flex;align-items:baseline;gap:6px;background:#fef2f2;border:1px solid #fee2e2;
+                  border-radius:99px;padding:4px 12px;font-size:12.5px;">
+              <b style="color:#0f172a;">${esc(n)}</b>
+              <span style="color:#dc2626;font-size:11px;font-weight:600;">no leave</span>
+            </span>`).join('')}
+        </div>` : ''}
       </div>`;
   }
 

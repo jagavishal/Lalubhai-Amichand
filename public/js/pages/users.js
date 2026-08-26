@@ -216,7 +216,7 @@ window.Pages.users = (() => {
   }
 
   function blankForm() {
-    return { name: '', email: '', phone: '', department: '', branch: '', roles: ['User'], password: '', notifEmail: '' };
+    return { name: '', email: '', phone: '', department: '', branch: '', roles: ['User'], password: '', notifEmail: '', leave_approver: '', substitute_approver: '' };
   }
 
   /* ── API ────────────────────────────────────────────────────────────── */
@@ -587,7 +587,7 @@ window.Pages.users = (() => {
           const u = _users.find(x => String(x.id) === String(btn.dataset.id));
           if (!u) return;
           _editingUser = u;
-          _form = { id: u.id, name: u.name || '', email: u.email || '', phone: u.phone || '', department: u.department || '', branch: u.branch || '', leave_approver: u.leave_approver || '', roles: normalizeRoles(u.roles), active: u.active !== false, notifEmail: u.notifEmail || '' };
+          _form = { id: u.id, name: u.name || '', email: u.email || '', phone: u.phone || '', department: u.department || '', branch: u.branch || '', leave_approver: u.leave_approver || '', substitute_approver: u.substitute_approver || '', roles: normalizeRoles(u.roles), active: u.active !== false, notifEmail: u.notifEmail || '' };
           _picture = u.picture || null; _pictureChanged = false; _modalOpen = true;
           renderModal();
         });
@@ -975,11 +975,13 @@ window.Pages.users = (() => {
     // is a reporting relationship, not a role, and the shop floor reports to
     // people who are not Admins. The person being edited is left out: nobody
     // approves their own leave.
-    const approverOptions = (_users || [])
+    const approverOptionsFor = (selected) => (_users || [])
       .filter(u => u.active !== false && u.id !== _form.id)
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-      .map(u => `<option value="${esc(u.id)}" ${_form.leave_approver === u.id ? 'selected' : ''}>${esc(u.name || u.email)}${u.department ? ' · ' + esc(u.department) : ''}</option>`)
+      .map(u => `<option value="${esc(u.id)}" ${selected === u.id ? 'selected' : ''}>${esc(u.name || u.email)}${u.department ? ' · ' + esc(u.department) : ''}</option>`)
       .join('');
+    const approverOptions = approverOptionsFor(_form.leave_approver);
+    const substituteOptions = approverOptionsFor(_form.substitute_approver);
 
     const rolesHtml = ROLES.map(r => {
       const active = curRoles.includes(r);
@@ -1100,6 +1102,20 @@ window.Pages.users = (() => {
                 </div>
                 <div class="text-[10px] text-slate-400 mt-1.5">Their leave requests are raised against this person</div>
               </div>
+              <div>
+                <div class="flex items-center justify-between mb-1.5">
+                  <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Substitute Approver</label>
+                </div>
+                <div class="relative">
+                  <select id="um-substitute-approver"
+                    class="w-full appearance-none rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-[13px] text-slate-700 outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100 transition">
+                    <option value="">— None —</option>
+                    ${substituteOptions}
+                  </select>
+                  <svg class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                </div>
+                <div class="text-[10px] text-slate-400 mt-1.5">When THIS person is the approver and is away on leave, requests go to their substitute instead — who can always see and decide their queue</div>
+              </div>
               ${passwordField}
             </div>
 
@@ -1205,6 +1221,9 @@ window.Pages.users = (() => {
 
     document.getElementById('um-leave-approver')?.addEventListener('change', e => {
       _form.leave_approver = e.target.value;
+    });
+    document.getElementById('um-substitute-approver')?.addEventListener('change', e => {
+      _form.substitute_approver = e.target.value;
     });
 
     /* Department: add new via inline input */
