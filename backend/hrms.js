@@ -1619,9 +1619,13 @@ function mountHrms(app, ctx) {
           }
         }
 
-        /* The department tier (Accounts, three days or more) now applies only
-           when no approver was picked on the Users page — an explicit pick is
-           the newer, more deliberate instruction and wins. */
+        /* The department tier, per the written policy for Accounts:
+           up to 2 days needs no Paresh sign-off (the within-team approver or
+           the picked one handles it); 3 days or more MUST go to Paresh, over
+           whoever is picked on the Users page — the whole point of the rule is
+           that a long absence cannot be signed off inside the department.
+           Jayesh Udani & above are exempt from the tier entirely and route as
+           per their own authority — leaveAuthorityFor returns null for them. */
         /* The employee master is the department of record, but plenty of office
            staff apply before anyone has made them an employee row — for those
            the login's own department is what there is. Only ever the session
@@ -1630,18 +1634,19 @@ function mountHrms(app, ctx) {
            quietly have their own department's rule applied to it. */
         const applicantDept = emp?.department
           || (employeeId ? '' : (req.session?.user?.department || ''));
+        const applicantName = emp?.name || b.userName || (!employeeId ? user?.name : '') || '';
         const tier = ctx.leaveAuthorityFor
-          ? await ctx.leaveAuthorityFor(applicantDept, days).catch(() => null)
+          ? await ctx.leaveAuthorityFor(applicantDept, days, applicantName).catch(() => null)
           : null;
         let tierNote = null;
 
-        if (pickedApprover) {
-          approverName = pickedApprover.name || '';
-          approverEmail = pickedApprover.email || '';
-        } else if (tier?.escalated) {
+        if (tier?.escalated) {
           approverName = tier.name;
           approverEmail = tier.email;
           tierNote = `${days} day(s) — this needs ${tier.name}'s approval, so it has been sent there.`;
+        } else if (pickedApprover) {
+          approverName = pickedApprover.name || '';
+          approverEmail = pickedApprover.email || '';
         }
 
         if (!approverName) {

@@ -2553,12 +2553,40 @@ async function userByName(name) {
    of the return value: an escalated tier is mandatory and overrides whoever the
    applicant has named, while an un-escalated one is only a fallback — "approval
    as per authority" means the authority already recorded on the user wins. */
-async function leaveAuthorityFor(department, days) {
+async function leaveAuthorityFor(department, days, applicantName) {
   const dept = String(department || '').trim().toLowerCase();
   if (!dept) return null;
   const matrix = await readAuthority('leave_authority', DEFAULT_LEAVE_AUTHORITY);
-  const tier = matrix.find((t) => t.department && dept.includes(String(t.department).toLowerCase()));
+  /* Substring both ways off a singular stem: the matrix says 'Accounts', the
+     staff records say 'ACCOUNTANT' and 'SR. ACCOUNTANT' — and 'accountant'
+     does not contain 'accounts', so the plain includes() missed most of the
+     very team the rule is about. 'account' catches every spelling in use. */
+  const tier = matrix.find((t) => {
+    const want = String(t.department || '').toLowerCase().trim();
+    if (!want) return false;
+    const stem = want.replace(/s$/, '');
+    return dept.includes(want) || (stem.length >= 4 && dept.includes(stem));
+  });
   if (!tier) return null;
+
+  /* "Senior Accountant Jayesh Udani & above: approval as per authority." The
+     tier's own approver, and the person it escalates to, are the seniors the
+     rule names — THEIR requests are not subject to it, whatever the length;
+     they route through the ordinary chain (the approver picked on their user
+     record, then their reporting line). Matched through userByName, so
+     'Jayesh Udani' in the matrix still exempts the login spelt
+     'JAYESH UDANI', and 'Paresh Sir' exempts Paresh Shah. */
+  const norm = (v) => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const applicant = norm(applicantName);
+  if (applicant) {
+    for (const named of [tier.withinTeamApprover, tier.escalateTo]) {
+      if (!named) continue;
+      if (norm(named) === applicant) return null;
+      const who = await userByName(named);
+      if (who && norm(who.name) === applicant) return null;
+    }
+  }
+
   const from = Number(tier.escalateFromDays) || 0;
   const escalated = !!from && Number(days) >= from;
   const named = escalated ? tier.escalateTo : tier.withinTeamApprover;
