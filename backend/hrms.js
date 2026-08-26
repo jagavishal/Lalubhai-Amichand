@@ -276,6 +276,16 @@ const HR_SCHEMA = [
   // Who covers the work while they are away — picked on the Apply form, shown
   // wherever "on leave today" is shown, so nobody has to ask around.
   `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS backup_name VARCHAR(255) DEFAULT ''`,
+  /* Two-signature approvals (Accounts, 3+ days: Jayesh AND Paresh). The row
+     goes to approver_* first; next_approver_* is who it moves on to when the
+     first approval lands, and level1_by records who gave that first one.
+     approver_mailto is the exact mailbox the request mail was sent to — the
+     email Approve/Reject buttons act only when their token names it, so a
+     level-1 link cannot finalise what still needs the level-2 signature. */
+  `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS next_approver_name VARCHAR(255) DEFAULT ''`,
+  `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS next_approver_email VARCHAR(255) DEFAULT ''`,
+  `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS level1_by VARCHAR(255) DEFAULT ''`,
+  `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS approver_mailto VARCHAR(255) DEFAULT ''`,
   `CREATE INDEX idx_leaves_emp ON leaves (employee_id)`,
 
   /* The holiday calendar gains the three things the sheet's HolidayList had
@@ -1640,10 +1650,17 @@ function mountHrms(app, ctx) {
           : null;
         let tierNote = null;
 
+        let nextApproverName = '', nextApproverEmail = '';
         if (tier?.escalated) {
           approverName = tier.name;
           approverEmail = tier.email;
-          tierNote = `${days} day(s) — this needs ${tier.name}'s approval, so it has been sent there.`;
+          if (tier.then) {
+            nextApproverName = tier.then.name || '';
+            nextApproverEmail = tier.then.email || '';
+            tierNote = `${days} day(s) — this needs ${tier.name}'s and then ${nextApproverName}'s approval.`;
+          } else {
+            tierNote = `${days} day(s) — this needs ${tier.name}'s approval, so it has been sent there.`;
+          }
         } else if (pickedApprover) {
           approverName = pickedApprover.name || '';
           approverEmail = pickedApprover.email || '';
@@ -1687,13 +1704,15 @@ function mountHrms(app, ctx) {
            highest id in use instead. */
         const id = await withSeqId('leaves', 'LV', 4, (newId) => pool.query(
           `INSERT INTO leaves (id, user_id, user_name, employee_id, type, leave_type, half_day, total_days,
-                               from_date, to_date, reason, status, approver, approver_email, approver_name, backup_name)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13,$14,$15)`,
+                               from_date, to_date, reason, status, approver, approver_email, approver_name, backup_name,
+                               next_approver_name, next_approver_email)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending',$12,$13,$14,$15,$16,$17)`,
           [newId, b.userId || req.session?.user?.id || null,
            b.userName || emp?.name || req.session?.user?.name || 'Unknown',
            employeeId || null, 'Leave', code, halfDay, days, from, to, b.reason || '',
            approverName || b.approver || 'HOD', approverEmail, approverName,
-           String(b.backup_name || '').trim().slice(0, 255)],
+           String(b.backup_name || '').trim().slice(0, 255),
+           nextApproverName, nextApproverEmail],
         ));
         /* Tell the approver. Fire-and-forget on purpose: SMTP is somebody
            else's server and can be slow or down, and a leave request that is
@@ -1711,11 +1730,16 @@ function mountHrms(app, ctx) {
             const address = ctx.notifyAddressFor
               ? await ctx.notifyAddressFor(approverUser?.id, loginEmail)
               : loginEmail;
+            // The buttons in the mail act only for the mailbox they were sent
+            // to — recorded here so a level-1 link can never finalise a row
+            // that has moved on to its level-2 approver.
+            if (address) await pool.query(`UPDATE leaves SET approver_mailto = $1 WHERE id = $2`, [address, id]).catch(() => {});
             await ctx.sendLeaveRequestEmail({
               // Carries the Approve / Reject buttons in the mail. Without an id
               // there is nothing to sign a link against, so the mail falls back
               // to telling them to open the ERP.
               leaveId: id,
+              nextApproverName,
               toEmail: address,
               toName: approverName,
               applicantName: emp?.name || b.userName || req.session?.user?.name || 'An employee',
@@ -1774,16 +1798,65 @@ function mountHrms(app, ctx) {
         if (!id || !status) return res.status(400).json({ error: 'id and status are required' });
 
         const user = req.session?.user;
+        const row = (await q(`SELECT * FROM leaves WHERE id = $1`, [id]))[0];
+        if (!row) return res.status(404).json({ error: 'Leave request not found' });
+        const same = (a, c) => String(a || '').trim().toLowerCase() === String(c || '').trim().toLowerCase();
         if (!isAdminUser(user)) {
-          const row = (await q(`SELECT approver_name, approver_email, user_id FROM leaves WHERE id = $1`, [id]))[0];
-          if (!row) return res.status(404).json({ error: 'Leave request not found' });
-          const named = String(row.approver_name || '').trim().toLowerCase() === String(user?.name || '').trim().toLowerCase()
-            || (row.approver_email && String(row.approver_email).trim().toLowerCase() === String(user?.email || '').trim().toLowerCase());
+          const named = same(row.approver_name, user?.name)
+            || (row.approver_email && same(row.approver_email, user?.email));
           // Nobody decides their own leave, whoever they are named as.
           if (!named || row.user_id === user?.id) {
-            return res.status(403).json({ error: 'Only this request\'s approver, or an Admin, can decide it' });
+            return res.status(403).json({ error: 'Only this request' + String.fromCharCode(39) + 's approver, or an Admin, can decide it' });
           }
         }
+
+        /* Two-signature rows (Accounts, 3+ days). A first approval does not
+           book the days — it forwards the request to the second approver and
+           mails them; the balance moves only on THEIR approval. A rejection at
+           either level ends it there. When the person deciding IS the second
+           approver (Paresh acting directly, in app or as Admin), both
+           signatures collapse into one and the row approves outright. */
+        if (/^approved$/i.test(status) && /^pending$/i.test(String(row.status || '')) && row.next_approver_name) {
+          const isFinal = same(row.next_approver_name, user?.name)
+            || (row.next_approver_email && same(row.next_approver_email, user?.email));
+          if (!isFinal) {
+            await pool.query(
+              `UPDATE leaves SET approver = $1, approver_name = $2, approver_email = $3,
+                      next_approver_name = '', next_approver_email = '', level1_by = $4 WHERE id = $5`,
+              [row.next_approver_name, row.next_approver_name, row.next_approver_email || '', user?.name || '', id],
+            );
+            if (b.comments != null) {
+              await pool.query(`UPDATE leaves SET approver_comments = $1 WHERE id = $2`, [b.comments, id]);
+            }
+            // Tell the second approver it is with them now — same mail, same
+            // buttons, their own signed links.
+            if (ctx.sendLeaveRequestEmail) {
+              (async () => {
+                const au = (await q(
+                  `SELECT id, email FROM users WHERE ${row.next_approver_email ? 'LOWER(email) = LOWER($1)' : 'LOWER(name) = LOWER($1)'} LIMIT 1`,
+                  [row.next_approver_email || row.next_approver_name],
+                ).catch(() => []))[0];
+                const loginEmail = row.next_approver_email || au?.email || '';
+                const address = ctx.notifyAddressFor ? await ctx.notifyAddressFor(au?.id, loginEmail) : loginEmail;
+                if (address) await pool.query(`UPDATE leaves SET approver_mailto = $1 WHERE id = $2`, [address, id]).catch(() => {});
+                await ctx.sendLeaveRequestEmail({
+                  leaveId: id,
+                  toEmail: address,
+                  toName: row.next_approver_name,
+                  applicantName: row.user_name,
+                  leaveType: row.leave_type || row.type,
+                  fromDate: isoDate(row.from_date),
+                  toDate: isoDate(row.to_date) === isoDate(row.from_date) ? '' : isoDate(row.to_date),
+                  days: num(row.total_days), halfDay: row.half_day,
+                  reason: row.reason || '',
+                  firstApprovedBy: user?.name || row.approver_name || '',
+                });
+              })().catch((e) => console.error('[hrms] level-2 mail failed:', e.message));
+            }
+            return res.json({ success: true, forwardedTo: row.next_approver_name });
+          }
+        }
+
         const decision = await applyLeaveDecision(id, status, req.session?.user?.name || '');
         if (!decision) return res.status(404).json({ error: 'Leave request not found' });
         if (b.comments != null) {

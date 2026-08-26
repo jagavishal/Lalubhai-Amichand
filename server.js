@@ -1293,7 +1293,7 @@ function _leaveMailButtons(leaveId, email) {
 const LEAVE_REQUEST_CC = (process.env.LEAVE_REQUEST_CC || 'inquiry@laltd.in').trim();
 
 // Sent to the approver the moment a request is raised.
-async function sendLeaveRequestEmail({ leaveId, toEmail, toName, applicantName, leaveType, fromDate, toDate, days, halfDay, reason, balanceNote }) {
+async function sendLeaveRequestEmail({ leaveId, toEmail, toName, applicantName, leaveType, fromDate, toDate, days, halfDay, reason, balanceNote, nextApproverName, firstApprovedBy }) {
   const mailer = getMailer();
   // The copy is the point of record, so a request with no approver address
   // still goes out — to the office inbox alone rather than nowhere at all.
@@ -1321,6 +1321,10 @@ async function sendLeaveRequestEmail({ leaveId, toEmail, toName, applicantName, 
           ['Days', String(days) + (halfDay && halfDay !== 'full' ? ` (half day — ${halfDay} half)` : '')],
           ['Reason', reason],
           ['Balance', balanceNote],
+          // Two-signature requests: the level-1 mail says who signs after
+          // them, the level-2 mail says whose signature it already carries.
+          ['Final Approval', nextApproverName ? `${nextApproverName} — after your approval` : ''],
+          ['Already Approved By', firstApprovedBy || ''],
         ],
         actions: leaveId ? _leaveMailButtons(leaveId, toEmail) : '',
         footer: leaveId
@@ -2569,30 +2573,54 @@ async function leaveAuthorityFor(department, days, applicantName) {
   });
   if (!tier) return null;
 
-  /* "Senior Accountant Jayesh Udani & above: approval as per authority." The
-     tier's own approver, and the person it escalates to, are the seniors the
-     rule names — THEIR requests are not subject to it, whatever the length;
-     they route through the ordinary chain (the approver picked on their user
-     record, then their reporting line). Matched through userByName, so
-     'Jayesh Udani' in the matrix still exempts the login spelt
-     'JAYESH UDANI', and 'Paresh Sir' exempts Paresh Shah. */
   const norm = (v) => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const resolve = async (named) => {
+    const who = await userByName(named);
+    return { name: who?.name || String(named), email: who?.email || '' };
+  };
+  const matches = async (named, applicant) => {
+    if (!named) return false;
+    if (norm(named) === applicant) return true;
+    const who = await userByName(named);
+    return !!(who && norm(who.name) === applicant);
+  };
+
   const applicant = norm(applicantName);
+
+  /* The written policy, line by line.
+
+     "Jayesh Udani & above: Paresh Shah" — the within-team approver's own
+     requests go straight to the escalation authority, whatever the length,
+     and that is mandatory (it beats a picked approver). The authority's own
+     requests have nobody above them in this matrix, so no tier applies. */
   if (applicant) {
-    for (const named of [tier.withinTeamApprover, tier.escalateTo]) {
-      if (!named) continue;
-      if (norm(named) === applicant) return null;
-      const who = await userByName(named);
-      if (who && norm(who.name) === applicant) return null;
+    if (await matches(tier.escalateTo, applicant)) return null;
+    if (await matches(tier.withinTeamApprover, applicant)) {
+      if (!tier.escalateTo) return null;
+      return { ...(await resolve(tier.escalateTo)), escalated: true, thresholdDays: 0, then: null };
     }
   }
 
   const from = Number(tier.escalateFromDays) || 0;
   const escalated = !!from && Number(days) >= from;
-  const named = escalated ? tier.escalateTo : tier.withinTeamApprover;
-  if (!named) return null;
-  const who = await userByName(named);
-  return { name: who?.name || String(named), email: who?.email || '', escalated, thresholdDays: from };
+
+  /* "3 days or more: Jayesh Udani AND Paresh Shah" — both signatures. The
+     request goes to the within-team approver first; `then` names who it moves
+     on to once they approve. The leave route stores that second stage on the
+     row and forwards the request when the first approval lands. */
+  if (escalated) {
+    if (!tier.escalateTo) return null;
+    const second = await resolve(tier.escalateTo);
+    if (tier.withinTeamApprover) {
+      return { ...(await resolve(tier.withinTeamApprover)), escalated: true, thresholdDays: from, then: second };
+    }
+    return { ...second, escalated: true, thresholdDays: from, then: null };
+  }
+
+  // "Up to 2 days: no Paresh approval required" — the within-team tier, and
+  // only as a fallback: an approver picked on the Users page outranks it.
+  if (!tier.withinTeamApprover) return null;
+  return { ...(await resolve(tier.withinTeamApprover)), escalated: false, thresholdDays: from, then: null };
 }
 
 /* A rupee figure, or null when there isn't one. Not Number() on its own:
@@ -3855,6 +3883,16 @@ async function _leaveForToken(token) {
   if (!claim) return { error: 'This link is not valid. It may have been altered in transit — open Leave Management in the ERP instead.' };
   const row = (await q(`SELECT * FROM leaves WHERE id = $1`, [claim.id]).catch(() => []))[0];
   if (!row) return { error: 'That leave request no longer exists.' };
+  /* The link acts only for the mailbox its mail was sent to. On a
+     two-signature row the first approval moves the request to the second
+     approver and re-stamps approver_mailto — from then on the level-1 links
+     open but cannot decide, so forwarding or re-clicking an old mail can
+     never finalise what still needs the higher signature. Legacy rows with
+     no stamp keep working as before. */
+  if (/^pending$/i.test(String(row.status || '')) && row.approver_mailto && claim.email
+      && String(row.approver_mailto).trim().toLowerCase() !== String(claim.email).trim().toLowerCase()) {
+    return { error: `This request is now with ${row.approver_name || 'its next approver'} — this link belonged to an earlier stage.` };
+  }
   return { claim, row };
 }
 
@@ -3895,7 +3933,9 @@ app.get('/leave-action', async (req, res) => {
     res.send(_leaveActionPage({
       title: good ? 'Approve this leave request?' : 'Reject this leave request?',
       tone: good ? 'good' : 'bad',
-      lead: `You are about to mark <b>${escHtml(row.user_name)}</b>'s request as <b>${escHtml(claim.decision)}</b>.`,
+      lead: `You are about to mark <b>${escHtml(row.user_name)}</b>'s request as <b>${escHtml(claim.decision)}</b>.`
+        + (row.next_approver_name && /^approved$/i.test(claim.decision)
+            ? ` It will then go to <b>${escHtml(row.next_approver_name)}</b> for final approval.` : ''),
       rows: _leaveRows(row),
       form: `<form method="POST" action="/leave-action">
                <input type="hidden" name="t" value="${escHtml(String(req.query.t))}">
@@ -3919,6 +3959,39 @@ app.post('/leave-action', async (req, res) => {
 
     const status = /^approved$/i.test(claim.decision) ? 'Approved' : 'Rejected';
     const by = row.approver_name || claim.email || 'Approver (by email)';
+
+    /* Two-signature rows: this approval forwards rather than finalises — the
+       balance moves only when the second approver signs. Rejection ends it
+       here, exactly as in the app. */
+    if (status === 'Approved' && row.next_approver_name) {
+      const nextName = row.next_approver_name, nextEmail = row.next_approver_email || '';
+      const au = (await q(
+        `SELECT id, email FROM users WHERE ${nextEmail ? 'LOWER(email) = LOWER($1)' : 'LOWER(name) = LOWER($1)'} LIMIT 1`,
+        [nextEmail || nextName],
+      ).catch(() => []))[0];
+      const loginEmail = nextEmail || au?.email || '';
+      const address = await notifyAddressFor(au?.id, loginEmail);
+      await pool.query(
+        `UPDATE leaves SET approver = $1, approver_name = $2, approver_email = $3,
+                next_approver_name = '', next_approver_email = '', level1_by = $4, approver_mailto = $5 WHERE id = $6`,
+        [nextName, nextName, nextEmail, by, address || '', row.id],
+      );
+      sendLeaveRequestEmail({
+        leaveId: row.id, toEmail: address, toName: nextName,
+        applicantName: row.user_name, leaveType: row.leave_type || row.type,
+        fromDate: _leaveDay(row.from_date),
+        toDate: _leaveDay(row.to_date) === _leaveDay(row.from_date) ? '' : _leaveDay(row.to_date),
+        days: row.total_days, halfDay: row.half_day, reason: row.reason || '',
+        firstApprovedBy: by,
+      }).catch((e) => console.error('[leave-action] level-2 mail failed:', e.message));
+      return res.send(_leaveActionPage({
+        title: 'Approved — sent up for final approval', tone: 'good',
+        lead: `Your approval is recorded. <b>${escHtml(row.user_name)}</b>'s request now needs <b>${escHtml(nextName)}</b>'s signature — they have been emailed. The leave is booked only once they approve.`,
+        rows: _leaveRows(row),
+        note: 'You can close this tab.',
+      }));
+    }
+
     await hrms.applyLeaveDecision(row.id, status, by);
 
     const good = status === 'Approved';
