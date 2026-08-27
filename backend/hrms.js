@@ -467,6 +467,45 @@ function suggestStatutory({ basic = 0, gross = 0, branch = '' } = {}) {
   return { pf, esic, pt };
 }
 
+/* ── Resolving a reporting-line name to a person ────────────────────────
+   The sheet's Reporting-to column — and any HR import that re-runs it —
+   names a manager the way the office speaks: "Brinda Ma'am", "Paresh Sir".
+   That is very often not the name on the row that carries their email, and
+   several of those spoken names also survive as their own login rows, which
+   is how the org chart grew two boxes for one person.
+
+   So: an exact match on a row spelt without the honorific wins; failing
+   that the honorific is dropped and the first name tried as a prefix, taken
+   only when it lands on exactly one plainly-named row — "Brinda Ma'am"
+   finds the Brinda Kapur login even while an old login spelt "Brinda
+   Ma'am" survives beside it. Only when no plain row claims the name does an
+   honorific-spelt row match, exactly as it always did. Anything ambiguous
+   resolves to nothing: two Jayeshes means no answer, not the wrong one. */
+const HONORIFIC = /\s+(?:sir|sirji|ma['’]?am|madam)\.?$/i;
+function pickByName(name, rows) {
+  const clean = String(name || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return null;
+  const lower = clean.toLowerCase();
+  const cand = (rows || [])
+    .map((r) => ({
+      r,
+      n: String(r.name || '').replace(/\s+/g, ' ').trim().toLowerCase(),
+      plain: !HONORIFIC.test(String(r.name || '').trim()),
+    }))
+    .filter((c) => c.n);
+  const exact = cand.find((c) => c.plain && c.n === lower);
+  if (exact) return exact.r;
+  const stripped = lower.replace(HONORIFIC, '');
+  const strippedExact = cand.filter((c) => c.plain && c.n === stripped);
+  if (strippedExact.length === 1) return strippedExact[0].r;
+  const first = stripped.split(' ')[0];
+  if (first.length >= 3) {
+    const pre = cand.filter((c) => c.plain && c.n.startsWith(first));
+    if (pre.length === 1) return pre[0].r;
+  }
+  return cand.find((c) => c.n === lower)?.r || null;
+}
+
 /* =====================================================================
    mountHrms(app, ctx)
    ---------------------------------------------------------------------
@@ -1686,12 +1725,21 @@ function mountHrms(app, ctx) {
         if (!approverName) {
           // Nobody picked and no tier — fall back to the reporting line the
           // employee record already carries. It holds a code on records this
-          // app created and a plain name on the ones imported from the sheet.
+          // app created and a plain name on the ones imported from the sheet;
+          // names go through pickByName, so the sheet's "Brinda Ma'am" mails
+          // the Brinda Kapur login and not a stale honorific row — the same
+          // resolution the org chart draws, so the tree and the approval mail
+          // cannot disagree.
           if (!approverName && emp?.reporting_to) {
-            const mgr = (await q(
-              `SELECT name, email FROM hr_employees WHERE id = $1 OR LOWER(name) = LOWER($2) LIMIT 1`,
-              [emp.reporting_to, emp.reporting_to],
+            const ref = String(emp.reporting_to).trim();
+            let mgr = (await q(
+              `SELECT name, email FROM hr_employees WHERE id = $1 LIMIT 1`,
+              [ref],
             ).catch(() => []))[0];
+            if (!mgr) {
+              mgr = pickByName(ref,
+                await q(`SELECT name, email FROM hr_employees`).catch(() => []));
+            }
             if (mgr) { approverName = mgr.name || ''; approverEmail = mgr.email || ''; }
             // Most reporting lines end at a director or business manager who
             // has a login but no employee record — they draw no salary here.
@@ -1699,10 +1747,8 @@ function mountHrms(app, ctx) {
             // nobody would be mailed, which is exactly the case the reporting
             // sheet exists to cover.
             if (!approverName) {
-              const boss = (await q(
-                `SELECT name, email FROM users WHERE LOWER(name) = LOWER($1) AND active = 1 LIMIT 1`,
-                [emp.reporting_to],
-              ).catch(() => []))[0];
+              const boss = pickByName(ref,
+                await q(`SELECT name, email FROM users WHERE active = 1`).catch(() => []));
               if (boss) { approverName = boss.name || ''; approverEmail = boss.email || ''; }
             }
           }
@@ -2665,14 +2711,10 @@ function mountHrms(app, ctx) {
         ]);
 
         const byId = new Map(emps.map((e) => [e.id, { ...e, reports: [] }]));
-        const byName = new Map(emps.map((e) => [String(e.name).trim().toLowerCase(), e.id]));
 
         // Managers who exist only as a login. Keyed 'user:<id>' so a synthetic
         // node can never collide with a real employee code.
-        const loginByName = new Map(logins.map((u) => [String(u.name || '').trim().toLowerCase(), u]));
-        const managerNode = (key) => {
-          const u = loginByName.get(key);
-          if (!u) return null;
+        const managerNode = (u) => {
           const nid = 'user:' + u.id;
           if (!byId.has(nid)) {
             byId.set(nid, {
@@ -2687,10 +2729,13 @@ function mountHrms(app, ctx) {
         for (const e of emps) {
           const node = byId.get(e.id);
           // reporting_to holds a code on records this app created and a plain
-          // name on the ones imported from the sheet; accept either.
+          // name on the ones imported from the sheet; accept either. Names go
+          // through pickByName so the sheet's "Brinda Ma'am" hangs off the
+          // Brinda Kapur node instead of drawing a second box for her.
           const key = String(e.reporting_to || '').trim();
-          const lower = key.toLowerCase();
-          const parentId = byId.has(key) ? key : (byName.get(lower) || managerNode(lower));
+          const empHit = byId.has(key) ? key : (pickByName(key, emps)?.id || null);
+          const login = empHit ? null : pickByName(key, logins);
+          const parentId = empHit || (login && managerNode(login));
           if (parentId && parentId !== e.id && byId.has(parentId)) byId.get(parentId).reports.push(node);
           else node.orphan = true;
         }
@@ -3183,4 +3228,4 @@ function payslipHtml(slip, emp, settings) {
 </body></html>`;
 }
 
-module.exports = { HR_SCHEMA, mountHrms, EARNINGS, DEDUCTIONS, ATT_STATUS, MONTHS, suggestStatutory };
+module.exports = { HR_SCHEMA, mountHrms, EARNINGS, DEDUCTIONS, ATT_STATUS, MONTHS, suggestStatutory, pickByName };
