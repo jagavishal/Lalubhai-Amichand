@@ -2710,6 +2710,19 @@ function mountHrms(app, ctx) {
           q(`SELECT id, name, email, department FROM users WHERE active = 1`).catch(() => []),
         ]);
 
+        // An employee row imported under a spoken name — the Directors tab's
+        // "Paresh Sir", "Brinda Ma'am" — is shown under the proper spelling of
+        // the login it resolves to, so the box and the login are one person on
+        // the page even before a re-import repairs the stored row. Renamed
+        // before the maps are built, so "Paresh Shah" in someone's
+        // reporting_to lands on this box instead of conjuring a second one.
+        for (const e of emps) {
+          if (HONORIFIC.test(String(e.name || '').trim())) {
+            const login = pickByName(e.name, logins);
+            if (login) e.name = login.name;
+          }
+        }
+
         const byId = new Map(emps.map((e) => [e.id, { ...e, reports: [] }]));
 
         // Managers who exist only as a login. Keyed 'user:<id>' so a synthetic
@@ -2996,10 +3009,24 @@ function mountHrms(app, ctx) {
         // Directors sit on their own tab with no employee code at all, so they
         // are given one (DIR001…) keyed on the order they appear — stable
         // across re-imports because the tab is append-only.
+        //
+        // The tab's Boss column names them the way the office speaks — "Brinda
+        // Ma'am", "Paresh Sir" — and stored that way each director became a
+        // second person on the org chart beside their own login. Resolve the
+        // spoken name to the login's proper spelling before the row is
+        // written; the upsert then also repairs rows an earlier import stored
+        // under the spoken name. A director with no matching login keeps the
+        // sheet's spelling — a spoken name is still a better row than none.
         let d = 0;
+        const loginRows = await q(`SELECT name, email FROM users WHERE active = 1`).catch(() => []);
         for (const r of (tab['Directors Salary Details'] || [])) {
           const name = val(r, 'Boss');
           if (!name) continue;
+          const login = pickByName(name, loginRows);
+          if (login) {
+            r['Boss'] = login.name;
+            if (!val(r, 'Email ID') && login.email) r['Email ID'] = login.email;
+          }
           const code = 'DIR' + pad(++d, 3);
           if (await importPerson(r, code, 'Director', 'Boss')) counts.directors += 1;
         }
@@ -3228,4 +3255,4 @@ function payslipHtml(slip, emp, settings) {
 </body></html>`;
 }
 
-module.exports = { HR_SCHEMA, mountHrms, EARNINGS, DEDUCTIONS, ATT_STATUS, MONTHS, suggestStatutory, pickByName };
+module.exports = { HR_SCHEMA, mountHrms, EARNINGS, DEDUCTIONS, ATT_STATUS, MONTHS, suggestStatutory, pickByName, HONORIFIC };
