@@ -447,7 +447,9 @@ window.Pages['help-ticket'] = (() => {
               <div style="font-size:15px;font-weight:700;color:#0f172a;">Approval Authority</div>
               <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">Who signs off what. Changes apply to tickets and leave raised from now on.</div>
             </div>
-            <button id="ht-auth-close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;color:#64748b;cursor:pointer;font-size:15px;line-height:1;">×</button>
+            <button id="ht-auth-close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;color:#64748b;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
           </div>
           <div id="ht-auth-body" style="padding:18px 22px;overflow-y:auto;"></div>
           <div style="padding:14px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;">

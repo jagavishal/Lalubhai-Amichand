@@ -749,7 +749,7 @@ window.Pages['all-tasks'] = (function () {
   function modalHeader(title, onClose) {
     return `<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
       <h2 style="font-size:15px;font-weight:600;color:#0f172a;margin:0">${esc(title)}</h2>
-      <button onclick="${onClose}" style="width:32px;height:32px;border-radius:8px;border:none;background:none;cursor:pointer;display:grid;place-items:center;color:#94a3b8" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='none'">
+      <button onclick="${onClose}" aria-label="Close" style="width:32px;height:32px;border-radius:8px;border:none;background:none;cursor:pointer;display:grid;place-items:center;color:#94a3b8" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='none'">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
       </button>
     </div>`;

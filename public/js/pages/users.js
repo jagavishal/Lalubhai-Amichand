@@ -1066,8 +1066,8 @@ window.Pages.users = (() => {
                       style="flex:1;border:none;outline:none;font-size:12.5px;color:var(--text-primary);background:transparent;width:100%;padding:0;" />
                     <button type="button" id="um-dept-new-save"
                       style="padding:3px 10px;background:var(--color-primary);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;">Add</button>
-                    <button type="button" id="um-dept-new-cancel"
-                      style="padding:3px 6px;background:transparent;color:var(--text-muted);border:none;font-size:15px;cursor:pointer;line-height:1;flex-shrink:0;">✕</button>
+                    <button type="button" id="um-dept-new-cancel" aria-label="Close"
+                      style="padding:3px 6px;background:transparent;color:var(--text-muted);border:none;cursor:pointer;line-height:1;flex-shrink:0;display:flex;align-items:center;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
                   </div>
                 </div>
               </div>

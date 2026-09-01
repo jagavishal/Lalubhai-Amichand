@@ -223,7 +223,7 @@ window.HR = (function () {
               <div style="font-size:15px;font-weight:700;color:#0f172a;">${esc(title)}</div>
               ${subtitle ? `<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">${esc(subtitle)}</div>` : ''}
             </div>
-            <button id="${id}-x" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;
+            <button id="${id}-x" aria-label="Close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;
               color:#64748b;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
                 stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>

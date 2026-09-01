@@ -2313,6 +2313,14 @@ app.post('/api/delegations', requireAuth, async (req, res) => {
     }
     const resolvedApproval = (doerIsAdmin && body.approval==='Approval Required') ? 'Approved' : (body.approval||'No Approval');
 
+    // No task may be delegated onto a week-off or holiday — the doer isn't there.
+    const workCtx = await getWorkingDayContext();
+    if (!Array.isArray(body.bulk)) {
+      const due = normDate(body.dueDate) || body.dueDate;
+      const nwReason = nonWorkingReason(due, workCtx);
+      if (nwReason) return res.status(400).json({ error: `Due date ${due} is ${nwReason} — tasks cannot be delegated on week-offs or holidays. Please pick a working day.` });
+    }
+
     if (!USE_DB) {
       const store = await readStore();
       const delegations = store.delegations||[];
@@ -2338,6 +2346,8 @@ app.post('/api/delegations', requireAuth, async (req, res) => {
         const dueDate = normDate(row.due_date||row.dueDate);
         const desc = (row.description||'').trim();
         if (!email||!dueDate||!desc) { errors.push(`Row ${i+1}: missing fields`); continue; }
+        const nwReason = nonWorkingReason(dueDate, workCtx);
+        if (nwReason) { errors.push(`Row ${i+1}: due date ${dueDate} is ${nwReason} — pick a working day`); continue; }
         const users = await q('SELECT id, name FROM users WHERE LOWER(email) = $1', [email]);
         if (!users.length) { errors.push(`Row ${i+1}: no user ${email}`); continue; }
         await insertDelegation({ description:desc, doerId:users[0].id, doerName:users[0].name, delegatedBy:body.delegatedBy, dueDate, priority:row.priority, approval:resolvedApproval, url:row.url, remarks:row.remarks });
@@ -3071,6 +3081,58 @@ function generateChecklistDates(startDate, endDate, freq) {
   return dates;
 }
 
+/* Week-offs and the holiday calendar. Tasks must not land on a day nobody is at
+   work: a daily checklist simply skips that day, any other frequency moves the
+   occurrence to the next working day (a monthly task still has to happen that
+   month), and a delegation whose due date falls on a week-off/holiday is
+   refused so the delegator picks a real working day. Week-offs come from the
+   same hr_week_off setting the HRMS muster roll uses (comma-separated JS
+   weekdays, default Sunday); holidays from the company holiday calendar. */
+async function getWorkingDayContext() {
+  const weekOffs = new Set(['0']);
+  const holidays = new Map(); // 'YYYY-MM-DD' → holiday name
+  if (!USE_DB) {
+    const store = await readStore();
+    for (const h of store.holidays || []) { if (h.date) holidays.set(h.date, h.name || 'Holiday'); }
+    return { weekOffs, holidays };
+  }
+  try {
+    const rows = await q(`SELECT "value" FROM app_config WHERE "key" = 'hr_week_off'`);
+    if (rows.length) {
+      weekOffs.clear();
+      for (const t of String(rows[0].value || '').split(',')) { const v = t.trim(); if (v) weekOffs.add(v); }
+    }
+  } catch {}
+  try {
+    const hols = await q('SELECT date, name FROM holidays');
+    for (const h of hols) holidays.set(toDateStr(h.date), h.name || 'Holiday');
+  } catch {}
+  return { weekOffs, holidays };
+}
+function nonWorkingReason(dateStr, ctx) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  if (ctx.holidays.has(dateStr)) return `a holiday (${ctx.holidays.get(dateStr)})`;
+  const dow = new Date(dateStr + 'T00:00:00Z').getUTCDay();
+  if (ctx.weekOffs.has(String(dow))) return 'a week-off';
+  return null;
+}
+const CHECKLIST_SHIFT_FREQS = new Set(['weekly', 'alternative_week', 'alternate_week', 'monthly', 'quarterly', 'yearly']);
+function skipNonWorkingDays(dates, freq, ctx) {
+  const shift = CHECKLIST_SHIFT_FREQS.has(String(freq || '').toLowerCase());
+  const out = []; const seen = new Set();
+  for (let d of dates) {
+    if (nonWorkingReason(d, ctx)) {
+      if (!shift) continue; // daily: that day's task is simply not created
+      let hops = 0;
+      while (hops < 14 && nonWorkingReason(d, ctx)) { d = _checklistPlusDays(d, 1); hops++; }
+      if (nonWorkingReason(d, ctx)) continue; // >2 weeks closed — give up on this one
+    }
+    if (seen.has(d)) continue; // two shifted occurrences can land on the same day
+    seen.add(d); out.push(d);
+  }
+  return out;
+}
+
 // One-time maintenance action: checklist masters created before recurring generation
 // existed are each a single dated row with no series behind them. This backfills their
 // future occurrences (from the interval after their own start date, through their stored
@@ -3083,11 +3145,12 @@ app.post('/api/masters/backfill-recurring', requireAuth, requireAdmin, async (re
     const keyOf = (task, assignedTo, date) => task + '||' + assignedTo + '||' + date;
     const seen = new Set(existing.map(m => keyOf(m.task, m.assigned_to, toDateStr(m.start_date))));
     const base = Date.now().toString(36).toUpperCase();
+    const workCtx = await getWorkingDayContext();
     let created = 0, seriesCount = 0;
     for (const m of existing) {
       const startDate = toDateStr(m.start_date);
       const endDate = toDateStr(m.end_date) || defaultChecklistSeriesEnd(startDate);
-      const dates = generateChecklistDates(startDate, endDate, m.frequency).slice(1);
+      const dates = skipNonWorkingDays(generateChecklistDates(startDate, endDate, m.frequency).slice(1), m.frequency, workCtx);
       let any = false;
       for (const date of dates) {
         const key = keyOf(m.task, m.assigned_to, date);
@@ -3104,6 +3167,80 @@ app.post('/api/masters/backfill-recurring', requireAuth, requireAdmin, async (re
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+/* One-time cleanup for tasks created BEFORE the working-day rule existed: any
+   pending checklist occurrence or delegation dated today-or-later that sits on
+   a week-off/holiday is moved to the next working day. When the next working
+   day already carries the same checklist task for the same person (the normal
+   case for a daily series), the week-off copy is deleted instead of becoming a
+   duplicate. Past dates and completed work are left alone — they are history.
+   Runs once automatically at startup (guarded by an app_config flag) and stays
+   available as an admin route for re-runs after new holidays are added. */
+async function shiftNonWorkingTasks() {
+  const ctx = await getWorkingDayContext();
+  const today = new Date().toISOString().slice(0, 10);
+  const nextWorking = (d) => {
+    let hops = 0;
+    while (hops < 14 && nonWorkingReason(d, ctx)) { d = _checklistPlusDays(d, 1); hops++; }
+    return d;
+  };
+
+  const done = new Set((await q('SELECT DISTINCT master_id FROM checklist_completions')).map(r => r.master_id));
+  const rows = await q('SELECT id, task, assigned_to, start_date FROM masters WHERE start_date >= $1', [today]);
+  const occupied = new Set(rows.map(r => (r.task || '') + '||' + (r.assigned_to || '') + '||' + toDateStr(r.start_date)));
+  let checklistShifted = 0, checklistRemoved = 0;
+  for (const r of rows) {
+    const d = toDateStr(r.start_date);
+    if (!nonWorkingReason(d, ctx) || done.has(r.id)) continue;
+    const target = nextWorking(d);
+    if (nonWorkingReason(target, ctx)) continue; // >2 weeks closed — leave it
+    const key = (r.task || '') + '||' + (r.assigned_to || '') + '||' + target;
+    if (occupied.has(key)) {
+      await pool.query('DELETE FROM masters WHERE id=$1', [r.id]);
+      checklistRemoved++;
+    } else {
+      await pool.query('UPDATE masters SET start_date=$1 WHERE id=$2', [target, r.id]);
+      occupied.add(key);
+      checklistShifted++;
+    }
+  }
+
+  const dels = await q(`SELECT id, due_date FROM delegations WHERE status <> 'done' AND due_date >= $1`, [today]);
+  let delegationsShifted = 0;
+  for (const r of dels) {
+    const d = toDateStr(r.due_date);
+    if (!nonWorkingReason(d, ctx)) continue;
+    const target = nextWorking(d);
+    if (nonWorkingReason(target, ctx)) continue;
+    await pool.query('UPDATE delegations SET due_date=$1 WHERE id=$2', [target, r.id]);
+    delegationsShifted++;
+  }
+  return { checklistShifted, checklistRemoved, delegationsShifted };
+}
+
+app.post('/api/tasks/shift-nonworking', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    if (!USE_DB) return res.status(400).json({ error: 'Database mode only' });
+    await ensureSchema();
+    const result = await shiftNonWorkingTasks();
+    return res.json({ success: true, ...result });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+async function shiftNonWorkingTasksOnce() {
+  if (!USE_DB) return;
+  try {
+    await ensureSchema();
+    const flag = await q(`SELECT "value" FROM app_config WHERE "key" = 'shift_nonworking_done_v1'`);
+    if (flag.length) return;
+    const result = await shiftNonWorkingTasks();
+    await pool.query(
+      `INSERT INTO app_config ("key","value") VALUES ('shift_nonworking_done_v1',$1) ON CONFLICT ("key") DO UPDATE SET "value"=$2`,
+      [JSON.stringify(result), JSON.stringify(result)],
+    );
+    console.log('[shift-nonworking] moved week-off/holiday tasks:', JSON.stringify(result));
+  } catch (e) { console.error('[shift-nonworking]', e.message); }
+}
+
 app.post('/api/masters', requireAuth, async (req, res) => {
   try {
     const body = req.body;
@@ -3114,7 +3251,9 @@ app.post('/api/masters', requireAuth, async (req, res) => {
     const remarks = body.remarks || '';
     const department = await canonicalDept(body.department);
     const startDate = body.startDate || null;
-    const dates = startDate ? generateChecklistDates(startDate, body.endDate || null, frequency) : [null];
+    const workCtx = await getWorkingDayContext();
+    const dates = startDate ? skipNonWorkingDays(generateChecklistDates(startDate, body.endDate || null, frequency), frequency, workCtx) : [null];
+    if (!dates.length) return res.status(400).json({ error: 'Every date in this series falls on a week-off or holiday, so no tasks would be created. Please pick a different start date.' });
     const base = Date.now().toString(36).toUpperCase();
     const ids = dates.map((_, i) => 'CHK' + base + i.toString(36).padStart(3, '0').toUpperCase());
 
@@ -9971,4 +10110,5 @@ app.listen(process.env.PORT || 3000, async () => {
   console.log('Server on http://localhost:' + (process.env.PORT || 3000));
   console.log('[google-sync] credentials present at boot — email:', !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, '| key:', !!process.env.GOOGLE_PRIVATE_KEY);
   await seedJsonFallback();
+  shiftNonWorkingTasksOnce();
 });
