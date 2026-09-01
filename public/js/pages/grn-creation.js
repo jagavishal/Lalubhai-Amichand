@@ -607,6 +607,7 @@ window.Pages['grn-creation'] = (() => {
     const form = document.getElementById('grnc-form');
     form.addEventListener('submit', _submit);
     form.addEventListener('input', _onFormInput);
+    Utils.guardEnterSubmit(form);
 
     if (!_mastersLoaded) _loadMasters();
     if (!_poListLoaded) _loadPoList();

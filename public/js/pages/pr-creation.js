@@ -563,6 +563,7 @@ window.Pages['pr-creation'] = (() => {
     const form = document.getElementById('pcr-form');
     form.addEventListener('submit', _createSubmit);
     form.addEventListener('input', _onFormInput);
+    Utils.guardEnterSubmit(form);
     // Bound on every render (the form is rebuilt from scratch each time), so the
     // Department dropdown's "+ Add new department" option keeps working after a
     // format switch or a trip through the Summary tab.
@@ -948,6 +949,7 @@ window.Pages['pr-creation'] = (() => {
   function _bindFormView() {
     const formEl = document.getElementById('pr-form-el');
     formEl.addEventListener('submit', _pfSubmit);
+    Utils.guardEnterSubmit(formEl);
     _pfBindMultiSelectDropdowns(formEl);
     // This view's Department checkboxes are built synchronously from the cached
     // master list. Opening PR Form first (before anything has fetched it) would

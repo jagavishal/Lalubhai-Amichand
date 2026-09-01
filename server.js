@@ -7403,6 +7403,10 @@ function _piCleanItems(b) {
       swg: String(it.swg || '').trim(),
       packing: String(it.packing || '').trim(),
       qty: it.qty, boxes: it.boxes, cbm: it.cbm, weight: it.weight,
+      // Not printed on the PI — rides along from the product master so the
+      // Order Sheet's Weight Per Pc column starts from the exact figure
+      // rather than a back-computation.
+      weightPerPc: it.weightPerPc,
       remarks: String(it.remarks || '').trim(),
       // Comes from the product master via the form, so the PDF shows the
       // photo without the server having to look the item up again.
@@ -7683,6 +7687,82 @@ app.get('/api/proforma-invoice/list', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/proforma-invoice/last-prices?piNo=... — for the Add Price screen:
+// the most recent rate THIS buyer was quoted for each of this PI's items, read
+// off earlier PIs on the same log. Once a PI is priced (which is what closes
+// the FMS "Add Pricing" step), its rates become the "last price" the next PI
+// for that buyer shows. Returned aligned to the PI's own item order, because
+// rates are keyed by row index everywhere else on this screen.
+app.get('/api/proforma-invoice/last-prices', requireAuth, async (req, res) => {
+  try {
+    const piNo = String(req.query.piNo || '').trim();
+    if (!piNo) return res.status(400).json({ error: 'piNo is required' });
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const rows = result.data.values || [];
+
+    const target = rows.find(r => String(r[0] || '').trim() === piNo);
+    if (!target) return res.status(404).json({ error: 'PI ' + piNo + ' is not on the PI log' });
+    let targetForm = {};
+    try { targetForm = target[9] ? JSON.parse(target[9]) : {}; } catch {}
+
+    // Same forgiving key the frontend's buyer matcher uses — "M/s. Alfa
+    // Trading LLC" and "ALFA TRADING LLC" are the same client.
+    const buyerKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const wantBuyer = buyerKey(targetForm.buyerName || target[2]);
+    // Model No. + size identifies the goods (the same model sells at several
+    // sizes); pre-export-format Drafts carried itemCode/description instead.
+    const itemKey = (it) => {
+      const id = String(it.modelNo || it.itemCode || it.itemName || it.description || '').trim().toLowerCase();
+      return id ? id + '|' + String(it.size || '').trim().toLowerCase() : '';
+    };
+
+    // Log order is chronological, so a plain overwrite leaves the latest
+    // quote standing. Superseded PIs count too — they were real quotes to
+    // this buyer, and a revision's own row lands after its parent's anyway.
+    const byKey = new Map();
+    const byModel = new Map();
+    for (const r of rows) {
+      const rowPi = String(r[0] || '').trim();
+      if (!rowPi || rowPi === piNo) continue;
+      const status = r[10] || 'Draft';
+      if (status !== 'Priced' && status !== 'Superseded') continue;
+      if (buyerKey(r[2]) !== wantBuyer) continue;
+      let form = null;
+      try { form = r[9] ? JSON.parse(r[9]) : null; } catch {}
+      if (!form || !Array.isArray(form.items)) continue;
+      for (const it of form.items) {
+        const rate = String(it.rate ?? '').trim();
+        if (!rate || !parseFloat(rate)) continue;
+        const key = itemKey(it);
+        if (!key) continue;
+        const rec = {
+          rate,
+          priceType: form.priceType || '',
+          currency: form.currency || '',
+          piNo: rowPi,
+          date: _sheetDateToIso(r[1]),
+        };
+        byKey.set(key, rec);
+        byModel.set(key.split('|')[0], rec);   // size-blind fallback
+      }
+    }
+
+    const lastPrices = (Array.isArray(targetForm.items) ? targetForm.items : []).map(it => {
+      const key = itemKey(it);
+      if (!key) return null;
+      return byKey.get(key) || byModel.get(key.split('|')[0]) || null;
+    });
+    return res.json({ piNo, lastPrices });
+  } catch (e) {
+    if (/unable to parse range/i.test(e.message || '')) return res.json({ piNo: req.query.piNo, lastPrices: [] });
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // Marks the Export Marketing FMS tracker's "Add Pricing" step done for one PI,
 // with the same next-step email the manual Mark-as-Done path sends. Returns
 // true only when this call is what actually closed the step.
@@ -7882,6 +7962,7 @@ function _orderCleanItems(b) {
       swg: String(it.swg || '').trim(),
       packing: String(it.packing || '').trim(),
       qty: it.qty, boxes: it.boxes, cbm: it.cbm, weight: it.weight,
+      weightPerPc: it.weightPerPc,
       remarks: String(it.remarks || '').trim(),
       imageUrl: String(it.imageUrl || '').trim(),
     }));

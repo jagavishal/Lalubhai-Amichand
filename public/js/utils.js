@@ -38,6 +38,21 @@ window.Utils = {
     }
   },
 
+  /* ── Enter-key guard for the big creation forms ─────────────────── */
+  // A form full of text inputs with one submit button fires the browser's
+  // IMPLICIT submission on Enter — so typing an item code and hitting Enter
+  // was creating the whole PR/PO/GRN half-filled ("automatic save"). Only a
+  // real click on the submit button may submit; Enter in a textarea (new
+  // line) and on a focused button (click) still work.
+  guardEnterSubmit(form, onEnterInput) {
+    if (!form) return;
+    form.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return;
+      e.preventDefault();
+      if (onEnterInput) onEnterInput(e.target);
+    });
+  },
+
   /* ── Toast notification ─────────────────────────────────────────── */
   showToast(msg, type = 'success') {
     // Stack management — remove old ones after 2
@@ -82,7 +97,7 @@ window.Utils = {
     toast.innerHTML = `
       <span style="flex-shrink:0;margin-top:1px;">${c.icon}</span>
       <span style="flex:1;line-height:1.45;">${String(msg).replace(/</g,'&lt;')}</span>
-      <button onclick="this.parentElement.remove()" style="flex-shrink:0;background:none;border:none;cursor:pointer;color:${c.text};opacity:.5;padding:0 0 0 4px;line-height:1;font-size:16px;margin-top:-1px;" title="Dismiss">&times;</button>`;
+      <button onclick="this.parentElement.remove()" aria-label="Close" style="flex-shrink:0;background:none;border:none;cursor:pointer;color:${c.text};opacity:.5;padding:0 0 0 4px;line-height:1;margin-top:1px;display:flex;align-items:center;" title="Dismiss"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
 
     document.body.appendChild(toast);
     requestAnimationFrame(() => {

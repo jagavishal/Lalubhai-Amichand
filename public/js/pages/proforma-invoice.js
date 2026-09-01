@@ -249,10 +249,11 @@ window.Pages['proforma-invoice'] = (() => {
   // The fields the buyer wants picked from a list rather than typed. Port of
   // Discharge is NOT one of them — it fills in from the consignee and stays a
   // plain text box with suggestions, because it is the one that genuinely
-  // varies per shipment (see _dischargeField below).
+  // varies per shipment (see _dischargeField below). Port of Loading moved off
+  // this list too: it is now a text box with the house ports as suggestions
+  // and "Mundra Port" pre-filled, so it can simply be typed over.
   const _SHIP_FIELDS = [
     { id: 'pic-payment-terms', key: 'paymentTerms' },
-    { id: 'pic-port-loading',  key: 'portOfLoading' },
     { id: 'pic-place-delivery', key: 'placeOfDelivery' },
   ];
 
@@ -264,6 +265,25 @@ window.Pages['proforma-invoice'] = (() => {
       '<input type="text" id="pic-port-discharge" list="pic-port-discharge-list" autocomplete="off" placeholder="e.g. JEBEL ALI" style="' + _inputStyle + '" />'
       + '<datalist id="pic-port-discharge-list"></datalist>'
       + '<div style="font-size:11px;color:#94a3b8;margin-top:5px;">Fills in from the consignee — type over it for a one-off destination.</div>');
+  }
+
+  // Same pattern for Port of Loading: starts on the house default but fully
+  // editable, with the known ports one keystroke away as suggestions.
+  function _polField() {
+    return _fieldWrap('Port of Loading',
+      '<input type="text" id="pic-port-loading" list="pic-port-loading-list" autocomplete="off" placeholder="e.g. Mundra Port" style="' + _inputStyle + '" />'
+      + '<datalist id="pic-port-loading-list"></datalist>'
+      + '<div style="font-size:11px;color:#94a3b8;margin-top:5px;">Starts on the usual port — type over it when this shipment loads elsewhere.</div>');
+  }
+
+  function _fillPortLoadingList() {
+    const list = document.getElementById('pic-port-loading-list');
+    if (list) {
+      list.innerHTML = (_shippingOptions.portOfLoading || [])
+        .map(v => '<option value="' + esc(v) + '"></option>').join('');
+    }
+    const input = document.getElementById('pic-port-loading');
+    if (input && !input.value && _defaults) input.value = _defaults.portOfLoading || '';
   }
 
   function _selectField(id, label) {
@@ -300,12 +320,8 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   function _applyShippingOptions() {
-    _SHIP_FIELDS.forEach(f => _fillShippingSelect(
-      f.id,
-      _optionsFor(f.key),
-      // Port of Loading is the one with a house default ("Mundra Port").
-      f.key === 'portOfLoading' && _defaults ? _defaults.portOfLoading : '',
-    ));
+    _SHIP_FIELDS.forEach(f => _fillShippingSelect(f.id, _optionsFor(f.key), ''));
+    _fillPortLoadingList();
     _fillDischargeList();
   }
 
@@ -441,7 +457,9 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _bindItemCodeInput(input) {
     const row = input.closest('.pic-item-row');
-    const dd = row.querySelector('.pic-item-dd');
+    // Both Model No. and Item Name carry their own dropdown now, so the list
+    // has to be the one in THIS cell, not the first one in the row.
+    const dd = input.parentElement.querySelector('.pic-item-dd');
     let _lastMatches = [];
     const runSearch = () => {
       clearTimeout(_itemSearchTimer);
@@ -474,7 +492,9 @@ window.Pages['proforma-invoice'] = (() => {
       if (!opt) return;
       const p = _lastMatches[parseInt(opt.dataset.i, 10)];
       if (!p) return;
-      input.value = p.modelNo;
+      // Picking from either column fills the whole line, Model No. included.
+      const codeEl = row.querySelector('[data-field="modelNo"]');
+      if (codeEl) codeEl.value = p.modelNo;
       _applyProduct(row, p);
       dd.style.display = 'none';
     });
@@ -487,7 +507,7 @@ window.Pages['proforma-invoice'] = (() => {
      mirror the printed PI exactly, minus the two priced ones. ──────────── */
   const _ITEM_COLS = [
     { field: 'modelNo', label: 'Model No.', width: 130, typeahead: true },
-    { field: 'itemName', label: 'Item Name', width: 180 },
+    { field: 'itemName', label: 'Item Name', width: 180, typeahead: true },
     { field: 'size', label: 'Size', width: 64 },
     { field: 'swg', label: 'SWG', width: 60 },
     { field: 'packing', label: 'Per Box Dozen Packing', width: 88, numeric: true },
@@ -531,12 +551,11 @@ window.Pages['proforma-invoice'] = (() => {
         + '<tbody id="pic-items-tbody">' + _itemRowHtml() + '</tbody>'
       + '</table>'
     + '</div>'
-    + '<p style="font-size:11.5px;color:#94a3b8;margin:8px 2px 0;">Pick a Model No. and the name, size, SWG, packing and photo fill in from the product master; Total Box, CBM and Weight are then worked out from Qty. Type over any of them to override. The rate, its basis and its currency are added later by an authorized user.</p>';
+    + '<p style="font-size:11.5px;color:#94a3b8;margin:8px 2px 0;">Click into Model No. or Item Name to pick from the product list (type to narrow it down) — the name, size, SWG, packing and photo fill in from the product master; Total Box, CBM and Weight are then worked out from Qty. Type over any of them to override. The rate, its basis and its currency are added later by an authorized user.</p>';
   }
 
   function _bindItemRow(rowEl) {
-    const codeInput = rowEl.querySelector('.pic-item-code');
-    if (codeInput) _bindItemCodeInput(codeInput);
+    rowEl.querySelectorAll('.pic-item-code').forEach(_bindItemCodeInput);
 
     // Qty (or a corrected packing) re-derives the three computed columns…
     ['qty', 'packing'].forEach(f => {
@@ -583,7 +602,10 @@ window.Pages['proforma-invoice'] = (() => {
         + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;">'
           + '<div style="flex:1;"><div style="font-size:15px;font-weight:700;color:#1e293b;">New Product</div>'
             + '<div style="font-size:12px;color:#94a3b8;margin-top:1px;">Saved to the shared product master — available on every PI from now on.</div></div>'
-          + '<button id="np-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;">'
+          // type="button" is load-bearing: this modal lives INSIDE the PI
+          // form, and a bare <button> defaults to submit — clicking the ×
+          // used to create the PI.
+          + '<button type="button" id="np-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;">'
             + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
           + '</button>'
         + '</div>'
@@ -709,6 +731,10 @@ window.Pages['proforma-invoice'] = (() => {
     // master no longer lists), so they are passed as the value to keep —
     // _fillShippingSelect adds an option for anything it does not already have.
     _SHIP_FIELDS.forEach(f => _fillShippingSelect(f.id, _optionsFor(f.key), '', form[f.key] || ''));
+    // A text box now, so the parent's port goes in as a plain value — set it
+    // BEFORE the list fill, which only applies the default to an empty box.
+    put('pic-port-loading', form.portOfLoading);
+    _fillPortLoadingList();
     _fillDischargeList();
 
     const noEl = document.getElementById('pic-next-no');
@@ -741,7 +767,10 @@ window.Pages['proforma-invoice'] = (() => {
         // of leaving the old PI's figures behind.
         const qty = _num(it.qty), boxes = _num(it.boxes), cbm = _num(it.cbm), weight = _num(it.weight);
         if (boxes > 0 && cbm > 0) row.dataset.cbmPerBox = String(cbm / boxes);
-        if (qty > 0 && weight > 0) row.dataset.weightPerPc = String(weight / qty);
+        // The master's own figure when the parent stored it; the back-computed
+        // one otherwise.
+        if (it.weightPerPc) row.dataset.weightPerPc = String(it.weightPerPc);
+        else if (qty > 0 && weight > 0) row.dataset.weightPerPc = String(weight / qty);
       }
       _bindItemRow(row);
     });
@@ -806,7 +835,7 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _shippingFieldsHtml() {
     return '<div style="' + _grid + '">'
-      + _selectField('pic-port-loading', 'Port of Loading')
+      + _polField()
       + _dischargeField()
       + _selectField('pic-place-delivery', 'Place of Delivery')
       + _textField('pic-origin', 'Country of Origin of Goods', { value: _defaults ? _defaults.countryOfOrigin : '' })
@@ -831,7 +860,36 @@ window.Pages['proforma-invoice'] = (() => {
     + '</div>'
     + '<div style="margin-top:14px;">'
       + _textareaField('pic-terms', 'Terms & Conditions (one per line, printed as-is)', _defaults ? (_defaults.terms || []).join('\n') : '', 9)
+      // One-off terms for THIS PI only — they go into the textarea above (so
+      // they print like any other term) without touching the standard list,
+      // which comes back untouched on the next PI.
+      + '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center;">'
+        + '<input type="text" id="pic-new-term" autocomplete="off" placeholder="Add a temporary term / condition for this PI only…" style="' + _inputStyle + 'flex:1;min-width:220px;width:auto;" />'
+        + '<button type="button" id="pic-add-term" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid var(--color-primary);color:var(--color-primary);font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add Term</button>'
+        + '<button type="button" id="pic-reset-terms" title="Put the standard terms back, dropping any added or edited lines" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;">Reset to standard terms</button>'
+      + '</div>'
     + '</div>';
+  }
+
+  function _bindTermsButtons() {
+    const addBtn = document.getElementById('pic-add-term');
+    const resetBtn = document.getElementById('pic-reset-terms');
+    const newTerm = document.getElementById('pic-new-term');
+    const termsEl = document.getElementById('pic-terms');
+    if (!addBtn || !termsEl) return;
+    addBtn.addEventListener('click', () => {
+      const t = newTerm.value.trim();
+      if (!t) { newTerm.focus(); return; }
+      termsEl.value = (termsEl.value.replace(/\n+$/, '') + '\n' + t).replace(/^\n+/, '');
+      newTerm.value = '';
+      newTerm.focus();
+      // The new line may carry the term-3 blank; keep it consistent.
+      _applyShipmentDays();
+    });
+    if (resetBtn) resetBtn.addEventListener('click', () => {
+      termsEl.value = _defaults ? (_defaults.terms || []).join('\n') : '';
+      _applyShipmentDays();
+    });
   }
 
   /* ── Tabs (Create + PI List, same in-page-tab pattern as PO/GRN Creation) ── */
@@ -860,6 +918,9 @@ window.Pages['proforma-invoice'] = (() => {
       // Not a visible column — it rides along from the product master so the
       // printed PI can show the photo.
       item.imageUrl = row.querySelector('[data-field="imageUrl"]').value.trim();
+      // Also invisible here: the master's per-piece weight, which the Order
+      // Sheet raised against this PI prints in its own column.
+      item.weightPerPc = row.dataset.weightPerPc || '';
       return item;
     }).filter(it => it.modelNo || it.itemName);
   }
@@ -892,7 +953,7 @@ window.Pages['proforma-invoice'] = (() => {
       buyerAddress1: val('pic-buyer-addr1'),
       buyerAddress2: val('pic-buyer-addr2'),
       buyerContact: val('pic-buyer-contact'),
-      portOfLoading: _shippingVal('pic-port-loading'),
+      portOfLoading: val('pic-port-loading'),
       portOfDischarge: val('pic-port-discharge'),
       placeOfDelivery: _shippingVal('pic-place-delivery'),
       countryOfOrigin: val('pic-origin'),
@@ -1288,7 +1349,7 @@ window.Pages['proforma-invoice'] = (() => {
       + '<div style="background:#fff;border-radius:18px;width:100%;max-width:820px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
         + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;">'
           + '<div style="flex:1;"><div style="font-size:15px;font-weight:700;color:#1e293b;">' + (row.status === 'Priced' ? 'Edit Price' : 'Add Price') + ' — PI ' + esc(row.piNo) + '</div><div style="font-size:12px;color:#94a3b8;margin-top:1px;">' + esc(row.buyer) + '</div></div>'
-          + '<button id="pipm-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;">'
+          + '<button type="button" id="pipm-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;">'
             + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
           + '</button>'
         + '</div>'
@@ -1325,7 +1386,11 @@ window.Pages['proforma-invoice'] = (() => {
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.size || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;text-align:right;">' + esc(it.qty || '') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;">' + esc(it.weight || '—') + '</td>'
-                  + '<td style="padding:6px 8px;"><input type="text" inputmode="decimal" class="pipm-rate" value="' + esc(it.rate || '') + '" placeholder="0.000" style="width:110px;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" /></td>'
+                  + '<td style="padding:6px 8px;"><input type="text" inputmode="decimal" class="pipm-rate" value="' + esc(it.rate || '') + '" placeholder="0.000" style="width:110px;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" />'
+                    // Filled in by _loadLastPrices once the log has been
+                    // scanned — the last rate this buyer was quoted for this
+                    // item, click-to-use.
+                    + '<div class="pipm-last" style="font-size:10.5px;color:#94a3b8;margin-top:3px;max-width:150px;">Checking last price…</div></td>'
                   + '<td class="pipm-amount" style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;">0.00</td>'
                 + '</tr>').join('')
               + '</tbody>'
@@ -1364,6 +1429,39 @@ window.Pages['proforma-invoice'] = (() => {
     });
     document.getElementById('pipm-save').addEventListener('click', _submitPrice);
     _priceRecompute();
+    _loadLastPrices(row);
+  }
+
+  // The last price this buyer was quoted per item, off earlier priced PIs on
+  // the same log. Fetched after the modal paints — the rates screen must not
+  // wait on a log scan — and dropped silently if the modal has moved on.
+  async function _loadLastPrices(row) {
+    let data = null;
+    try {
+      data = await Utils.apiFetch('/api/proforma-invoice/last-prices?piNo=' + encodeURIComponent(row.piNo));
+    } catch {}
+    if (_priceModalRow !== row) return;
+    const modal = document.getElementById('pi-price-modal');
+    if (!modal) return;
+    const lastPrices = (data && data.lastPrices) || [];
+    modal.querySelectorAll('.pipm-item-row').forEach(rowEl => {
+      const holder = rowEl.querySelector('.pipm-last');
+      if (!holder) return;
+      const lp = lastPrices[parseInt(rowEl.dataset.index, 10)];
+      if (!lp) { holder.innerHTML = '<span style="color:#cbd5e1;">No earlier price for this buyer</span>'; return; }
+      holder.innerHTML = 'Last: <a href="#" class="pipm-last-use" data-rate="' + esc(lp.rate) + '"'
+        + ' title="Quoted on PI ' + esc(lp.piNo) + (lp.date ? ' (' + esc(lp.date) + ')' : '') + ' — click to use it"'
+        + ' style="color:var(--color-primary);font-weight:700;text-decoration:none;">'
+        + esc((lp.priceType ? lp.priceType + ' ' : '') + _currencyLabel(lp.currency) + ' ' + lp.rate) + '</a>'
+        + '<span style="color:#cbd5e1;"> · ' + esc(lp.piNo) + '</span>';
+    });
+    modal.querySelectorAll('.pipm-last-use').forEach(a => a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const input = a.closest('td').querySelector('.pipm-rate');
+      if (!input) return;
+      input.value = a.dataset.rate;
+      _priceRecompute();
+    }));
   }
 
   async function _submitPrice() {
@@ -1591,14 +1689,24 @@ window.Pages['proforma-invoice'] = (() => {
     renderPage();
   }
 
+  // The PI stores the master's per-piece weight with each line (newer PIs);
+  // an older PI's lines back it out of Total Weight ÷ Qty instead of leaving
+  // the new column blank.
+  function _osWeightPerPc(it) {
+    if (it.weightPerPc) return it.weightPerPc;
+    const qty = _num(it.qty), weight = _num(it.weight);
+    return (qty > 0 && weight > 0) ? String(Math.round((weight / qty) * 1000) / 1000) : '';
+  }
+
   function _osOrderItemsHtml(items) {
-    const head = ['#', 'Model No.', 'Item Name', 'Size', 'SWG', 'Per Box Dozen Packing', 'Total Qty (Pcs/Set)', 'Total Box', 'Total CBM', 'Total Weight (Kgs)', 'Remarks'];
+    const head = ['#', 'Model No.', 'Item Name', 'Size', 'SWG', 'Per Box Dozen Packing', 'Total Qty (Pcs/Set)', 'Total Box', 'Total CBM', 'Total Weight (Kgs)', 'Weight Per Pc (Kgs)', 'Remarks'];
     // Identity columns are read-only — an order sheet confirms the PI's goods,
     // so changing what the item IS belongs on a PI revision, not here. The
     // quantities stay editable for a part shipment or a corrected box count.
-    const editable = ['packing', 'qty', 'boxes', 'cbm', 'weight', 'remarks'];
+    const editable = ['packing', 'qty', 'boxes', 'cbm', 'weight', 'weightPerPc', 'remarks'];
+    const valOf = (it, f) => f === 'weightPerPc' ? _osWeightPerPc(it) : (it[f] == null ? '' : it[f]);
     return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:960px;">'
+      + '<table style="width:100%;border-collapse:collapse;min-width:1040px;">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
           + head.map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">' + esc(h) + '</th>').join('')
         + '</tr></thead>'
@@ -1609,7 +1717,7 @@ window.Pages['proforma-invoice'] = (() => {
                 '<td style="padding:6px 8px;font-size:12.5px;">' + esc(it[f] || '')
                 + '<input type="hidden" data-field="' + f + '" value="' + esc(it[f] || '') + '" /></td>').join('')
             + editable.map(f =>
-                '<td style="padding:6px 8px;"><input type="text" data-field="' + f + '" value="' + esc(it[f] == null ? '' : it[f]) + '" style="' + _cellInput + '" /></td>').join('')
+                '<td style="padding:6px 8px;"><input type="text" data-field="' + f + '" value="' + esc(valOf(it, f)) + '" style="' + _cellInput + '" /></td>').join('')
             + '<input type="hidden" data-field="imageUrl" value="' + esc(it.imageUrl || '') + '" />'
           + '</tr>').join('')
         + '</tbody>'
@@ -2525,7 +2633,9 @@ window.Pages['proforma-invoice'] = (() => {
     if (isOrders) {
       if (_osOf) {
         document.getElementById('os-form-cancel').addEventListener('click', _osCancelForm);
-        document.getElementById('os-form').addEventListener('submit', _osSubmit);
+        const osForm = document.getElementById('os-form');
+        osForm.addEventListener('submit', _osSubmit);
+        _guardEnterSubmit(osForm);
       } else {
         _osBindListBar();
         _osLoad();
@@ -2593,10 +2703,27 @@ window.Pages['proforma-invoice'] = (() => {
       newProductBtn.addEventListener('click', () => { _newProductOpen = true; _renderNewProductModal(); });
     }
 
+    _bindTermsButtons();
+
     // The PI number is FY-scoped, so a date change can change it.
     document.getElementById('pic-date').addEventListener('change', (e) => { _loadMasters(e.target.value); });
 
-    document.getElementById('pic-form').addEventListener('submit', _submit);
+    const picForm = document.getElementById('pic-form');
+    picForm.addEventListener('submit', _submit);
+    _guardEnterSubmit(picForm);
+  }
+
+  // Enter in any text box of a form with a single submit button fires the
+  // implicit submission — which is how half-typed PIs were "automatically
+  // submitted". Only the Create button itself may submit now (shared guard in
+  // Utils); Enter in the temporary-term box adds the term instead.
+  function _guardEnterSubmit(form) {
+    Utils.guardEnterSubmit(form, (target) => {
+      if (target.id === 'pic-new-term') {
+        const addBtn = document.getElementById('pic-add-term');
+        if (addBtn) addBtn.click();
+      }
+    });
   }
 
   /* ── entry point for the FMS "Add Pricing" step ───────────────────────

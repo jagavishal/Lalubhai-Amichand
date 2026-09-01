@@ -956,6 +956,7 @@ window.Pages['po-creation'] = (() => {
     const form = document.getElementById('poc-form');
     form.addEventListener('submit', _submit);
     form.addEventListener('input', _onFormInput);
+    Utils.guardEnterSubmit(form);
 
     if (!_mastersLoaded) _loadMasters();
     // Manual formats never touch PRs, so don't pay for the pending-PR fetch

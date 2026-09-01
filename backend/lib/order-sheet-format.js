@@ -14,8 +14,9 @@
  * does carry that the PI hides is Total Weight — a loading and production
  * figure the factory needs and the buyer's copy never showed.
  *
- * Grid is A..L (12 columns): the PI's fourteen minus its Rate and Amount
- * columns. Printed LANDSCAPE, like the PI.
+ * Grid is A..M (13 columns): the PI's fourteen minus its Rate and Amount
+ * columns, plus a per-piece weight column of its own — another production /
+ * loading figure the factory wants at hand. Printed LANDSCAPE, like the PI.
  */
 
 const PI = require('./pi-format');
@@ -28,8 +29,8 @@ const LETTERHEAD = Object.assign({}, PI.LETTERHEAD, {
 
 const LAYOUT = {
   firstCol: 'A',
-  lastCol: 'L',
-  colCount: 12,
+  lastCol: 'M',
+  colCount: 13,
   rowCount: 70,
 
   letterheadRows: { company: 1, regd: 2, admin: 3, works: 4, title: 5 },
@@ -64,7 +65,7 @@ const LAYOUT = {
   signatureCols: [
     { first: 'A', last: 'D', caption: 'Prepared By' },
     { first: 'E', last: 'H', caption: 'Checked By' },
-    { first: 'I', last: 'L', caption: 'Approved By' },
+    { first: 'I', last: 'M', caption: 'Approved By' },
   ],
   signatoryRow: 61,
   lastRow: 61,
@@ -121,8 +122,8 @@ const ITEMS = {
   srNoCol: 'A',
   photoCol: 'B',
   qtyCol: 'H',
-  remarksCol: 'L',
-  clearRanges: [['A', 'L']],
+  remarksCol: 'M',
+  clearRanges: [['A', 'M']],
   // Nothing is hidden on this document. Total Weight in particular is exactly
   // what the factory and the loading team are reading it for.
   printHiddenCols: [],
@@ -136,16 +137,18 @@ const ITEMS = {
     boxes: 'I',
     cbm: 'J',
     weight: 'K',
+    // Per-piece weight — not on the PI. Defaults to Total Weight ÷ Qty on the
+    // create form, editable there like the other quantity columns.
+    weightPerPc: 'L',
   },
   headers: [
     'Sr No', 'Photo', 'Model No.', 'Item Name', 'Size', 'SWG', 'Per Box Dozen Packing',
-    'Total Qty (Pcs / Set)', 'Total Box', 'Total CBM', 'Total Weight (Kgs)', 'Remarks',
+    'Total Qty (Pcs / Set)', 'Total Box', 'Total CBM', 'Total Weight (Kgs)', 'Weight Per Pc (Kgs)', 'Remarks',
   ],
-  // px widths, A..L — sums to 1065px, the same printable width the PI's
+  // px widths, A..M — sums to 1065px, the same printable width the PI's
   // fourteen columns were fitted to, so both documents export at one scale.
-  // The width freed by dropping Rate and Amount goes to Item Name and
-  // Remarks, which are what this document is actually read for.
-  colWidths: [34, 72, 96, 200, 48, 44, 76, 92, 64, 66, 78, 195],
+  // Item Name and Remarks gave up the width the Weight Per Pc column takes.
+  colWidths: [34, 72, 96, 172, 48, 44, 76, 92, 64, 66, 78, 64, 159],
 };
 
 // Boilerplate the sheet is painted with. The first three carry over from the

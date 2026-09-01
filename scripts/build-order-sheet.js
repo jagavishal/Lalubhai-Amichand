@@ -231,6 +231,9 @@ async function run() {
   requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.boxes, ITEMS.fields.boxes, '#,##0'));
   requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.cbm, ITEMS.fields.cbm, '0.0000'));
   requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.weight, ITEMS.fields.weight, '#,##0.00'));
+  // Per-piece weight runs to grams; no TOTAL — summing a per-piece figure
+  // across lines would mean nothing.
+  requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.weightPerPc, ITEMS.fields.weightPerPc, '0.000'));
 
   // ── totals row
   requests.push(merge(sheetId, L.totalRow, L.totalRow, L.totalLabelFirst, L.totalLabelLast));
