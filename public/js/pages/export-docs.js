@@ -178,14 +178,19 @@ window.Pages['export-documentation'] = (() => {
      line straight from it — the custom invoice form starts filled instead of
      retyped. Prices, exchange rate and the stuffing details stay manual (the
      packing list never had them). */
-  async function _loadPLs() {
-    if (_plList !== null || _plLoading) return;
+  let _plError = '';
+  async function _loadPLs(force) {
+    if ((_plList !== null && !force) || _plLoading) return;
     _plLoading = true;
+    _plError = '';
     try {
       const data = await Utils.apiFetch('/api/packing-list/list');
       _plList = Array.isArray(data) ? data.filter(p => (p.status || 'Open') !== 'Cancelled') : [];
-    } catch {
-      _plList = [];
+    } catch (e) {
+      // A failed fetch must not be remembered as "no packing lists" — keep it
+      // null so the next render (or the Retry button) tries again.
+      _plList = null;
+      _plError = e.message || 'Failed to load packing lists';
     } finally {
       _plLoading = false;
       // Only the picker needs repainting — a full render would wipe anything
@@ -197,10 +202,15 @@ window.Pages['export-documentation'] = (() => {
 
   function _plPickerHtml() {
     let inner;
-    if (_plList === null) {
+    const retryBtn = '<button type="button" id="ed-pl-retry" style="padding:6px 14px;border:1px solid #bfdbfe;border-radius:8px;background:#fff;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer;">Retry</button>';
+    if (_plError) {
+      inner = '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">'
+        + '<span style="font-size:12px;color:#b91c1c;">Packing lists could not be loaded: ' + esc(_plError) + '</span>' + retryBtn + '</div>';
+    } else if (_plList === null) {
       inner = '<div style="font-size:12px;color:#94a3b8;">Loading packing lists…</div>';
     } else if (!_plList.length) {
-      inner = '<div style="font-size:12px;color:#94a3b8;">No packing lists found — the form can still be filled by hand.</div>';
+      inner = '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">'
+        + '<span style="font-size:12px;color:#94a3b8;">No packing lists found — the form can still be filled by hand.</span>' + retryBtn + '</div>';
     } else {
       const opts = _plList.map(p => {
         const label = [p.plNo, p.invoiceNo && ('Inv ' + p.invoiceNo), p.buyer, p.orderNos && ('Orders ' + p.orderNos)].filter(Boolean).join(' — ');
@@ -215,7 +225,7 @@ window.Pages['export-documentation'] = (() => {
     }
     return '<div id="ed-pl-picker" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:14px 18px;margin-bottom:14px;">'
       + '<div style="font-size:13px;font-weight:800;color:#1e40af;">Load from Packing List</div>'
-      + '<div style="font-size:11.5px;color:#3b82f6;margin:2px 0 8px;">Order numbers, consignee, container and every item/carton row fill in from the packing list. Rates, exchange rate and stuffing details are then all that is left to add.</div>'
+      + '<div style="font-size:11.5px;color:#3b82f6;margin:2px 0 8px;">Pick a packing list and everything fills in — order numbers, consignee, container and every item/carton row. Rates, exchange rate and stuffing details are then all that is left to add.</div>'
       + inner
     + '</div>';
   }
@@ -1014,6 +1024,12 @@ window.Pages['export-documentation'] = (() => {
           if (pl) _applyPL(pl);
           return;
         }
+        if (e.target.id === 'ed-pl-retry') {
+          _loadPLs(true);
+          const slot = document.getElementById('ed-pl-picker');
+          if (slot) { _plError = ''; const fresh = document.createElement('div'); fresh.innerHTML = _plPickerHtml(); slot.replaceWith(fresh.firstElementChild); }
+          return;
+        }
         if (e.target.id === 'ed-cancel-edit') {
           _editingId = null;
           _form = _blankForm();
@@ -1024,10 +1040,15 @@ window.Pages['export-documentation'] = (() => {
         }
       });
 
-      // Remember the dropdown choice across the partial re-renders the item
-      // table does on every keystroke.
+      // Picking from the dropdown applies the packing list straight away —
+      // no separate Load click needed (the button stays as a redo).
       form.addEventListener('change', (e) => {
-        if (e.target.id === 'ed-pl-select') _plSelected = e.target.value;
+        if (e.target.id === 'ed-pl-select') {
+          _plSelected = e.target.value;
+          if (!_plSelected) return;
+          const pl = (_plList || []).find(p => p.plNo === _plSelected);
+          if (pl) _applyPL(pl);
+        }
       });
 
       if (!_editingId) _loadPLs();
