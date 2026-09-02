@@ -540,6 +540,7 @@ window.Pages['export-documentation'] = (() => {
             + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;text-align:right;">' + esc(totals.cartons ?? '') + '</td>'
             + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;text-align:right;white-space:nowrap;">' + esc(totals.cf ?? '') + '</td>'
             + '<td style="padding:6px 10px;"><div style="display:flex;gap:5px;flex-wrap:wrap;">'
+              + '<button type="button" class="ed-doc-btn" data-id="' + esc(r.id) + '" data-doc="all" style="padding:5px 10px;border:none;border-radius:7px;background:var(--color-primary);color:#fff;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">⬇ All Documents</button>'
               + _DOCS.map(([k, l]) => docBtn(r.id, k, l)).join('')
               + _STATIC_DOCS.map(([href, l]) => '<a href="' + esc(href) + '" target="_blank" rel="noopener" style="padding:5px 9px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;color:#475569;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;text-decoration:none;">' + esc(l) + '</a>').join('')
             + '</div></td>'
@@ -882,11 +883,22 @@ window.Pages['export-documentation'] = (() => {
       + _signBlock('For ' + COMPANY.name);
   }
 
+  // Every generated document in one window, each on its own A4 page — so one
+  // Print / Save PDF gives the whole set as a single file. The two LUT PDFs
+  // are already-filed files and stay as their own downloads beside it.
+  function _docAll(d) {
+    const parts = [_docInvoice(d), _docPacking(d), _docAnnexure(d), _docDbk(d), _docVgm(d)];
+    return parts.map((p, i) =>
+      '<div style="' + (i < parts.length - 1 ? 'page-break-after:always;' : '') + '">' + p + '</div>'
+    ).join('');
+  }
+
   function _openDoc(docKey, rec) {
     let d = {};
     try { d = JSON.parse(rec.data || '{}'); } catch {}
     const invNo = d.invoiceNo || rec.invoice_no || '';
     const map = {
+      all:      ['Export Documents ' + invNo, _docAll],
       invoice:  ['Custom Invoice ' + invNo, _docInvoice],
       packing:  ['Packing List ' + invNo, _docPacking],
       annexure: ['Annexure ' + invNo, _docAnnexure],
