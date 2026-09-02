@@ -943,36 +943,27 @@ window.Pages['export-documentation'] = (() => {
     setTimeout(() => URL.revokeObjectURL(a.href), 30000);
   }
 
-  let _allBusy = false;
-  async function _downloadAll(rec, btn) {
-    if (_allBusy) return;
-    _allBusy = true;
-    const btnLabel = btn ? btn.textContent : '';
-    const setBtn = (t) => { if (btn) btn.textContent = t; };
-    let d = {};
-    try { d = JSON.parse(rec.data || '{}'); } catch {}
-    const invNo = d.invoiceNo || rec.invoice_no || '';
-    const safeInv = String(invNo).replace(/[\\/:*?"<>|]+/g, '-').trim() || 'shipment';
+  const _DOC_SET = [
+    ['Custom Invoice', _docInvoice],
+    ['Packing List', _docPacking],
+    ['Annexure', _docAnnexure],
+    ['DBK Declaration', _docDbk],
+    ['VGM', _docVgm],
+  ];
+  const _safeInvName = (invNo) => String(invNo || '').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'shipment';
 
-    // Rendered off-screen (not display:none — html2canvas needs layout).
+  // Renders every generated document to a PDF data URI, off-screen (not
+  // display:none — html2canvas needs layout).
+  async function _generatePdfs(d, safeInv, onProgress) {
+    await _ensurePdfLibs();
     const holder = document.createElement('div');
     holder.style.cssText = 'position:absolute;left:-10000px;top:0;width:800px;background:#fff;font-family:Arial,Helvetica,sans-serif;font-size:11.5px;color:#000;';
     document.body.appendChild(holder);
-    let driveError = '';
-    let folderLink = '';
     try {
-      setBtn('Preparing…');
-      await _ensurePdfLibs();
-      const docs = [
-        ['Custom Invoice', _docInvoice],
-        ['Packing List', _docPacking],
-        ['Annexure', _docAnnexure],
-        ['DBK Declaration', _docDbk],
-        ['VGM', _docVgm],
-      ];
-      for (let i = 0; i < docs.length; i++) {
-        const [name, fn] = docs[i];
-        setBtn((i + 1) + '/' + docs.length + ' ' + name + '…');
+      const out = [];
+      for (let i = 0; i < _DOC_SET.length; i++) {
+        const [name, fn] = _DOC_SET[i];
+        if (onProgress) onProgress((i + 1) + '/' + _DOC_SET.length + ' ' + name + '…');
         holder.innerHTML = '<style>' + _DOC_CSS + '</style><div class="sheet" style="padding:10px;">' + fn(d) + '</div>';
         // The letterhead image must be painted before the canvas snapshot.
         await Promise.all([...holder.querySelectorAll('img')].map(img =>
@@ -989,57 +980,96 @@ window.Pages['export-documentation'] = (() => {
         // jsPDF emits "data:application/pdf;filename=generated.pdf;base64,…" —
         // strip the filename param so the server's data-URL parser accepts it.
         dataUri = dataUri.replace(/^data:application\/pdf;filename=[^;]*;base64,/, 'data:application/pdf;base64,');
-        const fname = name + ' ' + safeInv + '.pdf';
-        _downloadBlob(_dataUriToBlob(dataUri), fname);
-        if (!driveError) {
-          try {
-            const r = await Utils.apiFetch('/api/export-docs/' + encodeURIComponent(rec.id) + '/drive', {
-              method: 'POST',
-              body: JSON.stringify({ name: fname, dataUrl: dataUri }),
-            });
-            if (r?.folderLink) folderLink = r.folderLink;
-          } catch (e) {
-            driveError = e.message || 'Drive save failed';
-          }
-        }
+        out.push({ name: name + ' ' + safeInv + '.pdf', dataUri });
       }
-      // The filed LUT PDFs: straight downloads here, copied into the same
-      // Drive folder by the server.
+      return out;
+    } finally {
+      holder.remove();
+    }
+  }
+
+  async function _uploadPdfsToDrive(id, pdfs) {
+    let folderLink = '';
+    for (const p of pdfs) {
+      const r = await Utils.apiFetch('/api/export-docs/' + encodeURIComponent(id) + '/drive', {
+        method: 'POST',
+        body: JSON.stringify({ name: p.name, dataUrl: p.dataUri }),
+      });
+      if (r?.folderLink) folderLink = r.folderLink;
+    }
+    const r2 = await Utils.apiFetch('/api/export-docs/' + encodeURIComponent(id) + '/drive', {
+      method: 'POST',
+      body: JSON.stringify({ includeLut: true }),
+    });
+    if (r2?.folderLink) folderLink = r2.folderLink;
+    return folderLink;
+  }
+
+  function _patchRowDrive(id, folderLink) {
+    if (!folderLink) return;
+    const rec = _rows.find(r => r.id === id);
+    if (rec) {
+      try { const nd = JSON.parse(rec.data || '{}'); nd._driveFolder = folderLink; rec.data = JSON.stringify(nd); } catch {}
+    }
+    if (_view === 'list') render();
+  }
+
+  // Runs by itself right after a shipment is saved: the whole document set is
+  // generated and filed on the Shared Drive without anyone clicking anything.
+  let _driveSaveBusy = false;
+  async function _saveDocsToDrive(id, d) {
+    if (_driveSaveBusy) return;
+    _driveSaveBusy = true;
+    try {
+      Utils.showToast('Saving all documents to Google Drive…', 'info');
+      const pdfs = await _generatePdfs(d, _safeInvName(d.invoiceNo), null);
+      const folderLink = await _uploadPdfsToDrive(id, pdfs);
+      _patchRowDrive(id, folderLink);
+      Utils.showToast('All documents saved to Google Drive', 'success');
+    } catch (e) {
+      Utils.showToast('Drive save failed: ' + (e.message || 'unknown error') + ' — click All Documents to retry', 'warning');
+    } finally {
+      _driveSaveBusy = false;
+    }
+  }
+
+  // The download button: everything is generated first, then the whole set —
+  // all 7 PDFs — lands in the Downloads folder together in one go.
+  let _allBusy = false;
+  async function _downloadAll(rec, btn) {
+    if (_allBusy) return;
+    _allBusy = true;
+    const btnLabel = btn ? btn.textContent : '';
+    const setBtn = (t) => { if (btn) btn.textContent = t; };
+    let d = {};
+    try { d = JSON.parse(rec.data || '{}'); } catch {}
+    const safeInv = _safeInvName(d.invoiceNo || rec.invoice_no);
+    try {
+      setBtn('Preparing…');
+      const pdfs = await _generatePdfs(d, safeInv, setBtn);
       setBtn('LUT PDFs…');
+      const lut = [];
       for (const [href, name] of [['/export-lut-rfd11.pdf', 'LUT RFD-11.pdf'], ['/export-lut-ack.pdf', 'LUT Acknowledgement.pdf']]) {
         try {
           const res = await fetch(href);
-          if (res.ok) _downloadBlob(await res.blob(), name);
+          if (res.ok) lut.push({ name, blob: await res.blob() });
         } catch {}
       }
-      if (!driveError) {
-        try {
-          setBtn('Saving to Drive…');
-          const r = await Utils.apiFetch('/api/export-docs/' + encodeURIComponent(rec.id) + '/drive', {
-            method: 'POST',
-            body: JSON.stringify({ includeLut: true }),
-          });
-          if (r?.folderLink) folderLink = r.folderLink;
-        } catch (e) {
-          driveError = e.message || 'Drive save failed';
-        }
-      }
+      setBtn('Downloading…');
+      pdfs.forEach(p => _downloadBlob(_dataUriToBlob(p.dataUri), p.name));
+      lut.forEach(f => _downloadBlob(f.blob, f.name));
+      Utils.showToast('All ' + (pdfs.length + lut.length) + ' PDFs downloaded', 'success');
 
-      if (driveError) {
-        Utils.showToast('All 7 PDFs downloaded. Drive save failed: ' + driveError, 'warning');
-      } else {
-        Utils.showToast('All 7 PDFs downloaded and saved to Google Drive', 'success');
-        // The record now carries the Drive folder link — refresh the row so
-        // the Drive button appears.
-        if (folderLink) {
-          try { const nd = JSON.parse(rec.data || '{}'); nd._driveFolder = folderLink; rec.data = JSON.stringify(nd); } catch {}
-          render();
-        }
+      // If this shipment never made it to Drive (older record, or the save-time
+      // upload failed), quietly file the freshly generated set there now.
+      if (!d._driveFolder) {
+        _uploadPdfsToDrive(rec.id, pdfs)
+          .then(fl => { _patchRowDrive(rec.id, fl); if (fl) Utils.showToast('Documents saved to Google Drive', 'success'); })
+          .catch(e => Utils.showToast('Drive save failed: ' + (e.message || ''), 'warning'));
       }
     } catch (e) {
       Utils.showToast(e.message || 'Failed to generate the documents', 'error');
     } finally {
-      holder.remove();
       setBtn(btnLabel || '⬇ All Documents');
       _allBusy = false;
     }
@@ -1072,6 +1102,7 @@ window.Pages['export-documentation'] = (() => {
     const btn = document.getElementById('ed-submit');
     if (btn) { btn.textContent = 'Saving…'; btn.disabled = true; }
     try {
+      let savedId = _editingId;
       if (_editingId) {
         const res = await Utils.apiFetch('/api/export-docs/' + encodeURIComponent(_editingId), { method: 'PUT', body: JSON.stringify(payload) });
         if (!res) return;
@@ -1079,8 +1110,12 @@ window.Pages['export-documentation'] = (() => {
       } else {
         const res = await Utils.apiFetch('/api/export-docs', { method: 'POST', body: JSON.stringify(payload) });
         if (!res) return;
-        Utils.showToast(payload.invoiceNo + ' saved — all documents are ready to print', 'success');
+        savedId = res.id;
+        Utils.showToast(payload.invoiceNo + ' saved — all documents are ready', 'success');
       }
+      // Fire-and-forget: the document set files itself on Google Drive the
+      // moment the shipment is saved — no button click needed.
+      if (savedId) _saveDocsToDrive(savedId, data);
       _editingId = null;
       _form = _blankForm();
       _items = [_blankItem()];
