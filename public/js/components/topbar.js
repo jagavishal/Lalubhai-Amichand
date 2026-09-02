@@ -12,6 +12,7 @@ window.Topbar = {
     'profile':      'Profile',
     'client-master':'',
     'po-pending':   'PO Pending',
+    'export-documentation': 'Export Documentation',
     'compliance':   'Compliance',
     'hr-employees': 'Employee Master',
     'hr-attendance':'Attendance',

@@ -17,6 +17,9 @@ window.Sidebar = {
     reports:      '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h2v4H8zM13 11h2v6h-2z"/></svg>',
     clientmaster: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M5 21V7l8-4 8 4v14M9 9h1M9 13h1M9 17h1M14 9h1M14 13h1M14 17h1"/></svg>',
     consignee:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20a3 3 0 0 0 2.5-1.4 3 3 0 0 1 5 0 3 3 0 0 0 5 0 3 3 0 0 1 5 0A3 3 0 0 0 22 20"/><path d="M4 18 2.6 12.6A1 1 0 0 1 3.6 11.4h16.8a1 1 0 0 1 1 1.2L20 18"/><path d="M12 11.4V4"/><path d="M8 7h8"/></svg>',
+    // Export Documentation — a document with a globe, since it is the customs
+    // paper set (invoice, packing list, annexure, DBK, VGM) for a shipment.
+    exportdocs:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><circle cx="12" cy="15" r="4"/><path d="M8 15h8M12 11c1.5 1.2 1.5 6.8 0 8c-1.5-1.2-1.5-6.8 0-8z"/></svg>',
     prcreation:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 12v6M9 15h6"/></svg>',
     pocreation:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14l2 2 4-4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>',
     grncreation:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>',
@@ -108,6 +111,7 @@ window.Sidebar = {
     { title: 'Export Department', items: [
       { route: 'proforma-invoice', label: 'Proforma Invoice', icon: 'picreation' },
       { route: 'consignee-master', label: 'Consignee Master', icon: 'consignee' },
+      { route: 'export-documentation', label: 'Export Documentation', icon: 'exportdocs' },
       { route: 'pr-creation',    label: 'PR Creation',    icon: 'prcreation' },
       { route: 'po-creation',    label: 'PO Creation',    icon: 'pocreation' },
       { route: 'grn-creation',   label: 'GRN Creation',   icon: 'grncreation' },

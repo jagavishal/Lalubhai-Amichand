@@ -380,6 +380,13 @@ const SCHEMA = [
   // new name up on its next load. sort_order keeps the seeded list in the
   // factory's own numbering; anything added later sorts after it.
   `CREATE TABLE IF NOT EXISTS departments (id VARCHAR(16) PRIMARY KEY, name VARCHAR(128) NOT NULL, sort_order INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(name)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  // ── Export Documentation: one row per shipment. The whole custom-invoice
+  // form (header fields + item/carton rows) is stored as JSON in `data`; the
+  // Packing List, Annexure, DBK Declaration and VGM are all generated from it
+  // client-side (see public/js/pages/export-docs.js), so nothing else needs
+  // its own table. The few lifted-out columns exist only for the list view.
+  `CREATE TABLE IF NOT EXISTS export_shipments (id VARCHAR(16) PRIMARY KEY, invoice_no VARCHAR(64) NOT NULL, invoice_date VARCHAR(32) DEFAULT '', consignee_name VARCHAR(255) DEFAULT '', data LONGTEXT NOT NULL, created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_export_ship_inv ON export_shipments (invoice_no)`,
 ];
 
 // ── HRMS ──────────────────────────────────────────────────────────────────────
@@ -7081,6 +7088,78 @@ function _piShippingOptions(rows) {
     placeOfDelivery: pick('placeOfDelivery'),
   };
 }
+
+// ── Export Documentation (page: export-documentation) ───────────────────────
+// One record per export shipment. The team fills only the Custom Invoice form;
+// the Packing List, Annexure, DBK Declaration and VGM sheet are generated from
+// that one record in the browser (public/js/pages/export-docs.js), so the API
+// is a plain CRUD over export_shipments with the form stored as JSON.
+
+app.get('/api/export-docs', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const rows = await q('SELECT * FROM export_shipments ORDER BY created_at DESC', []);
+    return res.json({ rows });
+  } catch (e) {
+    console.error('[export-docs] list failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/export-docs', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const allowed = await userCanUseFeature(req.session.user, 'export-documentation', 'add');
+    if (!allowed) return res.status(403).json({ error: 'You do not have permission to create export documentation' });
+    const { invoiceNo, invoiceDate, consigneeName, data } = req.body || {};
+    if (!invoiceNo || !invoiceDate) return res.status(400).json({ error: 'Invoice No. and Invoice Date are required' });
+    if (!data || typeof data !== 'object') return res.status(400).json({ error: 'Shipment data missing' });
+    const id = 'ED' + Date.now().toString(36).toUpperCase();
+    await pool.query(
+      'INSERT INTO export_shipments (id,invoice_no,invoice_date,consignee_name,data,created_by) VALUES ($1,$2,$3,$4,$5,$6)',
+      [id, String(invoiceNo).trim(), String(invoiceDate).trim(), String(consigneeName || '').trim(), JSON.stringify(data), req.session.user.name || '']
+    );
+    return res.status(201).json({ id });
+  } catch (e) {
+    console.error('[export-docs] create failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/export-docs/:id', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const allowed = await userCanUseFeature(req.session.user, 'export-documentation', 'add');
+    if (!allowed) return res.status(403).json({ error: 'You do not have permission to edit export documentation' });
+    const { invoiceNo, invoiceDate, consigneeName, data } = req.body || {};
+    if (!invoiceNo || !invoiceDate) return res.status(400).json({ error: 'Invoice No. and Invoice Date are required' });
+    if (!data || typeof data !== 'object') return res.status(400).json({ error: 'Shipment data missing' });
+    const rows = await q('SELECT id FROM export_shipments WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Shipment not found' });
+    await pool.query(
+      'UPDATE export_shipments SET invoice_no=$1, invoice_date=$2, consignee_name=$3, data=$4, updated_at=NOW() WHERE id=$5',
+      [String(invoiceNo).trim(), String(invoiceDate).trim(), String(consigneeName || '').trim(), JSON.stringify(data), req.params.id]
+    );
+    return res.json({ success: true });
+  } catch (e) {
+    console.error('[export-docs] update failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/export-docs?id=... — owner-only, same rule as every other module.
+app.delete('/api/export-docs', requireAuth, requireSuperAdmin, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: 'id required' });
+    await pool.query('DELETE FROM export_shipments WHERE id=$1', [id]);
+    return res.json({ success: true });
+  } catch (e) {
+    console.error('[export-docs] delete failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
 
 // ── Consignee Master (page: consignee-master) ───────────────────────────────
 // The same master the PI create form reads, given its own page so a new buyer
