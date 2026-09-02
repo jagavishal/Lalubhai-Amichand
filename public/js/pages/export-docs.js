@@ -612,20 +612,28 @@ window.Pages['export-documentation'] = (() => {
     + '</tr>').join('');
     const extraMarks = marks.slice(c.items.length);
 
-    return '<div class="title">INVOICE</div>'
-      + '<table class="grid">'
+    return '<table class="grid">'
+      // Their invoice's letterhead: the "Exporter" block with the Queen Brand
+      // trade-mark emblem and the Mumbai Regd./Admn. offices — extracted from
+      // the export team's own invoice workbook (public/export-header.png).
       + '<tr>'
-        + '<td style="width:50%;" rowspan="2"><span class="sm">Consignee</span><br><span class="b">' + esc(d.consignee) + '</span>'
-          + '<br><br><span class="sm">Buyer (if other than consignee)</span><br><span class="b">' + esc(d.buyer) + '</span></td>'
-        + '<td><span class="sm">Invoice No. & Date</span><br><span class="b">' + esc(d.invoiceNo) + '</span> &nbsp; DATE: <span class="b">' + esc(d.invoiceDate) + '</span>'
+        // Absolute URL: the print window is an about:blank document, where a
+        // relative /path may have no base to resolve against.
+        + '<td style="width:50%;vertical-align:middle;"><img src="' + esc(window.location.origin + '/export-header.png') + '" alt="Exporter — LALLUBHAI AMICHAND LIMITED" style="width:100%;max-width:430px;display:block;"></td>'
+        + '<td style="vertical-align:top;"><div class="b c" style="font-size:16px;margin:2px 0 6px;">INVOICE</div>'
+          + '<span class="sm">Invoice No. & Date</span><br><span class="b">' + esc(d.invoiceNo) + '</span> &nbsp; DATE: <span class="b">' + esc(d.invoiceDate) + '</span>'
           + '<br><span class="sm">Exporter\'s Ref:</span> ' + esc(d.exportersRef)
           + '<br><span class="sm">Buyer\'s Order No.</span> <span class="b">' + esc(d.buyersOrderNo) + '</span>'
           + '<br><span class="sm">Other Reference(s):</span> ' + esc(d.otherRef) + '</td>'
       + '</tr>'
-      + '<tr><td><span class="sm">Terms of delivery &amp; payment</span> <span class="b">' + esc(d.deliveryTerms) + ' &nbsp; ' + esc(d.paymentTerms) + '</span>'
+      + '<tr>'
+        + '<td><span class="sm">Consignee</span><br><span class="b">' + esc(d.consignee) + '</span>'
+          + '<br><br><span class="sm">Buyer (if other than consignee)</span><br><span class="b">' + esc(d.buyer) + '</span></td>'
+        + '<td><span class="sm">Terms of delivery &amp; payment</span> <span class="b">' + esc(d.deliveryTerms) + ' &nbsp; ' + esc(d.paymentTerms) + '</span>'
         + '<br><span class="b">SHIPMENT UNDER LUT</span>'
         + '<br>LUT ARN NO. <span class="b">' + esc(d.lutArnNo) + '</span>'
-        + '<br>LUT ARN DATE <span class="b">' + esc(d.lutArnDate) + '</span></td></tr>'
+        + '<br>LUT ARN DATE <span class="b">' + esc(d.lutArnDate) + '</span></td>'
+      + '</tr>'
       + '<tr>'
         + '<td><span class="sm">Shipper</span><br><span class="b">' + esc(COMPANY.name) + '</span><br>'
           + esc(COMPANY.addr1) + '<br>' + esc(COMPANY.addr2) + '<br>' + esc(COMPANY.country) + '</td>'
