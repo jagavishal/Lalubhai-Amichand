@@ -248,6 +248,17 @@ window.Pages['export-documentation'] = (() => {
       else if (/20/.test(cs)) _form.containerSizeText = "1x20'  FCL";
     }
 
+    // A starting point for the marks column — their real marks are the buyer's
+    // short name, city, PO and phone (e.g. "SAIF PLUS CO / RYD. KSA /
+    // PO 12376 / TEL...."), which only the team knows; prefill what the
+    // packing list does carry so the column never prints empty unnoticed.
+    if (!String(_form.shippingMarks || '').trim()) {
+      _form.shippingMarks = [
+        (pl.buyer || f.buyerName || '').toUpperCase(),
+        pl.orderNos || (f.orderNos || []).join(', '),
+      ].filter(Boolean).join('\n');
+    }
+
     const items = Array.isArray(f.items) ? f.items : [];
     if (items.length) {
       let grossSum = 0;
@@ -608,9 +619,12 @@ window.Pages['export-documentation'] = (() => {
   /* ── 1. CUSTOM INVOICE ────────────────────────────────────────────────── */
   function _docInvoice(d) {
     const c = _calcFrom(d);
-    const marks = _lines(d.shippingMarks);
+    // The marks print as one block spanning every item row — the way their
+    // sheet reads — rather than one line per row, which left the column
+    // looking empty whenever the marks were shorter than the item list.
+    const marksCell = '<td class="sm" rowspan="' + c.items.length + '" style="vertical-align:top;">' + _linesHtml(d.shippingMarks) + '</td>';
     const itemRows = c.items.map((it, i) => '<tr>'
-      + '<td class="sm">' + esc(marks[i] || '') + '</td>'
+      + (i === 0 ? marksCell : '')
       + '<td>' + esc(it.invItem) + '</td>'
       + '<td>' + esc(it.scheme) + '</td>'
       + '<td>' + esc(it.productCode) + '</td>'
@@ -622,7 +636,6 @@ window.Pages['export-documentation'] = (() => {
       + '<td class="r">' + money(it.taxable) + '</td>'
       + '<td>LUT</td>'
     + '</tr>').join('');
-    const extraMarks = marks.slice(c.items.length);
 
     return '<table class="grid">'
       // Their invoice's letterhead: the "Exporter" block with the Queen Brand
@@ -670,7 +683,6 @@ window.Pages['export-documentation'] = (() => {
       + '<table class="grid" style="margin-top:-1px;">'
       + '<tr class="sm"><th>Marks and numbers</th><th>(ITEM)</th><th>SCHEME</th><th>PRODUCT CODE</th><th>SIZE</th><th>Qty. PCS/SET</th><th>UOM</th><th>Rate Per PC/SET US$</th><th>' + esc(d.deliveryTerms) + ' US$</th><th>Taxable Value (Rs)</th><th>LUT</th></tr>'
       + itemRows
-      + (extraMarks.length ? '<tr><td class="sm">' + extraMarks.map(esc).join('<br>') + '</td><td colspan="10"></td></tr>' : '')
       + '<tr class="b"><td></td><td colspan="4" class="r">TOTAL</td><td class="r">' + c.totalQty + '</td><td></td><td class="r">TOTAL</td><td class="r">' + money(c.totalCf) + '</td><td class="r">' + money(c.totalTaxable) + '</td><td></td></tr>'
       + '</table>'
 
