@@ -923,7 +923,13 @@ window.Pages['export-documentation'] = (() => {
   }
   async function _ensurePdfLibs() {
     if (!window.html2pdf) await _loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js');
+    if (!window.JSZip) await _loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
   }
+
+  // The set generated at save time (for Drive) is kept here so the download
+  // button can hand it over instantly instead of rendering everything again.
+  // Keyed by record id; overwritten on every save of that record.
+  const _pdfCache = {};
 
   function _dataUriToBlob(uri) {
     const b64 = uri.slice(uri.indexOf(';base64,') + 8);
@@ -972,7 +978,9 @@ window.Pages['export-documentation'] = (() => {
           .set({
             margin: 8,
             jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-            html2canvas: { scale: 2, backgroundColor: '#ffffff' },
+            // 1.5 renders in roughly half the pixels of 2 — visibly faster on
+            // the office machines, still ~160dpi on an A4 print.
+            html2canvas: { scale: 1.5, backgroundColor: '#ffffff' },
             pagebreak: { mode: ['css', 'legacy'] },
           })
           .from(holder)
@@ -1022,7 +1030,9 @@ window.Pages['export-documentation'] = (() => {
     _driveSaveBusy = true;
     try {
       Utils.showToast('Saving all documents to Google Drive…', 'info');
-      const pdfs = await _generatePdfs(d, _safeInvName(d.invoiceNo), null);
+      const safeInv = _safeInvName(d.invoiceNo);
+      const pdfs = await _generatePdfs(d, safeInv, null);
+      _pdfCache[id] = { safeInv, pdfs };
       const folderLink = await _uploadPdfsToDrive(id, pdfs);
       _patchRowDrive(id, folderLink);
       Utils.showToast('All documents saved to Google Drive', 'success');
@@ -1033,8 +1043,10 @@ window.Pages['export-documentation'] = (() => {
     }
   }
 
-  // The download button: everything is generated first, then the whole set —
-  // all 7 PDFs — lands in the Downloads folder together in one go.
+  // The download button: one file lands in Downloads — a ZIP that unpacks to
+  // a folder named after the invoice holding all 7 PDFs (a browser cannot
+  // download a bare folder; the ZIP is how one travels). The set generated at
+  // save time is reused, so right after a save this is nearly instant.
   let _allBusy = false;
   async function _downloadAll(rec, btn) {
     if (_allBusy) return;
@@ -1046,7 +1058,15 @@ window.Pages['export-documentation'] = (() => {
     const safeInv = _safeInvName(d.invoiceNo || rec.invoice_no);
     try {
       setBtn('Preparing…');
-      const pdfs = await _generatePdfs(d, safeInv, setBtn);
+      await _ensurePdfLibs();
+      let pdfs;
+      const cached = _pdfCache[rec.id];
+      if (cached && cached.safeInv === safeInv) {
+        pdfs = cached.pdfs;
+      } else {
+        pdfs = await _generatePdfs(d, safeInv, setBtn);
+        _pdfCache[rec.id] = { safeInv, pdfs };
+      }
       setBtn('LUT PDFs…');
       const lut = [];
       for (const [href, name] of [['/export-lut-rfd11.pdf', 'LUT RFD-11.pdf'], ['/export-lut-ack.pdf', 'LUT Acknowledgement.pdf']]) {
@@ -1055,10 +1075,14 @@ window.Pages['export-documentation'] = (() => {
           if (res.ok) lut.push({ name, blob: await res.blob() });
         } catch {}
       }
-      setBtn('Downloading…');
-      pdfs.forEach(p => _downloadBlob(_dataUriToBlob(p.dataUri), p.name));
-      lut.forEach(f => _downloadBlob(f.blob, f.name));
-      Utils.showToast('All ' + (pdfs.length + lut.length) + ' PDFs downloaded', 'success');
+      setBtn('Making folder…');
+      const zip = new window.JSZip();
+      const folder = zip.folder(safeInv);
+      pdfs.forEach(p => folder.file(p.name, _dataUriToBlob(p.dataUri)));
+      lut.forEach(f => folder.file(f.name, f.blob));
+      const blob = await zip.generateAsync({ type: 'blob' });
+      _downloadBlob(blob, 'Export Documents ' + safeInv + '.zip');
+      Utils.showToast('Downloaded — open the ZIP and the "' + safeInv + '" folder holds all ' + (pdfs.length + lut.length) + ' PDFs', 'success');
 
       // If this shipment never made it to Drive (older record, or the save-time
       // upload failed), quietly file the freshly generated set there now.
