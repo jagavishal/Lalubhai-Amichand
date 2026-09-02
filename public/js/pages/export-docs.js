@@ -80,9 +80,16 @@ window.Pages['export-documentation'] = (() => {
     qty: '', uom: 'PCS', rate: '', cartonFrom: '', cartonTo: '', pcsPerCarton: '', ntWtPerCarton: '',
   });
 
+  // Dates print exactly as typed, and their own documents write them d.M.yyyy
+  // ("21.8.2026") — so that is what the automatic date fills in.
+  function _todayStr() {
+    const t = new Date();
+    return t.getDate() + '.' + (t.getMonth() + 1) + '.' + t.getFullYear();
+  }
+
   function _blankForm() {
     return Object.assign({
-      invoiceNo: '', invoiceDate: '', buyersOrderNo: '', exportersRef: '', otherRef: '',
+      invoiceNo: '', invoiceDate: _todayStr(), buyersOrderNo: '', exportersRef: '', otherRef: '',
       consigneeName: '', consigneeAddress: '', consigneeTel: '', consigneeCr: '',
       preCarriage: '', placeOfReceipt: '', portOfDischarge: '', placeOfDelivery: '', countryFinal: '',
       swg: '', totalGrossWt: '', vehicleNo: '', containerNo: '', lrNo: '', lrDate: '',
@@ -102,6 +109,9 @@ window.Pages['export-documentation'] = (() => {
   let _editingId = null;        // null = creating new
   let _form = _blankForm();
   let _items = [_blankItem()];
+  let _plList = null;           // packing lists from /api/packing-list/list (null = not fetched yet)
+  let _plLoading = false;
+  let _plSelected = '';
 
   function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
   const num = (v) => { const n = parseFloat(String(v ?? '').replace(/,/g, '')); return isFinite(n) ? n : 0; };
@@ -159,6 +169,102 @@ window.Pages['export-documentation'] = (() => {
     let s = (prefix ? prefix + ' ' : '') + 'US DOLLARS ' + _numWords(intPart);
     if (cents > 0) s += ' AND CENTS ' + _numWords(cents);
     return s + ' ONLY';
+  }
+
+  /* ── Packing List connection ──────────────────────────────────────────────
+     The export team already raises its Packing Lists in the app (Proforma
+     Invoice → Packing List, logged to the "ERP Packing List Log"). Picking one
+     here pulls the order numbers, consignee, container and every item/carton
+     line straight from it — the custom invoice form starts filled instead of
+     retyped. Prices, exchange rate and the stuffing details stay manual (the
+     packing list never had them). */
+  async function _loadPLs() {
+    if (_plList !== null || _plLoading) return;
+    _plLoading = true;
+    try {
+      const data = await Utils.apiFetch('/api/packing-list/list');
+      _plList = Array.isArray(data) ? data.filter(p => (p.status || 'Open') !== 'Cancelled') : [];
+    } catch {
+      _plList = [];
+    } finally {
+      _plLoading = false;
+      // Only the picker needs repainting — a full render would wipe anything
+      // already typed into the form.
+      const slot = document.getElementById('ed-pl-picker');
+      if (slot) { const fresh = document.createElement('div'); fresh.innerHTML = _plPickerHtml(); slot.replaceWith(fresh.firstElementChild); }
+    }
+  }
+
+  function _plPickerHtml() {
+    let inner;
+    if (_plList === null) {
+      inner = '<div style="font-size:12px;color:#94a3b8;">Loading packing lists…</div>';
+    } else if (!_plList.length) {
+      inner = '<div style="font-size:12px;color:#94a3b8;">No packing lists found — the form can still be filled by hand.</div>';
+    } else {
+      const opts = _plList.map(p => {
+        const label = [p.plNo, p.invoiceNo && ('Inv ' + p.invoiceNo), p.buyer, p.orderNos && ('Orders ' + p.orderNos)].filter(Boolean).join(' — ');
+        return '<option value="' + esc(p.plNo) + '"' + (_plSelected === p.plNo ? ' selected' : '') + '>' + esc(label) + '</option>';
+      }).join('');
+      inner = '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">'
+        + '<select id="ed-pl-select" style="' + _inputStyle + 'max-width:520px;">'
+          + '<option value="">Select a packing list…</option>' + opts
+        + '</select>'
+        + '<button type="button" id="ed-pl-load" style="padding:8px 16px;border:none;border-radius:8px;background:var(--color-primary);color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Load</button>'
+      + '</div>';
+    }
+    return '<div id="ed-pl-picker" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:14px 18px;margin-bottom:14px;">'
+      + '<div style="font-size:13px;font-weight:800;color:#1e40af;">Load from Packing List</div>'
+      + '<div style="font-size:11.5px;color:#3b82f6;margin:2px 0 8px;">Order numbers, consignee, container and every item/carton row fill in from the packing list. Rates, exchange rate and stuffing details are then all that is left to add.</div>'
+      + inner
+    + '</div>';
+  }
+
+  function _applyPL(pl) {
+    const f = pl.form || {};
+    _plSelected = pl.plNo;
+
+    _form.buyersOrderNo = pl.orderNos || (f.orderNos || []).join(', ');
+    if (pl.invoiceNo || f.invoiceNo) _form.invoiceNo = pl.invoiceNo || f.invoiceNo;
+    if (!_form.invoiceDate) _form.invoiceDate = _todayStr();
+    if (pl.buyer || f.buyerName) _form.consigneeName = pl.buyer || f.buyerName;
+
+    // "20 FT HC" / "40 FT HC" — printed as-is on the VGM, and mapped to the
+    // Annexure's own "1x40'  FCL" phrasing.
+    const cs = String(f.containerSize || '').trim();
+    if (cs) {
+      _form.containerSize = cs;
+      if (/40/.test(cs)) _form.containerSizeText = "1x40'  FCL";
+      else if (/20/.test(cs)) _form.containerSizeText = "1x20'  FCL";
+    }
+
+    const items = Array.isArray(f.items) ? f.items : [];
+    if (items.length) {
+      let grossSum = 0;
+      _items = items.map(it => {
+        // cartonNo is the packing list's own computed range ("121-180", "05").
+        const m = String(it.cartonNo || '').match(/^(\d+)\s*-\s*(\d+)$/);
+        const single = String(it.cartonNo || '').match(/^(\d+)$/);
+        grossSum += num(it.grossTotal);
+        return Object.assign(_blankItem(), {
+          itemName: it.description || '',
+          productCode: it.itemCode || '',
+          size: it.size || '',
+          qty: it.packedQty != null ? String(it.packedQty) : '',
+          cartonFrom: m ? String(Number(m[1])) : (single ? String(Number(single[1])) : ''),
+          cartonTo: m ? String(Number(m[2])) : (single ? String(Number(single[1])) : ''),
+          pcsPerCarton: it.perCarton != null ? String(it.perCarton) : '',
+          ntWtPerCarton: it.netPerCarton != null ? String(it.netPerCarton) : '',
+        });
+      });
+      // Their packing list carries gross weight per carton, so the invoice's
+      // total gross weight comes along too — still editable if the weighbridge
+      // figure differs.
+      if (grossSum > 0 && !num(_form.totalGrossWt)) _form.totalGrossWt = wt(grossSum);
+    }
+
+    render();
+    Utils.showToast('Loaded ' + pl.plNo + (pl.orderNos ? ' — orders ' + pl.orderNos : ''), 'success');
   }
 
   /* ── data ─────────────────────────────────────────────────────────────── */
@@ -273,7 +379,11 @@ window.Pages['export-documentation'] = (() => {
   function _formHtml() {
     return '<form id="ed-form" autocomplete="off">'
 
-      + _section('Invoice Header', 'Dates are printed exactly as typed (e.g. 21.8.2026).',
+      // Only on a fresh invoice — loading a packing list over a record being
+      // edited would silently overwrite what was already saved.
+      + (_editingId ? '' : _plPickerHtml())
+
+      + _section('Invoice Header', 'Dates are printed exactly as typed (e.g. 21.8.2026). Invoice Date is prefilled with today.',
           _fld('invoiceNo', 'Invoice No.', { required: true, placeholder: 'LA-16/26-27' })
         + _fld('invoiceDate', 'Invoice Date', { required: true, placeholder: '21.8.2026' })
         + _fld('buyersOrderNo', "Buyer's Order No.", { placeholder: 'P00595,P00660' })
@@ -785,6 +895,7 @@ window.Pages['export-documentation'] = (() => {
       _editingId = null;
       _form = _blankForm();
       _items = [_blankItem()];
+      _plSelected = '';
       _loaded = false;
       _q = payload.invoiceNo;
       _view = 'list';
@@ -895,14 +1006,31 @@ window.Pages['export-documentation'] = (() => {
           _refreshItemsDerived();
           return;
         }
+        if (e.target.id === 'ed-pl-load') {
+          const sel = document.getElementById('ed-pl-select');
+          const plNo = sel ? sel.value : '';
+          if (!plNo) { Utils.showToast('Pick a packing list first', 'warning'); return; }
+          const pl = (_plList || []).find(p => p.plNo === plNo);
+          if (pl) _applyPL(pl);
+          return;
+        }
         if (e.target.id === 'ed-cancel-edit') {
           _editingId = null;
           _form = _blankForm();
           _items = [_blankItem()];
+          _plSelected = '';
           _view = 'list';
           render();
         }
       });
+
+      // Remember the dropdown choice across the partial re-renders the item
+      // table does on every keystroke.
+      form.addEventListener('change', (e) => {
+        if (e.target.id === 'ed-pl-select') _plSelected = e.target.value;
+      });
+
+      if (!_editingId) _loadPLs();
     }
 
     // List interactions — delegated on the page wrapper so they survive the
