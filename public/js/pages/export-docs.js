@@ -543,6 +543,7 @@ window.Pages['export-documentation'] = (() => {
               + '<button type="button" class="ed-doc-btn" data-id="' + esc(r.id) + '" data-doc="all" style="padding:5px 10px;border:none;border-radius:7px;background:var(--color-primary);color:#fff;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">⬇ All Documents</button>'
               + _DOCS.map(([k, l]) => docBtn(r.id, k, l)).join('')
               + _STATIC_DOCS.map(([href, l]) => '<a href="' + esc(href) + '" target="_blank" rel="noopener" style="padding:5px 9px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;color:#475569;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;text-decoration:none;">' + esc(l) + '</a>').join('')
+              + (d._driveFolder ? '<a href="' + esc(d._driveFolder) + '" target="_blank" rel="noopener" style="padding:5px 9px;border:1px solid #bbf7d0;border-radius:7px;background:#f0fdf4;color:#15803d;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;text-decoration:none;">📁 Drive</a>' : '')
             + '</div></td>'
             + '<td style="padding:8px 10px;white-space:nowrap;">'
               + (canAdd ? '<button type="button" class="ed-edit-btn" data-id="' + esc(r.id) + '" style="padding:5px 10px;border:1px solid #e2e8f0;border-radius:7px;background:#fff;color:#475569;font-size:11px;font-weight:700;cursor:pointer;">Edit</button>' : '')
@@ -904,11 +905,13 @@ window.Pages['export-documentation'] = (() => {
     _openPrint(title, fn(d));
   }
 
-  /* ── Download all — one click, one ZIP ────────────────────────────────────
+  /* ── Download all — direct PDFs + Google Drive ────────────────────────────
      Renders each generated document to a real PDF in the browser (html2pdf =
-     html2canvas + jsPDF, loaded from cdnjs on first use), adds the two filed
-     LUT PDFs as they are, and hands the lot over as a single
-     "Export Documents <invoice>.zip" — no print dialog involved. */
+     html2canvas + jsPDF, loaded from cdnjs on first use). Every PDF downloads
+     straight to the Downloads folder AND is posted to the server, which files
+     it under Export Documents/<invoice no>/ on the company's Shared Drive.
+     The two filed LUT PDFs download alongside and are copied into the same
+     Drive folder by the server. */
   function _loadScript(src) {
     return new Promise((resolve, reject) => {
       const s = document.createElement('script');
@@ -920,13 +923,30 @@ window.Pages['export-documentation'] = (() => {
   }
   async function _ensurePdfLibs() {
     if (!window.html2pdf) await _loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js');
-    if (!window.JSZip) await _loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
   }
 
-  let _zipBusy = false;
+  function _dataUriToBlob(uri) {
+    const b64 = uri.slice(uri.indexOf(';base64,') + 8);
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: 'application/pdf' });
+  }
+
+  function _downloadBlob(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+  }
+
+  let _allBusy = false;
   async function _downloadAll(rec, btn) {
-    if (_zipBusy) return;
-    _zipBusy = true;
+    if (_allBusy) return;
+    _allBusy = true;
     const btnLabel = btn ? btn.textContent : '';
     const setBtn = (t) => { if (btn) btn.textContent = t; };
     let d = {};
@@ -938,10 +958,11 @@ window.Pages['export-documentation'] = (() => {
     const holder = document.createElement('div');
     holder.style.cssText = 'position:absolute;left:-10000px;top:0;width:800px;background:#fff;font-family:Arial,Helvetica,sans-serif;font-size:11.5px;color:#000;';
     document.body.appendChild(holder);
+    let driveError = '';
+    let folderLink = '';
     try {
       setBtn('Preparing…');
       await _ensurePdfLibs();
-      const zip = new window.JSZip();
       const docs = [
         ['Custom Invoice', _docInvoice],
         ['Packing List', _docPacking],
@@ -951,12 +972,12 @@ window.Pages['export-documentation'] = (() => {
       ];
       for (let i = 0; i < docs.length; i++) {
         const [name, fn] = docs[i];
-        setBtn('Generating ' + (i + 1) + '/' + docs.length + '…');
+        setBtn((i + 1) + '/' + docs.length + ' ' + name + '…');
         holder.innerHTML = '<style>' + _DOC_CSS + '</style><div class="sheet" style="padding:10px;">' + fn(d) + '</div>';
         // The letterhead image must be painted before the canvas snapshot.
         await Promise.all([...holder.querySelectorAll('img')].map(img =>
           (img.complete ? Promise.resolve() : new Promise(r => { img.onload = img.onerror = r; }))));
-        const buf = await window.html2pdf()
+        let dataUri = await window.html2pdf()
           .set({
             margin: 8,
             jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
@@ -964,30 +985,63 @@ window.Pages['export-documentation'] = (() => {
             pagebreak: { mode: ['css', 'legacy'] },
           })
           .from(holder)
-          .outputPdf('arraybuffer');
-        zip.file(name + ' ' + safeInv + '.pdf', buf);
+          .outputPdf('datauristring');
+        // jsPDF emits "data:application/pdf;filename=generated.pdf;base64,…" —
+        // strip the filename param so the server's data-URL parser accepts it.
+        dataUri = dataUri.replace(/^data:application\/pdf;filename=[^;]*;base64,/, 'data:application/pdf;base64,');
+        const fname = name + ' ' + safeInv + '.pdf';
+        _downloadBlob(_dataUriToBlob(dataUri), fname);
+        if (!driveError) {
+          try {
+            const r = await Utils.apiFetch('/api/export-docs/' + encodeURIComponent(rec.id) + '/drive', {
+              method: 'POST',
+              body: JSON.stringify({ name: fname, dataUrl: dataUri }),
+            });
+            if (r?.folderLink) folderLink = r.folderLink;
+          } catch (e) {
+            driveError = e.message || 'Drive save failed';
+          }
+        }
       }
-      setBtn('Adding LUT…');
-      for (const [href, name] of [['/export-lut-rfd11.pdf', 'LUT RFD-11'], ['/export-lut-ack.pdf', 'LUT Acknowledgement']]) {
-        const res = await fetch(href);
-        if (res.ok) zip.file(name + '.pdf', await res.arrayBuffer());
+      // The filed LUT PDFs: straight downloads here, copied into the same
+      // Drive folder by the server.
+      setBtn('LUT PDFs…');
+      for (const [href, name] of [['/export-lut-rfd11.pdf', 'LUT RFD-11.pdf'], ['/export-lut-ack.pdf', 'LUT Acknowledgement.pdf']]) {
+        try {
+          const res = await fetch(href);
+          if (res.ok) _downloadBlob(await res.blob(), name);
+        } catch {}
       }
-      setBtn('Zipping…');
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'Export Documents ' + safeInv + '.zip';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
-      Utils.showToast('All documents downloaded — Export Documents ' + safeInv + '.zip', 'success');
+      if (!driveError) {
+        try {
+          setBtn('Saving to Drive…');
+          const r = await Utils.apiFetch('/api/export-docs/' + encodeURIComponent(rec.id) + '/drive', {
+            method: 'POST',
+            body: JSON.stringify({ includeLut: true }),
+          });
+          if (r?.folderLink) folderLink = r.folderLink;
+        } catch (e) {
+          driveError = e.message || 'Drive save failed';
+        }
+      }
+
+      if (driveError) {
+        Utils.showToast('All 7 PDFs downloaded. Drive save failed: ' + driveError, 'warning');
+      } else {
+        Utils.showToast('All 7 PDFs downloaded and saved to Google Drive', 'success');
+        // The record now carries the Drive folder link — refresh the row so
+        // the Drive button appears.
+        if (folderLink) {
+          try { const nd = JSON.parse(rec.data || '{}'); nd._driveFolder = folderLink; rec.data = JSON.stringify(nd); } catch {}
+          render();
+        }
+      }
     } catch (e) {
       Utils.showToast(e.message || 'Failed to generate the documents', 'error');
     } finally {
       holder.remove();
       setBtn(btnLabel || '⬇ All Documents');
-      _zipBusy = false;
+      _allBusy = false;
     }
   }
 

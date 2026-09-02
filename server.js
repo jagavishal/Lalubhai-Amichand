@@ -7147,6 +7147,138 @@ app.put('/api/export-docs/:id', requireAuth, async (req, res) => {
   }
 });
 
+// ── Export Documentation → Drive ─────────────────────────────────────────────
+// The browser generates each document as a real PDF and posts it here one at a
+// time; the server files them under Export Documents/<invoice no>/ on the same
+// Shared Drive as the PR/PO/GRN PDFs (a service account has no storage quota of
+// its own, so a plain "My Drive" folder rejects every upload). Re-posting a
+// name OVERWRITES the existing file, so regenerating a shipment's documents
+// never litters the folder with duplicates.
+const EXPORT_DOCS_DRIVE_FOLDER_NAME = 'Export Documents';
+let _exportDocsDriveFolderId = null;
+
+async function ensureExportDocsDriveFolder(drive) {
+  if (_exportDocsDriveFolderId) return _exportDocsDriveFolderId;
+  const override = process.env.EXPORT_DOCS_DRIVE_FOLDER_ID?.trim();
+  if (override) { _exportDocsDriveFolderId = override; return _exportDocsDriveFolderId; }
+  const found = await drive.files.list({
+    q: `name = '${EXPORT_DOCS_DRIVE_FOLDER_NAME}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    corpora: 'drive', driveId: PHOTO_SHARED_DRIVE_ID,
+    includeItemsFromAllDrives: true, supportsAllDrives: true,
+    fields: 'files(id,name)', pageSize: 1,
+  });
+  if (found.data.files?.length) { _exportDocsDriveFolderId = found.data.files[0].id; return _exportDocsDriveFolderId; }
+  const created = await drive.files.create({
+    requestBody: { name: EXPORT_DOCS_DRIVE_FOLDER_NAME, mimeType: 'application/vnd.google-apps.folder', parents: [PHOTO_SHARED_DRIVE_ID] },
+    fields: 'id', supportsAllDrives: true,
+  });
+  _exportDocsDriveFolderId = created.data.id;
+  console.log('[export-docs] created Drive folder', EXPORT_DOCS_DRIVE_FOLDER_NAME, _exportDocsDriveFolderId);
+  return _exportDocsDriveFolderId;
+}
+
+// Names go into Drive queries in single quotes, so quotes (and the characters
+// no filesystem wants anyway) are stripped rather than escaped.
+function _exportDocsSafeName(name, fallback) {
+  return String(name || '').replace(/[\\/:*?"<>|']+/g, '-').trim() || fallback;
+}
+
+async function _exportDocsShipmentFolder(drive, invoiceNo) {
+  const parentId = await ensureExportDocsDriveFolder(drive);
+  const safe = _exportDocsSafeName(invoiceNo, 'shipment');
+  const found = await drive.files.list({
+    q: `name = '${safe}' and mimeType = 'application/vnd.google-apps.folder' and '${parentId}' in parents and trashed = false`,
+    corpora: 'drive', driveId: PHOTO_SHARED_DRIVE_ID,
+    includeItemsFromAllDrives: true, supportsAllDrives: true,
+    fields: 'files(id)', pageSize: 1,
+  });
+  if (found.data.files?.length) return found.data.files[0].id;
+  const created = await drive.files.create({
+    requestBody: { name: safe, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
+    fields: 'id', supportsAllDrives: true,
+  });
+  return created.data.id;
+}
+
+async function _exportDocsPutPdf(drive, folderId, name, buffer) {
+  const safeName = _exportDocsSafeName(name, 'document.pdf');
+  const found = await drive.files.list({
+    q: `name = '${safeName}' and '${folderId}' in parents and trashed = false`,
+    corpora: 'drive', driveId: PHOTO_SHARED_DRIVE_ID,
+    includeItemsFromAllDrives: true, supportsAllDrives: true,
+    fields: 'files(id,webViewLink)', pageSize: 1,
+  });
+  if (found.data.files?.length) {
+    const f = found.data.files[0];
+    await drive.files.update({
+      fileId: f.id,
+      media: { mimeType: 'application/pdf', body: Readable.from(buffer) },
+      supportsAllDrives: true,
+    });
+    return f.webViewLink;
+  }
+  const file = await drive.files.create({
+    requestBody: { name: safeName, parents: [folderId] },
+    media: { mimeType: 'application/pdf', body: Readable.from(buffer) },
+    fields: 'id,webViewLink', supportsAllDrives: true,
+  });
+  await drive.permissions.create({
+    fileId: file.data.id, requestBody: { role: 'reader', type: 'anyone' }, supportsAllDrives: true,
+  }).catch(e => console.error('[export-docs] share failed:', e.message));
+  return file.data.webViewLink;
+}
+
+// POST /api/export-docs/:id/drive — one generated PDF per call ({name,
+// dataUrl}), and/or {includeLut: true} to copy the filed LUT PDFs from
+// public/ into the same folder. Every call answers with the folder link, which
+// is also stamped into the record's data so the list can show a Drive button.
+app.post('/api/export-docs/:id/drive', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const allowed = await userCanUseFeature(req.session.user, 'export-documentation', 'add');
+    if (!allowed) return res.status(403).json({ error: 'You do not have permission to save export documentation' });
+    const rows = await q('SELECT * FROM export_shipments WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'Shipment not found' });
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Drive is not configured on this server' });
+    const { google } = require('googleapis');
+    const drive = google.drive({ version: 'v3', auth });
+    const folderId = await _exportDocsShipmentFolder(drive, rows[0].invoice_no);
+    const folderLink = 'https://drive.google.com/drive/folders/' + folderId;
+
+    const links = {};
+    const { name, dataUrl, includeLut } = req.body || {};
+    if (name && dataUrl) {
+      const parsed = _parseAnyDataUrl(dataUrl);
+      if (!parsed || parsed.mimeType !== 'application/pdf') return res.status(400).json({ error: 'Only PDF uploads are accepted' });
+      links[name] = await _exportDocsPutPdf(drive, folderId, name, parsed.buffer);
+    }
+    if (includeLut) {
+      const fs = require('fs');
+      for (const [file, lutName] of [['export-lut-rfd11.pdf', 'LUT RFD-11.pdf'], ['export-lut-ack.pdf', 'LUT Acknowledgement.pdf']]) {
+        try {
+          const buf = fs.readFileSync(path.join(__dirname, 'public', file));
+          links[lutName] = await _exportDocsPutPdf(drive, folderId, lutName, buf);
+        } catch (e) {
+          console.error('[export-docs] LUT copy failed:', e.message);
+        }
+      }
+    }
+
+    let data = {};
+    try { data = JSON.parse(rows[0].data || '{}'); } catch {}
+    data._driveFolder = folderLink;
+    data._driveLinks = Object.assign({}, data._driveLinks, links);
+    await pool.query('UPDATE export_shipments SET data=$1, updated_at=NOW() WHERE id=$2', [JSON.stringify(data), req.params.id]);
+
+    return res.json({ folderLink, links });
+  } catch (e) {
+    console.error('[export-docs] drive save failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // DELETE /api/export-docs?id=... — owner-only, same rule as every other module.
 app.delete('/api/export-docs', requireAuth, requireSuperAdmin, async (req, res) => {
   try {
