@@ -498,6 +498,15 @@ window.Pages['export-documentation'] = (() => {
     ['vgm', 'VGM'],
   ];
 
+  // The LUT paperwork itself — FORM GST RFD-11 and its portal acknowledgement.
+  // Filed once per financial year on the GST portal, so these are the filed
+  // PDFs served as-is (public/export-lut-*.pdf); replace both files when the
+  // new year's LUT is filed. They ride along with every shipment's documents.
+  const _STATIC_DOCS = [
+    ['/export-lut-rfd11.pdf', 'LUT (RFD-11)'],
+    ['/export-lut-ack.pdf', 'LUT Ack.'],
+  ];
+
   function _tableHtml() {
     const rows = _filtered();
     const owner = Utils.isOwner();
@@ -519,7 +528,10 @@ window.Pages['export-documentation'] = (() => {
             + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;">' + esc(r.consignee_name) + '</td>'
             + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;text-align:right;">' + esc(totals.cartons ?? '') + '</td>'
             + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;text-align:right;white-space:nowrap;">' + esc(totals.cf ?? '') + '</td>'
-            + '<td style="padding:6px 10px;"><div style="display:flex;gap:5px;flex-wrap:wrap;">' + _DOCS.map(([k, l]) => docBtn(r.id, k, l)).join('') + '</div></td>'
+            + '<td style="padding:6px 10px;"><div style="display:flex;gap:5px;flex-wrap:wrap;">'
+              + _DOCS.map(([k, l]) => docBtn(r.id, k, l)).join('')
+              + _STATIC_DOCS.map(([href, l]) => '<a href="' + esc(href) + '" target="_blank" rel="noopener" style="padding:5px 9px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;color:#475569;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;text-decoration:none;">' + esc(l) + '</a>').join('')
+            + '</div></td>'
             + '<td style="padding:8px 10px;white-space:nowrap;">'
               + (canAdd ? '<button type="button" class="ed-edit-btn" data-id="' + esc(r.id) + '" style="padding:5px 10px;border:1px solid #e2e8f0;border-radius:7px;background:#fff;color:#475569;font-size:11px;font-weight:700;cursor:pointer;">Edit</button>' : '')
               + (owner ? ' <button type="button" class="ed-delete-btn" data-id="' + esc(r.id) + '" data-name="' + esc(r.invoice_no) + '" style="padding:5px 10px;border:1px solid #fecaca;border-radius:7px;background:#fef2f2;color:#dc2626;font-size:11px;font-weight:700;cursor:pointer;">Delete</button>' : '')
