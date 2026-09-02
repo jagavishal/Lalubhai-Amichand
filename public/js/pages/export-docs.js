@@ -580,19 +580,24 @@ window.Pages['export-documentation'] = (() => {
     return c;
   }
 
-  const _PRINT_CSS = `
-    * { box-sizing: border-box; }
+  // Core document styles — shared by the print window and the off-screen
+  // renderer behind "All Documents". Deliberately free of body/@page rules so
+  // injecting it into the app page (the renderer does) restyles nothing there.
+  const _DOC_CSS = `
+    .sheet, .sheet * { box-sizing: border-box; }
+    .sheet { max-width: 780px; margin: 0 auto; font-family: Arial, Helvetica, sans-serif; font-size: 11.5px; color: #000; }
+    .sheet table.grid { width: 100%; border-collapse: collapse; }
+    .sheet table.grid th, .sheet table.grid td { border: 1px solid #000; padding: 3px 5px; vertical-align: top; }
+    .sheet table.plain td { border: none; padding: 2px 4px; vertical-align: top; }
+    .sheet .b { font-weight: bold; }
+    .sheet .c { text-align: center; }
+    .sheet .r { text-align: right; }
+    .sheet .sm { font-size: 10.5px; }
+    .sheet .title { text-align: center; font-weight: bold; font-size: 15px; margin: 0 0 8px; }
+    .sheet .nb { border: none !important; }
+  `;
+  const _PRINT_CSS = _DOC_CSS + `
     body { font-family: Arial, Helvetica, sans-serif; font-size: 11.5px; color: #000; margin: 0; padding: 24px; background:#fff; }
-    .sheet { max-width: 780px; margin: 0 auto; }
-    table.grid { width: 100%; border-collapse: collapse; }
-    table.grid th, table.grid td { border: 1px solid #000; padding: 3px 5px; vertical-align: top; }
-    table.plain td { border: none; padding: 2px 4px; vertical-align: top; }
-    .b { font-weight: bold; }
-    .c { text-align: center; }
-    .r { text-align: right; }
-    .sm { font-size: 10.5px; }
-    .title { text-align: center; font-weight: bold; font-size: 15px; margin: 0 0 8px; }
-    .nb { border: none !important; }
     .print-btn { position: fixed; top: 12px; right: 12px; padding: 9px 18px; background: #0150AA; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
     @media print { .print-btn { display: none; } body { padding: 0; } }
     @page { size: A4; margin: 12mm; }
@@ -883,22 +888,11 @@ window.Pages['export-documentation'] = (() => {
       + _signBlock('For ' + COMPANY.name);
   }
 
-  // Every generated document in one window, each on its own A4 page — so one
-  // Print / Save PDF gives the whole set as a single file. The two LUT PDFs
-  // are already-filed files and stay as their own downloads beside it.
-  function _docAll(d) {
-    const parts = [_docInvoice(d), _docPacking(d), _docAnnexure(d), _docDbk(d), _docVgm(d)];
-    return parts.map((p, i) =>
-      '<div style="' + (i < parts.length - 1 ? 'page-break-after:always;' : '') + '">' + p + '</div>'
-    ).join('');
-  }
-
   function _openDoc(docKey, rec) {
     let d = {};
     try { d = JSON.parse(rec.data || '{}'); } catch {}
     const invNo = d.invoiceNo || rec.invoice_no || '';
     const map = {
-      all:      ['Export Documents ' + invNo, _docAll],
       invoice:  ['Custom Invoice ' + invNo, _docInvoice],
       packing:  ['Packing List ' + invNo, _docPacking],
       annexure: ['Annexure ' + invNo, _docAnnexure],
@@ -908,6 +902,93 @@ window.Pages['export-documentation'] = (() => {
     const [title, fn] = map[docKey] || [];
     if (!fn) return;
     _openPrint(title, fn(d));
+  }
+
+  /* ── Download all — one click, one ZIP ────────────────────────────────────
+     Renders each generated document to a real PDF in the browser (html2pdf =
+     html2canvas + jsPDF, loaded from cdnjs on first use), adds the two filed
+     LUT PDFs as they are, and hands the lot over as a single
+     "Export Documents <invoice>.zip" — no print dialog involved. */
+  function _loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('Could not load ' + src + ' — check the internet connection'));
+      document.head.appendChild(s);
+    });
+  }
+  async function _ensurePdfLibs() {
+    if (!window.html2pdf) await _loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js');
+    if (!window.JSZip) await _loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+  }
+
+  let _zipBusy = false;
+  async function _downloadAll(rec, btn) {
+    if (_zipBusy) return;
+    _zipBusy = true;
+    const btnLabel = btn ? btn.textContent : '';
+    const setBtn = (t) => { if (btn) btn.textContent = t; };
+    let d = {};
+    try { d = JSON.parse(rec.data || '{}'); } catch {}
+    const invNo = d.invoiceNo || rec.invoice_no || '';
+    const safeInv = String(invNo).replace(/[\\/:*?"<>|]+/g, '-').trim() || 'shipment';
+
+    // Rendered off-screen (not display:none — html2canvas needs layout).
+    const holder = document.createElement('div');
+    holder.style.cssText = 'position:absolute;left:-10000px;top:0;width:800px;background:#fff;font-family:Arial,Helvetica,sans-serif;font-size:11.5px;color:#000;';
+    document.body.appendChild(holder);
+    try {
+      setBtn('Preparing…');
+      await _ensurePdfLibs();
+      const zip = new window.JSZip();
+      const docs = [
+        ['Custom Invoice', _docInvoice],
+        ['Packing List', _docPacking],
+        ['Annexure', _docAnnexure],
+        ['DBK Declaration', _docDbk],
+        ['VGM', _docVgm],
+      ];
+      for (let i = 0; i < docs.length; i++) {
+        const [name, fn] = docs[i];
+        setBtn('Generating ' + (i + 1) + '/' + docs.length + '…');
+        holder.innerHTML = '<style>' + _DOC_CSS + '</style><div class="sheet" style="padding:10px;">' + fn(d) + '</div>';
+        // The letterhead image must be painted before the canvas snapshot.
+        await Promise.all([...holder.querySelectorAll('img')].map(img =>
+          (img.complete ? Promise.resolve() : new Promise(r => { img.onload = img.onerror = r; }))));
+        const buf = await window.html2pdf()
+          .set({
+            margin: 8,
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            html2canvas: { scale: 2, backgroundColor: '#ffffff' },
+            pagebreak: { mode: ['css', 'legacy'] },
+          })
+          .from(holder)
+          .outputPdf('arraybuffer');
+        zip.file(name + ' ' + safeInv + '.pdf', buf);
+      }
+      setBtn('Adding LUT…');
+      for (const [href, name] of [['/export-lut-rfd11.pdf', 'LUT RFD-11'], ['/export-lut-ack.pdf', 'LUT Acknowledgement']]) {
+        const res = await fetch(href);
+        if (res.ok) zip.file(name + '.pdf', await res.arrayBuffer());
+      }
+      setBtn('Zipping…');
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'Export Documents ' + safeInv + '.zip';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+      Utils.showToast('All documents downloaded — Export Documents ' + safeInv + '.zip', 'success');
+    } catch (e) {
+      Utils.showToast(e.message || 'Failed to generate the documents', 'error');
+    } finally {
+      holder.remove();
+      setBtn(btnLabel || '⬇ All Documents');
+      _zipBusy = false;
+    }
   }
 
   /* ── save ─────────────────────────────────────────────────────────────── */
@@ -1106,7 +1187,9 @@ window.Pages['export-documentation'] = (() => {
         const docBtn = e.target.closest('.ed-doc-btn');
         if (docBtn) {
           const rec = _rows.find(r => r.id === docBtn.dataset.id);
-          if (rec) _openDoc(docBtn.dataset.doc, rec);
+          if (!rec) return;
+          if (docBtn.dataset.doc === 'all') _downloadAll(rec, docBtn);
+          else _openDoc(docBtn.dataset.doc, rec);
           return;
         }
         const editBtn = e.target.closest('.ed-edit-btn');
