@@ -45,7 +45,8 @@ window.Pages['grn-creation'] = (() => {
   }
 
   /* ── Masters (vendors / next GR number) ────────────────────────────── */
-  async function _loadMasters() {
+  async function _loadMasters(attempt) {
+    attempt = attempt || 0;
     try {
       const data = await Utils.apiFetch('/api/grn-creation/masters');
       if (!data) return;
@@ -55,7 +56,17 @@ window.Pages['grn-creation'] = (() => {
       const el = document.getElementById('grnc-next-no');
       if (el) el.textContent = _nextGrNumber != null ? ('#' + _nextGrNumber) : '—';
     } catch (e) {
+      // A failed fetch used to strand GR NO on "Loading…" for good (the
+      // sheet-side read quota can be exhausted for a minute at a time) —
+      // retry a couple of times, then offer a click-to-retry.
+      if (attempt < 2) { setTimeout(() => _loadMasters(attempt + 1), (attempt + 1) * 5000); return; }
       Utils.showToast(e.message || 'Failed to load GRN masters', 'error');
+      const el = document.getElementById('grnc-next-no');
+      if (el) {
+        el.textContent = 'Couldn\'t load — click to retry';
+        el.style.cursor = 'pointer';
+        el.onclick = () => { el.onclick = null; el.style.cursor = ''; el.textContent = 'Loading…'; _loadMasters(); };
+      }
     }
   }
 
@@ -92,8 +103,8 @@ window.Pages['grn-creation'] = (() => {
   function _fillPoIntoForm(po) {
     const poInput = document.getElementById('grnc-po-no');
     if (poInput) poInput.value = po.poNo;
-    const prDisplay = document.getElementById('grnc-pr-no');
-    if (prDisplay) prDisplay.textContent = po.prNo || '—';
+    const prInput = document.getElementById('grnc-pr-no');
+    if (prInput && po.prNo) prInput.value = po.prNo;
     const vendorInput = document.getElementById('grnc-vendor');
     if (vendorInput && po.vendorName) vendorInput.value = po.vendorName;
 
@@ -146,6 +157,20 @@ window.Pages['grn-creation'] = (() => {
       dd.style.display = 'none';
       const po = _poList.find(p => String(p.poNo) === opt.dataset.po);
       if (po) _fillPoIntoForm(po); else input.value = opt.dataset.po;
+    });
+    // A PO number typed by hand (never picked from the dropdown) should still
+    // pull its PR No / vendor across — but only into fields still empty, so a
+    // blur never overwrites something the user already typed. "PO047"/"47"
+    // both match the same PO.
+    input.addEventListener('blur', () => {
+      const typedKey = input.value.trim().replace(/\D/g, '').replace(/^0+/, '');
+      if (!typedKey) return;
+      const po = _poList.find(p => String(p.poNo).replace(/\D/g, '').replace(/^0+/, '') === typedKey);
+      if (!po) return;
+      const prInput = document.getElementById('grnc-pr-no');
+      if (prInput && !prInput.value.trim() && po.prNo) prInput.value = po.prNo;
+      const vendorInput = document.getElementById('grnc-vendor');
+      if (vendorInput && !vendorInput.value.trim() && po.vendorName) vendorInput.value = po.vendorName;
     });
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
   }
@@ -466,8 +491,12 @@ window.Pages['grn-creation'] = (() => {
       + _textField('grnc-date', 'Date of Making GRN', { type: 'date', value: _today() })
       + _readonlyField('grnc-next-no', 'GR NO. (auto-assigned)', _nextGrNumber != null ? ('#' + _nextGrNumber) : 'Loading…')
       + _textField('grnc-made-by', 'Made By', { value: (window.currentUser && window.currentUser.name) || '' })
+      // Editable, not read-only: it auto-fills when a PO is picked (a PO
+      // carries the PR it was raised against), but plenty of POs were logged
+      // without a PR No — the store team must be able to type it in ("GRN
+      // creation me PR no. add nai ho raha he").
       + _poNoField()
-      + _readonlyField('grnc-pr-no', 'PR No.', '—')
+      + _textField('grnc-pr-no', 'PR No.', { placeholder: 'Auto-fills from PO, or type…' })
       + _vendorField()
       + _textField('grnc-bill-no', 'Bill No')
       + _textField('grnc-bill-recv-date', 'Bill Recv. Date', { type: 'date' })
@@ -508,8 +537,7 @@ window.Pages['grn-creation'] = (() => {
     const date = document.getElementById('grnc-date').value;
     const madeBy = document.getElementById('grnc-made-by').value.trim();
     const poNo = document.getElementById('grnc-po-no').value.trim();
-    const prNoText = document.getElementById('grnc-pr-no').textContent.trim();
-    const prNo = prNoText === '—' ? '' : prNoText;
+    const prNo = document.getElementById('grnc-pr-no').value.trim();
     const vendorName = document.getElementById('grnc-vendor').value.trim();
     const billNo = document.getElementById('grnc-bill-no').value.trim();
     const billRecvDate = document.getElementById('grnc-bill-recv-date').value;

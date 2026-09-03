@@ -190,7 +190,8 @@ window.Pages['pr-creation'] = (() => {
   }
 
   /* ── Masters (vendors / next PR number) ────────────────────────────────── */
-  async function _loadMasters() {
+  async function _loadMasters(attempt) {
+    attempt = attempt || 0;
     try {
       const data = await Utils.apiFetch('/api/pr-creation/masters');
       if (!data) return;
@@ -205,7 +206,17 @@ window.Pages['pr-creation'] = (() => {
       const deptSel = document.getElementById('pcr-department');
       if (deptSel) Utils.fillDeptSelect(deptSel, null, { extra: PR_DEPARTMENT_EXTRAS });
     } catch (e) {
+      // A failed fetch used to strand PR NO on "Loading…" for good (the
+      // sheet-side read quota can be exhausted for a minute at a time) —
+      // retry a couple of times, then offer a click-to-retry.
+      if (attempt < 2) { setTimeout(() => _loadMasters(attempt + 1), (attempt + 1) * 5000); return; }
       Utils.showToast(e.message || 'Failed to load PR masters', 'error');
+      const el = document.getElementById('pcr-next-no');
+      if (el) {
+        el.textContent = 'Couldn\'t load — click to retry';
+        el.style.cursor = 'pointer';
+        el.onclick = () => { el.onclick = null; el.style.cursor = ''; el.textContent = 'Loading…'; _loadMasters(); };
+      }
     }
   }
 

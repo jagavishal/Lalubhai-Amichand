@@ -51,6 +51,17 @@ window.Utils = {
       e.preventDefault();
       if (onEnterInput) onEnterInput(e.target);
     });
+    // Belt and braces: even if a submit event fires some other way (a browser
+    // path the keydown guard doesn't cover, an extension, autofill), only a
+    // submission actually triggered by the form's own submit BUTTON is allowed
+    // through to the page's submit handler. Capture phase so this runs before
+    // the page handler; skipped on browsers too old to report e.submitter.
+    form.addEventListener('submit', (e) => {
+      if (!('submitter' in e)) return;
+      if (e.submitter && e.submitter.type === 'submit') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }, true);
   },
 
   /* ── Toast notification ─────────────────────────────────────────── */

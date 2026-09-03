@@ -1005,6 +1005,57 @@ function sheetSerialised(key, timeoutMs = 120000) {
   }));
 }
 
+/* ── Duplicate-submission guard for the document creates ─────────────────────
+   A PR/PO/GRN create takes long enough (multi-call Sheets write + recalc pause
+   + PDF export) that the browser can give up ("Request timed out") while the
+   server-side create is still finishing fine. The user then re-submits the
+   exact same form and a SECOND document gets created — same content, next
+   number. Remember each successful create's fingerprint (who + what) for a few
+   minutes; an identical create arriving inside that window gets the FIRST
+   create's own result back instead of a new document. */
+const _recentCreates = new Map(); // fingerprint -> { at, result }
+const RECENT_CREATE_TTL_MS = 5 * 60 * 1000;
+
+function _createFingerprint(kind, req, payload) {
+  return kind + '|' + (req.session?.user?.id || '') + '|' + JSON.stringify(payload);
+}
+function _recentCreateResult(fingerprint) {
+  const hit = _recentCreates.get(fingerprint);
+  if (!hit) return null;
+  if (Date.now() - hit.at > RECENT_CREATE_TTL_MS) { _recentCreates.delete(fingerprint); return null; }
+  return hit.result;
+}
+function _rememberCreate(fingerprint, result) {
+  _recentCreates.set(fingerprint, { at: Date.now(), result });
+  // Keep the map from growing without bound — anything expired can go.
+  if (_recentCreates.size > 200) {
+    const cutoff = Date.now() - RECENT_CREATE_TTL_MS;
+    for (const [k, v] of _recentCreates) if (v.at < cutoff) _recentCreates.delete(k);
+  }
+}
+
+/* ── Masters cache (short TTL, stale-on-error) ───────────────────────────────
+   Every PR/PO/GRN form open costs 3-4 live Sheets reads, and the shared
+   service account has a per-minute read quota — a busy morning blows through
+   it and the masters endpoints start failing with quota errors, which the
+   pages showed as fields stuck on "Loading…" and an empty item picker. A
+   short cache absorbs repeat opens, and a failed refresh serves the last
+   good copy instead of an error. Creates invalidate their module's entry so
+   the "next number" display catches up immediately. */
+const _mastersCache = new Map(); // key -> { at, payload }
+async function withMastersCache(key, ttlMs, fetcher) {
+  const hit = _mastersCache.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.payload;
+  try {
+    const payload = await fetcher();
+    _mastersCache.set(key, { at: Date.now(), payload });
+    return payload;
+  } catch (e) {
+    if (hit) { console.error('[masters]', key, 'refresh failed — serving stale copy:', e.message); return hit.payload; }
+    throw e;
+  }
+}
+
 // ── Backup helpers ────────────────────────────────────────────────────────────
 /* TIMESTAMPTZ is a Postgres type; MySQL/MariaDB has no such thing, so this
    CREATE failed outright on the production database and dev_backups never
@@ -1469,6 +1520,61 @@ async function sendHelpTicketEmail({
   } catch (e) {
     console.error('[email] Failed to send help ticket notification:', e.message);
   }
+}
+
+/* Sent to the PO approver the moment a PO is created. The real PR→PO approval
+   chain lives in the store team's "FMS (Stores)" sheet + Apps Script, outside
+   this app — which is why a PO raised HERE never reached anyone for sign-off
+   ("PO sir k pas approval k liye nahi gya"). Until that chain moves in-app,
+   this mail is the bridge: the approver hears about every ERP-created PO
+   immediately, with the Drive PDF a click away.
+
+   Who approves is app_config key 'po_approver' (a plain name, resolved to a
+   login via userByName) so management can change it without a deploy —
+   default per the FMS's own "PO Approval" step owner. */
+const DEFAULT_PO_APPROVER = 'Sajil Shah';
+async function sendPoApprovalEmail({ poNumber, format, party, department, prNo, totalAmount, pdfLink, createdBy }) {
+  const mailer = getMailer();
+  if (!mailer) { console.log('[email] PO approval mail skipped — SMTP not configured'); return; }
+  let approverName = DEFAULT_PO_APPROVER;
+  try {
+    const rows = await q(`SELECT "value" FROM app_config WHERE "key" = 'po_approver'`);
+    const v = rows.length ? String(rows[0].value || '').trim().replace(/^"+|"+$/g, '') : '';
+    if (v) approverName = v;
+  } catch {}
+  const who = await userByName(approverName);
+  if (!who || !who.email) {
+    console.log('[email] PO approval mail skipped — no login/email found for approver:', approverName);
+    return;
+  }
+  const rupees = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && String(v).trim() !== '' ? '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '';
+  };
+  await mailer.sendMail({
+    from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+    to: who.email,
+    subject: `Approval needed — ${poNumber}${party ? ' (' + party + ')' : ''}`,
+    html: _leaveMailHtml({
+      heading: 'Purchase Order Awaiting Your Approval',
+      colour: '#0150AA',
+      lead: `Hi <b>${who.name}</b>, <b>${createdBy || 'the store team'}</b> has created a Purchase Order in the ERP. Please review it.`,
+      rows: [
+        ['PO No', poNumber],
+        ['Format', format],
+        ['Party', party],
+        ['Department', department],
+        ['Against PR', prNo],
+        ['Total', rupees(totalAmount)],
+        ['Created By', createdBy],
+      ],
+      actions: pdfLink
+        ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open PO PDF</a></td></tr></table>`
+        : '',
+      footer: 'Reply to the store team, or open <b>PO Creation → PO List</b> in the ERP to see every PO.',
+    }),
+  });
+  console.log('[email] PO approval mail sent to:', who.email, 'for', poNumber);
 }
 
 
@@ -5026,6 +5132,26 @@ function _padSeqNo(prefix, n) {
   return prefix + String(n).padStart(3, '0');
 }
 
+// Retries a Sheets read when the shared service account's per-minute read
+// quota is hit (or Google hiccups) — used for the reads that NUMBER a new
+// document. Those must either succeed or fail the request loudly: swallowing
+// the error let numbering fall back to the stale legacy-tab maximum, which is
+// exactly how two different PRs were both handed PR206 (log read failed
+// under quota pressure on 2026-09-02, next number restarted from the old
+// archive tabs' ceiling).
+async function _sheetsReadWithRetry(fn, attempts = 4) {
+  let delay = 1500;
+  for (let i = 0; ; i++) {
+    try { return await fn(); }
+    catch (e) {
+      const retriable = /quota|rate.?limit|429|503|backend error|internal error|socket|ECONNRESET|ETIMEDOUT/i.test(e.message || '');
+      if (!retriable || i >= attempts - 1) throw e;
+      await _sleep(delay);
+      delay *= 2;
+    }
+  }
+}
+
 // A few PR/PO/GRN log rows were written before the "PR047"/"PO047"-style
 // prefix existed and just hold a bare number — normalize either shape to the
 // prefixed form so display and used/pending-set comparisons never mismatch
@@ -5133,17 +5259,23 @@ async function _poSheetMeta() {
     if (m) maxPoNo = Math.max(maxPoNo, parseInt(m[1], 10));
   }
   try {
-    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    const logRes = await _sheetsReadWithRetry(() => sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' }));
     for (const row of (logRes.data.values || [])) {
-      // Older rows logged a bare integer; newer ones log "PO047" — strip any
-      // leading letters so both parse the same way.
-      const n = parseInt(String(row[0] ?? '').replace(/^[A-Za-z]+/, ''), 10);
-      if (!isNaN(n)) maxPoNo = Math.max(maxPoNo, n);
+      // Older rows logged a bare integer; newer ones log "PO047". Same
+      // damaged-cell tolerance as _prSheetMeta: a row whose No cell doesn't
+      // start with the number must still advance the sequence, or the next
+      // create reuses a number already handed out.
+      const m = /\d+/.exec(String(row[0] ?? ''));
+      if (m) maxPoNo = Math.max(maxPoNo, parseInt(m[0], 10));
     }
   } catch (e) {
     // Log tab doesn't exist yet (no PO created via the ERP so far) — fine, the
-    // legacy-tab-derived maxPoNo above is the correct floor in that case.
-    if (!/unable to parse range/i.test(e.message || '')) console.error('[po-creation] log read for numbering failed:', e.message);
+    // legacy-tab-derived maxPoNo above is the correct floor in that case. Any
+    // OTHER failure must abort, or numbering restarts from that stale floor.
+    if (!/unable to parse range/i.test(e.message || '')) {
+      console.error('[po-creation] log read for numbering failed:', e.message);
+      throw new Error('Could not read the PO log to assign the next PO number — please try again in a minute. (' + e.message + ')');
+    }
   }
   return { nextPoNo: maxPoNo + 1, sheetIdByTitle, sheetCount: meta.data.sheets.length };
 }
@@ -5157,19 +5289,22 @@ async function _poSheetMeta() {
 // data-validation list is stored and printed normally.
 app.get('/api/po-creation/masters', requireAuth, async (req, res) => {
   try {
-    const auth = getGoogleAuth();
-    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
-    const { google } = require('googleapis');
-    const sheets = google.sheets({ version: 'v4', auth });
-    const [vendorsRes, shipToRes, departments, meta] = await Promise.all([
-      sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:E200`, valueRenderOption: 'FORMATTED_VALUE' }),
-      sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!I3:I45`, valueRenderOption: 'FORMATTED_VALUE' }),
-      listDepartments(),
-      _poSheetMeta(),
-    ]);
-    const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    const shipToLocations = (shipToRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    return res.json({ vendors, shipToLocations, departments, nextPoNumber: _padSeqNo('PO', meta.nextPoNo) });
+    const payload = await withMastersCache('po', 45000, async () => {
+      const auth = getGoogleAuth();
+      if (!auth) throw new Error('Google Sheets is not configured on this server');
+      const { google } = require('googleapis');
+      const sheets = google.sheets({ version: 'v4', auth });
+      const [vendorsRes, shipToRes, departments, meta] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:E200`, valueRenderOption: 'FORMATTED_VALUE' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!I3:I45`, valueRenderOption: 'FORMATTED_VALUE' }),
+        listDepartments(),
+        _poSheetMeta(),
+      ]);
+      const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+      const shipToLocations = (shipToRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+      return { vendors, shipToLocations, departments, nextPoNumber: _padSeqNo('PO', meta.nextPoNo) };
+    });
+    return res.json(payload);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -5266,6 +5401,15 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res
     // Form JSON. Refusing is the only honest answer.
     const poCapacity = cfg.items.lastRow - cfg.items.firstRow + 1;
     if (cleanItems.length > poCapacity) return res.status(400).json({ error: `This PO format fits ${poCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one PO.` });
+
+    // Same user re-submitting the identical PO (a timed-out first attempt, a
+    // double-fired submit) gets the first create's result back, not a second PO.
+    const dupeKey = _createFingerprint('po', req, { format: req.body.format, party, items: cleanItems });
+    const prevResult = _recentCreateResult(dupeKey);
+    if (prevResult) {
+      console.log('[po-creation] duplicate submit absorbed — returning', prevResult.poNumber);
+      return res.json(prevResult);
+    }
 
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
@@ -5384,7 +5528,17 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res
       'Active',
     ]);
 
-    return res.json({ success: true, poNumber: poNoFormatted, totalAmount, pdfLink });
+    // 6) Tell the PO approver — fire-and-forget: a slow/unreachable SMTP
+    // server must never delay or fail the create itself.
+    sendPoApprovalEmail({
+      poNumber: poNoFormatted, format: tab, party, department, prNo,
+      totalAmount, pdfLink, createdBy: sessUser?.name || poMadeBy || '',
+    }).catch((e) => console.error('[po-creation] approval mail failed:', e.message));
+
+    const resultPayload = { success: true, poNumber: poNoFormatted, totalAmount, pdfLink };
+    _mastersCache.delete('po'); // so the next masters fetch shows the advanced next-number
+    _rememberCreate(dupeKey, resultPayload);
+    return res.json(resultPayload);
   } catch (e) { console.error('[po-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
 });
 
@@ -5505,6 +5659,11 @@ const PR_FORMAT_CONFIG = {
     // had to be restored). Never widen this range to include L.
     items: { firstRow: 7, lastRow: 20, clearCols: ['B', 'K'], fields: { itemCode: 'B', monthlyConsumption: 'D', qtyRequired: 'E', uom: 'F', stock: 'G', lastOrderedDate: 'H', lastUnitPrice: 'I', tax: 'J' } },
     summary: { totalCell: 'L21' },
+    // Landscape (per the store team's print feedback), pinned to A:L — the
+    // tab's GRID is 32 columns wide while the template only uses 12, and
+    // without c1/c2 fitw=true shrinks the print to a fraction of the page to
+    // fit 20 columns of empty space (same class of bug PACKING_BOX had).
+    pdf: { portrait: false, c1: 0, c2: 12 },
   },
   PACKING_STICKER: {
     tabName: 'PURCHASE REQUISITION(PACKING_STICKER)',
@@ -5537,6 +5696,10 @@ const PR_FORMAT_CONFIG = {
     header: { prNo: 'B4', requestedBy: 'C4', department: 'D4', vendorName: 'E4', termsOfPayment: 'G4', estimatedDeliveryDate: 'H4', dateRequested: 'I4' },
     items: { firstRow: 7, lastRow: 20, clearCols: ['B', 'I'], fields: { itemCode: 'B', qtyRequired: 'E', uom: 'F', tax: 'G', rate: 'H', stock: 'I' } },
     summary: { totalCell: 'H21' },
+    // Pinned to A:I — the tab's grid is 29 columns wide, template uses 9.
+    // Stays portrait (narrow enough); the pinning alone is what stops the
+    // print coming out at a third of the page width.
+    pdf: { c1: 0, c2: 9 },
   },
 };
 
@@ -5582,15 +5745,25 @@ async function _prSheetMeta() {
     if (m) maxPrNo = Math.max(maxPrNo, parseInt(m[1], 10));
   }
   try {
-    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    const logRes = await _sheetsReadWithRetry(() => sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' }));
     for (const row of (logRes.data.values || [])) {
-      // Older rows logged a bare integer; newer ones log "PR047" — strip any
-      // leading letters so both parse the same way.
-      const n = parseInt(String(row[0] ?? '').replace(/^[A-Za-z]+/, ''), 10);
-      if (!isNaN(n)) maxPrNo = Math.max(maxPrNo, n);
+      // Older rows logged a bare integer; newer ones log "PR047". A log row
+      // whose PR No cell holds anything else (hand-edited, or a value pasted
+      // into the wrong column) used to parse as NaN and be skipped — the
+      // sequence then stopped advancing past it and the NEXT create was
+      // handed a number already in use ("ek hi number do bar"). Take the
+      // first digit run wherever it sits in the cell instead.
+      const m = /\d+/.exec(String(row[0] ?? ''));
+      if (m) maxPrNo = Math.max(maxPrNo, parseInt(m[0], 10));
     }
   } catch (e) {
-    if (!/unable to parse range/i.test(e.message || '')) console.error('[pr-creation] log read for numbering failed:', e.message);
+    // Only a genuinely missing log tab may pass — the legacy-tab max above is
+    // then the correct floor. Any OTHER failure (quota, network) must abort:
+    // numbering off a partial view hands out a number already in use.
+    if (!/unable to parse range/i.test(e.message || '')) {
+      console.error('[pr-creation] log read for numbering failed:', e.message);
+      throw new Error('Could not read the PR log to assign the next PR number — please try again in a minute. (' + e.message + ')');
+    }
   }
   return { nextPrNo: maxPrNo + 1, sheetIdByTitle };
 }
@@ -5622,23 +5795,26 @@ async function _exportPrTabPdf(sourceSheetId, opts) {
 // it's formula-derived on every format except ALU, where it's a free-text field.
 app.get('/api/pr-creation/masters', requireAuth, async (req, res) => {
   try {
-    const auth = getGoogleAuth();
-    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
-    const { google } = require('googleapis');
-    const sheets = google.sheets({ version: 'v4', auth });
-    const [vendorsRes, departments, meta] = await Promise.all([
-      sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'Vendor Name'!A3:A1000`, valueRenderOption: 'FORMATTED_VALUE' }),
-      listDepartments(),
-      _prSheetMeta(),
-    ]);
-    const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    // Departments (ALU's manual Department dropdown, and the PR Form tab's own
-    // Department multi-select) come from the app's departments master — the
-    // same list every other form uses. They used to be two separate hardcoded
-    // lists in pr-creation.js, spelled differently from each other and from PO
-    // Creation's. Department is only ever a label on the PR record/log here, so
-    // it's not tied to anything structural in the sheet.
-    return res.json({ vendors, departments, nextPrNumber: _padSeqNo('PR', meta.nextPrNo) });
+    const payload = await withMastersCache('pr', 45000, async () => {
+      const auth = getGoogleAuth();
+      if (!auth) throw new Error('Google Sheets is not configured on this server');
+      const { google } = require('googleapis');
+      const sheets = google.sheets({ version: 'v4', auth });
+      const [vendorsRes, departments, meta] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'Vendor Name'!A3:A1000`, valueRenderOption: 'FORMATTED_VALUE' }),
+        listDepartments(),
+        _prSheetMeta(),
+      ]);
+      const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+      // Departments (ALU's manual Department dropdown, and the PR Form tab's own
+      // Department multi-select) come from the app's departments master — the
+      // same list every other form uses. They used to be two separate hardcoded
+      // lists in pr-creation.js, spelled differently from each other and from PO
+      // Creation's. Department is only ever a label on the PR record/log here, so
+      // it's not tied to anything structural in the sheet.
+      return { vendors, departments, nextPrNumber: _padSeqNo('PR', meta.nextPrNo) };
+    });
+    return res.json(payload);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -5719,6 +5895,15 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr'), async (req, res
     // Form JSON. Refusing is the only honest answer.
     const prCapacity = cfg.items.lastRow - cfg.items.firstRow + 1;
     if (cleanItems.length > prCapacity) return res.status(400).json({ error: `This PR format fits ${prCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one PR.` });
+
+    // Same user re-submitting the identical PR (a timed-out first attempt, a
+    // double-fired submit) gets the first create's result back, not a second PR.
+    const dupeKey = _createFingerprint('pr', req, { format: req.body.format, party, items: cleanItems });
+    const prevResult = _recentCreateResult(dupeKey);
+    if (prevResult) {
+      console.log('[pr-creation] duplicate submit absorbed — returning', prevResult.prNumber);
+      return res.json(prevResult);
+    }
 
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
@@ -5852,7 +6037,10 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr'), async (req, res
       console.log('[pr-creation] PR Form Responses sync: row appended for', prNoFormatted, '| PDF link:', pdfLink ? 'yes' : 'none');
     } catch (e) { console.error('[pr-creation] PR Form Responses sync failed:', e.message); }
 
-    return res.json({ success: true, prNumber: prNoFormatted, totalAmount, department: departmentOut, pdfLink });
+    const resultPayload = { success: true, prNumber: prNoFormatted, totalAmount, department: departmentOut, pdfLink };
+    _mastersCache.delete('pr'); // so the next masters fetch shows the advanced next-number
+    _rememberCreate(dupeKey, resultPayload);
+    return res.json(resultPayload);
   } catch (e) { console.error('[pr-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
 });
 
@@ -6231,13 +6419,20 @@ async function _grnSheetMeta() {
     if (m) maxGrNo = Math.max(maxGrNo, parseInt(m[1], 10));
   }
   try {
-    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    const logRes = await _sheetsReadWithRetry(() => sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'UNFORMATTED_VALUE' }));
     for (const row of (logRes.data.values || [])) {
-      const n = parseInt(row[0], 10);
-      if (!isNaN(n)) maxGrNo = Math.max(maxGrNo, n);
+      // Same damaged-cell tolerance as _prSheetMeta/_poSheetMeta — a GR No
+      // cell that doesn't parse cleanly must still advance the sequence.
+      const m = /\d+/.exec(String(row[0] ?? ''));
+      if (m) maxGrNo = Math.max(maxGrNo, parseInt(m[0], 10));
     }
   } catch (e) {
-    if (!/unable to parse range/i.test(e.message || '')) console.error('[grn-creation] log read for numbering failed:', e.message);
+    // Same rule as _prSheetMeta/_poSheetMeta: only a missing log tab may
+    // pass — any other failure would restart numbering from the stale floor.
+    if (!/unable to parse range/i.test(e.message || '')) {
+      console.error('[grn-creation] log read for numbering failed:', e.message);
+      throw new Error('Could not read the GRN log to assign the next GR number — please try again in a minute. (' + e.message + ')');
+    }
   }
   return { nextGrNo: maxGrNo + 1, sheetIdByTitle };
 }
@@ -6247,16 +6442,19 @@ async function _grnSheetMeta() {
 // at) and the next GR number, read live (no local mirror).
 app.get('/api/grn-creation/masters', requireAuth, async (req, res) => {
   try {
-    const auth = getGoogleAuth();
-    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
-    const { google } = require('googleapis');
-    const sheets = google.sheets({ version: 'v4', auth });
-    const [vendorsRes, meta] = await Promise.all([
-      sheets.spreadsheets.values.get({ spreadsheetId: PR_SHEET_ID, range: `'Vendor Name'!A3:A2000`, valueRenderOption: 'FORMATTED_VALUE' }),
-      _grnSheetMeta(),
-    ]);
-    const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
-    return res.json({ vendors, nextGrNumber: meta.nextGrNo });
+    const payload = await withMastersCache('grn', 45000, async () => {
+      const auth = getGoogleAuth();
+      if (!auth) throw new Error('Google Sheets is not configured on this server');
+      const { google } = require('googleapis');
+      const sheets = google.sheets({ version: 'v4', auth });
+      const [vendorsRes, meta] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId: PR_SHEET_ID, range: `'Vendor Name'!A3:A2000`, valueRenderOption: 'FORMATTED_VALUE' }),
+        _grnSheetMeta(),
+      ]);
+      const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+      return { vendors, nextGrNumber: meta.nextGrNo };
+    });
+    return res.json(payload);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -6331,6 +6529,15 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn'), async (req, r
     // Form JSON. Refusing is the only honest answer.
     const grnCapacity = GRN_ITEMS.lastRow - GRN_ITEMS.firstRow + 1;
     if (cleanItems.length > grnCapacity) return res.status(400).json({ error: `A GRN fits ${grnCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one GRN.` });
+
+    // Same user re-submitting the identical GRN (a timed-out first attempt, a
+    // double-fired submit) gets the first create's result back, not a second GRN.
+    const dupeKey = _createFingerprint('grn', req, { vendorName, poNo, items: cleanItems });
+    const prevResult = _recentCreateResult(dupeKey);
+    if (prevResult) {
+      console.log('[grn-creation] duplicate submit absorbed — returning GR', prevResult.grNumber);
+      return res.json(prevResult);
+    }
 
     const auth = getGoogleAuth();
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
@@ -6446,7 +6653,10 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn'), async (req, r
       'Active',
     ]);
 
-    return res.json({ success: true, grNumber: nextGrNo, subtotal, totalAmount, pdfLink });
+    const resultPayload = { success: true, grNumber: nextGrNo, subtotal, totalAmount, pdfLink };
+    _mastersCache.delete('grn'); // so the next masters fetch shows the advanced next-number
+    _rememberCreate(dupeKey, resultPayload);
+    return res.json(resultPayload);
   } catch (e) { console.error('[grn-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
 });
 

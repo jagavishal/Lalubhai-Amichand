@@ -197,7 +197,8 @@ window.Pages['po-creation'] = (() => {
   }
 
   /* ── Masters (vendors / ship-to / departments / next PO number) ───────── */
-  async function _loadMasters() {
+  async function _loadMasters(attempt) {
+    attempt = attempt || 0;
     try {
       const data = await Utils.apiFetch('/api/po-creation/masters');
       if (!data) return;
@@ -220,7 +221,17 @@ window.Pages['po-creation'] = (() => {
         Utils.bindDeptSelect(deptSel);
       }
     } catch (e) {
+      // A failed fetch used to strand P.O. NO / Ship To on "Loading…" for
+      // good (the sheet-side read quota can be exhausted for a minute at a
+      // time) — retry a couple of times, then offer a click-to-retry.
+      if (attempt < 2) { setTimeout(() => _loadMasters(attempt + 1), (attempt + 1) * 5000); return; }
       Utils.showToast(e.message || 'Failed to load PO masters', 'error');
+      const el = document.getElementById('poc-next-no');
+      if (el) {
+        el.textContent = 'Couldn\'t load — click to retry';
+        el.style.cursor = 'pointer';
+        el.onclick = () => { el.onclick = null; el.style.cursor = ''; el.textContent = 'Loading…'; _loadMasters(); };
+      }
     }
   }
 
@@ -898,13 +909,12 @@ window.Pages['po-creation'] = (() => {
         + _headerFieldsHtml()
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">' + (_isManual() ? 'Services' : 'Items') + '</div>'
         + _itemsTableHtml()
-        // Only the manual formats can grow their own line list. On the three
-        // PR-driven formats the lines come from the approved PR that was picked
-        // (see _fillPrIntoForm), so there's no "+ Add Item" to bolt extra,
-        // un-requisitioned lines onto a PO after the fact.
-        + (_isManual()
-          ? '<div><button type="button" id="poc-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Service</button></div>'
-          : '')
+        // Every format can grow its own line list. The PR-driven formats used
+        // to hide this (lines were meant to come only from the picked PR), but
+        // the store team needs to add lines below the PR's own — a PO raised
+        // without a PR, or an extra line the PR missed — so the button is
+        // always there now; rows a PR prefilled stay locked either way.
+        + '<div><button type="button" id="poc-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">' + (_isManual() ? '+ Add Service' : '+ Add Item') + '</button></div>'
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Charges</div>'
         + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">' + _summaryFieldsHtml() + '</div>'
         + _extraFieldsHtml()
@@ -947,7 +957,7 @@ window.Pages['po-creation'] = (() => {
     // you switch format or come back from the List tab.
     Utils.bindDeptSelect(document.getElementById('poc-department'));
 
-    const addItemBtn = document.getElementById('poc-add-item'); // manual formats only
+    const addItemBtn = document.getElementById('poc-add-item');
     if (addItemBtn) addItemBtn.addEventListener('click', () => {
       document.getElementById('poc-items-tbody').insertAdjacentHTML('beforeend', _itemRowHtml());
       _bindItemRow(document.getElementById('poc-items-tbody').lastElementChild);
