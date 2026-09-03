@@ -40,6 +40,9 @@ window.Sidebar = {
     imsalu:       '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 12.09-9.17 4.16a2 2 0 0 1-1.66 0L2 12.09"/><path d="m22 16.92-9.17 4.17a2 2 0 0 1-1.66 0L2 16.92"/></svg>',
     imsaccess:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M19.1 4.9l-2.2 2.2M7.1 16.9l-2.2 2.2"/></svg>',
     imstrading:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h13l-3-3"/><path d="M21 16H8l3 3"/></svg>',
+    // Bulk Email — an envelope with a send arrow, since the page's whole job
+    // is one button that mails a folder of PDFs out.
+    bulkemail:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 13V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9"/><path d="m22 7-10 6L2 7"/><path d="M16 19h6"/><path d="m19 16 3 3-3 3"/></svg>',
     developer:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
     // HR module — the Leave entry reuses the existing calendar icon, so these
     // three only cover what the sidebar did not already have a mark for:
@@ -172,6 +175,9 @@ window.Sidebar = {
     ]},
     { title: 'Accounts', items: [
       { route: 'client-master',  label: 'Vendor Master',  icon: 'clientmaster' },
+      // adminOnly, but grantable to a non-admin from Users → Access like
+      // Employee Master — the API gates on the same rule (requireAdminOrPage).
+      { route: 'bulk-email',     label: 'Bulk Email',     icon: 'bulkemail', adminOnly: true },
     ]},
   ],
 

@@ -399,6 +399,13 @@ const SCHEMA = [
 const { HR_SCHEMA, mountHrms } = require('./backend/hrms.js');
 SCHEMA.push(...HR_SCHEMA);
 
+// Bulk Email — mails a ZIP of PDFs (Form 16) to the addresses in the master
+// Excel/CSV inside that same ZIP. Same arrangement as the HR module: tables appended to
+// SCHEMA here, routes mounted further down with this file's pool and guards
+// (search "mountBulkMail"). See backend/bulk-mail.js.
+const { BULK_MAIL_SCHEMA, mountBulkMail } = require('./backend/bulk-mail.js');
+SCHEMA.push(...BULK_MAIL_SCHEMA);
+
 // The factory's own department list (the numbered list the plant keeps on
 // paper), used to seed the `departments` table on a fresh DB and as the
 // fallback whenever that table can't be read. Not the live list — once seeded,
@@ -4106,6 +4113,18 @@ const hrms = mountHrms(app, {
   // file's canonicaliser and the departments master behind it, rather than
   // keeping the sheet's casing. See the block above canonicalDept.
   canonicalDept, listDepartments,
+});
+
+// ── Bulk Email routes ─────────────────────────────────────────────────────────
+// Everything under /api/bulk-mail/. Gated like Employee Master: Admin/HOD, or a
+// non-admin explicitly granted the 'bulk-email' page from Users → Access.
+// `express` is handed over so the module can mount its own raw-body parser for
+// the ZIP upload without this file's global JSON parser (and its 10mb cap)
+// standing in the way. See backend/bulk-mail.js.
+mountBulkMail(app, {
+  q, ensureSchema, express,
+  requireAuth, requireSuperAdmin, withSeqId, getMailer,
+  requireBulkEmail: requireAdminOrPage('bulk-email'),
 });
 
 
