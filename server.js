@@ -10465,6 +10465,42 @@ app.post('/api/developer/reset-users', async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
+// ── Google credential self-check ─────────────────────────────────────────────
+// Admin-only diagnostic for "DECODER routines::unsupported"-class failures:
+// reports what shape the configured key is in and whether a token can
+// actually be fetched — without ever returning the key material itself.
+// Deliberately builds a FRESH GoogleAuth (not getGoogleAuth's cached one) so
+// it reflects the env as loaded at this boot.
+app.get('/api/google-cred-check', requireAuth, requireAdmin, async (req, res) => {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim() || '';
+  const rawPem = process.env.GOOGLE_PRIVATE_KEY || '';
+  const b64 = process.env.GOOGLE_PRIVATE_KEY_B64?.trim() || '';
+  let b64Decoded = '';
+  let b64Error = '';
+  if (b64) {
+    try { b64Decoded = Buffer.from(b64, 'base64').toString('utf8'); } catch (e) { b64Error = e.message; }
+  }
+  const activeKey = b64Decoded || _normalizeGooglePrivateKey(rawPem) || '';
+  const report = {
+    email,
+    keySource: b64Decoded ? 'GOOGLE_PRIVATE_KEY_B64' : (rawPem ? 'GOOGLE_PRIVATE_KEY' : 'none'),
+    b64: { present: !!b64, length: b64.length, decodesToPem: b64Decoded.startsWith('-----BEGIN PRIVATE KEY-----') && b64Decoded.trimEnd().endsWith('-----END PRIVATE KEY-----'), error: b64Error },
+    pem: { present: !!rawPem, length: rawPem.length, hasLiteralBackslashN: rawPem.includes('\\n'), startsWithQuote: /^["']/.test(rawPem.trim()) },
+    activeKey: { length: activeKey.length, validPemMarkers: activeKey.startsWith('-----BEGIN PRIVATE KEY-----') && activeKey.trimEnd().endsWith('-----END PRIVATE KEY-----'), lineCount: activeKey.split('\n').length },
+    tokenFetch: 'not attempted',
+  };
+  if (email && activeKey) {
+    try {
+      const { google } = require('googleapis');
+      const auth = new google.auth.GoogleAuth({ credentials: { client_email: email, private_key: activeKey }, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
+      const client = await auth.getClient();
+      const t = await client.getAccessToken();
+      report.tokenFetch = t?.token ? 'SUCCESS — Google accepted the key' : 'no token returned';
+    } catch (e) { report.tokenFetch = 'FAILED: ' + e.message; }
+  }
+  res.json(report);
+});
+
 // ── Sync Sheets ───────────────────────────────────────────────────────────────
 app.post('/api/sync-sheets', requireAuth, async (req, res) => {
   // getGoogleAuth accepts either GOOGLE_PRIVATE_KEY or GOOGLE_PRIVATE_KEY_B64
