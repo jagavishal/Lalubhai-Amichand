@@ -89,6 +89,7 @@ window.Pages.users = (() => {
     { cat: 'HR Section', key: 'hr-reports',    label: 'HR Reports' },
 
     { cat: 'Accounts', key: 'client-master',     label: 'Vendor Master' },
+    { cat: 'Accounts', key: 'bulk-email',        label: 'Bulk Email' },
   ];
 
   const ALL_FEATURES = {
