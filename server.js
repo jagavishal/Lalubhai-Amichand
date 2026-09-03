@@ -957,10 +957,11 @@ async function syncUsers_gs() {
   try {
     const { google } = require('googleapis');
     const SPREADSHEET_ID = '1uVHOQ8OSuah5JarpgR_2fkD7Mwdfu-6yWEMgJWfv9Nw';
-    const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-    const key = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g,'\n');
-    if (!email||!key) return;
-    const auth = new google.auth.GoogleAuth({ credentials:{client_email:email,private_key:key}, scopes:['https://www.googleapis.com/auth/spreadsheets'] });
+    // getGoogleAuth, not its own env reads: this was the one path that
+    // ignored GOOGLE_PRIVATE_KEY_B64 and the PEM normalization, so it kept
+    // failing with a DECODER error after the key moved to the B64 form.
+    const auth = getGoogleAuth();
+    if (!auth) return;
     const sheets = google.sheets({ version:'v4', auth });
     const rows = await sql`SELECT * FROM users ORDER BY id`;
     const values = rows.map(u => [u.id,u.name,u.email,u.phone||'',u.department||'',u.branch||'',(Array.isArray(u.roles)?u.roles:[u.roles]).filter(Boolean).join(', '),u.active?'Yes':'No',u.created_at?new Date(u.created_at).toLocaleString('en-IN'):'']);
@@ -10466,7 +10467,9 @@ app.post('/api/developer/reset-users', async (req, res) => {
 
 // ── Sync Sheets ───────────────────────────────────────────────────────────────
 app.post('/api/sync-sheets', requireAuth, async (req, res) => {
-  if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL||!process.env.GOOGLE_PRIVATE_KEY) return res.status(500).json({ error:'Google credentials not configured' });
+  // getGoogleAuth accepts either GOOGLE_PRIVATE_KEY or GOOGLE_PRIVATE_KEY_B64
+  // — checking the raw env var here rejected a B64-only configuration.
+  if (!getGoogleAuth()) return res.status(500).json({ error:'Google credentials not configured' });
   try {
     await ensureSchema();
     await syncUsers_gs();
@@ -10610,7 +10613,7 @@ async function seedJsonFallback() {
 
 app.listen(process.env.PORT || 3000, async () => {
   console.log('Server on http://localhost:' + (process.env.PORT || 3000));
-  console.log('[google-sync] credentials present at boot — email:', !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, '| key:', !!process.env.GOOGLE_PRIVATE_KEY);
+  console.log('[google-sync] credentials present at boot — email:', !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, '| key:', !!process.env.GOOGLE_PRIVATE_KEY, '| key_b64:', !!process.env.GOOGLE_PRIVATE_KEY_B64);
   await seedJsonFallback();
   shiftNonWorkingTasksOnce();
 });
