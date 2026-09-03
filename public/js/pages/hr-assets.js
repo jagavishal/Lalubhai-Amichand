@@ -22,13 +22,19 @@ window.Pages['hr-assets'] = (() => {
   let _filter = { q: '', category: 'All', type: 'All', status: 'All' };
 
   const STATUSES = ['Available', 'Assigned', 'Under Repair', 'Scrapped'];
-  const CONDITIONS = ['Working', 'Not Working'];
+  // The sheet's own condition vocabulary (New/Good/Fair/Poor — verified
+  // against all 93 rows of the Assets tab), so the register keeps speaking
+  // the words the company already uses. 'Working' survives in the good-set
+  // for rows created before the vocabulary was aligned with the import.
+  const CONDITIONS = ['New', 'Good', 'Fair', 'Poor'];
+  const GOOD = new Set(['New', 'Good', 'Working']);
 
   // The shared STATUS_VARIANT map doesn't know asset wording, so this page
   // carries its own.
   const VARIANT = {
     Available: 'success', Assigned: 'info', 'Under Repair': 'warning', Scrapped: 'neutral',
-    Working: 'success', 'Not Working': 'danger', open: 'warning', done: 'success',
+    New: 'info', Good: 'success', Working: 'success', Fair: 'warning', Poor: 'danger',
+    open: 'warning', done: 'success',
   };
   const pill = (s) => (s ? H.pill(s, VARIANT[s] || 'neutral') : '—');
 
@@ -74,7 +80,7 @@ window.Pages['hr-assets'] = (() => {
 
   function myView() {
     const assigned = _assets.filter((a) => a.status === 'Assigned').length;
-    const working = _assets.filter((a) => a.asset_condition === 'Working').length;
+    const working = _assets.filter((a) => GOOD.has(a.asset_condition)).length;
     const repair = _assets.filter((a) => a.status === 'Under Repair').length;
     return `
       ${H.header('My Assets', 'Everything the company has booked out to you',
@@ -82,7 +88,7 @@ window.Pages['hr-assets'] = (() => {
       ${H.stats([
         { label: 'My Assets', value: _assets.length },
         { label: 'Currently Assigned', value: assigned },
-        { label: 'Working', value: _assets.length ? working : '—' },
+        { label: 'Good Condition', value: _assets.length ? working : '—' },
         { label: 'Under Repair', value: repair, color: repair ? '#d97706' : undefined },
       ])}
       ${H.table(
@@ -120,7 +126,7 @@ window.Pages['hr-assets'] = (() => {
         { label: 'Assigned', value: count('Assigned') },
         { label: 'Available', value: count('Available') },
         { label: 'Under Repair', value: count('Under Repair'), color: count('Under Repair') ? '#d97706' : undefined },
-        { label: 'Working', value: _assets.filter((a) => a.asset_condition === 'Working').length },
+        { label: 'Good Condition', value: _assets.filter((a) => GOOD.has(a.asset_condition)).length },
       ])}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
         <input id="hra-q" value="${H.esc(_filter.q)}" placeholder="Search code, name, serial, holder…"
@@ -185,7 +191,8 @@ window.Pages['hr-assets'] = (() => {
         + H.field('af-type', 'Asset Type', a.asset_type, { required: true, placeholder: 'Laptop' })
         + H.field('af-name', 'Asset Name', a.name, { required: true, placeholder: 'Lenovo - V14 G3 IAP', span: 2 })
         + H.field('af-serial', 'Serial No', a.serial_no)
-        + H.select('af-condition', 'Condition', a.asset_condition || 'Working', CONDITIONS)
+        + H.select('af-condition', 'Condition', a.asset_condition || 'Good',
+            CONDITIONS.includes(a.asset_condition) || !a.asset_condition ? CONDITIONS : [a.asset_condition, ...CONDITIONS])
         + (editing ? H.select('af-status', 'Status', a.status, STATUSES,
             { hint: 'Assigning and repairs move this on their own — set it by hand only to scrap or to fix a mistake' }) : '')
         + H.field('af-pdate', 'Purchase Date', a.purchase_date, { type: 'date' })

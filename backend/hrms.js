@@ -320,7 +320,7 @@ const HR_SCHEMA = [
      purchase_cost DECIMAL(12,2) NOT NULL DEFAULT 0,
      vendor VARCHAR(255) DEFAULT '',
      warranty_till DATE DEFAULT NULL,
-     asset_condition VARCHAR(32) DEFAULT 'Working',
+     asset_condition VARCHAR(32) DEFAULT 'Good',
      status VARCHAR(32) NOT NULL DEFAULT 'Available',
      assigned_to VARCHAR(16) DEFAULT '',
      assigned_name VARCHAR(255) DEFAULT '',
@@ -3256,10 +3256,6 @@ function mountHrms(app, ctx) {
           tab[TABS[i]] = v.slice(1).map((r) => Object.fromEntries(head.map((k, n) => [k, r[n] ?? ''])));
         });
         const val = (r, k) => { const s = String(r[k] ?? '').trim(); return s === '#N/A' ? '' : s; };
-        // The asset tabs' headers were typed by hand and are not on record, so
-        // read by the first spelling that yields anything rather than by one
-        // exact name — a miss costs a blank column, not a lost row.
-        const pick = (r, ...names) => { for (const n of names) { const v = val(r, n); if (v !== '') return v; } return ''; };
         const counts = { employees: 0, directors: 0, structures: 0, balances: 0, holidays: 0, leaves: 0, attendance: 0, payslips: 0, assets: 0, assetRepairs: 0, skipped: [] };
 
         /* Employees + their salary structure + their leave balances. The
@@ -3486,37 +3482,48 @@ function mountHrms(app, ctx) {
           counts.payslips += 1;
         }
 
-        /* The asset register. The sheet recorded the holder as a name, not a
-           code — resolve it against the employees just imported above so the
-           row lands linked; an unresolved name is kept as-is rather than
-           dropped, exactly as reporting_to already does. */
+        /* The asset register — mapped against the tab's actual header row:
+           Asset ID | Unique Code | Category | Asset Type | Asset Name |
+           Serial No | Assigned To | Assigned To Name | Assigned On |
+           Returned On | Condition | Status | Notes.
+
+           "Assigned To" already carries the employee code (MUM002); the name
+           column rides along for rows whose code matches nobody. The date
+           columns mix both orders in one column — a real date renders
+           m/d/yyyy in the sheet's locale while a hand-typed one stays
+           dd/mm/yyyy — so try the locale's order first and fall back to the
+           other before giving up on a date. */
+        const flexDate = (v) => sheetDate(v, 'mdy') || sheetDate(v, 'dmy');
         const empByName = new Map();
         for (const e of await q(`SELECT id, name FROM hr_employees`).catch(() => [])) {
           empByName.set(String(e.name).trim().toLowerCase(), e.id);
         }
         for (const r of (tab['Assets'] || [])) {
-          const code = pick(r, 'Unique Code', 'Asset Code', 'Unique ID', 'Code').toUpperCase();
-          const name = pick(r, 'Asset Name', 'Name');
+          const code = val(r, 'Unique Code').toUpperCase();
+          const name = val(r, 'Asset Name');
           if (!code || !name) continue;
-          const holder = pick(r, 'Assigned To', 'Assign To', 'Employee Name', 'Assigned Employee');
-          const empId = empByName.get(holder.trim().toLowerCase()) || '';
-          const status = pick(r, 'Status') || (holder ? 'Assigned' : 'Available');
+          const holder = val(r, 'Assigned To Name');
+          const empId = val(r, 'Assigned To').toUpperCase()
+                     || empByName.get(holder.trim().toLowerCase()) || '';
+          const returned = flexDate(val(r, 'Returned On'));
+          const stillHeld = (empId || holder) && !returned;
+          let status = val(r, 'Status') || (stillHeld ? 'Assigned' : 'Available');
+          if (!stillHeld && /^assigned$/i.test(status)) status = 'Available';
           const fields = {
-            category: pick(r, 'Category', 'Asset Category'),
-            asset_type: pick(r, 'Asset Type', 'Type'),
+            category: val(r, 'Category'),
+            asset_type: val(r, 'Asset Type'),
             name,
-            serial_no: pick(r, 'Serial No', 'Serial Number', 'Serial'),
-            purchase_date: sheetDate(pick(r, 'Purchase Date', 'Date of Purchase', 'DOP'), 'dmy'),
-            purchase_cost: money(pick(r, 'Purchase Cost', 'Cost', 'Price', 'Amount')),
-            vendor: pick(r, 'Vendor', 'Supplier', 'Purchased From'),
-            warranty_till: sheetDate(pick(r, 'Warranty Till', 'Warranty Expiry', 'Warranty End Date'), 'dmy'),
-            asset_condition: pick(r, 'Condition', 'Working Status', 'Working'),
+            serial_no: val(r, 'Serial No'),
+            asset_condition: val(r, 'Condition'),
             status,
-            assigned_to: empId,
-            assigned_name: holder,
-            assigned_on: sheetDate(pick(r, 'Assigned Date', 'Assigned On', 'Assign Date'), 'dmy'),
-            notes: pick(r, 'Notes', 'Remarks', 'Description'),
+            assigned_to: stillHeld ? empId : '',
+            assigned_name: stillHeld ? holder : '',
+            assigned_on: stillHeld ? flexDate(val(r, 'Assigned On')) : null,
+            notes: val(r, 'Notes'),
           };
+          // purchase_* / vendor / warranty_till are deliberately absent: the
+          // sheet never carried them, and a re-import must not blank out what
+          // HR has since typed into this app.
           if (!dryRun) {
             const keys = Object.keys(fields);
             await pool.query(
@@ -3529,29 +3536,36 @@ function mountHrms(app, ctx) {
           counts.assets += 1;
         }
 
+        /* Assets Repair — actual headers: Unique Repair ID | (a copy of the
+           asset's columns) | Repair Date | Repair Amount | Upload Attachment |
+           Approval Status | Rejection Reason | Repair Notes | Added Date.
+           There is no separate "issue" column: the description lives in
+           Repair Notes (falling back to the asset-row Notes). A repair is
+           closed when the asset came back (Returned On) or the request was
+           rejected; only a still-open one flips the asset to Under Repair. */
         let repSeq = 0;
         for (const r of (tab['Assets Repair'] || [])) {
           repSeq += 1;
-          const assetCode = pick(r, 'Unique Code', 'Asset Code', 'Asset ID', 'Asset').toUpperCase();
-          const issue = pick(r, 'Issue', 'Problem', 'Repair Details', 'Description', 'Reason');
-          if (!assetCode || !issue) continue;
-          // The tab may or may not number its rows; the row's own position is
-          // a stable fallback because the tab, like the others, is append-only.
-          const id = 'REPIMP' + pad(pick(r, 'ID', 'Repair ID', 'Sr No', 'Sr. No') || repSeq, 4);
-          const rawStatus = pick(r, 'Status', 'Repair Status');
-          const done = /done|complete|resolved|closed|repaired|ok/i.test(rawStatus);
+          const assetCode = val(r, 'Unique Code').toUpperCase();
+          if (!assetCode) continue;
+          const id = 'REPIMP' + pad(val(r, 'Unique Repair ID') || repSeq, 4);
+          const issue = val(r, 'Repair Notes') || val(r, 'Notes') || 'Repair';
+          const returned = flexDate(val(r, 'Returned On'));
+          const approval = val(r, 'Approval Status');
+          const done = !!returned || /reject/i.test(approval);
+          const remarks = [approval && `Approval: ${approval}`, val(r, 'Rejection Reason')]
+            .filter(Boolean).join(' — ');
           if (!dryRun) {
             await pool.query(
               `INSERT INTO hr_asset_repairs (id, asset_id, issue, reported_by, reported_on, vendor, cost, status, resolved_on, remarks)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-               ON CONFLICT (id) DO UPDATE SET issue = $11, cost = $12, status = $13, resolved_on = $14`,
-              [id, assetCode, issue, pick(r, 'Reported By', 'Employee Name'),
-               sheetDate(pick(r, 'Reported On', 'Date', 'Repair Date', 'Sent Date'), 'dmy'),
-               pick(r, 'Vendor', 'Repaired By', 'Service Centre'), money(pick(r, 'Cost', 'Repair Cost', 'Amount')),
-               done ? 'done' : 'open', done ? sheetDate(pick(r, 'Resolved On', 'Return Date', 'Received Date'), 'dmy') : null,
-               pick(r, 'Remarks', 'Notes'),
-               issue, money(pick(r, 'Cost', 'Repair Cost', 'Amount')),
-               done ? 'done' : 'open', done ? sheetDate(pick(r, 'Resolved On', 'Return Date', 'Received Date'), 'dmy') : null],
+               ON CONFLICT (id) DO UPDATE SET issue = $11, cost = $12, status = $13, resolved_on = $14, remarks = $15`,
+              [id, assetCode, issue, val(r, 'Assigned To Name'),
+               flexDate(val(r, 'Repair Date')) || flexDate(val(r, 'Added Date')),
+               '', money(val(r, 'Repair Amount')),
+               done ? 'done' : 'open', returned, remarks,
+               issue, money(val(r, 'Repair Amount')),
+               done ? 'done' : 'open', returned, remarks],
             );
             // A still-open repair also marks the asset itself.
             if (!done) await pool.query(`UPDATE hr_assets SET status = 'Under Repair' WHERE id = $1`, [assetCode]).catch(() => {});
