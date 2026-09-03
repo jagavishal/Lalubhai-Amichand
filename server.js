@@ -4408,16 +4408,36 @@ function _normalizeGooglePrivateKey(raw) {
   return key.replace(/\r\n/g, '\n').replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
 }
 
+// The pasted credential often turns out to be the WHOLE downloaded JSON key
+// file rather than just its private_key field — including a base64 of the
+// full file (exactly what landed in production's GOOGLE_PRIVATE_KEY_B64 on
+// the celestile switch: 14 lines of JSON, no PEM markers, DECODER error).
+// Accept that shape too: if the material parses as JSON, pull private_key
+// out of it — and client_email as a fallback when the env var is absent.
+function _resolveGoogleCredentials() {
+  const b64 = process.env.GOOGLE_PRIVATE_KEY_B64?.trim();
+  let key = b64 ? Buffer.from(b64, 'base64').toString('utf8') : _normalizeGooglePrivateKey(process.env.GOOGLE_PRIVATE_KEY);
+  let email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+  if (key && key.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(key);
+      if (parsed.private_key) {
+        key = parsed.private_key;
+        if (!email && parsed.client_email) email = parsed.client_email;
+      }
+    } catch { /* not JSON after all — leave it for GoogleAuth to reject loudly */ }
+  }
+  return { email, key, b64Present: !!b64 };
+}
+
 let _googleAuth = null;
 function getGoogleAuth() {
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
-  const b64 = process.env.GOOGLE_PRIVATE_KEY_B64?.trim();
-  const key = b64 ? Buffer.from(b64, 'base64').toString('utf8') : _normalizeGooglePrivateKey(process.env.GOOGLE_PRIVATE_KEY);
+  const { email, key, b64Present } = _resolveGoogleCredentials();
   // This guard used to fail silently — every sync function treated a null
   // return as "nothing to do" with zero logging, so a missing/blank env var
   // in production looked identical to everything working. Always log why.
   if (!email || !key) {
-    console.error('[google-sync] Google credentials missing — GOOGLE_SERVICE_ACCOUNT_EMAIL set:', !!email, '| GOOGLE_PRIVATE_KEY set:', !!key, '| GOOGLE_PRIVATE_KEY_B64 set:', !!b64);
+    console.error('[google-sync] Google credentials missing — GOOGLE_SERVICE_ACCOUNT_EMAIL set:', !!email, '| GOOGLE_PRIVATE_KEY set:', !!key, '| GOOGLE_PRIVATE_KEY_B64 set:', b64Present);
     return null;
   }
   if (_googleAuth) return _googleAuth;
@@ -10480,19 +10500,22 @@ app.get('/api/google-cred-check', requireAuth, requireAdmin, async (req, res) =>
   if (b64) {
     try { b64Decoded = Buffer.from(b64, 'base64').toString('utf8'); } catch (e) { b64Error = e.message; }
   }
-  const activeKey = b64Decoded || _normalizeGooglePrivateKey(rawPem) || '';
+  // What the app will actually use — including the JSON-key-file tolerance
+  // in _resolveGoogleCredentials (a full-file paste is a supported shape now).
+  const resolved = _resolveGoogleCredentials();
+  const activeKey = resolved.key || '';
   const report = {
-    email,
+    email: resolved.email || email,
     keySource: b64Decoded ? 'GOOGLE_PRIVATE_KEY_B64' : (rawPem ? 'GOOGLE_PRIVATE_KEY' : 'none'),
-    b64: { present: !!b64, length: b64.length, decodesToPem: b64Decoded.startsWith('-----BEGIN PRIVATE KEY-----') && b64Decoded.trimEnd().endsWith('-----END PRIVATE KEY-----'), error: b64Error },
+    b64: { present: !!b64, length: b64.length, decodesToPem: b64Decoded.startsWith('-----BEGIN PRIVATE KEY-----') && b64Decoded.trimEnd().endsWith('-----END PRIVATE KEY-----'), decodesToJsonKeyFile: b64Decoded.trim().startsWith('{'), error: b64Error },
     pem: { present: !!rawPem, length: rawPem.length, hasLiteralBackslashN: rawPem.includes('\\n'), startsWithQuote: /^["']/.test(rawPem.trim()) },
     activeKey: { length: activeKey.length, validPemMarkers: activeKey.startsWith('-----BEGIN PRIVATE KEY-----') && activeKey.trimEnd().endsWith('-----END PRIVATE KEY-----'), lineCount: activeKey.split('\n').length },
     tokenFetch: 'not attempted',
   };
-  if (email && activeKey) {
+  if (report.email && activeKey) {
     try {
       const { google } = require('googleapis');
-      const auth = new google.auth.GoogleAuth({ credentials: { client_email: email, private_key: activeKey }, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
+      const auth = new google.auth.GoogleAuth({ credentials: { client_email: report.email, private_key: activeKey }, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
       const client = await auth.getClient();
       const t = await client.getAccessToken();
       report.tokenFetch = t?.token ? 'SUCCESS — Google accepted the key' : 'no token returned';
