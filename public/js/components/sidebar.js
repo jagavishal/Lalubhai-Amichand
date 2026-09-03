@@ -51,6 +51,8 @@ window.Sidebar = {
     hrattendance: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 1.8"/></svg>',
     hrpayroll:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M9 10h6M9 13h4M11 10v6"/><path d="m13.5 13 2.5 3"/></svg>',
     hrreports:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="1"/><rect x="12" y="8" width="3" height="10" rx="1"/><rect x="17" y="5" width="3" height="13" rx="1"/></svg>',
+    // Assets — a laptop, since electronics are most of the register.
+    hrassets:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="10" rx="1.5"/><path d="M2 19h20"/><path d="M9 19v-1.5h6V19"/></svg>',
     // Section open/close arrow — drawn pointing right and rotated 90° when the
     // section is open, so one icon covers both states.
     chevron:      '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
@@ -156,6 +158,12 @@ window.Sidebar = {
       { route: 'hr-attendance', label: 'Attendance',      icon: 'hrattendance' },
       { route: 'hr-leave',      label: 'Leave Management', icon: 'leave' },
       { route: 'hr-payroll',    label: 'Payroll',         icon: 'hrpayroll' },
+      // Not adminOnly: an employee's view is scoped to their own assigned
+      // assets, the same way Attendance and Payroll scope to their own punch
+      // card and payslips. alwaysShow for the Company Tree reason: permission
+      // records saved before this page existed cannot mention it, and every
+      // employee has a "my assets" answer worth seeing.
+      { route: 'hr-assets',     label: 'Assets',          icon: 'hrassets', alwaysShow: true },
       { route: 'hr-reports',    label: 'HR Reports',      icon: 'hrreports',  adminOnly: true },
       // alwaysShow for the same reason as Company Tree: users permissioned
       // before this page existed have an explicit pages list that cannot

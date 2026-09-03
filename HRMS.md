@@ -23,6 +23,7 @@ every screen.
 | `public/js/pages/hr-leave.js` | Requests, approvals, balances, holiday calendar, leave types. |
 | `public/js/pages/hr-payroll.js` | Monthly runs, payslips, bank sheet. |
 | `public/js/pages/hr-reports.js` | HR MIS. |
+| `public/js/pages/hr-assets.js` | The asset register and repairs; employees see their own gear. |
 
 SQL is written Postgres-style (`$1`, `ON CONFLICT`) like the rest of
 `server.js`; the host's `pgToMysql()` translates it for the live MariaDB.
@@ -62,6 +63,22 @@ only the owner account can reopen one.
 Leave Register, Salary Register, Statutory Deductions, Birthdays &
 Anniversaries. Every report comes back in one `{ title, summary, columns, rows }`
 shape, so a new report is a case in one switch rather than a new page.
+
+**Assets** — the sheet's Assets and Assets Repair tabs. One list, two
+audiences: an Admin gets the full register (add, edit, assign, send to
+repair, a Repairs tab), an employee gets "My Assets" — whatever is booked
+out to them. An employee can add an asset too, for recording something
+already in their hands: the row lands assigned to them on the spot, and the
+self-assignment comes from their linked employee record, never from the
+request — so nobody can book an asset out to somebody else. Editing,
+reassigning and repairs stay with Admin. Unique codes follow the sheet's own scheme
+(`LAL-ELE-LAP-002`: LAL + three letters of category and type + a sequence)
+and are generated the same way for assets added here. Assignment only moves
+through the assign action, so status and holder can never disagree; opening
+a repair puts the asset Under Repair and closing it hands it back to its
+holder or to stock. Scrapping is a status, not a delete — only the owner
+account can delete a row, because the register is also the record of what
+the company bought.
 
 ---
 
@@ -136,7 +153,10 @@ forward, capped at 30), CL 5, SL 7, EL 0, LWP 0 and unpaid.
 then writes.
 
 It brings across employees, directors, salary structures, leave balances, leave
-requests, attendance, the holiday calendar and past payslips. Every row is
+requests, attendance, the holiday calendar, past payslips, and the asset
+register with its repair log. The asset tabs recorded holders by name, so the
+import resolves each name to an employee code where one matches and keeps the
+name as written where none does. Every row is
 matched on the id the sheet already carries (`MUM014`, `SAL-2026-04-009`,
 `HOL001`), so **running it twice changes nothing** and running it a month later
 only brings across what is new. Historic payslips arrive as *finalised* runs —
@@ -159,18 +179,20 @@ Enforced server-side, not by hiding buttons.
 |---|---|---|---|
 | Own punch card, own payslips, holiday calendar | ✓ | ✓ | ✓ |
 | Own leave requests and balances | ✓ | ✓ | ✓ |
-| Own employee record | ✓ | ✓ | ✓ |
+| Own employee record, own assigned assets (view + add own) | ✓ | ✓ | ✓ |
+| Full asset register, edit, assignment, repairs | | ✓ | ✓ |
 | Everyone's leave, balances, muster roll, reports | | ✓ | ✓ |
 | Employee list (bank accounts, PAN, Aadhar) | | ✓ | ✓ |
 | Salary structures, payroll, bank sheet | | ✓ | ✓ |
-| Reopen a finalised month, delete an employee, import the sheet | | | ✓ |
+| Reopen a finalised month, delete an employee or asset, import the sheet | | | ✓ |
 
 A leave applied for on someone else's behalf is booked against the applicant
 unless the applicant is Admin/HOD — HR can raise one for the factory floor,
 nobody else can raise one for anybody.
 
 Page-level access is also grantable per user from **Users → Access**
-(`hr-employees`, `hr-attendance`, `hr-leave`, `hr-payroll`, `hr-reports`).
+(`hr-employees`, `hr-attendance`, `hr-leave`, `hr-payroll`, `hr-assets`,
+`hr-reports`).
 
 ---
 
@@ -202,7 +224,6 @@ words.
 These tabs exist in **HRMS (Final)** but have no screen here yet — say the word
 and they are straightforward additions on the same foundations:
 
-- **Assets** and **Assets Repair** (93 rows) — asset register and assignment
 - **Timesheets** — project/task time logging
 - **Work Anniversary** — a whole tab of formulas, now just a filter in the
   Birthdays & Anniversaries report

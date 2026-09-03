@@ -85,6 +85,7 @@ window.Pages.users = (() => {
     { cat: 'HR Section', key: 'hr-attendance', label: 'Attendance' },
     { cat: 'HR Section', key: 'hr-leave',      label: 'Leave Management' },
     { cat: 'HR Section', key: 'hr-payroll',    label: 'Payroll' },
+    { cat: 'HR Section', key: 'hr-assets',     label: 'Assets' },
     { cat: 'HR Section', key: 'hr-reports',    label: 'HR Reports' },
 
     { cat: 'Accounts', key: 'client-master',     label: 'Vendor Master' },

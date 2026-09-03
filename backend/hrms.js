@@ -299,6 +299,52 @@ const HR_SCHEMA = [
   `ALTER TABLE holidays ADD COLUMN IF NOT EXISTS branch VARCHAR(64) DEFAULT 'All'`,
   `ALTER TABLE holidays ADD COLUMN IF NOT EXISTS applies_to VARCHAR(128) DEFAULT 'All'`,
   `ALTER TABLE holidays ADD COLUMN IF NOT EXISTS notes VARCHAR(255) DEFAULT ''`,
+
+  /* The sheet's Assets and Assets Repair tabs — laptops, phones, furniture,
+     and who is holding what. The id is the unique code the office already
+     quotes out loud (LAL-ELE-LAP-002), so an import can run twice without
+     inventing a second identity for a laptop.
+
+     assigned_to carries the employee code where one matches; assigned_name is
+     the display name alongside it, because the sheet only ever recorded a
+     name and an imported row may match no employee record at all — the same
+     name-or-code tolerance hr_employees.reporting_to already lives with.
+     `condition` is a reserved word in MySQL, hence asset_condition. */
+  `CREATE TABLE IF NOT EXISTS hr_assets (
+     id VARCHAR(32) PRIMARY KEY,
+     category VARCHAR(64) NOT NULL DEFAULT '',
+     asset_type VARCHAR(64) NOT NULL DEFAULT '',
+     name VARCHAR(255) NOT NULL DEFAULT '',
+     serial_no VARCHAR(128) DEFAULT '',
+     purchase_date DATE DEFAULT NULL,
+     purchase_cost DECIMAL(12,2) NOT NULL DEFAULT 0,
+     vendor VARCHAR(255) DEFAULT '',
+     warranty_till DATE DEFAULT NULL,
+     asset_condition VARCHAR(32) DEFAULT 'Working',
+     status VARCHAR(32) NOT NULL DEFAULT 'Available',
+     assigned_to VARCHAR(16) DEFAULT '',
+     assigned_name VARCHAR(255) DEFAULT '',
+     assigned_on DATE DEFAULT NULL,
+     notes TEXT DEFAULT NULL,
+     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_hrasset_emp ON hr_assets (assigned_to)`,
+  `CREATE INDEX idx_hrasset_status ON hr_assets (status)`,
+
+  `CREATE TABLE IF NOT EXISTS hr_asset_repairs (
+     id VARCHAR(24) PRIMARY KEY,
+     asset_id VARCHAR(32) NOT NULL,
+     issue VARCHAR(255) NOT NULL DEFAULT '',
+     reported_by VARCHAR(255) DEFAULT '',
+     reported_on DATE DEFAULT NULL,
+     vendor VARCHAR(255) DEFAULT '',
+     cost DECIMAL(12,2) NOT NULL DEFAULT 0,
+     status VARCHAR(24) NOT NULL DEFAULT 'open',
+     resolved_on DATE DEFAULT NULL,
+     remarks VARCHAR(255) DEFAULT '',
+     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_hrrep_asset ON hr_asset_repairs (asset_id)`,
 ];
 
 /* ── Small shared helpers ───────────────────────────────────────────── */
@@ -847,6 +893,7 @@ function mountHrms(app, ctx) {
   mountLeaveRoutes();
   mountPayrollRoutes();
   mountReportRoutes();
+  mountAssetRoutes();
   mountAdminRoutes();
 
   // Handed back to server.js so its own leave route can share the balance
@@ -2777,6 +2824,294 @@ function mountHrms(app, ctx) {
   }
 
   /* ===================================================================
+     Assets — the register, assignment, and repairs
+     ---------------------------------------------------------------------
+     The one list answers two different questions. An Admin asks "what does
+     the company own and where is it"; an employee asks "what am I holding".
+     Both go through GET /api/hr/assets — the route scopes the answer by who
+     is asking, so there is no second endpoint to drift out of step.
+     =================================================================== */
+  function mountAssetRoutes() {
+
+    const ASSET_FIELDS = [
+      'category', 'asset_type', 'name', 'serial_no', 'purchase_date',
+      'purchase_cost', 'vendor', 'warranty_till', 'asset_condition', 'notes',
+    ];
+    const ASSET_DATE_FIELDS = new Set(['purchase_date', 'warranty_till']);
+
+    const shapeAsset = (r) => (r ? {
+      ...r,
+      purchase_date: isoDate(r.purchase_date),
+      warranty_till: isoDate(r.warranty_till),
+      assigned_on: isoDate(r.assigned_on),
+    } : null);
+    const shapeRepair = (r) => (r ? {
+      ...r,
+      reported_on: isoDate(r.reported_on),
+      resolved_on: isoDate(r.resolved_on),
+    } : null);
+
+    /* Unique codes follow the ones already on the sheet: LAL-ELE-LAP-002 is
+       LAL + the first three letters of the category and type + a sequence per
+       prefix. Generated the same way here so a laptop added today sits
+       naturally next to the imported ones. */
+    const codeChunk = (s, fallback) => {
+      const letters = String(s || '').replace(/[^a-zA-Z]/g, '').toUpperCase();
+      return (letters.slice(0, 3) || fallback);
+    };
+    async function nextAssetCode(category, assetType) {
+      const prefix = `LAL-${codeChunk(category, 'GEN')}-${codeChunk(assetType, 'AST')}-`;
+      return nextCode('hr_assets', 'id', prefix, 3);
+    }
+
+    app.get('/api/hr/assets', requireAuth, hrReady, async (req, res) => {
+      try {
+        const user = req.session?.user;
+        if (!isAdminUser(user)) {
+          // An employee sees exactly what is booked out to them — matched on
+          // their employee code first, their name as the fallback for rows
+          // the import could not resolve to a code.
+          const me = await selfEmployee(user);
+          if (!me) return res.json({ mine: true, assets: [] });
+          const rows = await q(
+            `SELECT * FROM hr_assets
+              WHERE assigned_to = $1 OR (assigned_to = '' AND LOWER(assigned_name) = LOWER($2))
+              ORDER BY id ASC`,
+            [me.id, me.name],
+          );
+          return res.json({ mine: true, assets: rows.map(shapeAsset) });
+        }
+
+        const { status, category, asset_type: type, q: search } = req.query;
+        const where = [];
+        const params = [];
+        if (status && status !== 'All')     { params.push(status);   where.push(`status = $${params.length}`); }
+        if (category && category !== 'All') { params.push(category); where.push(`category = $${params.length}`); }
+        if (type && type !== 'All')         { params.push(type);     where.push(`asset_type = $${params.length}`); }
+        if (search) {
+          params.push('%' + search + '%'); const a = params.length;
+          params.push('%' + search + '%'); const b = params.length;
+          params.push('%' + search + '%'); const c = params.length;
+          where.push(`(id LIKE $${a} OR name LIKE $${b} OR serial_no LIKE $${c})`);
+        }
+        const rows = await q(
+          `SELECT * FROM hr_assets ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id ASC`,
+          params,
+        );
+        res.json({ mine: false, assets: rows.map(shapeAsset) });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // One asset with its repair history — an Admin, or the person holding it.
+    app.get('/api/hr/assets/:id', requireAuth, hrReady, async (req, res) => {
+      try {
+        const rows = await q(`SELECT * FROM hr_assets WHERE id = $1`, [req.params.id]);
+        if (!rows[0]) return res.status(404).json({ error: 'Asset not found' });
+        const asset = rows[0];
+        const user = req.session?.user;
+        if (!isAdminUser(user)) {
+          const me = await selfEmployee(user);
+          const mine = me && (asset.assigned_to === me.id
+            || (!asset.assigned_to && String(asset.assigned_name).toLowerCase() === String(me.name).toLowerCase()));
+          if (!mine) return res.status(403).json({ error: 'Not allowed' });
+        }
+        const repairs = await q(
+          `SELECT * FROM hr_asset_repairs WHERE asset_id = $1 ORDER BY created_at DESC`,
+          [asset.id],
+        ).catch(() => []);
+        res.json({ asset: shapeAsset(asset), repairs: repairs.map(shapeRepair) });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    /* Anyone signed in can add an asset — but what happens next depends on
+       who they are. An Admin stocks the register (the row lands Available,
+       assignment is a separate step); an employee is recording something
+       already in their hands, so the row lands assigned to them on the spot.
+       An employee cannot name somebody else — the self-assignment comes from
+       their own linked employee record, not from the request body. */
+    app.post('/api/hr/assets', requireAuth, hrReady, async (req, res) => {
+      try {
+        const b = req.body || {};
+        if (!String(b.name || '').trim()) return res.status(400).json({ error: 'Asset name is required' });
+
+        const user = req.session?.user;
+        const admin = isAdminUser(user);
+        let me = null;
+        if (!admin) {
+          me = await selfEmployee(user);
+          if (!me) {
+            return res.status(400).json({
+              error: 'Your login is not linked to an employee record yet — ask HR to run Link Logins, then try again.',
+            });
+          }
+        }
+
+        // Only an Admin may pick the code by hand; an employee always gets a
+        // generated one so the LAL-XXX-YYY-NNN sequence stays clean.
+        const id = (admin && String(b.id || '').trim().toUpperCase())
+          || await nextAssetCode(b.category, b.asset_type);
+        const fields = {};
+        for (const k of ASSET_FIELDS) {
+          fields[k] = ASSET_DATE_FIELDS.has(k) ? (isoDate(b[k]) || null)
+                    : k === 'purchase_cost' ? money(b[k])
+                    : String(b[k] ?? '').trim();
+        }
+        fields.status = admin ? 'Available' : 'Assigned';
+        fields.assigned_to = admin ? '' : me.id;
+        fields.assigned_name = admin ? '' : me.name;
+        fields.assigned_on = admin ? null : isoDate(new Date());
+        const keys = Object.keys(fields);
+        await pool.query(
+          `INSERT INTO hr_assets (id, ${keys.join(', ')})
+           VALUES ($1, ${keys.map((_, i) => '$' + (i + 2)).join(', ')})`,
+          [id, ...keys.map((k) => fields[k])],
+        );
+        res.json({ success: true, id, status: fields.status });
+      } catch (e) {
+        if (/duplicate|unique/i.test(e.message)) return res.status(400).json({ error: `Asset code already exists` });
+        res.status(500).json({ error: e.message });
+      }
+    });
+
+    app.patch('/api/hr/assets/:id', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        const b = req.body || {};
+        const sets = [];
+        const params = [];
+        for (const k of ASSET_FIELDS) {
+          if (!(k in b)) continue;
+          params.push(ASSET_DATE_FIELDS.has(k) ? (isoDate(b[k]) || null)
+                    : k === 'purchase_cost' ? money(b[k])
+                    : String(b[k] ?? '').trim());
+          sets.push(`${k} = $${params.length}`);
+        }
+        // Status is edited here too (Scrapped, or undoing a mistake) — but
+        // assignment fields are not: those only move through /assign, so the
+        // status and the who/when columns cannot be edited apart.
+        if ('status' in b) {
+          const s = String(b.status || '').trim();
+          if (!['Available', 'Assigned', 'Under Repair', 'Scrapped'].includes(s)) {
+            return res.status(400).json({ error: `Unknown status "${s}"` });
+          }
+          params.push(s);
+          sets.push(`status = $${params.length}`);
+        }
+        if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+        params.push(req.params.id);
+        const r = await pool.query(`UPDATE hr_assets SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+        if (!r.rowCount) return res.status(404).json({ error: 'Asset not found' });
+        res.json({ success: true });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Owner-only, like every other hard delete in the module. Scrapping an
+    // asset is a status ('Scrapped'), not a delete — the register is also the
+    // record of what the company bought.
+    app.delete('/api/hr/assets/:id', requireAuth, requireSuperAdmin, hrReady, async (req, res) => {
+      try {
+        await pool.query(`DELETE FROM hr_asset_repairs WHERE asset_id = $1`, [req.params.id]);
+        const r = await pool.query(`DELETE FROM hr_assets WHERE id = $1`, [req.params.id]);
+        if (!r.rowCount) return res.status(404).json({ error: 'Asset not found' });
+        res.json({ success: true });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    /* Assign to a person, or hand back to stock (empty employee_id). One
+       route for both directions so status and the who/when columns can never
+       disagree about whether something is out. */
+    app.post('/api/hr/assets/:id/assign', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        const empId = String(req.body?.employee_id || '').trim().toUpperCase();
+        const rows = await q(`SELECT * FROM hr_assets WHERE id = $1`, [req.params.id]);
+        if (!rows[0]) return res.status(404).json({ error: 'Asset not found' });
+        if (!empId) {
+          await pool.query(
+            `UPDATE hr_assets SET assigned_to = '', assigned_name = '', assigned_on = NULL,
+                    status = CASE WHEN status = 'Assigned' THEN 'Available' ELSE status END
+              WHERE id = $1`,
+            [req.params.id],
+          );
+          return res.json({ success: true, status: 'Available' });
+        }
+        const emp = (await q(`SELECT id, name FROM hr_employees WHERE id = $1`, [empId]))[0];
+        if (!emp) return res.status(400).json({ error: `No employee ${empId}` });
+        await pool.query(
+          `UPDATE hr_assets SET assigned_to = $1, assigned_name = $2, assigned_on = $3, status = 'Assigned'
+            WHERE id = $4`,
+          [emp.id, emp.name, isoDate(new Date()), req.params.id],
+        );
+        res.json({ success: true, status: 'Assigned', assigned_name: emp.name });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    /* ── Repairs ── Opening one puts the asset Under Repair; closing it hands
+       the asset back to whoever was holding it, or to stock. ── */
+
+    app.get('/api/hr/asset-repairs', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        const rows = await q(
+          `SELECT r.*, a.name AS asset_name, a.assigned_name
+             FROM hr_asset_repairs r LEFT JOIN hr_assets a ON a.id = r.asset_id
+            ORDER BY CASE WHEN r.status = 'open' THEN 0 ELSE 1 END, r.created_at DESC`,
+        );
+        res.json(rows.map(shapeRepair));
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/hr/assets/:id/repairs', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        const b = req.body || {};
+        if (!String(b.issue || '').trim()) return res.status(400).json({ error: 'Describe the issue' });
+        const asset = (await q(`SELECT id FROM hr_assets WHERE id = $1`, [req.params.id]))[0];
+        if (!asset) return res.status(404).json({ error: 'Asset not found' });
+        const id = rowId('REP');
+        await pool.query(
+          `INSERT INTO hr_asset_repairs (id, asset_id, issue, reported_by, reported_on, vendor, cost, remarks)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [id, asset.id, String(b.issue).trim(), req.session?.user?.name || '',
+           isoDate(new Date()), String(b.vendor ?? '').trim(), money(b.cost), String(b.remarks ?? '').trim()],
+        );
+        await pool.query(`UPDATE hr_assets SET status = 'Under Repair' WHERE id = $1`, [asset.id]);
+        res.json({ success: true, id });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.patch('/api/hr/asset-repairs/:id', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        const b = req.body || {};
+        const rep = (await q(`SELECT * FROM hr_asset_repairs WHERE id = $1`, [req.params.id]))[0];
+        if (!rep) return res.status(404).json({ error: 'Repair not found' });
+        const done = String(b.status || rep.status) === 'done';
+        await pool.query(
+          `UPDATE hr_asset_repairs SET issue = $1, vendor = $2, cost = $3, remarks = $4,
+                  status = $5, resolved_on = $6 WHERE id = $7`,
+          [String(b.issue ?? rep.issue).trim(), String(b.vendor ?? rep.vendor).trim(),
+           'cost' in b ? money(b.cost) : rep.cost, String(b.remarks ?? rep.remarks).trim(),
+           done ? 'done' : 'open', done ? (isoDate(rep.resolved_on) || isoDate(new Date())) : null,
+           rep.id],
+        );
+        if (done && rep.status !== 'done') {
+          // Back from the shop: to its holder if it still has one, else stock.
+          // Only when no other repair is still open on it.
+          const open = await q(
+            `SELECT id FROM hr_asset_repairs WHERE asset_id = $1 AND status = 'open' AND id <> $2 LIMIT 1`,
+            [rep.asset_id, rep.id],
+          );
+          if (!open.length) {
+            await pool.query(
+              `UPDATE hr_assets SET status = CASE WHEN assigned_to <> '' OR assigned_name <> ''
+                      THEN 'Assigned' ELSE 'Available' END
+                WHERE id = $1 AND status = 'Under Repair'`,
+              [rep.asset_id],
+            );
+          }
+        }
+        res.json({ success: true });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+  }
+
+  /* ===================================================================
      Settings, user linking, and the one-time import from the old sheet
      =================================================================== */
   function mountAdminRoutes() {
@@ -2883,7 +3218,8 @@ function mountHrms(app, ctx) {
         const { google } = require('googleapis');
         const sheets = google.sheets({ version: 'v4', auth });
 
-        const TABS = ['EmployeeDetails', 'Directors Salary Details', 'HolidayList', 'Leave', 'Attendance', 'Salary'];
+        const TABS = ['EmployeeDetails', 'Directors Salary Details', 'HolidayList', 'Leave', 'Attendance', 'Salary',
+                      'Assets', 'Assets Repair'];
         let batch;
         try {
           batch = await sheets.spreadsheets.values.batchGet({
@@ -2920,7 +3256,11 @@ function mountHrms(app, ctx) {
           tab[TABS[i]] = v.slice(1).map((r) => Object.fromEntries(head.map((k, n) => [k, r[n] ?? ''])));
         });
         const val = (r, k) => { const s = String(r[k] ?? '').trim(); return s === '#N/A' ? '' : s; };
-        const counts = { employees: 0, directors: 0, structures: 0, balances: 0, holidays: 0, leaves: 0, attendance: 0, payslips: 0, skipped: [] };
+        // The asset tabs' headers were typed by hand and are not on record, so
+        // read by the first spelling that yields anything rather than by one
+        // exact name — a miss costs a blank column, not a lost row.
+        const pick = (r, ...names) => { for (const n of names) { const v = val(r, n); if (v !== '') return v; } return ''; };
+        const counts = { employees: 0, directors: 0, structures: 0, balances: 0, holidays: 0, leaves: 0, attendance: 0, payslips: 0, assets: 0, assetRepairs: 0, skipped: [] };
 
         /* Employees + their salary structure + their leave balances. The
            sheet carried all three on one very wide row; they land in three
@@ -3144,6 +3484,79 @@ function mountHrms(app, ctx) {
             );
           }
           counts.payslips += 1;
+        }
+
+        /* The asset register. The sheet recorded the holder as a name, not a
+           code — resolve it against the employees just imported above so the
+           row lands linked; an unresolved name is kept as-is rather than
+           dropped, exactly as reporting_to already does. */
+        const empByName = new Map();
+        for (const e of await q(`SELECT id, name FROM hr_employees`).catch(() => [])) {
+          empByName.set(String(e.name).trim().toLowerCase(), e.id);
+        }
+        for (const r of (tab['Assets'] || [])) {
+          const code = pick(r, 'Unique Code', 'Asset Code', 'Unique ID', 'Code').toUpperCase();
+          const name = pick(r, 'Asset Name', 'Name');
+          if (!code || !name) continue;
+          const holder = pick(r, 'Assigned To', 'Assign To', 'Employee Name', 'Assigned Employee');
+          const empId = empByName.get(holder.trim().toLowerCase()) || '';
+          const status = pick(r, 'Status') || (holder ? 'Assigned' : 'Available');
+          const fields = {
+            category: pick(r, 'Category', 'Asset Category'),
+            asset_type: pick(r, 'Asset Type', 'Type'),
+            name,
+            serial_no: pick(r, 'Serial No', 'Serial Number', 'Serial'),
+            purchase_date: sheetDate(pick(r, 'Purchase Date', 'Date of Purchase', 'DOP'), 'dmy'),
+            purchase_cost: money(pick(r, 'Purchase Cost', 'Cost', 'Price', 'Amount')),
+            vendor: pick(r, 'Vendor', 'Supplier', 'Purchased From'),
+            warranty_till: sheetDate(pick(r, 'Warranty Till', 'Warranty Expiry', 'Warranty End Date'), 'dmy'),
+            asset_condition: pick(r, 'Condition', 'Working Status', 'Working'),
+            status,
+            assigned_to: empId,
+            assigned_name: holder,
+            assigned_on: sheetDate(pick(r, 'Assigned Date', 'Assigned On', 'Assign Date'), 'dmy'),
+            notes: pick(r, 'Notes', 'Remarks', 'Description'),
+          };
+          if (!dryRun) {
+            const keys = Object.keys(fields);
+            await pool.query(
+              `INSERT INTO hr_assets (id, ${keys.join(', ')})
+               VALUES ($1, ${keys.map((_, i) => '$' + (i + 2)).join(', ')})
+               ON CONFLICT (id) DO UPDATE SET ${keys.map((k, i) => `${k} = $${keys.length + 2 + i}`).join(', ')}`,
+              [code, ...keys.map((k) => fields[k]), ...keys.map((k) => fields[k])],
+            );
+          }
+          counts.assets += 1;
+        }
+
+        let repSeq = 0;
+        for (const r of (tab['Assets Repair'] || [])) {
+          repSeq += 1;
+          const assetCode = pick(r, 'Unique Code', 'Asset Code', 'Asset ID', 'Asset').toUpperCase();
+          const issue = pick(r, 'Issue', 'Problem', 'Repair Details', 'Description', 'Reason');
+          if (!assetCode || !issue) continue;
+          // The tab may or may not number its rows; the row's own position is
+          // a stable fallback because the tab, like the others, is append-only.
+          const id = 'REPIMP' + pad(pick(r, 'ID', 'Repair ID', 'Sr No', 'Sr. No') || repSeq, 4);
+          const rawStatus = pick(r, 'Status', 'Repair Status');
+          const done = /done|complete|resolved|closed|repaired|ok/i.test(rawStatus);
+          if (!dryRun) {
+            await pool.query(
+              `INSERT INTO hr_asset_repairs (id, asset_id, issue, reported_by, reported_on, vendor, cost, status, resolved_on, remarks)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+               ON CONFLICT (id) DO UPDATE SET issue = $11, cost = $12, status = $13, resolved_on = $14`,
+              [id, assetCode, issue, pick(r, 'Reported By', 'Employee Name'),
+               sheetDate(pick(r, 'Reported On', 'Date', 'Repair Date', 'Sent Date'), 'dmy'),
+               pick(r, 'Vendor', 'Repaired By', 'Service Centre'), money(pick(r, 'Cost', 'Repair Cost', 'Amount')),
+               done ? 'done' : 'open', done ? sheetDate(pick(r, 'Resolved On', 'Return Date', 'Received Date'), 'dmy') : null,
+               pick(r, 'Remarks', 'Notes'),
+               issue, money(pick(r, 'Cost', 'Repair Cost', 'Amount')),
+               done ? 'done' : 'open', done ? sheetDate(pick(r, 'Resolved On', 'Return Date', 'Received Date'), 'dmy') : null],
+            );
+            // A still-open repair also marks the asset itself.
+            if (!done) await pool.query(`UPDATE hr_assets SET status = 'Under Repair' WHERE id = $1`, [assetCode]).catch(() => {});
+          }
+          counts.assetRepairs += 1;
         }
 
         res.json({ success: true, dryRun, counts });
