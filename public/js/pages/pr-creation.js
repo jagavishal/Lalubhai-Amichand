@@ -303,6 +303,7 @@ window.Pages['pr-creation'] = (() => {
       ctx.input.value = result.code;
       ctx.previewDesc.textContent = result.description || '—';
       ctx.previewSize.textContent = result.size || '—';
+      _setSticker(ctx.input.closest('.pcr-item-row'), result.stickerSize);
       ctx.dd.style.display = 'none';
       _closeAddItemModal();
       Utils.showToast('Item added — you can now use it right away', 'success');
@@ -330,8 +331,9 @@ window.Pages['pr-creation'] = (() => {
           const matches = await res.json();
           const addNewHtml = '<div class="pcr-item-add-new" style="padding:8px 12px;font-size:12.5px;cursor:pointer;font-weight:700;color:var(--color-primary);'
             + (matches.length ? 'border-top:1px solid #e2e8f0;' : '') + '">+ Add' + (q ? ' "' + esc(q) + '"' : '') + ' as new item</div>';
-          dd.innerHTML = matches.map(m => '<div class="pcr-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.code) + '" data-desc="' + esc(m.description) + '" data-size="' + esc(m.size) + '">'
-            + '<b>' + esc(m.code) + '</b> — ' + esc(m.description) + (m.size ? ' (' + esc(m.size) + ')' : '') + '</div>').join('') + addNewHtml;
+          dd.innerHTML = matches.map(m => '<div class="pcr-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.code) + '" data-desc="' + esc(m.description) + '" data-size="' + esc(m.size) + '" data-sticker="' + esc(m.stickerSize || '') + '">'
+            + '<b>' + esc(m.code) + '</b> — ' + esc(m.description) + (m.size ? ' (' + esc(m.size) + ')' : '')
+            + (m.stickerSize ? ' <span style="color:#94a3b8;">· Sticker ' + esc(m.stickerSize) + '</span>' : '') + '</div>').join('') + addNewHtml;
           const rect = input.getBoundingClientRect();
           dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 260) + 'px';
           dd.style.display = 'block';
@@ -352,6 +354,7 @@ window.Pages['pr-creation'] = (() => {
       input.value = opt.dataset.code;
       previewDesc.textContent = opt.dataset.desc || '—';
       previewSize.textContent = opt.dataset.size || '—';
+      _setSticker(row, opt.dataset.sticker);
       dd.style.display = 'none';
     });
     window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
@@ -398,6 +401,15 @@ window.Pages['pr-creation'] = (() => {
   }
 
   /* ── Item rows ──────────────────────────────────────────────────────── */
+  // Sticker Size (L × W) is a read-only lookup column shown only on the
+  // Packing Sticker format — it comes from the item master (cols E/F), the
+  // same source the sheet's STICKER SIZE VLOOKUP prints into the PDF.
+  function _hasStickerSize() { return _format === 'PACKING_STICKER'; }
+  function _setSticker(row, value) {
+    const cell = row && row.querySelector('.pcr-item-sticker');
+    if (cell) cell.textContent = value || '—';
+  }
+
   function _itemRowHtml() {
     const fields = ITEM_FIELDS[_format];
     const computed = ITEM_COMPUTED[_format];
@@ -412,6 +424,7 @@ window.Pages['pr-creation'] = (() => {
       + '</td>'
       + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="pcr-item-desc">—</td>'
       + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="pcr-item-size">—</td>'
+      + (_hasStickerSize() ? '<td style="padding:6px;min-width:120px;font-size:12px;color:#64748b;white-space:nowrap;" class="pcr-item-sticker">—</td>' : '')
       + fieldCells
       + computedCells
       + '<td style="padding:6px;text-align:center;"><button type="button" class="pcr-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
@@ -429,6 +442,7 @@ window.Pages['pr-creation'] = (() => {
           + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Item No.</th>'
           + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Description</th>'
           + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Size</th>'
+          + (_hasStickerSize() ? '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">Sticker Size (L × W)</th>' : '')
           + headCells
           + computedHeadCells
           + '<th></th>'

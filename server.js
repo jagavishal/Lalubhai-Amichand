@@ -5745,7 +5745,10 @@ const PR_FORMAT_CONFIG = {
 
 const PR_ITEM_CATALOG_RANGE = {
   ITEM_CODE: { tab: 'ITEM_CODE', range: 'A2:C1003' },
-  PACKING_STICKER: { tab: 'ITEM_CODE(PACKING_STICKER)', range: 'A2:C1082' },
+  // A:I, not A:C — the sticker master also carries L (E) / W (F), which the
+  // PR template's own STICKER SIZE columns VLOOKUP into the printed PDF; the
+  // item picker shows the same so the size is visible before the PDF exists.
+  PACKING_STICKER: { tab: 'ITEM_CODE(PACKING_STICKER)', range: 'A2:I1082' },
   PACKING_BOX: { tab: 'ITEM_CODE(PACKING_BOX)', range: 'A2:C989' },
   ALU: { tab: 'ITEM_CODE(ALU)', range: 'A2:C2103' },
 };
@@ -5764,7 +5767,15 @@ async function _loadPrItemCatalog(format) {
   const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${cat.tab}'!${cat.range}`, valueRenderOption: 'FORMATTED_VALUE' });
   const rows = (result.data.values || [])
     .filter(r => r[0])
-    .map(r => ({ code: r[0] || '', description: r[1] || '', size: r[2] || '' }));
+    .map(r => {
+      const row = { code: r[0] || '', description: r[1] || '', size: r[2] || '' };
+      if (format === 'PACKING_STICKER') {
+        row.stickerL = String(r[4] || '').trim();
+        row.stickerW = String(r[5] || '').trim();
+        row.stickerSize = [row.stickerL, row.stickerW].filter(Boolean).join(' × ');
+      }
+      return row;
+    });
   _prItemCatalogCache[format] = { at: Date.now(), rows };
   return rows;
 }
