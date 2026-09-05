@@ -36,7 +36,6 @@ function getMailer() {
 
 async function sendDelegationEmail({ toEmail, toName, description, dueDate, priority, delegatedByName, url, remarks }) {
   const mailer = getMailer();
-  console.log('[email] sendDelegationEmail → toEmail:', toEmail, '| mailer ready:', !!mailer, '| SMTP_USER:', process.env.SMTP_USER || '(not set)');
   if (!mailer || !toEmail) return;
   try {
     await mailer.sendMail({
@@ -73,6 +72,11 @@ if (!g.__store_version) g.__store_version = 0;
 function getStoreVersion() { return g.__store_version; }
 function bumpStoreVersion() { g.__store_version++; }
 const WRITE_RE = /^\s*(INSERT|UPDATE|DELETE|TRUNCATE)\b/i;
+// The session store writes on nearly every authenticated request. Those rows are
+// not part of the cached store (see readStoreDb), so they must not invalidate it —
+// otherwise the cache would miss on every single page load and never help.
+const NO_BUMP_RE = /\buser_sessions\b/i;
+function noteWrite(text) { if (WRITE_RE.test(text) && !NO_BUMP_RE.test(text)) bumpStoreVersion(); }
 
 // ── PostgreSQL→MySQL query translator (used when DB_TYPE=mysql) ───────────────
 function pgToMysql(text) {
@@ -127,7 +131,7 @@ if (!g.__db_pool) {
     });
     g.__db_pool = {
       async query(text, params) {
-        if (WRITE_RE.test(text)) bumpStoreVersion();
+        noteWrite(text);
         const [rows] = await myPool.execute(pgToMysql(text), params || []);
         return { rows: Array.isArray(rows) ? rows : [], rowCount: rows.affectedRows || 0 };
       },
@@ -135,7 +139,7 @@ if (!g.__db_pool) {
         const conn = await myPool.getConnection();
         return {
           async query(text, params) {
-            if (WRITE_RE.test(text)) bumpStoreVersion();
+            noteWrite(text);
             const [rows] = await conn.execute(pgToMysql(text), params || []);
             return { rows: Array.isArray(rows) ? rows : [], rowCount: rows.affectedRows || 0 };
           },
@@ -153,7 +157,7 @@ if (!g.__db_pool) {
       const useSsl = !/railway\.internal|localhost|127\.0\.0\.1/.test(pgUrl);
       const pgPool = new pg.Pool({ connectionString: pgUrl, ssl: useSsl ? { rejectUnauthorized: false } : false, max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 10000 });
       g.__db_pool = {
-        query: (t, p) => { if (WRITE_RE.test(t)) bumpStoreVersion(); return pgPool.query(t, p); },
+        query: (t, p) => { noteWrite(t); return pgPool.query(t, p); },
         connect: (...a) => pgPool.connect(...a),
         end: () => pgPool.end(),
       };
@@ -254,6 +258,10 @@ const SCHEMA = [
   `CREATE INDEX idx_del_status ON delegations (status)`,
   `CREATE INDEX idx_del_doer_id ON delegations (doer_id)`,
   `CREATE INDEX idx_del_delegated_by ON delegations (delegated_by)`,
+  // Both list endpoints ORDER BY created_at DESC over the whole table; without
+  // these every request is a filesort of every row.
+  `CREATE INDEX idx_del_created_at ON delegations (created_at)`,
+  `CREATE INDEX idx_masters_created_at ON masters (created_at)`,
   `CREATE TABLE IF NOT EXISTS masters (id VARCHAR(16) PRIMARY KEY, task TEXT NOT NULL, assigned_to VARCHAR(255) DEFAULT '', frequency VARCHAR(32) NOT NULL DEFAULT 'Daily', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_masters_assigned_to ON masters (assigned_to)`,
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS start_date DATE DEFAULT NULL`,
@@ -789,6 +797,13 @@ async function ensureSchema() {
 }
 
 function toIso(v) { if (!v) return null; if (v instanceof Date) return v.toISOString(); return v; }
+// Today's date for the business (IST), as YYYY-MM-DD. `new Date().toISOString()`
+// is the UTC date, which is still yesterday until 05:30 in the morning in India —
+// the host runs on UTC, so anything stamped "today" server-side between midnight
+// and half past five was dated a day early.
+function todayIST() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
 function toDateStr(v) { if (!v) return null; if (v instanceof Date) return v.toISOString().slice(0,10); if (typeof v==='string') return v.slice(0,10); return null; }
 
 // ── JSON store (no-DB fallback) ───────────────────────────────────────────────
@@ -800,10 +815,6 @@ const USE_DB = !!g.__db_pool;
 
 const CACHE_TTL_MS = Number(process.env.STORE_CACHE_TTL_MS || 30000);
 if (!g.__store_cache) g.__store_cache = { data: null, version: -1, at: 0 };
-
-function cloneData(data) {
-  return typeof structuredClone === 'function' ? structuredClone(data) : JSON.parse(JSON.stringify(data));
-}
 
 async function ensureStoreJson() {
   try { await fs.access(STORE_FILE); }
@@ -835,10 +846,43 @@ function userOut(r) {
   return { id:r.id, name:r.name, email:r.email, phone:r.phone||'', department:r.department||'', roles, active:!!r.active, picture:r.picture||null, permissions, createdAt:toIso(r.created_at) };
 }
 
+/* readStoreDb() is what /api/dashboard (and, in JSON mode, most routes) run on:
+   every user, every delegation, every checklist occurrence and every completion,
+   pulled from the database and re-shaped on EACH call. With the recurring
+   checklists pre-generated as one row per day that is tens of thousands of rows
+   per dashboard open — the single slowest thing in the app.
+
+   The result is cached in-process. The cache is dropped by any write to the
+   tables it covers (noteWrite bumps the store version on every INSERT/UPDATE/
+   DELETE that isn't a session row) and also ages out after CACHE_TTL_MS, so a
+   change made straight in the database (an import script) shows within seconds.
+   Concurrent callers share one in-flight load rather than each starting their
+   own. Callers must treat the returned object as read-only — every DB-mode
+   caller only reads it (the JSON-mode paths that mutate never run with a DB). */
 async function readStoreDb() {
+  const c = g.__store_cache;
+  const ver = getStoreVersion();
+  if (c.data && c.version === ver && Date.now() - c.at < CACHE_TTL_MS) return c.data;
+  if (c.inflight && c.inflightVersion === ver) return c.inflight;
+  const p = _loadStoreDb().then((data) => {
+    // Version captured BEFORE the reads began: a write that landed while we
+    // were loading bumps past it, so the next call reloads instead of trusting
+    // a snapshot that may predate the write. A slower, older load must not
+    // overwrite a newer one that already finished.
+    if (ver >= c.version) { c.data = data; c.version = ver; c.at = Date.now(); }
+    return data;
+  });
+  c.inflight = p; c.inflightVersion = ver;
+  p.catch(() => {}).finally(() => { if (c.inflight === p) c.inflight = null; });
+  return p;
+}
+
+async function _loadStoreDb() {
   await ensureSchema();
   const [users, delegations, masters, holidays, profileRows, completedMasters] = await Promise.all([
-    q('SELECT * FROM users ORDER BY id ASC'),
+    // No `picture`: the avatars are base64 blobs, and nothing that reads the
+    // store needs them — leaving them out is most of the payload.
+    q('SELECT id, name, email, phone, department, branch, roles, active, permissions, created_at FROM users ORDER BY id ASC'),
     q('SELECT * FROM delegations ORDER BY id ASC'),
     q('SELECT * FROM masters ORDER BY id ASC'),
     q('SELECT * FROM holidays ORDER BY date ASC'),
@@ -1173,14 +1217,39 @@ class DbSessionStore extends session.Store {
       .then(() => cb(null)).catch(() => cb(null));
   }
   destroy(sid, cb) {
+    _sessionTouched.delete(sid);
     pool.query('DELETE FROM user_sessions WHERE sid = $1', [sid])
       .then(() => cb(null)).catch(() => cb(null));
   }
-  touch(sid, sess, cb) { this.set(sid, sess, cb); }
+  /* express-session calls touch() on EVERY request that doesn't otherwise modify
+     the session — which is every API call of every page load. Each one used to
+     be a full row rewrite (the whole session JSON, via set()). The cookie's
+     30-day expiry does not need refreshing more than a few times an hour, so
+     touches are throttled per session and only push the expiry forward when
+     they do run. A session that was never touched by this process (fresh boot)
+     is touched once immediately, so the throttle can never let one lapse. */
+  touch(sid, sess, cb) {
+    const now = Date.now();
+    const last = _sessionTouched.get(sid) || 0;
+    if (now - last < SESSION_TOUCH_MIN_MS) return cb(null);
+    _sessionTouched.set(sid, now);
+    pool.query('UPDATE user_sessions SET expires_at = $1 WHERE sid = $2', [new Date(now + SESSION_TTL_MS), sid])
+      .then(() => cb(null)).catch(() => cb(null));
+  }
 }
+const SESSION_TOUCH_MIN_MS = 10 * 60 * 1000;
+const _sessionTouched = new Map(); // sid -> last touch ms
+setInterval(() => {
+  const cutoff = Date.now() - SESSION_TOUCH_MIN_MS;
+  for (const [sid, at] of _sessionTouched) if (at < cutoff) _sessionTouched.delete(sid);
+}, 30 * 60 * 1000).unref?.();
 
 // ── App setup ─────────────────────────────────────────────────────────────────
 const app = express();
+// gzip/brotli for API JSON and the (large) page scripts. The task lists and the
+// store-shaped responses compress 5-10x; PDFs/ZIPs are skipped by the default
+// filter since they are already compressed.
+app.use(require('compression')({ threshold: 1024 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.set('trust proxy', 1);
@@ -1247,6 +1316,15 @@ app.use(express.static(path.join(__dirname, 'public'), {
       res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.set('Pragma', 'no-cache');
       res.set('Expires', '0');
+      return;
+    }
+    // Scripts and styles are requested with a ?v=N that app.html bumps on every
+    // change, so a versioned URL never changes meaning — it can be cached hard.
+    // Every page load used to re-validate all ~40 of them (a 304 round trip
+    // each); now a repeat visit reads them from the browser cache. Unversioned
+    // requests keep express.static's default (revalidate every time).
+    if (res.req?.query?.v !== undefined) {
+      res.set('Cache-Control', 'public, max-age=604800, immutable');
     }
   },
 }));
@@ -1824,10 +1902,16 @@ function requireAdmin(req, res, next) {
 // to their own leave and payslips by the HR module, which reads company-wide
 // access from this same function. The owner outranks Admin, so it can never
 // see less than one.
+// A user's roles as an array, whether the row/session holds them as an array or
+// as the comma-separated string the users table stores.
+function rolesOf(user) {
+  const roles = user?.roles || [];
+  return Array.isArray(roles) ? roles : String(roles).split(',').map(r=>r.trim());
+}
+
 function isAdminUser(user) {
   if (isSuperAdmin(user)) return true;
-  const roles = user?.roles || [];
-  const rolesArr = Array.isArray(roles) ? roles : String(roles).split(',').map(r=>r.trim());
+  const rolesArr = rolesOf(user);
   return rolesArr.includes('Admin') || rolesArr.includes('HOD');
 }
 
@@ -1911,14 +1995,10 @@ function clientUser(user, extra = {}) {
 // gating (edit/delete/etc.), but task VISIBILITY must not: only true Admin sees
 // everyone, HOD is scoped to their own department, plain User to just themselves.
 function isTrueAdminUser(user) {
-  const roles = user?.roles || [];
-  const rolesArr = Array.isArray(roles) ? roles : String(roles).split(',').map(r=>r.trim());
-  return rolesArr.includes('Admin');
+  return rolesOf(user).includes('Admin');
 }
 function isHODUser(user) {
-  const roles = user?.roles || [];
-  const rolesArr = Array.isArray(roles) ? roles : String(roles).split(',').map(r=>r.trim());
-  return rolesArr.includes('HOD') && !isTrueAdminUser(user);
+  return rolesOf(user).includes('HOD') && !isTrueAdminUser(user);
 }
 
 // `department` is free text (Users admin has "+ Add new department" alongside a
@@ -2104,7 +2184,11 @@ app.post('/api/auth/login', async (req, res) => {
         console.error('[auth] Postgres error:', err.message);
       }
     }
-    if (!matches.length) {
+    // The JSON store is only a fallback for running WITHOUT a database. With a DB
+    // configured, "no match" means the credentials are wrong — consulting the
+    // store from here cost a full readStore() (every table) on every mistyped
+    // email, for an answer that could only ever be the same "no".
+    if (!matches.length && !USE_DB) {
       try {
         // Auto-seed admin on first login attempt if store is empty
         await seedJsonFallback();
@@ -3298,7 +3382,7 @@ app.post('/api/masters/backfill-recurring', requireAuth, requireAdmin, async (re
    available as an admin route for re-runs after new holidays are added. */
 async function shiftNonWorkingTasks() {
   const ctx = await getWorkingDayContext();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIST();
   const nextWorking = (d) => {
     let hops = 0;
     while (hops < 14 && nonWorkingReason(d, ctx)) { d = _checklistPlusDays(d, 1); hops++; }
@@ -3659,7 +3743,16 @@ app.get('/api/users', requireAuth, async (req, res) => {
   // notifEmail rides along from the profile table. The edit form has carried a
   // "Notification Email" field since it existed; without this join it always
   // reopened blank, whatever had been saved.
-  const rows = await q(`SELECT u.*, p.notification_email AS notif_email
+  //
+  // ?lite=1 leaves out `picture`. The avatars are base64 blobs of up to ~100KB
+  // each, and most callers (Dashboard, All Tasks, FMS, Help Ticket) only want
+  // names and departments for a dropdown — they were downloading every photo
+  // in the company on every open. Users and Profile still fetch the full rows.
+  const lite = req.query.lite === '1';
+  const cols = lite
+    ? 'u.id, u.name, u.email, u.phone, u.department, u.branch, u.roles, u.active, u.permissions, u.leave_approver, u.substitute_approver, u.created_at'
+    : 'u.*';
+  const rows = await q(`SELECT ${cols}, p.notification_email AS notif_email
                           FROM users u LEFT JOIN profile p ON p.user_id = u.id ORDER BY u.id`);
   return res.json(rows.map(({ password_hash, notif_email, ...u }) =>
     ({ ...u, notifEmail: notif_email || '', permissions: parsePermissions(u.permissions) })));
@@ -4361,7 +4454,6 @@ app.delete('/api/clients', requireAuth, async (req, res) => {
 // ── Google Sheets & Drive Sync (PR/PO/GRN → their respective live sheets) ─────
 
 const PR_SHEET_ID = '18SNUNQPwZMC0OLCKmU8eltvLLY4VC1kO8rZw75UNg1k';
-const GRN_SHEET_ID = '1mvhf6SN7_5h1HEuKoBc1CJRqnYwoOAzNAgvGuSbSi38';
 const PDF_DRIVE_FOLDER_ID = '1szkgiMRZ8RAvQxQiwOho4Hqd7JO5VzoI';
 // PO/PR/GRN each save into their own subfolder of the "PR/PO/GRN ERP pdfs"
 // Shared Drive (0AO3U0bKj4seJUk9PVA). This has to be a Shared Drive, not a
@@ -4374,10 +4466,6 @@ const PDF_DRIVE_FOLDER_ID = '1szkgiMRZ8RAvQxQiwOho4Hqd7JO5VzoI';
 const PO_PDF_DRIVE_FOLDER_ID = '1iFcj9bv3QmIuaNKQSIKrNy6_8FhGzn6e';
 const PR_PDF_DRIVE_FOLDER_ID = '1Nr33UmAqIUEC4KQmaAnZlFjhv57mVWi4';
 const GRN_PDF_DRIVE_FOLDER_ID = '11ELSLuEbVIqUeibZwmvPiRg-MOUVPJXQ';
-const LOG_TAB_NAME = 'Web App Log';
-// PO log replaced the old per-PO-spreadsheet "Web App Log" tab with this shared
-// monitoring spreadsheet so PO activity shows up alongside other ops tracking.
-const PO_MONITORING_SHEET_ID = '19wbm97_bYYsVDCpgOzGHZlriYc81McuPSKpqumf96MI';
 // PR creation also logs into "PR Form Responses" — the spreadsheet the store
 // team's own Google Form (filled by hand by Sagar/whoever raises the PR) has
 // always submitted into, tab "RM_1_res". NOT the "FMS (Stores)" spreadsheet's
@@ -4852,9 +4940,6 @@ async function uploadPdfToDrive(buffer, filename, folderId = PDF_DRIVE_FOLDER_ID
   return file.data.webViewLink;
 }
 
-function _itemsSummary(items) {
-  return (items || []).map(it => it.itemName).filter(Boolean).join(', ');
-}
 
 // Matches the existing "7/20/2026 13:41:00" style already used in the FMS
 // Monitoring sheet — M/D/YYYY, 24-hour time, in India time regardless of
@@ -9862,7 +9947,7 @@ async function _imsCreateTxn(direction, body, user) {
   const quantity = parseFloat(body.quantity);
   if (!itemCode) throw Object.assign(new Error('itemCode is required'), { status: 400 });
   if (!quantity || quantity <= 0) throw Object.assign(new Error('quantity must be greater than 0'), { status: 400 });
-  const txnDate = body.date || new Date().toISOString().slice(0, 10);
+  const txnDate = body.date || todayIST();
   // Only the Trading form sends this (see inward.js/outward.js); every other
   // book posts nothing and stores '', exactly as before the column existed.
   const size = String(body.size || '').trim().slice(0, 64);
@@ -9961,7 +10046,7 @@ async function _imsPhysicalStockUpdate(body, user) {
   const physicalStock = parseFloat(body.physicalStock);
   if (!itemCode) throw Object.assign(new Error('itemCode is required'), { status: 400 });
   if (!Number.isFinite(physicalStock) || physicalStock < 0) throw Object.assign(new Error('physicalStock must be a number 0 or greater'), { status: 400 });
-  const txnDate = body.date || new Date().toISOString().slice(0, 10);
+  const txnDate = body.date || todayIST();
 
   const existing = await q('SELECT * FROM ims_items WHERE item_code=$1', [itemCode]);
   if (!existing.length) throw Object.assign(new Error('Unknown item code — add it on the IMS page first'), { status: 404 });
@@ -10575,66 +10660,6 @@ app.post('/api/sync-sheets', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
-// ── Migrate ───────────────────────────────────────────────────────────────────
-const MIGRATE_USERS = [
-  {id:'U001',name:'Abhishek Jain',email:'abhishek@e-marketing.io',phone:'9602684444',department:'CXO',roles:'Admin',active:1},
-  {id:'U002',name:'Akhilesh Vyas',email:'vyas.akhilesh@e-marketing.io',phone:'7048462985',department:'Business Automation',roles:'Admin,HOD',active:1},
-  {id:'U003',name:'Akshita Jain',email:'jain.akshita@e-marketing.io',phone:'7340302359',department:'Social Media',roles:'User',active:1},
-  {id:'U004',name:'Aman Bejal',email:'bejal.aman@e-marketing.io',phone:'6376724283',department:'Graphic Designing',roles:'User',active:1},
-  {id:'U005',name:'Aman Pareek',email:'pareek.aman@e-marketing.io',phone:'7507905684',department:'Business Automation',roles:'Admin,User',active:1},
-  {id:'U006',name:'Ankit Ladha',email:'ladha.ankit@e-marketing.io',phone:'7737270516',department:'Google Ads',roles:'User',active:1},
-  {id:'U007',name:'Ashish Jha',email:'seo@e-marketing.io',phone:'9024736048',department:'SEO',roles:'User',active:1},
-  {id:'U008',name:'Bhanu Sharma',email:'sharma.bhanu@e-marketing.io',phone:'9351842255',department:'SEO',roles:'User',active:1},
-  {id:'U009',name:'Chetna Agrawal',email:'chetna@e-marketing.io',phone:'8238999732',department:'CXO',roles:'User',active:1},
-  {id:'U010',name:'Ching Thakral',email:'googlexecutive@e-marketing.io',phone:'9988716423',department:'Google Ads',roles:'User',active:1},
-  {id:'U011',name:'Divvy Jain',email:'jain.divvy@e-marketing.io',phone:'8769533770',department:'Meta Ads',roles:'User',active:1},
-  {id:'U012',name:'Divya Srivastava',email:'srivastava.divya@e-marketing.io',phone:'9001798754',department:'Graphic Designing',roles:'User',active:1},
-  {id:'U013',name:'Garvit Kedia',email:'kedia.garvit@e-marketing.io',phone:'9782800257',department:'Meta Ads',roles:'User',active:1},
-  {id:'U014',name:'Gaurav Gupta',email:'gupta.gaurav@e-marketing.io',phone:'9155836021',department:'Website Design & Development',roles:'User',active:1},
-  {id:'U015',name:'Harsh Daharwal',email:'daharwal.harsh@e-marketing.io',phone:'9596896449',department:'Business Automation',roles:'Admin,User',active:1},
-  {id:'U016',name:'Kritika Saini',email:'saini.kritika@e-marketing.io',phone:'8696482750',department:'Google Ads',roles:'User',active:1},
-  {id:'U017',name:'Kushagra Dubey',email:'dubey.kushagra@e-marketing.io',phone:'8203058282',department:'Meta Ads',roles:'User',active:1},
-  {id:'U018',name:'Mohit Kumawat',email:'kumawat.mohit@e-marketing.io',phone:'6290552269',department:'Content Writing',roles:'User',active:1},
-  {id:'U019',name:'Nikita Khandelwal',email:'khandelwal.nikita@e-marketing.io',phone:'8306660792',department:'MDO',roles:'Admin,User',active:1},
-  {id:'U020',name:'Nisha Madaan',email:'madaan.nisha@e-marketing.io',phone:'9988820092',department:'Google Ads',roles:'User',active:1},
-  {id:'U021',name:'Nupur Kothari',email:'kothari.nupur@e-marketing.io',phone:'9314050398',department:'Graphic Designing',roles:'User',active:1},
-  {id:'U022',name:'Pradhuman Kumar',email:'pradhuman@e-marketing.io',phone:'7973006643',department:'Google Ads',roles:'HOD',active:1},
-  {id:'U023',name:'Priya Saini',email:'saini.priya@e-marketing.io',phone:'9652295500',department:'SEO',roles:'User',active:1},
-  {id:'U024',name:'Purvi Saini',email:'saini.purvi@e-marketing.io',phone:'9301878061',department:'MDO',roles:'Admin,User',active:1},
-  {id:'U025',name:'Rahul Maharchandani',email:'maharchandani.rahul@e-marketing.io',phone:'8302671330',department:'AI',roles:'HOD',active:1},
-  {id:'U026',name:'Ritu Tilokani',email:'tilokani.ritu@e-marketing.io',phone:'9772779351',department:'Content Writing',roles:'HOD',active:1},
-  {id:'U027',name:'Sakshi Saini',email:'sakshi.saini@e-marketing.io',phone:'9530000022',department:'Google Ads',roles:'User',active:1},
-  {id:'U028',name:'Satish Khichi',email:'khichi.satish@e-marketing.io',phone:'9530000023',department:'Google Ads',roles:'User',active:1},
-  {id:'U029',name:'Saurav Pareek',email:'pareek.saurav@e-marketing.io',phone:'9530000024',department:'Social Media',roles:'User',active:1},
-  {id:'U030',name:'Swati Joshi',email:'joshi.swati@e-marketing.io',phone:'9530000025',department:'Content Writing',roles:'User',active:1},
-  {id:'U031',name:'Tushar Chauhan',email:'chauhan.tushar@e-marketing.io',phone:'9530000026',department:'Website Design & Development',roles:'User',active:1},
-  {id:'U032',name:'Vishal Jaga',email:'mis1@e-marketing.io',phone:'00756492939',department:'MDO',roles:'Admin',active:1},
-  {id:'U033',name:'Naman Gupta',email:'mis2@e-marketing.io',phone:'6367577176',department:'Business Automation',roles:'User',active:1,password_hash:'$2b$10$fF1PhyruhuhcYZtrqIC2DOjPlGZct61n/b9azuwsuRCSrpI4SKtD6'},
-  {id:'U034',name:'Saloni',email:'saloni@lallubhaiamichand.com',phone:'',department:'CXO',roles:'Admin',active:1,password_hash:'$2b$10$I6naUIg8PYam1dg8ZCo3.uPvJ9BogTgTNrBy1l.wCJzMmUQQrw/3G'},
-];
-
-// One-time bootstrap that overwrites the users table from the hard-coded list
-// above. Its key used to be a literal in this file — i.e. no key at all for
-// anyone with the source. Fail-closed behind MIGRATE_KEY now; leave that unset
-// (it should be) and the route is simply dead.
-app.get('/api/migrate', async (req, res) => {
-  const key = req.query.key;
-  const want = process.env.MIGRATE_KEY || '';
-  if (!want || !timingSafeEq(key, want)) return res.status(401).json({ error:'Unauthorized' });
-  try {
-    await ensureSchema();
-    const results={ users:0, delegations:0, masters:0, holidays:0, errors:[] };
-    for (const u of MIGRATE_USERS) {
-      try {
-        await pool.query(`INSERT INTO users (id,name,email,phone,department,roles,active,password_hash,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW()) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,phone=EXCLUDED.phone,department=EXCLUDED.department,roles=EXCLUDED.roles,active=EXCLUDED.active,password_hash=COALESCE(EXCLUDED.password_hash,users.password_hash)`,
-          [u.id,u.name,u.email,u.phone||'',u.department||'',u.roles,u.active,u.password_hash||null]);
-        results.users++;
-      } catch(e) { results.errors.push(`User ${u.id}: ${e.message}`); }
-    }
-    return res.json({ success:true, ...results });
-  } catch(err) { return res.status(500).json({ error:err.message }); }
-});
-
 // ── DB test ───────────────────────────────────────────────────────────────────
 app.get('/api/db-test', async (req, res) => {
   try {
@@ -10711,7 +10736,6 @@ async function seedJsonFallback() {
 
 app.listen(process.env.PORT || 3000, async () => {
   console.log('Server on http://localhost:' + (process.env.PORT || 3000));
-  console.log('[google-sync] credentials present at boot — email:', !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, '| key:', !!process.env.GOOGLE_PRIVATE_KEY, '| key_b64:', !!process.env.GOOGLE_PRIVATE_KEY_B64);
   await seedJsonFallback();
   shiftNonWorkingTasksOnce();
 });
