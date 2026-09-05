@@ -185,8 +185,7 @@ window.Pages.approvals = {
         'No leave requests waiting on you',
         'Requests naming you as the approver appear here, and you are emailed when one is raised.');
     }
-    const esc = (v) => String(v == null ? '' : v)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const esc = Utils.esc;
     const rows = items.map(l => {
       const busy = this._leaveBusy === l.id;
       const half = l.half_day && l.half_day !== 'full' ? ` <span class="text-[10px] text-amber-600">(${esc(l.half_day)} half)</span>` : '';

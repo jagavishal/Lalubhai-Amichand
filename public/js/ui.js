@@ -73,8 +73,6 @@ window.UI = (function () {
       </div>`;
   }
 
-  function showModal(id) { const el = document.getElementById(id); if (el) el.style.display = 'flex'; }
-  function hideModal(id) { const el = document.getElementById(id); if (el) el.style.display = 'none'; }
 
   /* ── Stat tile ───────────────────────────────────────────────────── */
   function statTile(opts = {}) {
@@ -169,5 +167,5 @@ window.UI = (function () {
       </div>`;
   }
 
-  return { avatar, pill, badge, modal, showModal, hideModal, statTile, emptyState, lightbox, hideLightbox };
+  return { avatar, pill, badge, modal, statTile, emptyState, lightbox, hideLightbox };
 })();

@@ -23,8 +23,8 @@ window.Pages['grn-creation'] = (() => {
   let _grlFFrom = '';
   let _grlFTo = '';
 
-  function _today() { return new Date().toISOString().slice(0, 10); }
-  function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function _today() { return Utils.todayISO(); }
+  const esc = Utils.esc;
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
   function _fmtMoney(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -172,7 +172,7 @@ window.Pages['grn-creation'] = (() => {
       const vendorInput = document.getElementById('grnc-vendor');
       if (vendorInput && !vendorInput.value.trim() && po.vendorName) vendorInput.value = po.vendorName;
     });
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   /* ── Vendor typeahead — plain text input + filtered list, same pattern as
@@ -204,7 +204,7 @@ window.Pages['grn-creation'] = (() => {
       input.value = opt.dataset.v;
       dd.style.display = 'none';
     });
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   /* ── Item-no typeahead per row — fixed-position dropdown so it isn't
@@ -242,8 +242,8 @@ window.Pages['grn-creation'] = (() => {
       previewSize.textContent = opt.dataset.size || '—';
       dd.style.display = 'none';
     });
-    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, { capture: true, signal: window.Router.pageSignal() });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   /* ── Live computed previews (row Total, Grand Total) — Amount is Rate ×

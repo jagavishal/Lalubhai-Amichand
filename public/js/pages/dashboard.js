@@ -3,9 +3,7 @@ window.Pages = window.Pages || {};
 window.Pages.dashboard = (function () {
 
   /* ── helpers ─────────────────────────────────────────────────────── */
-  function esc(s) {
-    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
+  const esc = Utils.esc;
 
   function fmt(iso) {
     if (!iso) return '—';
@@ -32,12 +30,6 @@ window.Pages.dashboard = (function () {
     return out;
   }
 
-  function fmtDateInput(iso) {
-    if (!iso) return '';
-    const d = new Date(iso);
-    if (isNaN(d)) return '';
-    return d.toISOString().split('T')[0];
-  }
 
   function todayISO() {
     return new Date().toISOString().split('T')[0];
@@ -222,7 +214,7 @@ window.Pages.dashboard = (function () {
     const leave = Array.isArray(data) ? data : (data?.leave || []);
     const absent = Array.isArray(data) ? [] : (data?.absent || []);
     if (!leave.length && !absent.length) return;
-    const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const esc = Utils.esc;
     box.style.display = '';
     box.innerHTML = `
       <div class="card" style="padding:12px 16px;border-left:3px solid #7c3aed;display:flex;flex-direction:column;gap:8px;">
@@ -282,7 +274,7 @@ window.Pages.dashboard = (function () {
     /* parallel fetches */
     const [dashData, usersData, holidaysData, delegationsData] = await Promise.all([
       Utils.apiFetch('/api/dashboard'),
-      Utils.apiFetch('/api/users'),
+      Utils.apiFetch('/api/users?lite=1'),
       Utils.apiFetch('/api/holidays'),
       admin ? Utils.apiFetch('/api/delegations') : Promise.resolve([]),
     ]);
@@ -842,7 +834,9 @@ window.Pages.dashboard = (function () {
       }
     }
     _applyMobileLayout();
-    window.addEventListener('resize', _applyMobileLayout);
+    // Scoped to this page render — otherwise every visit to the dashboard
+    // stacked another resize handler pointing at the previous, detached DOM.
+    window.addEventListener('resize', _applyMobileLayout, { signal: window.Router.pageSignal() });
   }
 
   /* ── pie chart svg ───────────────────────────────────────────────── */
@@ -947,7 +941,7 @@ window.Pages.dashboard = (function () {
         <td style="${tdStyle}">${typePillHTML(t.type)}</td>
         <td style="${tdStyle}max-width:260px;">
           <div style="display:flex;align-items:flex-start;gap:4px;">
-            <span style="font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;" title="${t.description}">${t.description}</span>
+            <span style="font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;" title="${esc(t.description)}">${esc(t.description)}</span>
             ${urlLink}
           </div>
           ${t.type === 'Checklist' && t.department ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${t.department}</div>` : ''}
@@ -1097,8 +1091,8 @@ window.Pages.dashboard = (function () {
     const infoEl = document.getElementById('revise-task-info');
     if (infoEl) {
       infoEl.innerHTML = `
-        <div style="font-weight:700;color:#0f172a;margin-bottom:4px;">${task.description}</div>
-        <div style="font-size:12px;color:#64748b;">Doer: <b style="color:#334155;">${task.doer}</b></div>`;
+        <div style="font-weight:700;color:#0f172a;margin-bottom:4px;">${esc(task.description)}</div>
+        <div style="font-size:12px;color:#64748b;">Doer: <b style="color:#334155;">${esc(task.doer)}</b></div>`;
     }
 
     const dateInput = document.getElementById('revise-date-input');
@@ -1115,10 +1109,10 @@ window.Pages.dashboard = (function () {
     const existing = document.getElementById('db-ht-modal');
     if (existing) existing.remove();
     const userName = window.currentUser?.name || '';
-    const today = new Date().toISOString().slice(0,10);
+    const today = Utils.todayISO();
     let userOpts = `<option value="${userName}">${userName}</option>`;
     try {
-      const res = await fetch('/api/users');
+      const res = await fetch('/api/users?lite=1');
       if (res.ok) {
         const users = await res.json();
         userOpts = users
@@ -1404,7 +1398,7 @@ window.Pages.dashboard = (function () {
       if (picker && !picker.contains(e.target)) {
         if (empDropdown) empDropdown.style.display = 'none';
       }
-    });
+    }, { signal: window.Router.pageSignal() });
 
     /* hover style for options */
     if (empList) {
@@ -1865,19 +1859,6 @@ window.Pages.dashboard = (function () {
     }
   }
 
-  async function denyRevise(task, admin) {
-    if (!await Utils.showConfirm('This will send the task back to pending status.', { title: 'Deny Revise Request', confirmText: 'Deny', danger: true })) return;
-    try {
-      await Utils.apiFetch('/api/delegations', {
-        method: 'PATCH',
-        body: JSON.stringify({ id: task.id, status: 'pending', _denyRevise: true }),
-      });
-      Utils.showToast('Revise request denied.');
-      await _refresh(admin);
-    } catch (err) {
-      Utils.showToast(err.message || 'Failed.', 'error');
-    }
-  }
 
   /* ── refresh (re-fetch data, update table) ───────────────────────── */
   async function _refresh(admin) {

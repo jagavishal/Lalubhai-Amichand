@@ -168,8 +168,8 @@ window.Pages['po-creation'] = (() => {
   let _polFFrom = '';
   let _polFTo = '';
 
-  function _today() { return new Date().toISOString().slice(0, 10); }
-  function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function _today() { return Utils.todayISO(); }
+  const esc = Utils.esc;
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
   function _fmtMoney(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -278,7 +278,7 @@ window.Pages['po-creation'] = (() => {
       const pr = _pendingPrs.find(p => String(p.prNo) === opt.dataset.pr);
       if (pr) _applyPendingPr(pr); else input.value = opt.dataset.pr;
     });
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   /* ── Applying a picked pending PR — prefills Party/Department, carries the
@@ -371,7 +371,7 @@ window.Pages['po-creation'] = (() => {
       input.value = opt.dataset.v;
       dd.style.display = 'none';
     });
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   // Looks up an exact item code and fills that row's Description/Size preview
@@ -433,8 +433,8 @@ window.Pages['po-creation'] = (() => {
     // on the placeholder "—". Resolve it on blur too, not just on an
     // explicit dropdown click.
     input.addEventListener('blur', () => _resolveItemPreview(row, input.value));
-    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, { capture: true, signal: window.Router.pageSignal() });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   /* ── Live computed previews (Amount / Amount w/ Tax / Total, Grand Total) ─ */

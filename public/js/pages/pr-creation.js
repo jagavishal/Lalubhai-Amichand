@@ -168,8 +168,8 @@ window.Pages['pr-creation'] = (() => {
   let _sumFFrom = '';
   let _sumFTo = '';
 
-  function _today() { return new Date().toISOString().slice(0, 10); }
-  function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function _today() { return Utils.todayISO(); }
+  const esc = Utils.esc;
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
   function _fmtMoney(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -248,7 +248,7 @@ window.Pages['pr-creation'] = (() => {
       input.value = opt.dataset.v;
       dd.style.display = 'none';
     });
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   /* ── "Add new item" modal — for when the picker below comes up empty.
@@ -357,8 +357,8 @@ window.Pages['pr-creation'] = (() => {
       _setSticker(row, opt.dataset.sticker);
       dd.style.display = 'none';
     });
-    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, { capture: true, signal: window.Router.pageSignal() });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   /* ── Live computed previews (row totals + grand total) ─────────────────── */

@@ -1,4 +1,4 @@
-const _SPIN = '<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;"><div style="text-align:center;"><div style="width:40px;height:40px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 14px;"></div><div style="font-size:13px;color:#94a3b8;font-weight:500;letter-spacing:.01em;">Loading…</div></div></div>';
+const _SPIN = '<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;"><div style="text-align:center;"><div style="width:40px;height:40px;border-radius:50%;border:3px solid var(--border-light);border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 14px;"></div><div style="font-size:13px;color:var(--text-muted);font-weight:500;letter-spacing:.01em;">Loading…</div></div></div>';
 
 window.Router = {
   navigate(page) { window.location.hash = '#' + page; },
@@ -6,6 +6,21 @@ window.Router = {
   init() {
     window.addEventListener('hashchange', () => this._render());
     this._render();
+  },
+
+  /* Per-page AbortSignal.
+     ---------------------------------------------------------------------
+     Pages have no unmount hook, and several of them attach listeners to
+     `document`/`window` from their render() (the "close this dropdown on an
+     outside click" pattern). Every navigation back to such a page added
+     another copy, each holding its old, detached DOM alive — after a morning of
+     clicking around, a single click on the document ran dozens of dead handlers.
+     Passing this signal to addEventListener ties the listener to the page:
+     the router aborts it the moment another page is rendered. */
+  _pageAbort: null,
+  pageSignal() {
+    if (!this._pageAbort) this._pageAbort = new AbortController();
+    return this._pageAbort.signal;
   },
 
   _render() {
@@ -24,8 +39,9 @@ window.Router = {
       return;
     }
 
-    document.querySelectorAll('[data-route]').forEach(el =>
-      el.classList.toggle('nav-active', el.dataset.route === page));
+    // Drop everything the previous page hung on document/window.
+    if (this._pageAbort) this._pageAbort.abort();
+    this._pageAbort = new AbortController();
 
     // Paint spinner immediately; setTimeout(0) yields so the browser
     // renders it before the page module's render() runs its own innerHTML.

@@ -39,7 +39,7 @@ const CATEGORY = 'Accessories';
 const argv = process.argv.slice(2);
 const DIALECT = (argv.find(a => a.startsWith('--dialect='))?.split('=')[1] || 'mysql').toLowerCase();
 if (!['mysql', 'postgres'].includes(DIALECT)) throw new Error(`--dialect must be mysql or postgres, got "${DIALECT}"`);
-const OUT = argv.find(a => !a.startsWith('--')) || path.join(__dirname, '../ims_items_accessories_import.sql');
+const OUT = argv.find(a => !a.startsWith('--')) || path.join(__dirname, '../database/imports/ims_items_accessories_import.sql');
 
 // Column indexes, 0-based, in each tab's row array.
 const IL = { code: 0, name: 1, group: 2, dept: 4, weight: 5, adc: 9, leadTime: 10, safety: 11, moq: 12, maxLevel: 13 };

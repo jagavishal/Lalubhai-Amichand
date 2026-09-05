@@ -128,8 +128,8 @@ window.Pages['proforma-invoice'] = (() => {
   let _newProductPhoto = null;   // data URL, uploaded to Drive on save
   let _newProductSaving = false;
 
-  function _today() { return new Date().toISOString().slice(0, 10); }
-  function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function _today() { return Utils.todayISO(); }
+  const esc = Utils.esc;
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
   function _fmtUsd(n) { return (n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
@@ -404,7 +404,7 @@ window.Pages['proforma-invoice'] = (() => {
       if (!c.recent) _fillFromConsignee(c);
       dd.style.display = 'none';
     });
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   /* ── Model-No typeahead per row — same fixed-position dropdown pattern
@@ -498,8 +498,8 @@ window.Pages['proforma-invoice'] = (() => {
       _applyProduct(row, p);
       dd.style.display = 'none';
     });
-    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, { capture: true, signal: window.Router.pageSignal() });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   /* ── Item rows (Create form) — deliberately NO Rate/Amount column here:

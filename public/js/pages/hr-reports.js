@@ -58,19 +58,13 @@ window.Pages['hr-reports'] = (() => {
           ${H.select('hrr-type', 'Report', _type, REPORTS.map((r) => ({ value: r.key, label: r.label })),
             { hint: current().hint })}
           ${needs.includes('month') ? H.select('hrr-month', 'Month', _month, H.MONTHS.map((m, i) => ({ value: i + 1, label: m }))) : ''}
-          ${needs.includes('year') || needs.includes('month') ? H.select('hrr-year', 'Year', _year, yearList()) : ''}
+          ${needs.includes('year') || needs.includes('month') ? H.select('hrr-year', 'Year', _year, H.yearList()) : ''}
         </div>
         <div id="hrr-body">${_loading ? H.spinner('Building the report…') : reportBody()}</div>
       </div>`;
     bind();
   }
 
-  const yearList = () => {
-    const y = new Date().getFullYear();
-    const out = [];
-    for (let i = y + 1; i >= 2020; i--) out.push(i);
-    return out;
-  };
 
   function reportBody() {
     if (!_data) return H.spinner();

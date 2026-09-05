@@ -14,10 +14,7 @@ window.FmsFileUpload = (function () {
   const MAX_BYTES = 7 * 1024 * 1024;
   let _busy = 0;
 
-  function esc(s) {
-    return String(s ?? '')
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
+  const esc = Utils.esc;
 
   function linkHTML(url) {
     return `<a href="${esc(url)}" target="_blank" rel="noopener" style="color:#0150AA;font-weight:600;">✓ Uploaded — view file</a>`;
@@ -92,10 +89,7 @@ window.FmsDoneModal = (function () {
   let _fmsId = null, _step = null, _row = null, _onSaved = null;
   let _saving = false, _delayReason = '', _extra = {};
 
-  function esc(s) {
-    return String(s ?? '')
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
+  const esc = Utils.esc;
 
   function normalizeDetails(data) {
     if (Array.isArray(data)) return data;
@@ -431,10 +425,7 @@ window.Pages.fms = (() => {
   let _intakeModalForm = null; // { intakeSheetId, intakeSheetName, intakeHeaderRow, intakeFormName, fields:[...] }
 
   /* ── helpers ───────────────────────────────────────────────────────── */
-  function esc(s) {
-    return String(s ?? '')
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
+  const esc = Utils.esc;
 
   function isAdmin(user) {
     const roles = Array.isArray(user?.roles) ? user.roles : String(user?.roles || '').split(',').map(r => r.trim());
@@ -467,7 +458,7 @@ window.Pages.fms = (() => {
   }
 
   async function loadUsers() {
-    try { _users = await window.Utils.apiFetch('/api/users') || []; }
+    try { _users = await window.Utils.apiFetch('/api/users?lite=1') || []; }
     catch { _users = []; }
   }
 

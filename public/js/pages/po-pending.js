@@ -31,8 +31,7 @@ window.Pages['po-pending'] = (() => {
   // the new one.
   let _gen = 0;
 
-  const esc = s => String(s ?? '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const esc = Utils.esc;
 
   const alive = myGen => myGen === _gen && !!document.getElementById('pop-root');
 

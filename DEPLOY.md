@@ -1,131 +1,42 @@
-# Deploy to your VPS (87.106.200.69)
+# Deploy
 
-The app runs on Node + Next.js and talks to **MariaDB on the same VPS** via `127.0.0.1`. No firewall changes needed.
+Production is a Hostinger Node.js app with **git auto-deploy**: pushing to
+`main` redeploys it. There is no manual build step and no PM2 to restart by hand.
 
-## 1. One-time setup on the VPS
+## What a deploy does
 
-SSH in:
+1. Hostinger pulls `main` and runs `npm install` (so `package.json` changes,
+   like a new dependency, are picked up automatically).
+2. `node server.js` starts. On boot `ensureSchema()` applies the idempotent
+   `SCHEMA` statements in `server.js` against the production MariaDB, then the
+   app listens on the port Hostinger provides (`PORT`).
 
-```bash
-ssh root@87.106.200.69
-```
+## Environment
 
-Install Node.js 20 (skip if already installed):
+Set on the server in `.env.local` (never committed). Keys are documented in
+`.env.example`:
 
-```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs git
-sudo npm install -g pm2
-```
+- `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` (or a `DATABASE_URL`
+  starting with `mysql://`) — production is MariaDB.
+- `NEXTAUTH_SECRET` — signs session cookies. Required; without it every restart
+  signs all users out.
+- `SMTP_USER`, `SMTP_PASS` — Gmail app password for notifications.
+- `GOOGLE_SERVICE_ACCOUNT_EMAIL` + `GOOGLE_PRIVATE_KEY` (or
+  `GOOGLE_PRIVATE_KEY_B64`) — Sheets/Drive access for the document flows.
+- `DEVELOPER_SECRET`, `MASTER_KEY` — optional; blank disables those panels.
+- `APP_ORIGIN` — public URL used in email links (defaults to the live domain).
 
-Verify:
+## Checklist before pushing
 
-```bash
-node -v   # v20.x
-npm -v
-pm2 -v
-```
+- `node --check server.js` (and any page script you touched).
+- Bumped `?v=N` in `public/app.html` for every changed JS/CSS file.
+- If a page gained a new utility class: `node scripts/gen-tw-css.js` and bump
+  `tw.css?v=N`.
+- Hand-written SQL (in `database/imports/` style one-offs) is MySQL dialect.
 
-## 2. Clone the repo
+## After a deploy
 
-Replace `<YOUR_REPO_URL>` with your GitHub URL (e.g. `https://github.com/yourname/lallubhai-amichand.git`).
-
-```bash
-cd /var/www
-sudo git clone <YOUR_REPO_URL> lallubhai-amichand
-sudo chown -R $USER:$USER lallubhai-amichand
-cd lallubhai-amichand
-```
-
-## 3. Configure environment
-
-```bash
-nano .env.local
-```
-
-Set (use the full connection URL — this is required for the app to connect to the database):
-
-```
-NEXTAUTH_SECRET=<your-secret-from-env.local>
-DEVELOPER_SECRET=<your-developer-secret>
-POSTGRES_URL=postgresql://<db_user>:<db_password>@127.0.0.1:5433/<db_name>
-```
-
-> Note: Use `127.0.0.1` (not the public IP `87.106.200.69`) to connect to the local DB on the same VPS.
-
-## 4. Install + build + migrate
-
-```bash
-npm ci
-```
-
-The app auto-creates the database schema and seeds users on first startup (no separate migration step needed).
-
-## 5. Run with PM2
-
-```bash
-pm2 start server.js --name lallubhai-amichand --cwd /var/www/lallubhai-amichand
-pm2 save
-pm2 startup       # follow the command it prints to enable on boot
-```
-
-The app now runs on `http://127.0.0.1:3000` on the VPS.
-
-## 6. Expose via Nginx (recommended)
-
-```bash
-sudo apt-get install -y nginx
-sudo nano /etc/nginx/sites-available/lallubhai-amichand
-```
-
-Paste:
-
-```nginx
-server {
-  listen 80;
-  server_name erp.example.com;   # or use the bare IP
-
-  location / {
-    proxy_pass http://127.0.0.1:3000;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection 'upgrade';
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_cache_bypass $http_upgrade;
-  }
-}
-```
-
-Enable + reload:
-
-```bash
-sudo ln -s /etc/nginx/sites-available/lallubhai-amichand /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-Open in browser: `http://87.106.200.69` (or your domain).
-
-## 7. Future updates
-
-After pushing changes to GitHub:
-
-```bash
-cd /var/www/lallubhai-amichand
-git pull
-npm ci
-npm run build
-pm2 restart lallubhai-amichand
-```
-
-## Useful commands
-
-```bash
-pm2 logs lallubhai-amichand       # live logs
-pm2 status                       # process state
-pm2 restart lallubhai-amichand    # restart
-pm2 stop lallubhai-amichand       # stop
-```
+Open the app, sign in, and load the Dashboard once: that exercises the DB pool,
+the session store and the schema step. Startup problems show in Hostinger's
+application log (the server logs `[db] schema statement failed …` for any
+statement it had to skip).

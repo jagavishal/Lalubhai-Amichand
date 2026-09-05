@@ -16,7 +16,19 @@ window.Utils = {
         ...opts,
       });
       clearTimeout(timer);
-      if (res.status === 401) { window.location.hash = '#login'; return null; }
+      if (res.status === 401) {
+        // The session has expired (or was signed out elsewhere). Setting the hash
+        // to #login while window.currentUser was still set made the router bounce
+        // straight back to #dashboard, whose fetches got 401 again — an endless
+        // #login ⇄ #dashboard loop hammering the API. Drop the user and reload:
+        // main.js re-checks the session and shows the login form properly.
+        if (window.currentUser && !window.__sessionExpired) {
+          window.__sessionExpired = true;
+          window.currentUser = null;
+          window.location.replace(window.location.pathname);
+        }
+        return null;
+      }
       // A proxy/hosting-layer error (Hostinger, or Node itself crashing mid-
       // request) doesn't return JSON — it returns an HTML or plain-text error
       // page. Calling res.json() directly on that throws a raw browser
@@ -36,6 +48,49 @@ window.Utils = {
       if (e.name === 'AbortError') throw new Error('Request timed out');
       throw e;
     }
+  },
+
+  /* ── HTML escaping ──────────────────────────────────────────────── */
+  // The one escape function for text going into innerHTML. Every page used to
+  // carry an identical private copy; they now alias this one.
+  esc(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  },
+
+  // One CSV cell: quoted (with doubled quotes) only when the value needs it.
+  csvCell(v) {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  },
+
+  /* ── On-demand script loading ───────────────────────────────────── */
+  // SheetJS is ~900KB and only two screens (Vendor Master's RBI export, the
+  // Developer export) ever call it. It used to be a blocking <script> in
+  // app.html, paid for by every user on every page load. Load it when a
+  // workbook is actually about to be written instead; the promise is cached
+  // so a second export on the same page is instant.
+  _scriptPromises: {},
+  loadScript(src) {
+    if (!this._scriptPromises[src]) {
+      this._scriptPromises[src] = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = true;
+        s.onload = () => resolve(true);
+        s.onerror = () => { delete this._scriptPromises[src]; reject(new Error('Failed to load ' + src)); };
+        document.head.appendChild(s);
+      });
+    }
+    return this._scriptPromises[src];
+  },
+  // Resolves to the XLSX global, or null when the CDN could not be reached —
+  // callers keep their existing "library unavailable" fallback.
+  async loadXlsx() {
+    if (window.XLSX) return window.XLSX;
+    try {
+      await this.loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+      return window.XLSX || null;
+    } catch { return null; }
   },
 
   /* ── Enter-key guard for the big creation forms ─────────────────── */
@@ -150,23 +205,35 @@ window.Utils = {
       overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10000;display:grid;place-items:center;padding:16px;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
 
       overlay.innerHTML = `
-        <div id="utils-confirm-box" style="background:#fff;border-radius:18px;width:100%;max-width:380px;box-shadow:0 24px 64px rgba(0,0,0,.2);overflow:hidden;animation:pop-in 220ms cubic-bezier(.16,1,.3,1);">
+        <div id="utils-confirm-box" style="background:var(--surface,#fff);border-radius:18px;width:100%;max-width:380px;box-shadow:0 24px 64px rgba(0,0,0,.2);overflow:hidden;animation:pop-in 220ms cubic-bezier(.16,1,.3,1);">
           <div style="padding:24px 24px 20px;display:flex;gap:14px;align-items:flex-start;">
             <div style="width:42px;height:42px;border-radius:12px;background:${iconBg};display:grid;place-items:center;flex-shrink:0;">${iconHtml}</div>
             <div style="flex:1;min-width:0;padding-top:2px;">
-              <div style="font-size:15px;font-weight:700;color:#1e293b;margin-bottom:5px;">${String(title).replace(/</g,'&lt;')}</div>
-              <div style="font-size:13px;color:#64748b;line-height:1.5;">${String(msg).replace(/</g,'&lt;')}</div>
+              <div style="font-size:15px;font-weight:700;color:var(--text-primary,#1e293b);margin-bottom:5px;">${String(title).replace(/</g,'&lt;')}</div>
+              <div style="font-size:13px;color:var(--text-secondary,#64748b);line-height:1.5;">${String(msg).replace(/</g,'&lt;')}</div>
             </div>
           </div>
           <div style="padding:0 24px 20px;display:flex;justify-content:flex-end;gap:10px;">
-            <button id="utils-confirm-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s;" onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='#fff'">${String(cancelText).replace(/</g,'&lt;')}</button>
+            <button id="utils-confirm-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid var(--border-base,#e2e8f0);background:var(--surface,#fff);color:var(--text-secondary,#475569);font-size:13px;font-weight:600;cursor:pointer;transition:background .15s;" onmouseenter="this.style.background='var(--surface-alt)'" onmouseleave="this.style.background='var(--surface)'">${String(cancelText).replace(/</g,'&lt;')}</button>
             <button id="utils-confirm-ok" style="padding:9px 22px;border-radius:9px;border:none;background:${btnBg};color:${btnText};font-size:13px;font-weight:700;cursor:pointer;transition:background .15s;" onmouseenter="this.style.background='${btnHover}'" onmouseleave="this.style.background='${btnBg}'">${String(confirmText).replace(/</g,'&lt;')}</button>
           </div>
         </div>`;
 
       document.body.appendChild(overlay);
 
+      // The keydown listener is removed in cleanup(), whichever way the dialog
+      // closes. It used to be removed only on Escape/Enter, so every confirm
+      // dismissed by clicking a button left a listener behind — and each of
+      // those fired cleanup(true) on the next Enter anywhere in the app.
+      const onKey = (e) => {
+        if (e.key === 'Escape') cleanup(false);
+        if (e.key === 'Enter')  cleanup(true);
+      };
+      let settled = false;
       const cleanup = (result) => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKey);
         overlay.style.opacity = '0';
         overlay.style.transition = 'opacity .2s';
         setTimeout(() => overlay.remove(), 210);
@@ -176,10 +243,8 @@ window.Utils = {
       document.getElementById('utils-confirm-ok').addEventListener('click',     () => cleanup(true));
       document.getElementById('utils-confirm-cancel').addEventListener('click',  () => cleanup(false));
       overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(false); });
-      document.addEventListener('keydown', function esc(e) {
-        if (e.key === 'Escape') { cleanup(false); document.removeEventListener('keydown', esc); }
-        if (e.key === 'Enter')  { cleanup(true);  document.removeEventListener('keydown', esc); }
-      });
+      document.addEventListener('keydown', onKey);
+      document.getElementById('utils-confirm-ok')?.focus();
     });
   },
 
@@ -194,24 +259,24 @@ window.Utils = {
     return new Promise((resolve) => {
       const existing = document.getElementById('utils-prompt-overlay');
       if (existing) existing.remove();
-      const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      const escHtml = window.Utils.esc;
 
       const overlay = document.createElement('div');
       overlay.id = 'utils-prompt-overlay';
       overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10001;display:grid;place-items:center;padding:16px;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
       overlay.innerHTML = `
-        <div style="background:#fff;border-radius:18px;width:100%;max-width:400px;box-shadow:0 24px 64px rgba(0,0,0,.2);overflow:hidden;animation:pop-in 220ms cubic-bezier(.16,1,.3,1);">
+        <div style="background:var(--surface,#fff);border-radius:18px;width:100%;max-width:400px;box-shadow:0 24px 64px rgba(0,0,0,.2);overflow:hidden;animation:pop-in 220ms cubic-bezier(.16,1,.3,1);">
           <div style="padding:24px 24px 4px;">
-            <div style="font-size:15px;font-weight:700;color:#1e293b;margin-bottom:5px;">${escHtml(title)}</div>
-            <div style="font-size:13px;color:#64748b;line-height:1.5;">${escHtml(msg)}</div>
+            <div style="font-size:15px;font-weight:700;color:var(--text-primary,#1e293b);margin-bottom:5px;">${escHtml(title)}</div>
+            <div style="font-size:13px;color:var(--text-secondary,#64748b);line-height:1.5;">${escHtml(msg)}</div>
           </div>
           <div style="padding:16px 24px 4px;">
             <input id="utils-prompt-input" type="text" value="${escHtml(value)}" placeholder="${escHtml(placeholder)}"
-              style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;color:#1e293b;outline:none;" />
+              class="input" style="padding:10px 12px;border-radius:9px;" />
             <div id="utils-prompt-err" style="display:none;font-size:12px;color:#dc2626;margin-top:6px;"></div>
           </div>
           <div style="padding:16px 24px 20px;display:flex;justify-content:flex-end;gap:10px;">
-            <button id="utils-prompt-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;">${escHtml(cancelText)}</button>
+            <button id="utils-prompt-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid var(--border-base,#e2e8f0);background:var(--surface,#fff);color:var(--text-secondary,#475569);font-size:13px;font-weight:600;cursor:pointer;">${escHtml(cancelText)}</button>
             <button id="utils-prompt-ok" style="padding:9px 22px;border-radius:9px;border:none;background:var(--color-primary);color:var(--color-primary-text,#fff);font-size:13px;font-weight:700;cursor:pointer;">${escHtml(confirmText)}</button>
           </div>
         </div>`;
@@ -314,7 +379,7 @@ window.Utils = {
   // resolved (or re-render once it does) — with an empty cache it still renders
   // the placeholder and the "+ Add new department" row, never an empty box.
   deptOptionsHtml(selected = '', { placeholder = 'Select…', addNew = true, extra = [] } = {}) {
-    const escHtml = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const escHtml = window.Utils.esc;
     const list = (this._deptCache || []).slice();
     // A department stored on an old record but since removed from the master
     // list must still show as the current selection instead of silently
@@ -375,37 +440,16 @@ window.Utils = {
     });
   },
 
-  /* ── Page-level loader ──────────────────────────────────────────── */
-  showLoader(msg = 'Loading…') {
-    const existing = document.getElementById('utils-page-loader');
-    if (existing) { existing.querySelector('#utils-loader-msg').textContent = msg; return; }
-    const el = document.createElement('div');
-    el.id = 'utils-page-loader';
-    el.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,.75);z-index:9990;display:grid;place-items:center;backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);';
-    el.innerHTML = `
-      <div style="display:flex;flex-direction:column;align-items:center;gap:14px;">
-        <div style="width:44px;height:44px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;"></div>
-        <div id="utils-loader-msg" style="font-size:13px;font-weight:500;color:#64748b;">${String(msg).replace(/</g,'&lt;')}</div>
-      </div>`;
-    document.body.appendChild(el);
-  },
-
-  hideLoader() {
-    const el = document.getElementById('utils-page-loader');
-    if (!el) return;
-    el.style.opacity = '0';
-    el.style.transition = 'opacity .2s';
-    setTimeout(() => el.remove(), 220);
-  },
-
-  /* ── Inline skeleton block ──────────────────────────────────────── */
-  skeleton(rows = 4) {
-    const row = '<div style="display:flex;gap:12px;align-items:center;margin-bottom:12px;"><div style="width:36px;height:36px;border-radius:8px;background:linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%);background-size:200% 100%;animation:shimmer 1.2s infinite;flex-shrink:0;"></div><div style="flex:1;"><div style="height:11px;border-radius:4px;background:linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%);background-size:200% 100%;animation:shimmer 1.2s infinite;margin-bottom:6px;width:60%;"></div><div style="height:10px;border-radius:4px;background:linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%);background-size:200% 100%;animation:shimmer 1.2s infinite;width:40%;"></div></div></div>';
-    return `<style>@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}</style>
-      <div style="padding:20px;background:#fff;border-radius:14px;border:1px solid #e2e8f0;">${row.repeat(rows)}</div>`;
-  },
-
   /* ── Date helpers ───────────────────────────────────────────────── */
+  // Today's date as YYYY-MM-DD in the USER'S timezone. Every form used to
+  // default its date field with `new Date().toISOString().slice(0,10)`, which
+  // is the UTC date — in India that is still YESTERDAY until 05:30 in the
+  // morning, so an early-shift GRN, inward or help ticket was dated a day off.
+  todayISO(d = new Date()) {
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  },
+
   formatDate(d) {
     if (!d) return '';
     const date = new Date(d);
@@ -413,13 +457,6 @@ window.Utils = {
     return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   },
 
-  formatDateTime(d) {
-    if (!d) return '';
-    const date = new Date(d);
-    if (isNaN(date.getTime())) return '';
-    return date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
-      + ' ' + date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-  },
 
   /* ── Photo helpers ──────────────────────────────────────────────── */
   // The avatar stored in the DB is a 512px square crop. This returns the
@@ -467,7 +504,7 @@ window.Utils = {
   // Returns '' for everyone else, so a row can concatenate it unconditionally.
   ownerDeleteBtn(cls, dataName, value) {
     if (!this.isOwner()) return '';
-    const safe = String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const safe = window.Utils.esc(value);
     return '<button type="button" class="' + cls + '" data-' + dataName + '="' + safe + '"'
       + ' style="border:none;background:transparent;color:#b91c1c;cursor:pointer;font-size:12.5px;font-weight:700;padding:2px 6px;margin-left:2px;">Delete</button>';
   },
@@ -481,6 +518,4 @@ window.Utils = {
     );
   },
 
-  /* ── Legacy (kept for backward compat) ─────────────────────────── */
-  confirm(msg) { return window.confirm(msg); },
 };

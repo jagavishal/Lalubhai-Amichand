@@ -9,9 +9,14 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <link rel="stylesheet" href="/css/style.css?v=10" />
+  <link rel="stylesheet" href="/css/style.css?v=12" />
+  <!-- tw.css replaces the Tailwind Play CDN (a ~400KB in-browser compiler that
+       blocked first paint and re-scanned the DOM after every render). It holds
+       Tailwind's base reset plus the exact utility classes the pages use.
+       SheetJS (xlsx) is no longer loaded up front either — Utils.loadXlsx()
+       fetches it on the two screens that export a workbook. -->
+  <link rel="stylesheet" href="/css/tw.css?v=2" />
+  <link rel="stylesheet" href="/css/login.css?v=1" />
   <!-- Apply saved light/dark mode before first paint to prevent FOUC -->
   <script>
     (function(){
@@ -67,59 +72,8 @@
       border-bottom: 1px solid var(--sidebar-border, #0E2748);
     }
 
-    /* Nav link */
-    .sb-link {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      height: 34px;
-      padding: 0 8px;
-      border-radius: 7px;
-      font-size: 12.5px;
-      font-weight: 500;
-      color: var(--sidebar-text-muted, #93a7c1);
-      text-decoration: none;
-      position: relative;
-      transition: background 140ms, color 140ms;
-      cursor: pointer;
-    }
-    .sb-link:hover { background: rgba(255,255,255,0.07); color: var(--sidebar-text, #e6edf6); }
-    .sb-link.active {
-      background: var(--sidebar-active-bg, rgba(59,138,224,0.18));
-      color: var(--sidebar-text, #e6edf6);
-      font-weight: 600;
-    }
-    .sb-link .sb-active-bar {
-      display: none;
-      position: absolute;
-      left: 0; top: 5px; bottom: 5px;
-      width: 2px;
-      border-radius: 0 2px 2px 0;
-      background: var(--sidebar-accent-bar, #DF0419);
-    }
-    .sb-link.active .sb-active-bar { display: block; }
-    .sb-link svg { flex-shrink: 0; }
-    .sb-link.active svg { color: var(--sidebar-accent, #6BB0F5); }
 
-    /* Pending badge */
-    .sb-badge {
-      position: absolute;
-      top: -6px; right: -6px;
-      min-width: 14px; height: 14px;
-      padding: 0 3px;
-      border-radius: 9999px;
-      background: var(--color-accent);
-      box-shadow: 0 0 0 2px var(--sidebar-bg, #06162B);
-      font-size: 9px;
-      font-weight: 700;
-      color: #fff;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
 
-    /* Icon wrapper (relative for badge) */
-    .sb-icon-wrap { position: relative; flex-shrink: 0; }
 
     /* Nav scroll area */
     #sb-nav {
@@ -131,21 +85,6 @@
     #sb-nav::-webkit-scrollbar { width: 3px; }
     #sb-nav::-webkit-scrollbar-thumb { background: #1B3A5C; border-radius: 2px; }
 
-    .sb-section { margin-bottom: 6px; }
-    .sb-section-label {
-      padding: 10px 12px 3px;
-      font-size: 9.5px;
-      font-weight: 700;
-      letter-spacing: 0.09em;
-      text-transform: uppercase;
-      color: var(--sidebar-section-label, #3d5878);
-      opacity: 0;
-      transition: opacity 220ms;
-      white-space: nowrap;
-      overflow: hidden;
-    }
-    #sidebar:hover .sb-section-label { opacity: 1; }
-    .sb-section-inner { padding: 0 6px; display: flex; flex-direction: column; gap: 2px; }
 
     /* User card */
     #sb-user {
@@ -189,11 +128,10 @@
       position: sticky;
       top: 0;
       z-index: 20;
-      background: rgba(255,255,255,0.95);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      border-bottom: 1px solid #e8edf3;
-      box-shadow: 0 1px 0 rgba(0,0,0,0.04);
+      /* Tokens, not literals — the old hardcoded white strip and light border
+         showed through as a pale line across the top in dark mode. */
+      background: var(--surface, #ffffff);
+      border-bottom: 1px solid var(--border-light, #e8edf3);
     }
 
     /* ── App Shell layout ────────────────────────────────────────── */
@@ -221,30 +159,13 @@
     @media (min-width: 1024px) {
       #main-content { padding: 28px 32px 40px; }
     }
-    #main-content-inner {
-      width: 100%;
-    }
 
     /* ── Login page ──────────────────────────────────────────────── */
     #login-page { display: none; width: 100vw; min-height: 100vh; }
 
-    @keyframes float {
-      0%, 100% { transform: translateY(0px) rotate(0deg); }
-      33%       { transform: translateY(-10px) rotate(-1deg); }
-      66%       { transform: translateY(-5px) rotate(1deg); }
-    }
-    @keyframes fadeSlide {
-      from { opacity: 0; transform: translateY(18px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
     .login-card { animation: fadeSlide 0.5s cubic-bezier(0.16,1,0.3,1) both; }
     .login-input { transition: border-color 0.15s, box-shadow 0.15s; outline: none; }
-    .login-input:focus { border-color: #0150AA !important; box-shadow: 0 0 0 3px rgba(1,80,170,0.22); }
 
-    /* ── Utility: page hidden by default ────────────────────────── */
-    .page { display: none; }
-    .page.active { display: block; }
 
     /* ── Bottom Navigation (mobile only) ────────────────────────── */
     #bottom-nav {
@@ -503,36 +424,10 @@
 
     <!-- Topbar -->
     <div id="topbar">
-      <div id="topbar-inner">
-        <h1 id="topbar-title"></h1>
-        <div style="flex:1;"></div>
-        <div id="topbar-date" class="hidden xl:flex">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;color:#cbd5e1;">
-            <rect x="3" y="4" width="18" height="18" rx="2"/>
-            <path d="M16 2v4M8 2v4M3 10h18"/>
-          </svg>
-          <span id="topbar-date-text"></span>
-        </div>
-      </div>
     </div>
 
     <!-- Main content — pages rendered here by router -->
     <main id="main-content">
-      <div id="main-content-inner">
-        <!-- Page containers (router shows/hides) -->
-        <div id="page-login"        class="page" data-page="login"></div>
-        <div id="page-dashboard"    class="page" data-page="dashboard"></div>
-        <div id="page-all-tasks"    class="page" data-page="all-tasks"></div>
-        <div id="page-approvals"    class="page" data-page="approvals"></div>
-        <div id="page-fms"          class="page" data-page="fms"></div>
-        <div id="page-mis"          class="page" data-page="mis"></div>
-        <div id="page-users"        class="page" data-page="users"></div>
-        <div id="page-client-master"   class="page" data-page="client-master"></div>
-        <div id="page-profile"         class="page" data-page="profile"></div>
-        <div id="page-developer"       class="page" data-page="developer"></div>
-        <div id="page-help-ticket"     class="page" data-page="help-ticket"></div>
-        <div id="page-announcements"   class="page" data-page="announcements"></div>
-      </div>
     </main>
 
   </div>
@@ -548,51 +443,51 @@
 <!-- ═══════════════════════════════════════════════════════════════
      SCRIPTS  (order matters)
 ════════════════════════════════════════════════════════════════ -->
-<script src="/js/utils.js?v=11"></script>
-<script src="/js/ui.js?v=4"></script>
+<script src="/js/utils.js?v=13"></script>
+<script src="/js/ui.js?v=5"></script>
 <script src="/js/theme.js?v=8"></script>
-<script src="/js/router.js?v=7"></script>
-<script src="/js/components/sidebar.js?v=43"></script>
-<script src="/js/components/topbar.js?v=12"></script>
+<script src="/js/router.js?v=9"></script>
+<script src="/js/components/sidebar.js?v=44"></script>
+<script src="/js/components/topbar.js?v=13"></script>
 
 <!-- Pages -->
-<script src="/js/pages/login.js?v=16"></script>
-<script src="/js/pages/dashboard.js?v=28"></script>
-<script src="/js/pages/all-tasks.js?v=14"></script>
-<script src="/js/pages/approvals.js?v=8"></script>
-<script src="/js/pages/fms.js?v=20"></script>
-<script src="/js/pages/mis.js?v=9"></script>
-<script src="/js/pages/users.js?v=43"></script>
-<script src="/js/pages/client-master.js?v=23"></script>
-<script src="/js/pages/pr-creation.js?v=14"></script>
-<script src="/js/pages/po-creation.js?v=16"></script>
-<script src="/js/pages/grn-creation.js?v=10"></script>
-<script src="/js/pages/po-pending.js?v=3"></script>
-<script src="/js/pages/proforma-invoice.js?v=16"></script>
-<script src="/js/pages/consignee-master.js?v=2"></script>
-<script src="/js/pages/export-docs.js?v=11"></script>
-<script src="/js/pages/inward.js?v=12"></script>
-<script src="/js/pages/outward.js?v=12"></script>
-<script src="/js/pages/ims.js?v=15"></script>
+<script src="/js/pages/login.js?v=17"></script>
+<script src="/js/pages/dashboard.js?v=30"></script>
+<script src="/js/pages/all-tasks.js?v=16"></script>
+<script src="/js/pages/approvals.js?v=9"></script>
+<script src="/js/pages/fms.js?v=22"></script>
+<script src="/js/pages/mis.js?v=10"></script>
+<script src="/js/pages/users.js?v=44"></script>
+<script src="/js/pages/client-master.js?v=25"></script>
+<script src="/js/pages/pr-creation.js?v=15"></script>
+<script src="/js/pages/po-creation.js?v=18"></script>
+<script src="/js/pages/grn-creation.js?v=12"></script>
+<script src="/js/pages/po-pending.js?v=4"></script>
+<script src="/js/pages/proforma-invoice.js?v=18"></script>
+<script src="/js/pages/consignee-master.js?v=3"></script>
+<script src="/js/pages/export-docs.js?v=12"></script>
+<script src="/js/pages/inward.js?v=14"></script>
+<script src="/js/pages/outward.js?v=14"></script>
+<script src="/js/pages/ims.js?v=17"></script>
 <script src="/js/pages/profile.js?v=14"></script>
-<script src="/js/pages/developer.js?v=7"></script>
-<script src="/js/pages/help-ticket.js?v=8"></script>
-<script src="/js/pages/announcements.js?v=4"></script>
+<script src="/js/pages/developer.js?v=8"></script>
+<script src="/js/pages/help-ticket.js?v=10"></script>
+<script src="/js/pages/announcements.js?v=5"></script>
 <!-- HR module. hr-common.js holds the shared table/modal/field builders the
      HR pages are built from, so it must load before any of them. -->
-<script src="/js/pages/hr-common.js?v=3"></script>
+<script src="/js/pages/hr-common.js?v=4"></script>
 <script src="/js/pages/hr-employees.js?v=6"></script>
 <script src="/js/pages/hr-attendance.js?v=1"></script>
-<script src="/js/pages/hr-leave.js?v=7"></script>
+<script src="/js/pages/hr-leave.js?v=8"></script>
 <script src="/js/pages/hr-payroll.js?v=1"></script>
-<script src="/js/pages/hr-reports.js?v=3"></script>
+<script src="/js/pages/hr-reports.js?v=4"></script>
 <script src="/js/pages/hr-org-chart.js?v=7"></script>
 <script src="/js/pages/hr-policies.js?v=1"></script>
 <script src="/js/pages/hr-assets.js?v=1"></script>
 <script src="/js/pages/bulk-email.js?v=1"></script>
 
 <!-- Bootstrap -->
-<script src="/js/main.js?v=6"></script>
+<script src="/js/main.js?v=7"></script>
 
 </body>
 </html>

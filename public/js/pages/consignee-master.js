@@ -36,7 +36,7 @@ window.Pages['consignee-master'] = (() => {
   let _q = '';              // list search
   let _saving = false;
 
-  function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  const esc = Utils.esc;
 
   /* ── field helpers (same cards as the PI create form, so the two pages
      read as one department) ───────────────────────────────────────────── */

@@ -8,9 +8,7 @@ window.Pages.announcements = (() => {
     return (Array.isArray(r) ? r : String(r).split(',')).some(x => x.trim() === 'Admin' || x.trim() === 'HOD');
   };
 
-  function esc(s) {
-    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
+  const esc = Utils.esc;
 
   function fmt(iso) {
     if (!iso) return '';

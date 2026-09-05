@@ -129,13 +129,7 @@ window.Pages.users = (() => {
   let _pwdError     = '';
 
   /* ── helpers ────────────────────────────────────────────────────────── */
-  function esc(s) {
-    return String(s ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
+  const esc = Utils.esc;
 
   /* The employee record behind a login, matched the same way the server does
      it (see selfEmployee in backend/hrms.js): the explicit link first, then
@@ -183,12 +177,12 @@ window.Pages.users = (() => {
     return ['User'];
   }
 
-  function avatarHtml(name, picture, size = 9) {
+  function avatarHtml(name, picture) {
     const ini = (name || 'U').split(' ').filter(Boolean).slice(0, 2).map(n => n[0]).join('').toUpperCase() || 'U';
     if (picture) {
-      return `<img src="${esc(picture)}" alt="${esc(name)}" data-zoom title="Click to view full image" class="w-${size} h-${size} rounded-full object-cover" />`;
+      return `<img src="${esc(picture)}" alt="${esc(name)}" data-zoom title="Click to view full image" class="w-9 h-9 rounded-full object-cover" />`;
     }
-    return `<div class="w-${size} h-${size} rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-white grid place-items-center text-[11px] font-bold">${esc(ini)}</div>`;
+    return `<div class="w-9 h-9 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 text-white grid place-items-center text-[11px] font-bold">${esc(ini)}</div>`;
   }
 
   function rolePillsHtml(roles) {
@@ -255,7 +249,7 @@ window.Pages.users = (() => {
   }
 
   async function deleteUser(id) {
-    if (!Utils.confirm('Delete this user?')) return;
+    if (!(await Utils.showConfirm('Delete this user?', { title: 'Delete user', confirmText: 'Delete', danger: true }))) return;
     try {
       await Utils.apiFetch('/api/users?id=' + id, { method: 'DELETE' });
       await loadData();
@@ -734,7 +728,7 @@ window.Pages.users = (() => {
             <tr class="table-row">
               <td class="table-td">
                 <div class="flex items-center gap-2.5">
-                  ${avatarHtml(u.name, u.picture, 9)}
+                  ${avatarHtml(u.name, u.picture)}
                   <div>
                     <div class="font-medium text-slate-900">${esc(u.name || 'Unknown')}</div>
                     <div class="text-[11px] text-slate-500">${esc(u.department || '—')}</div>

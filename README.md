@@ -1,80 +1,67 @@
-# E-Marketing Task Manager
+# Lallubhai Amichand — Task Manager / ERP
 
-Next.js 14 (App Router) based task manager with Dashboard, Masters, and FMS Master views.
+Single Node.js + Express server (`server.js`) serving a vanilla-JS single-page
+app from `public/`. Data lives in MariaDB/MySQL. Google Sheets and Drive are used
+for the document flows (PR/PO/GRN, Proforma Invoice, Order Sheet, Packing List,
+FMS), Gmail SMTP for notifications.
 
-## Features
-
-- **Dashboard** — Total / Completed / Pending stats, pending tasks list, `+ Add FMS` button
-- **Masters** — All checklist tasks (Daily / Weekly / Monthly / One-time)
-- **FMS Master** — Step-by-step campaign workflow tracking (8 steps per client). Click any pending status badge to mark it done.
-
-## Tech Stack
-
-- Next.js 14 (App Router, Server Components)
-- React 18
-- Tailwind CSS
-- File-based JSON storage (`database/store.json`) — no database needed
-
-## Setup
+## Run locally
 
 ```bash
-# 1. Install dependencies
 npm install
-
-# 2. Run dev server
-npm run dev
-
-# 3. Open http://localhost:3000
+cp .env.example .env.local   # fill in DB_*, SMTP_*, NEXTAUTH_SECRET, Google creds
+npm run dev                  # node --watch server.js  → http://localhost:3000
 ```
 
-## Production Build
+Without any `DB_*`/`DATABASE_URL` in `.env.local` the server falls back to a
+JSON file store (`database/store.json`). That mode is for local poking only;
+production always runs on the database.
 
-```bash
-npm run build
-npm run start
-```
-
-## Data Storage
-
-All data is stored in `database/store.json` which is auto-created on first run. To reset, just delete the file.
-
-For production with multiple users, replace `backend/lib/store.js` with a real database (Postgres, MongoDB, Supabase, etc.) — the API routes stay the same.
-
-## Customize FMS Steps
-
-Edit the `FMS_STEPS` array in `backend/lib/store.js` to change step names, owners, or add/remove steps.
-
-## Folder Structure
-
-The code is organised into three top-level layers — **frontend**, **backend**, **database** —
-plus the thin `app/` routing shell that Next.js requires at the project root.
+## Layout
 
 ```
-Lallubhai-Amichand/
-├── frontend/               # ── FRONTEND (all UI) ──
-│   ├── components/         #   Sidebar, Topbar, modals, charts, AppShell, Providers
-│   ├── DashboardClient.jsx #   Per-page client components ("...Client.jsx")
-│   ├── <route>/...Client.jsx
-│   └── globals.css         #   Global styles (Tailwind)
-│
-├── backend/               # ── BACKEND (server / data layer) ──
-│   └── lib/                #   db.js, store.js, store-mysql/postgres, auth helpers,
-│                          #   google-sheets, access, guards, config  (imported as @/lib/*)
-│
-├── database/              # ── DATABASE (schema + tooling, tracked on GitHub) ──
-│   ├── migration.sql       #   Schema / migrations
-│   ├── india_automotive_data.sql
-│   ├── scripts/            #   migrate.mjs, gen-sql.mjs, seed.ts, test-*.mjs
-│   └── store.json          #   Local JSON store (auto-generated, gitignored)
-│
-├── app/                   # ── Next.js routing shell (required at root) ──
-│   ├── page.jsx, <route>/page.jsx   # Server components → read backend/, render frontend/
-│   ├── api/.../route.js             # API route handlers → call backend/lib
-│   └── layout.jsx
-│
-├── middleware.js, next.config.mjs, tailwind.config.js, jsconfig.json, package.json
+server.js                 # all HTTP routes, schema (ensureSchema), mailers, Sheets sync
+backend/
+  hrms.js                 # HR module routes (employees, attendance, leave, payroll, assets)
+  bulk-mail.js            # Bulk Email module (Form 16 ZIP → per-PAN mailer)
+  hr-policies-seed.js
+  lib/
+    fmsSheet.js           # FMS (Google-Sheet-backed flows)
+    pi-format.js, order-sheet-format.js, packing-list-format.js   # sheet layouts
+public/
+  app.html                # the SPA shell; lists every page script with a ?v=N cache-buster
+  css/style.css           # design system (tokens, dark mode, components)
+  css/tw.css              # GENERATED utility classes — see scripts/gen-tw-css.js
+  css/login.css           # sign-in screen
+  js/utils.js, ui.js, router.js, theme.js, main.js
+  js/components/          # sidebar (menu + permissions), topbar
+  js/pages/               # one module per screen; hr-common.js is shared by the HR pages
+database/
+  migration.sql           # historical schema snapshot (ensureSchema in server.js is live)
+  imports/                # one-off data loads that have already been run (kept for reference)
+scripts/                  # one-off tools (sheet builders, imports, gen-tw-css.js)
+samples/                  # CSV templates served from /api/samples/*
+docs/                     # prompts/notes that are not code
 ```
 
-> **Note:** Next.js' App Router requires the `app/` directory at the project root, so the
-> route/API entry points live there. They are thin — all UI lives in `frontend/`, all server
-> logic in `backend/lib/` (imported via the `@/lib/*` alias), and all SQL in `database/`.
+## Working on the frontend
+
+- Page scripts are plain `<script>` tags in `public/app.html`; bump the `?v=N`
+  of every file you change or browsers keep the cached copy for a week.
+- Utility classes (`flex`, `px-4`, `text-slate-500`, `md:grid-cols-2`, …) come
+  from `public/css/tw.css`, generated from what the pages actually use. If you
+  add a utility class a page never used before, run `node scripts/gen-tw-css.js`
+  and bump `tw.css?v=N`.
+- Shared helpers: `Utils.esc`, `Utils.apiFetch`, `Utils.showConfirm`,
+  `Utils.showToast`, `Utils.todayISO`, `Utils.csvCell`, department helpers; the
+  HR pages use `window.HR` from `hr-common.js`.
+
+## Database notes
+
+- SQL in the code is written Postgres-style (`$1` placeholders, `ON CONFLICT`)
+  and translated for MySQL by `pgToMysql()` in `server.js`. Hand-written SQL
+  files must be MySQL dialect.
+- Schema changes go into the `SCHEMA` array in `server.js` (idempotent
+  `CREATE ... IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`); they run at boot.
+
+See `DEPLOY.md` for how the app ships.

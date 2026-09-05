@@ -113,7 +113,7 @@ window.Pages['export-documentation'] = (() => {
   let _plLoading = false;
   let _plSelected = '';
 
-  function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  const esc = Utils.esc;
   const num = (v) => { const n = parseFloat(String(v ?? '').replace(/,/g, '')); return isFinite(n) ? n : 0; };
   const money = (n) => n.toFixed(2);
   const wt = (n) => n.toFixed(3);

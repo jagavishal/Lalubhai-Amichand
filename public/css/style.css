@@ -183,8 +183,8 @@ html, body {
 
 ::-webkit-scrollbar        { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track  { background: transparent; }
-::-webkit-scrollbar-thumb  { background: #d1d5db; border-radius: 10px; }
-::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+::-webkit-scrollbar-thumb  { background: var(--border-strong); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--gray-400); }
 
 /* ── Keyframes ───────────────────────────────────────────────────── */
 
@@ -219,29 +219,13 @@ html, body {
 
 /* ── Animations ──────────────────────────────────────────────────── */
 
-.login-logo      { animation: float 4s ease-in-out infinite; }
 .login-card      { animation: fadeSlide 0.5s cubic-bezier(0.16,1,0.3,1) both; }
 .animate-fade-in { animation: fade-in 180ms ease-out; }
-.animate-pop-in  { animation: pop-in 200ms cubic-bezier(0.16,1,0.3,1); }
-.animate-slide-down { animation: slide-down 180ms ease-out; }
 
 /* ── Card ────────────────────────────────────────────────────────── */
 
 .card {
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border-base);
-  box-shadow: var(--shadow-xs);
-}
 
-.card-hover {
-  transition: box-shadow 200ms, transform 200ms, border-color 200ms;
-}
-.card-hover:hover {
-  box-shadow: var(--shadow-md);
-  border-color: var(--border-strong);
-  transform: translateY(-1px);
-}
 
 /* ── Buttons — shared base ───────────────────────────────────────── */
 
@@ -307,7 +291,7 @@ html, body {
   border-color: var(--gray-400);
   box-shadow: var(--shadow-sm);
 }
-.btn-secondary:active:not(:disabled) { background: var(--border-light); }
+.btn-secondary:active:not(:disabled) { background: var(--border-light); transform: translateY(0.5px); }
 
 /* Ghost */
 .btn-ghost {
@@ -397,6 +381,7 @@ html, body {
   font-family: inherit;
 }
 .input::placeholder { color: var(--text-muted); }
+.input:hover:not(:focus):not(:disabled) { border-color: var(--gray-400); }
 .input:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px var(--color-primary-ring);
@@ -432,53 +417,8 @@ select.input { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg
   line-height: 1.2;
 }
 
-.page-sub {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  margin-top: 2px;
-  line-height: 1.4;
-}
 
-/* ── Page Header Block ───────────────────────────────────────────── */
 
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 20px;
-}
-.page-header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-
-/* ── Segmented Control ───────────────────────────────────────────── */
-
-.seg {
-  display: inline-flex;
-  align-items: center;
-  background: var(--surface-alt);
-  border-radius: 10px;
-  padding: 3px;
-  gap: 2px;
-}
-
-.seg-btn {
-  padding: 5px 14px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  transition: all 150ms;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  outline: none;
-  white-space: nowrap;
-  font-family: inherit;
-}
-.seg-btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
-
-.seg-btn-active {
   background: var(--surface);
   box-shadow: 0 1px 3px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.04);
   color: var(--text-primary);
@@ -506,12 +446,15 @@ select.input { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg
   color: var(--text-secondary);
   border-top: 1px solid var(--border-light);
   line-height: 1.4;
+  vertical-align: middle;
 }
 
 .table-row {
   transition: background-color 100ms;
 }
 .table-row:hover { background: var(--surface-alt); }
+/* Numeric columns line up when the digits are all the same width. */
+.table-td.num, .table-th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ── Status Pill / Badge ─────────────────────────────────────────── */
 
@@ -537,25 +480,10 @@ select.input { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg
 .pill-purple  { background: var(--color-purple-bg); color: var(--color-purple-text); }
 .pill-sm      { padding: 2px 8px; font-size: var(--text-2xs); }
 
-/* ── Divider ─────────────────────────────────────────────────────── */
-
-.divider {
-  height: 1px;
-  background: var(--border-light);
-  margin: 16px 0;
-}
 
 /* ── Topbar ──────────────────────────────────────────────────────── */
 
 #topbar { flex-shrink: 0; position: sticky; top: 0; z-index: 20; }
-#topbar-inner {
-  display: flex; align-items: center; gap: 12px;
-  padding: 0 24px; height: 54px;
-  background: color-mix(in srgb, var(--surface) 97%, transparent);
-  backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border-light);
-  box-shadow: 0 1px 0 rgba(0,0,0,0.04);
-}
 #topbar-title {
   font-size: var(--text-md); font-weight: 700; color: var(--text-primary);
   letter-spacing: -0.02em; margin: 0;
@@ -672,52 +600,7 @@ button[aria-label="Close"]:focus-visible > svg,
   .modal-close:hover > svg { transform: none; }
 }
 
-/* ── Toast notification ──────────────────────────────────────────── */
 
-#toast-container {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  z-index: 9999;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  pointer-events: none;
-}
-
-.toast {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 16px;
-  background: #1e293b;
-  color: #f1f5f9;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 500;
-  box-shadow: var(--shadow-lg);
-  min-width: 240px;
-  max-width: 340px;
-  pointer-events: auto;
-  animation: slide-down 200ms cubic-bezier(0.16,1,0.3,1);
-  border: 1px solid rgba(255,255,255,0.08);
-}
-
-.toast.success { background: #064e3b; border-color: rgba(16,185,129,0.25); }
-.toast.error   { background: #7f1d1d; border-color: rgba(239,68,68,0.25); }
-.toast.warn    { background: #78350f; border-color: rgba(245,158,11,0.25); }
-
-/* ── Confirm dialog ──────────────────────────────────────────────── */
-
-.confirm-dialog {
-  background: var(--surface);
-  border-radius: var(--radius-2xl);
-  box-shadow: var(--shadow-xl);
-  width: 100%;
-  max-width: 360px;
-  padding: 24px;
-  animation: pop-in 200ms cubic-bezier(0.16,1,0.3,1);
-}
 
 /* ── Login Input Focus ───────────────────────────────────────────── */
 
@@ -795,24 +678,44 @@ button[aria-label="Close"]:focus-visible > svg,
 .badge-neutral { background: var(--color-neutral-text); }
 .badge-dot     { min-width: 8px; width: 8px; height: 8px; padding: 0; }
 
-/* ── Scrollable table wrapper ────────────────────────────────────── */
-
-.table-wrap {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
 
 /* ── Utility ─────────────────────────────────────────────────────── */
 
 .truncate    { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.text-muted  { color: var(--text-muted); }
-.text-sm     { font-size: 12px; }
-.text-xs     { font-size: 11px; }
 .font-mono   { font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace; }
-.sr-only     { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
 
 /* ── Selection color ─────────────────────────────────────────────── */
 ::selection { background: var(--color-primary-light); }
+
+/* ── Keyboard focus ──────────────────────────────────────────────────
+   One visible focus ring for anything reachable by Tab that doesn't style its
+   own (links, plain buttons, table action buttons). :focus-visible only, so a
+   mouse click never draws it. */
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible,
+select:focus-visible, input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────────
+   Every animation and transition in the app is decorative; honour the OS
+   setting for people who get motion sick or just want a faster UI. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Dark-mode fixes for things that hardcode light colours ──────────
+   Several dialogs and overlays were written with #fff / slate literals before
+   the theme existed. The most visible ones are fixed at the source; these
+   cover the remaining page-owned modals that follow the same id convention. */
+html[data-theme="dark"] .modal-box { color: var(--text-primary); }
+html[data-theme="dark"] .card img[data-zoom] { background: var(--surface-alt); }
 
 /* ── Sticky table header helpers ─────────────────────────────────── */
 .bg-slate-50\/95 { background-color: rgba(248,250,252,0.97); }
@@ -832,8 +735,6 @@ button[aria-label="Close"]:focus-visible > svg,
     max-height: 92vh;
   }
 
-  /* Tables scroll horizontally */
-  .table-wrap { overflow-x: auto; }
   .table-th, .table-td { padding: 9px 10px; font-size: 12px; }
 
   /* Buttons on mobile — minimum touch target */
@@ -841,20 +742,13 @@ button[aria-label="Close"]:focus-visible > svg,
     min-height: 40px;
   }
 
-  /* Page header stack on mobile */
-  .page-header { flex-direction: column; align-items: flex-start; }
-  .page-header-actions { width: 100%; }
 
   /* Page title smaller */
   .page-title { font-size: 17px; }
 
-  /* Toast full width on mobile */
-  #toast-container { left: 12px; right: 12px; bottom: 72px; }
-  .toast { max-width: 100%; min-width: unset; }
 }
 
 @media (max-width: 480px) {
-  .seg-btn { padding: 4px 10px; font-size: 11px; }
   .pill    { font-size: 10.5px; padding: 2px 8px; }
 }
 

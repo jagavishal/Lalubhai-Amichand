@@ -157,19 +157,13 @@ window.Pages['hr-leave'] = (() => {
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px;align-items:end;">
         ${H.select('hrl-f-status', 'Status', _statusFilter, ['All', ...STATUSES])}
-        ${H.select('hrl-f-year', 'Year', _year, yearList())}
+        ${H.select('hrl-f-year', 'Year', _year, H.yearList())}
         <div><button id="hrl-export" class="btn-secondary btn-sm" style="width:100%;">Export CSV</button></div>
       </div>
       ${H.table(shownCols, shownRows,
         { empty: admin ? 'No leave requests for these filters' : 'You have not applied for any leave in this period' })}`;
   }
 
-  const yearList = () => {
-    const y = new Date().getFullYear();
-    const out = [];
-    for (let i = y + 1; i >= 2020; i--) out.push(i);
-    return out;
-  };
 
   /* ── Balances ─────────────────────────────────────────────────────── */
 
@@ -200,7 +194,7 @@ window.Pages['hr-leave'] = (() => {
     return `
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;align-items:end;">
-        ${H.select('hrl-b-year', 'Year', _year, yearList())}
+        ${H.select('hrl-b-year', 'Year', _year, H.yearList())}
         <div><button id="hrl-carry" class="btn-secondary btn-sm" style="width:100%;">Carry Forward from ${_year - 1}</button></div>
         <div><button id="hrl-bal-export" class="btn-secondary btn-sm" style="width:100%;">Export CSV</button></div>
       </div>
@@ -245,7 +239,7 @@ window.Pages['hr-leave'] = (() => {
     return `
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;align-items:end;">
-        ${H.select('hrl-h-year', 'Year', _year, yearList())}
+        ${H.select('hrl-h-year', 'Year', _year, H.yearList())}
         ${admin ? '<div><button id="hrl-hol-add" class="btn-primary btn-sm" style="width:100%;">+ Add Holiday</button></div>' : ''}
       </div>
       ${cards

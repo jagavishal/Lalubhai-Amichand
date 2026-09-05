@@ -16,8 +16,7 @@ window.HR = (function () {
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December'];
 
-  const esc = (s) => String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const esc = Utils.esc;
 
   const num = (v) => {
     const n = Number(String(v ?? '').replace(/,/g, ''));
@@ -305,8 +304,16 @@ window.HR = (function () {
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 300);
   }
 
+  // Year options for the HR filters: next year down to 2020.
+  const yearList = () => {
+    const y = new Date().getFullYear();
+    const out = [];
+    for (let i = y + 1; i >= 2020; i--) out.push(i);
+    return out;
+  };
+
   return {
-    MONTHS, esc, num, inr, inr0, fmtDate, fmtTime, todayISO, isAdmin, isOwner,
+    MONTHS, esc, num, yearList, inr, inr0, fmtDate, fmtTime, todayISO, isAdmin, isOwner,
     api, post, patch, del, toast, fail,
     header, tabs, stats, table, pill, statusPill, TH, TD,
     field, select, textarea, readout, grid, sectionTitle,

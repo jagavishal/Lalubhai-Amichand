@@ -76,17 +76,12 @@ window.Pages['client-master'] = (() => {
     );
   }
 
-  function esc(s) {
-    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
+  const esc = Utils.esc;
 
   /* ── CSV export — quotes any cell with a comma/quote/newline (addresses and
      names routinely have commas), unlike a bare join(','). Exports exactly
      what's on screen, so it respects the current search/status filter. ──── */
-  function _csvCell(v) {
-    const s = String(v ?? '');
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-  }
+  const _csvCell = Utils.csvCell;
   function _downloadCSV(filename, headers, rows) {
     const csv = [headers, ...rows].map(r => r.map(_csvCell).join(',')).join('\r\n');
     const link = Object.assign(document.createElement('a'), {
@@ -352,10 +347,6 @@ window.Pages['client-master'] = (() => {
   function _pmAllChecked() {
     const filled = _pmRows.filter(r => r.vendorId && r.amount && parseFloat(r.amount) > 0);
     return filled.length > 0 && filled.every(r => r.checked);
-  }
-
-  function _pmCheckedCount() {
-    return _pmRows.filter(r => r.checked && r.vendorId && r.amount && parseFloat(r.amount) > 0).length;
   }
 
   function _pmRowHtml(row, i) {
@@ -836,7 +827,7 @@ window.Pages['client-master'] = (() => {
       downloadBlob(csvRows.join('\r\n'), 'text/plain;charset=utf-8;', 'RBI_Bulk_' + fileStamp + '.txt');
 
       // Excel (.xlsx) — human-readable workbook with a division-wise summary.
-      if (window.XLSX) {
+      if (await Utils.loadXlsx()) {
         const wb = window.XLSX.utils.book_new();
 
         const puAoa = [['Sr No','Division','Transaction Type','Beneficiary Account Number','Transaction Amount','Beneficiary Name','Debit Statement Narration','Chq / Trn Date','IFSC Code']];

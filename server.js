@@ -5786,9 +5786,11 @@ async function _prSheetMeta() {
   const sheets = google.sheets({ version: 'v4', auth });
   const meta = await sheets.spreadsheets.get({ spreadsheetId: PR_CREATION_SHEET_ID });
   const sheetIdByTitle = {};
+  const rowCountByTitle = {};
   let maxPrNo = 0;
   for (const s of meta.data.sheets) {
     sheetIdByTitle[s.properties.title] = s.properties.sheetId;
+    rowCountByTitle[s.properties.title] = s.properties.gridProperties?.rowCount || 0;
     // Legacy archive tabs — no new ones get created since PDF export replaced
     // tab-duplication, so this alone would freeze nextPrNo forever. The real,
     // growing sequence lives in ERP PR Log's own PR No column (read below).
@@ -5816,19 +5818,26 @@ async function _prSheetMeta() {
       throw new Error('Could not read the PR log to assign the next PR number — please try again in a minute. (' + e.message + ')');
     }
   }
-  return { nextPrNo: maxPrNo + 1, sheetIdByTitle };
+  return { nextPrNo: maxPrNo + 1, sheetIdByTitle, rowCountByTitle };
 }
 
 // Same borrowed docs.google.com export approach as _exportPoTabPdf — no per-tab
 // PDF export exists in the documented Sheets/Drive API.
 // opts — the format's own `pdf` config, absent on formats that keep the
-// portrait default: { portrait, c1, c2 } (c1/c2 0-indexed, c2 exclusive).
+// portrait default: { portrait, c1, c2 } (c1/c2 0-indexed, c2 exclusive),
+// plus r2 (the tab's row count) which the caller adds from the sheet meta.
+//
+// The export endpoint silently IGNORES c1/c2 unless r1/r2 are sent with them
+// (verified 2026-09-05: PACKING_BOX with c1/c2 alone still printed all 29
+// grid columns, shrunk to a third of the A4 landscape page — the exact bug
+// the c1/c2 pinning was added for). So whenever a column range is pinned,
+// a row range always goes with it.
 async function _exportPrTabPdf(sourceSheetId, opts) {
   const auth = getGoogleAuth();
   const client = await auth.getClient();
   const { token } = await client.getAccessToken();
   const portrait = !opts || opts.portrait !== false;
-  const rangeParams = opts && opts.c2 != null ? `&c1=${opts.c1 || 0}&c2=${opts.c2}` : '';
+  const rangeParams = opts && opts.c2 != null ? `&r1=0&r2=${opts.r2 || 60}&c1=${opts.c1 || 0}&c2=${opts.c2}` : '';
   const url = `https://docs.google.com/spreadsheets/d/${PR_CREATION_SHEET_ID}/export`
     + `?format=pdf&gid=${sourceSheetId}&size=A4&portrait=${portrait}&fitw=true`
     + `&gridlines=false&printtitle=false&sheetnames=false`
@@ -5961,7 +5970,7 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr'), async (req, res
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
 
-    const { nextPrNo, sheetIdByTitle } = await _prSheetMeta();
+    const { nextPrNo, sheetIdByTitle, rowCountByTitle } = await _prSheetMeta();
     const prNoFormatted = _padSeqNo('PR', nextPrNo);
     const tab = cfg.tabName;
     const sourceSheetId = sheetIdByTitle[tab];
@@ -6034,7 +6043,7 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr'), async (req, res
     // never block the PR itself from being created.
     let pdfLink = null;
     try {
-      const pdfBuffer = await _exportPrTabPdf(sourceSheetId, cfg.pdf);
+      const pdfBuffer = await _exportPrTabPdf(sourceSheetId, cfg.pdf ? { ...cfg.pdf, r2: rowCountByTitle[tab] } : cfg.pdf);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${prNoFormatted} - ${tab}.pdf`, PR_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[pr-creation] PDF export failed:', e.message); }
 

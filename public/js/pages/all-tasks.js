@@ -143,7 +143,7 @@ window.Pages['all-tasks'] = (function () {
     const [delegations, masters, users, completions, fmsTasks] = await Promise.all([
       Utils.apiFetch('/api/delegations'),
       Utils.apiFetch('/api/masters'),
-      Utils.apiFetch('/api/users'),
+      Utils.apiFetch('/api/users?lite=1'),
       Utils.apiFetch('/api/checklist-completions'),
       fmsEnabled() ? Utils.apiFetch('/api/fms-dashboard') : Promise.resolve([]),
     ]);
@@ -328,9 +328,7 @@ window.Pages['all-tasks'] = (function () {
   }
 
   /* ─── escape ────────────────────────────────────────────────────────────── */
-  function esc(s) {
-    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
+  const esc = Utils.esc;
 
   /* ─── status pill ───────────────────────────────────────────────────────── */
   function statusPill(status) {

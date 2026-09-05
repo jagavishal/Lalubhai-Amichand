@@ -894,10 +894,10 @@ window.Pages.developer = {
         const res = await fetch('/api/developer/export', { headers: devHeaders(secret) });
         if (!res.ok) { errorMsg = 'Export failed'; exporting = false; reRenderBody(); return; }
         const data = await res.json();
-        const date = new Date().toISOString().slice(0, 10);
+        const date = Utils.todayISO();
 
         // Use SheetJS if available, otherwise fall back to CSV download
-        if (window.XLSX) {
+        if (await Utils.loadXlsx()) {
           const wb = window.XLSX.utils.book_new();
           [
             { name: 'Tasks',      rows: data.delegations },

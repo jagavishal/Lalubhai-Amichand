@@ -24,16 +24,14 @@ window.Pages['help-ticket'] = (() => {
     return (Array.isArray(r) ? r : String(r).split(',')).some(x => x.trim() === 'Admin' || x.trim() === 'HOD');
   };
 
-  function esc(s) {
-    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
+  const esc = Utils.esc;
 
   function fmt(iso) {
     if (!iso) return '—';
     return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   }
 
-  function todayISO() { return new Date().toISOString().slice(0, 10); }
+  function todayISO() { return Utils.todayISO(); }
 
   const STATUS_STYLE = {
     open:          { bg: '#fef2f2', color: '#991b1b', label: 'Open' },
@@ -90,7 +88,7 @@ window.Pages['help-ticket'] = (() => {
     try {
       const [tRes, uRes, aRes] = await Promise.all([
         fetch('/api/help-tickets'),
-        fetch('/api/users'),
+        fetch('/api/users?lite=1'),
         fetch('/api/approval-authority'),
       ]);
       _tickets = tRes.ok ? await tRes.json() : [];

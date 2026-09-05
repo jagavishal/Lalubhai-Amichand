@@ -114,14 +114,14 @@ window.Pages = window.Pages || {};
     let _seriesFrom = '';
     let _seriesTo = '';
 
-    function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+    const esc = Utils.esc;
     function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
     // 1234.5 -> "1,234.5" — stock is stored as a decimal but is a whole number
     // most of the time, so trailing .00 is dropped rather than padded.
     function _fmtQty(n) {
       return (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 });
     }
-    function _today() { return new Date().toISOString().slice(0, 10); }
+    function _today() { return Utils.todayISO(); }
     // Display name of this book ("IMS Alu & SS"), vs _book which is the stored
     // category value ('ALU') everything is actually queried by.
     const _bookLabel = book.label;
@@ -140,10 +140,7 @@ window.Pages = window.Pages || {};
        descriptions and vendor names routinely have commas), unlike a bare
        join(','). Exports exactly what's on screen, so it respects whatever
        search/category/low-stock filters are currently applied. ───────────── */
-    function _csvCell(v) {
-      const s = String(v ?? '');
-      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-    }
+    const _csvCell = Utils.csvCell;
     function _downloadCSV(filename, headers, rows) {
       const csv = [headers, ...rows].map(r => r.map(_csvCell).join(',')).join('\r\n');
       const link = Object.assign(document.createElement('a'), {

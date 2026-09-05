@@ -27,3 +27,6 @@ uploads/
 # editor
 .vscode
 .idea
+
+# express-session file-store leftovers (no longer used)
+sessions/

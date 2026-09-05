@@ -38,8 +38,8 @@ window.Pages['inward'] = (() => {
   let _fFrom = '';
   let _fTo = '';
 
-  function _today() { return new Date().toISOString().slice(0, 10); }
-  function esc(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  function _today() { return Utils.todayISO(); }
+  const esc = Utils.esc;
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
 
   // Department is a Stores-side concept — which internal department the stock
@@ -213,8 +213,8 @@ window.Pages['inward'] = (() => {
       _setUomValue(row, 'row-uom', opt.dataset.uom || '');
       dd.style.display = 'none';
     });
-    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, true);
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; });
+    window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, { capture: true, signal: window.Router.pageSignal() });
+    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   /* ── Item rows (multi-entry) ────────────────────────────────────────── */
