@@ -60,7 +60,7 @@ window.Pages['po-creation'] = (() => {
       { key: 'plateRate', label: 'Plate Rate (INR)', numeric: true },
     ],
     // Same D:H column set as PurchaseOrder, minus HSN (a service carries a
-    // SAC code in column A instead) — Size is typed here rather than looked
+    // SAC code in column C instead) — Size is typed here rather than looked
     // up, since there's no catalog behind a service line. Amount is the
     // sheet's own qty x unit price formula, like the goods formats.
     'Service PO': [

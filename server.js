@@ -5351,7 +5351,8 @@ const PO_FORMAT_CONFIG = {
   // duplicating PurchaseOrder and reworking the item band: the ITEM CODE +
   // VLOOKUP description/size columns are gone (a service has no catalog entry
   // to look up), replaced by a free-text SERVICE DESCRIPTION merged across
-  // B:C, then SIZE / UOM / QTY / UNIT PRICE / GST typed per line in D:H —
+  // A:B with the SAC CODE beside it in C (the store team wanted the
+  // description first), then SIZE / UOM / QTY / UNIT PRICE / GST in D:H —
   // the same D:H column set as PurchaseOrder (Sep 2026: the band used to be
   // one B:G description + a lump-sum amount in I, which left the store team
   // no way to state size/UOM/qty/rate on a service PO). Rows 39-58 of the
@@ -5366,7 +5367,7 @@ const PO_FORMAT_CONFIG = {
     partyLabel: 'VENDOR',
     hasShipTo: true,
     header: { poNo: 'J7', date: 'J6', department: 'J9', party: 'A13', shipTo: 'G13', deliverySchedule: 'A16', poValidity: 'C16', paymentTerms: 'G16', poMadeBy: 'J16' },
-    items: { firstRow: 18, lastRow: 38, clearCols: ['A', 'J'], keyField: 'description', fields: { sacCode: 'A', description: 'B', size: 'D', uom: 'E', qty: 'F', unitPrice: 'G', gst: 'H' } },
+    items: { firstRow: 18, lastRow: 38, clearCols: ['A', 'J'], keyField: 'description', fields: { description: 'A', sacCode: 'C', size: 'D', uom: 'E', qty: 'F', unitPrice: 'G', gst: 'H' } },
     // Freight/Packing are meaningless for a service (their labels are blanked
     // out on the tab) but their cells still feed the Total formula, so they
     // stay configured and get zeroed on every submit — same
