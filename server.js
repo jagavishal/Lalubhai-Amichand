@@ -5199,19 +5199,22 @@ const PO_FORMAT_CONFIG = {
   // duplicating PurchaseOrder and reworking the item band: the ITEM CODE +
   // VLOOKUP description/size columns are gone (a service has no catalog entry
   // to look up), replaced by a free-text SERVICE DESCRIPTION merged across
-  // B:G, with a lump-sum AMOUNT typed straight into column I instead of being
-  // derived from qty x unit price. Rows 39-58 of the original were deleted, so
-  // the whole totals/footer block sits 20 rows higher than PurchaseOrder's —
-  // hence the I39..I44 addresses below. Only column J is still a formula
-  // (amount + tax, an ARRAYFORMULA anchored at J17), so it must never be
-  // written to; keyField marks Description as the line's identity, standing in
-  // for itemCode everywhere the generic PO code expects one.
+  // B:C, then SIZE / UOM / QTY / UNIT PRICE / GST typed per line in D:H —
+  // the same D:H column set as PurchaseOrder (Sep 2026: the band used to be
+  // one B:G description + a lump-sum amount in I, which left the store team
+  // no way to state size/UOM/qty/rate on a service PO). Rows 39-58 of the
+  // original were deleted, so the whole totals/footer block sits 20 rows
+  // higher than PurchaseOrder's — hence the I39..I44 addresses below. Columns
+  // I (qty x unit price) and J (amount + tax) are ARRAYFORMULA spills anchored
+  // at I17/J17, so they must never be written to; keyField marks Description
+  // as the line's identity, standing in for itemCode everywhere the generic
+  // PO code expects one.
   'Service PO': {
     tabName: 'Service PO',
     partyLabel: 'VENDOR',
     hasShipTo: true,
     header: { poNo: 'J7', date: 'J6', department: 'J9', party: 'A13', shipTo: 'G13', deliverySchedule: 'A16', poValidity: 'C16', paymentTerms: 'G16', poMadeBy: 'J16' },
-    items: { firstRow: 18, lastRow: 38, clearCols: ['A', 'J'], keyField: 'description', fields: { sacCode: 'A', description: 'B', gst: 'H', amount: 'I' } },
+    items: { firstRow: 18, lastRow: 38, clearCols: ['A', 'J'], keyField: 'description', fields: { sacCode: 'A', description: 'B', size: 'D', uom: 'E', qty: 'F', unitPrice: 'G', gst: 'H' } },
     // Freight/Packing are meaningless for a service (their labels are blanked
     // out on the tab) but their cells still feed the Total formula, so they
     // stay configured and get zeroed on every submit — same

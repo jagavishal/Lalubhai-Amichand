@@ -59,13 +59,17 @@ window.Pages['po-creation'] = (() => {
       { key: 'plateQty',  label: 'Plate Qty (Nos.)', numeric: true },
       { key: 'plateRate', label: 'Plate Rate (INR)', numeric: true },
     ],
-    // A service is priced as a lump sum, not qty x rate — Amount is typed
-    // directly (the sheet's own Amount column is a plain cell on this tab, not
-    // the F*G formula the goods formats use).
+    // Same D:H column set as PurchaseOrder, minus HSN (a service carries a
+    // SAC code in column A instead) — Size is typed here rather than looked
+    // up, since there's no catalog behind a service line. Amount is the
+    // sheet's own qty x unit price formula, like the goods formats.
     'Service PO': [
-      { key: 'sacCode', label: 'SAC Code' },
-      { key: 'gst',     label: 'GST %', numeric: true },
-      { key: 'amount',  label: 'Amount (INR)', numeric: true },
+      { key: 'sacCode',   label: 'SAC Code' },
+      { key: 'size',      label: 'Size' },
+      { key: 'uom',       label: 'UOM' },
+      { key: 'qty',       label: 'Qty', numeric: true },
+      { key: 'unitPrice', label: 'Unit Price (INR)', numeric: true },
+      { key: 'gst',       label: 'GST %', numeric: true },
     ],
   };
 
@@ -84,7 +88,8 @@ window.Pages['po-creation'] = (() => {
       { key: 'total', label: 'Total (INR)', compute: v => _num(v.boxQty) * _num(v.boxRate) + _num(v.plateQty) * _num(v.plateRate) },
     ],
     'Service PO': [
-      { key: 'amountWithTax', label: 'Amount w/ Tax (INR)', compute: v => { const a = _num(v.amount); return a + a * _num(v.gst) / 100; } },
+      { key: 'amount',        label: 'Amount (INR)',         compute: v => _num(v.qty) * _num(v.unitPrice) },
+      { key: 'amountWithTax', label: 'Amount w/ Tax (INR)',   compute: v => { const a = _num(v.qty) * _num(v.unitPrice); return a + a * _num(v.gst) / 100; } },
     ],
   };
 
@@ -464,7 +469,7 @@ window.Pages['po-creation'] = (() => {
       } else if (_format === 'Diamond PO') {
         itemsSum += _num(vals.boxQty) * _num(vals.boxRate) + _num(vals.plateQty) * _num(vals.plateRate);
       } else if (_format === 'Service PO') {
-        const amt = _num(vals.amount);
+        const amt = _num(vals.qty) * _num(vals.unitPrice);
         taxInclusive += amt + amt * _num(vals.gst) / 100;
       }
     });
