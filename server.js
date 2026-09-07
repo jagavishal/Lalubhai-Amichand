@@ -1418,7 +1418,7 @@ function _leaveMailHtml({ heading, colour, lead, rows, footer, actions }) {
 /* Bulletproof-ish buttons: a table with a background colour and a padded link,
    which is the one construction Outlook, Gmail and Apple Mail all render the
    same. No images, so nothing breaks when a client blocks them. */
-function _leaveMailButtons(leaveId, email) {
+function _decisionButtons(approveHref, rejectHref) {
   const btn = (label, colour, href) => `<td style="padding:0 6px 0 0">
       <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:separate">
         <tr><td style="background:${colour};border-radius:6px">
@@ -1429,11 +1429,20 @@ function _leaveMailButtons(leaveId, email) {
     </td>`;
   return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0 8px">
       <tr>
-        ${btn('Approve', '#16a34a', leaveActionUrl(leaveId, 'Approved', email))}
-        ${btn('Reject', '#dc2626', leaveActionUrl(leaveId, 'Rejected', email))}
+        ${btn('Approve', '#16a34a', approveHref)}
+        ${btn('Reject', '#dc2626', rejectHref)}
       </tr>
     </table>`;
 }
+const _leaveMailButtons = (leaveId, email) =>
+  _decisionButtons(leaveActionUrl(leaveId, 'Approved', email), leaveActionUrl(leaveId, 'Rejected', email));
+
+/* PO approval links ride on the same signed-token scheme. The id inside the
+   token is namespaced ("po:PO325") so a leave token can never be replayed
+   against a PO or the other way round, even though both share one HMAC. */
+const PO_TOKEN_NS = 'po:';
+const poActionUrl = (poNo, decision, email) =>
+  `${APP_ORIGIN}/po-action?t=${encodeURIComponent(leaveTokenFor(PO_TOKEN_NS + poNo, decision, email))}`;
 
 // The office inbox is copied on every leave request, so HR has the whole
 // year's requests in one place regardless of who approved what. Overridable
@@ -1644,7 +1653,7 @@ async function sendPoApprovalEmail({ poNumber, format, party, department, prNo, 
     html: _leaveMailHtml({
       heading: 'Purchase Order Awaiting Your Approval',
       colour: '#0150AA',
-      lead: `Hi <b>${who.name}</b>, <b>${createdBy || 'the store team'}</b> has created a Purchase Order in the ERP. Please review it.`,
+      lead: `Hi <b>${who.name}</b>, <b>${createdBy || 'the store team'}</b> has created a Purchase Order in the ERP. Please review the PDF and approve or reject it below.`,
       rows: [
         ['PO No', poNumber],
         ['Format', format],
@@ -1654,13 +1663,38 @@ async function sendPoApprovalEmail({ poNumber, format, party, department, prNo, 
         ['Total', rupees(totalAmount)],
         ['Created By', createdBy],
       ],
-      actions: pdfLink
+      actions: (pdfLink
         ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open PO PDF</a></td></tr></table>`
-        : '',
-      footer: 'Reply to the store team, or open <b>PO Creation → PO List</b> in the ERP to see every PO.',
+        : '')
+        + _decisionButtons(poActionUrl(poNumber, 'Approved', who.email), poActionUrl(poNumber, 'Rejected', who.email)),
+      footer: 'Each button opens a page that asks you to confirm — nothing is decided until you press the button there. Open <b>PO Creation → PO List</b> in the ERP to see every PO and its approval status.',
     }),
   });
   console.log('[email] PO approval mail sent to:', who.email, 'for', poNumber);
+}
+
+/* Tells whoever raised the PO how the approver decided — the mirror of the
+   mail above, so the store team is not left refreshing PO List. */
+async function sendPoDecisionEmail({ poNumber, format, party, department, totalAmount, pdfLink, createdBy, status, decidedBy }) {
+  const mailer = getMailer();
+  if (!mailer) return;
+  const who = await userByName(createdBy);
+  if (!who || !who.email) { console.log('[email] PO decision mail skipped — no login/email for creator:', createdBy); return; }
+  const approved = status === 'Approved';
+  const n = Number(totalAmount);
+  await mailer.sendMail({
+    from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+    to: who.email,
+    subject: `${poNumber} ${approved ? 'approved' : 'rejected'}${party ? ' — ' + party : ''}`,
+    html: _leaveMailHtml({
+      heading: `Purchase Order ${status}`,
+      colour: approved ? '#15803d' : '#b91c1c',
+      lead: `Hi <b>${who.name}</b>, <b>${decidedBy || 'the approver'}</b> has <b>${status.toLowerCase()}</b> ${poNumber}.`,
+      rows: [['PO No', poNumber], ['Format', format], ['Party', party], ['Department', department], ['Total', Number.isFinite(n) && String(totalAmount ?? '').trim() !== '' ? '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '']],
+      actions: pdfLink ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open PO PDF</a></td></tr></table>` : '',
+      footer: approved ? 'You can send it to the vendor.' : 'Speak to the approver before raising it again.',
+    }),
+  });
 }
 
 
@@ -4390,6 +4424,117 @@ app.post('/leave-action', async (req, res) => {
   }
 });
 
+/* ── Deciding a PO from the email ─────────────────────────────────────────────
+   Same shape as /leave-action above: the mailed link only opens a confirm
+   page, the decision is a form POST, and the token is bound to the approver's
+   own mailbox. The record is the "ERP PO Log" row — Status (L) becomes
+   Approved/Rejected, with who and when in M/N — since the sheet is the PO
+   database and PO List / GRN Creation already read that column. */
+const PO_LOG_DECISION_HEADERS = ['Decided By', 'Decided At'];
+
+async function _poForToken(token) {
+  const claim = readLeaveToken(token);
+  if (!claim || !String(claim.id).startsWith(PO_TOKEN_NS)) {
+    return { error: 'This link is not valid. It may have been altered in transit — open PO Creation → PO List in the ERP instead.' };
+  }
+  const poNo = claim.id.slice(PO_TOKEN_NS.length);
+  const auth = getGoogleAuth();
+  if (!auth) return { error: 'Google Sheets is not configured on this server.' };
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  let rowIndex;
+  try { rowIndex = await _findRowIndexByKey(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, poNo); }
+  catch (e) { if (e.notFound) return { error: `${poNo} is no longer on the PO log.` }; throw e; }
+  const got = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A${rowIndex + 1}:N${rowIndex + 1}`, valueRenderOption: 'FORMATTED_VALUE' });
+  const r = got.data.values?.[0] || [];
+  const row = {
+    poNo: r[0] || poNo, format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', department: r[4] || '',
+    total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', prNo: r[9] || '', status: r[11] || 'Active',
+    decidedBy: r[12] || '', decidedAt: r[13] || '', rowIndex,
+  };
+  return { claim: { ...claim, id: poNo }, row };
+}
+
+const _poRows = (row) => [
+  ['PO No', row.poNo], ['Format', row.format], ['Party', row.party], ['Department', row.department],
+  ['Against PR', row.prNo], ['Total (INR)', row.total], ['Created By', row.createdBy],
+];
+const _poPdfNote = (row) => row.pdfLink ? `<a href="${escHtml(row.pdfLink)}" target="_blank" rel="noopener">Open the PO PDF</a> to check it first.` : '';
+
+const _poAlreadyPage = (row) => _leaveActionPage({
+  title: row.status === 'Cancelled' ? 'PO cancelled' : 'Already decided', tone: 'plain',
+  lead: row.status === 'Cancelled'
+    ? `${escHtml(row.poNo)} was cancelled by the store team, so there is nothing to approve.`
+    : `${escHtml(row.poNo)} was already marked <b>${escHtml(row.status)}</b>${row.decidedBy ? ' by ' + escHtml(row.decidedBy) : ''}${row.decidedAt ? ' on ' + escHtml(row.decidedAt) : ''}. Nothing more to do.`,
+  rows: _poRows(row),
+});
+const _poDecided = (row) => ['Approved', 'Rejected', 'Cancelled'].includes(row.status);
+
+app.get('/po-action', async (req, res) => {
+  try {
+    const { error, claim, row } = await _poForToken(req.query.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    if (_poDecided(row)) return res.send(_poAlreadyPage(row));
+    const good = /^approved$/i.test(claim.decision);
+    const other = good ? 'Rejected' : 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? `Approve ${row.poNo}?` : `Reject ${row.poNo}?`,
+      tone: good ? 'good' : 'bad',
+      lead: `You are about to mark <b>${escHtml(row.poNo)}</b>${row.party ? ' for <b>' + escHtml(row.party) + '</b>' : ''} as <b>${escHtml(claim.decision)}</b>. ${_poPdfNote(row)}`,
+      rows: _poRows(row),
+      form: `<form method="POST" action="/po-action">
+               <input type="hidden" name="t" value="${escHtml(String(req.query.t))}">
+               <button type="submit">Yes, ${good ? 'approve' : 'reject'} it</button>
+             </form>`,
+      note: `Meant to do the opposite? <a href="/po-action?t=${encodeURIComponent(leaveTokenFor(PO_TOKEN_NS + row.poNo, other, claim.email))}">Switch to ${other}</a>.`,
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Something went wrong', tone: 'bad', lead: escHtml(e.message) }));
+  }
+});
+
+app.post('/po-action', async (req, res) => {
+  try {
+    const { error, claim, row } = await _poForToken(req.body?.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    // A double-click or a forwarded mail — not worth an error page, and it
+    // must never overwrite who decided first.
+    if (_poDecided(row)) return res.send(_poAlreadyPage(row));
+
+    const status = /^approved$/i.test(claim.decision) ? 'Approved' : 'Rejected';
+    let by = claim.email || 'Approver (by email)';
+    if (claim.email && USE_DB) {
+      const u = (await q('SELECT name FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [claim.email]).catch(() => []))[0];
+      if (u?.name) by = u.name;
+    }
+    const when = _timestampForSheet();
+
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
+    const data = [{ range: `'${PO_CREATION_LOG_TAB}'!L${row.rowIndex + 1}:N${row.rowIndex + 1}`, values: [[status, by, when]] }];
+    // The log predates these two columns; label them the first time one is written.
+    const head = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!M1:N1`, valueRenderOption: 'FORMATTED_VALUE' });
+    if (!(head.data.values?.[0] || []).some(c => String(c ?? '').trim())) data.push({ range: `'${PO_CREATION_LOG_TAB}'!M1:N1`, values: [PO_LOG_DECISION_HEADERS] });
+    await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PO_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
+
+    sendPoDecisionEmail({
+      poNumber: row.poNo, format: row.format, party: row.party, department: row.department,
+      totalAmount: String(row.total).replace(/[^0-9.-]/g, ''), pdfLink: row.pdfLink, createdBy: row.createdBy, status, decidedBy: by,
+    }).catch((e) => console.error('[po-action] decision mail failed:', e.message));
+
+    const good = status === 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? 'Approved' : 'Rejected',
+      tone: good ? 'good' : 'bad',
+      lead: `<b>${escHtml(row.poNo)}</b> has been marked <b>${status.toLowerCase()}</b>.${row.createdBy ? ' ' + escHtml(row.createdBy) + ' has been emailed.' : ''}`,
+      rows: _poRows({ ...row, status }),
+      note: 'You can close this tab.',
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Could not record the decision', tone: 'bad', lead: escHtml(e.message) }));
+  }
+});
+
 // ── FMS (Flow Management System) API — see fmsSheet.js wiring further down,
 // registered once getGoogleAuth()/ensureLogTab() etc. exist (search "FMS routes").
 
@@ -5645,8 +5790,10 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res
     // submission for that format.
     // "Status" is likewise appended at the end — defaults to "Active"; the PO
     // List "Cancel" action flips it to "Cancelled" in place, never deleting
-    // the row (see PUT /api/po-creation/cancel below).
-    await ensureLogTab(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, ['PO No', 'Format', 'Date', 'Party', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'PR No', 'Form JSON', 'Status']);
+    // the row (see PUT /api/po-creation/cancel below), and the approver's
+    // emailed Approve/Reject buttons flip it to Approved/Rejected (see
+    // /po-action), stamping "Decided By" / "Decided At" beside it.
+    await ensureLogTab(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, ['PO No', 'Format', 'Date', 'Party', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'PR No', 'Form JSON', 'Status', ...PO_LOG_DECISION_HEADERS]);
     await appendLogRow(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, [
       // Leading "'" forces the ISO date to stay literal text instead of being
       // reparsed into a locale-formatted date — the PO List page's date-range
@@ -5678,14 +5825,14 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:N1000`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).filter(r => r[0]).map(r => {
       let form = null;
       try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
       return {
         poNo: r[0] || '', format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', department: r[4] || '',
         total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', createdAt: r[8] || '', prNo: r[9] || '', form,
-        status: r[11] || 'Active',
+        status: r[11] || 'Active', decidedBy: r[12] || '', decidedAt: r[13] || '',
       };
     }).reverse();
     return res.json(rows.slice(0, 200));
@@ -6637,7 +6784,7 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
     // physical to receive against a service, so they'd only ever be noise in
     // this picker. They still appear in PO Creation's own PO List.
     const list = poRows
-      .filter(r => r[0] && r[1] !== 'Service PO' && (r[11] || 'Active') !== 'Cancelled' && !usedPoNos.has(_seqKey(r[0])))
+      .filter(r => r[0] && r[1] !== 'Service PO' && !['Cancelled', 'Rejected'].includes(r[11] || 'Active') && !usedPoNos.has(_seqKey(r[0])))
       .map(r => {
         let items = [];
         try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }

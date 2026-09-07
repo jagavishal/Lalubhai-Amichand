@@ -647,12 +647,25 @@ window.Pages['po-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
-          + (r.status === 'Cancelled'
-            ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
+          + _polStatusPill(r)
+          + (r.status === 'Cancelled' || r.status === 'Rejected'
+            ? ''
             : '<button type="button" class="poc-cancel-btn" data-po="' + esc(r.poNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
           + Utils.ownerDeleteBtn('poc-delete-btn', 'po', r.poNo)
         + '</td>'
       + '</tr>').join('');
+  }
+
+  // Approval state, as decided from the approver's email (see /po-action in
+  // server.js). "Active" is the plain not-yet-decided state — shown as
+  // "Awaiting approval" so the store team can tell it apart at a glance.
+  function _polStatusPill(r) {
+    const pill = (label, bg, fg, title) => '<span title="' + esc(title || '') + '" style="display:inline-flex;margin-right:6px;padding:2px 8px;border-radius:10px;background:' + bg + ';color:' + fg + ';font-size:11px;font-weight:600;">' + esc(label) + '</span>';
+    const who = r.decidedBy ? 'by ' + r.decidedBy + (r.decidedAt ? ' on ' + r.decidedAt : '') : '';
+    if (r.status === 'Cancelled') return pill('Cancelled', '#f1f5f9', '#64748b');
+    if (r.status === 'Approved')  return pill('Approved', '#dcfce7', '#15803d', who);
+    if (r.status === 'Rejected')  return pill('Rejected', '#fee2e2', '#b91c1c', who);
+    return pill('Awaiting approval', '#fef3c7', '#b45309');
   }
 
   function _polBindRowActions() {
