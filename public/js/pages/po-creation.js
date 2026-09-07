@@ -686,6 +686,7 @@ window.Pages['po-creation'] = (() => {
           await _polLoad();
         } catch (err) {
           Utils.showToast(err.message || 'Failed to delete', 'error');
+          await _polLoad();
         }
         return;
       }
@@ -711,6 +712,9 @@ window.Pages['po-creation'] = (() => {
           await _polLoad();
         } catch (err) {
           Utils.showToast(err.message || 'Failed to cancel', 'error');
+          // "Entry not found" means the row went away under us (deleted from
+          // another tab) — re-sync so the list stops offering a stale PO.
+          await _polLoad();
         }
       }
     });
