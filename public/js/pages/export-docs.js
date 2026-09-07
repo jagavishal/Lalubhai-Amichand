@@ -75,10 +75,18 @@ window.Pages['export-documentation'] = (() => {
     stuffingTimeTo: '6.0PM',
   };
 
+  // UOM starts blank on purpose — the team picks PCS or SET per line (a
+  // prefilled PCS used to slip through on SET items). swgMm / barcode / poNo /
+  // container print on the customer's Invoice + Packing List only (filled
+  // from the packing list when one is loaded); piRate is the rate the
+  // Proforma Invoice quoted for that product — shown beside the invoice rate
+  // for reference, never used in any figure.
   const _blankItem = () => ({
     invItem: 'UTENSILS', itemName: '', scheme: 'DBK/RDT', productCode: '', size: '',
-    qty: '', uom: 'PCS', rate: '', cartonFrom: '', cartonTo: '', pcsPerCarton: '', ntWtPerCarton: '',
+    swgMm: '', barcode: '', poNo: '', container: '', piRate: '',
+    qty: '', uom: '', rate: '', cartonFrom: '', cartonTo: '', pcsPerCarton: '', ntWtPerCarton: '',
   });
+  const UOM_OPTIONS = ['', 'PCS', 'SET'];
 
   // Dates print exactly as typed, and their own documents write them d.M.yyyy
   // ("21.8.2026") — so that is what the automatic date fills in.
@@ -93,7 +101,7 @@ window.Pages['export-documentation'] = (() => {
       consigneeName: '', consigneeAddress: '', consigneeTel: '', consigneeCr: '',
       preCarriage: '', placeOfReceipt: '', portOfDischarge: '', placeOfDelivery: '', countryFinal: '',
       swg: '', totalGrossWt: '', vehicleNo: '', containerNo: '', lrNo: '', lrDate: '',
-      exchRate: '', freightUsd: '', shippingMarks: '',
+      exchRate: '', freightUsd: '', shippingMarks: '', custExtraCharges: '',
       bookingNo: '', shippingLineSealNo: '', customSealNo: '',
       stuffingDate: '', containerTareWt: '', weighingDate: '', weighingTime: '', weighingSlipNo: '',
     }, DEFAULTS);
@@ -271,6 +279,9 @@ window.Pages['export-documentation'] = (() => {
           itemName: it.description || '',
           productCode: it.itemCode || '',
           size: it.size || '',
+          swgMm: it.sizeMm != null ? String(it.sizeMm) : '',
+          barcode: it.barcode || '',
+          poNo: it.orderNo || '',
           qty: it.packedQty != null ? String(it.packedQty) : '',
           cartonFrom: m ? String(Number(m[1])) : (single ? String(Number(single[1])) : ''),
           cartonTo: m ? String(Number(m[2])) : (single ? String(Number(single[1])) : ''),
@@ -286,6 +297,33 @@ window.Pages['export-documentation'] = (() => {
 
     render();
     Utils.showToast('Loaded ' + pl.plNo + (pl.orderNos ? ' — orders ' + pl.orderNos : ''), 'success');
+    _fillPiRates(pl.piNos);
+  }
+
+  // The rate each product was quoted at on the Proforma Invoice(s) this
+  // packing list shipped against — matched by model no. and shown read-only
+  // beside the invoice rate. Best effort: a failed lookup just leaves the
+  // column blank.
+  const _piKey = (v) => String(v || '').replace(/\D/g, '');
+  async function _fillPiRates(piNos) {
+    const wanted = String(piNos || '').split(/[,\s]+/).map(_piKey).filter(Boolean);
+    if (!wanted.length) return;
+    try {
+      const list = await Utils.apiFetch('/api/proforma-invoice/list');
+      const rateByCode = {};
+      (Array.isArray(list) ? list : []).filter(p => wanted.includes(_piKey(p.piNo))).forEach(p => {
+        (p.form?.items || []).forEach(it => {
+          const code = String(it.modelNo || '').trim().toLowerCase();
+          if (code && it.rate) rateByCode[code] = String(it.rate);
+        });
+      });
+      let hits = 0;
+      _items.forEach(it => {
+        const r = rateByCode[String(it.productCode || '').trim().toLowerCase()];
+        if (r) { it.piRate = r; hits++; }
+      });
+      if (hits && _view === 'form') _refreshItemsDerived();
+    } catch {}
   }
 
   /* ── data ─────────────────────────────────────────────────────────────── */
@@ -347,9 +385,16 @@ window.Pages['export-documentation'] = (() => {
   function _itemCell(idx, key, width, ph) {
     return '<td style="padding:3px;"><input type="text" data-item-idx="' + idx + '" data-item-key="' + key + '" value="' + esc(_items[idx][key] ?? '') + '" placeholder="' + esc(ph || '') + '" autocomplete="off" style="' + _inputStyle + 'padding:6px 7px;font-size:12px;min-width:' + width + 'px;" /></td>';
   }
+  function _itemSelect(idx, key, options, width) {
+    const cur = String(_items[idx][key] ?? '');
+    const opts = options.includes(cur) ? options : options.concat([cur]);
+    return '<td style="padding:3px;"><select data-item-idx="' + idx + '" data-item-key="' + key + '" style="' + _inputStyle + 'padding:6px 7px;font-size:12px;min-width:' + width + 'px;">'
+      + opts.map(o => '<option value="' + esc(o) + '"' + (o === cur ? ' selected' : '') + '>' + (o ? esc(o) : '—') + '</option>').join('')
+      + '</select></td>';
+  }
   function _itemsTableHtml() {
     const c = _calc();
-    const head = ['#', 'Item (Invoice)', 'Item Name (Packing List)', 'Product Code', 'Size', 'Scheme', 'Qty', 'UOM', 'Rate US$', 'Carton From', 'Carton To', 'Pcs/Carton', 'Nt Wt/Carton (kg)', 'Cartons', 'Amount US$', '']
+    const head = ['#', 'Item (Invoice)', 'Item Name (Packing List)', 'Product Code', 'Size', 'SWG mm', 'Barcode', 'P.O. No', 'Container', 'Scheme', 'Qty', 'UOM', 'PI Rate', 'Rate US$', 'Carton From', 'Carton To', 'Pcs/Carton', 'Nt Wt/Carton (kg)', 'Cartons', 'Amount US$', '']
       .map(h => '<th style="padding:6px 6px;text-align:left;font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap;">' + esc(h) + '</th>').join('');
     const body = _items.map((it, i) => {
       const d = c.items[i];
@@ -359,9 +404,14 @@ window.Pages['export-documentation'] = (() => {
         + _itemCell(i, 'itemName', 160, 'e.g. Mug With Handle Naxi')
         + _itemCell(i, 'productCode', 90, '022-0201')
         + _itemCell(i, 'size', 90)
+        + _itemCell(i, 'swgMm', 55, '0.91')
+        + _itemCell(i, 'barcode', 110)
+        + _itemCell(i, 'poNo', 70, 'P00595')
+        + _itemCell(i, 'container', 100, 'TRKU4450407')
         + _itemCell(i, 'scheme', 80)
         + _itemCell(i, 'qty', 60)
-        + _itemCell(i, 'uom', 55, 'PCS')
+        + _itemSelect(i, 'uom', UOM_OPTIONS, 62)
+        + '<td style="padding:3px 6px;font-size:12px;color:#94a3b8;text-align:right;white-space:nowrap;" title="Rate quoted on the Proforma Invoice — for reference only">' + esc(it.piRate || '') + '</td>'
         + _itemCell(i, 'rate', 70)
         + _itemCell(i, 'cartonFrom', 60)
         + _itemCell(i, 'cartonTo', 60)
@@ -373,7 +423,7 @@ window.Pages['export-documentation'] = (() => {
       + '</tr>';
     }).join('');
     return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;background:#fff;">'
-      + '<table style="border-collapse:collapse;width:100%;min-width:1280px;"><thead><tr style="background:#f8fafc;">' + head + '</tr></thead><tbody>' + body + '</tbody></table>'
+      + '<table style="border-collapse:collapse;width:100%;min-width:1900px;"><thead><tr style="background:#f8fafc;">' + head + '</tr></thead><tbody>' + body + '</tbody></table>'
     + '</div>';
   }
 
@@ -444,10 +494,13 @@ window.Pages['export-documentation'] = (() => {
         + _fld('remarks', 'Remarks / Scheme Declaration')
         + '<div style="grid-column:1/-1;">' + _area('shippingMarks', 'Shipping Marks (one line per row)', 4, 'Printed in the invoice "Marks and numbers" column and under the Packing List.') + '</div>')
 
+      + _section('Customer Invoice & Packing List', 'The customer\'s copy prints from the same rows, one page at a time — every page carries its own running total and the next page starts from it.',
+          '<div style="grid-column:1/-1;">' + _area('custExtraCharges', 'Additional charges on the Customer Invoice (one per line: label = amount US$)', 2, 'e.g. "Diff. Freight = 6000.00" — added to the customer invoice total only; the customs invoice is not affected.') + '</div>')
+
       + _section('Transport & Container', 'Gross weight comes from the weighbridge; net weight is calculated from the carton rows below.',
           _fld('totalGrossWt', 'Total Gross Weight (KGS)', { required: true, placeholder: '12915.550' })
         + _fld('vehicleNo', 'Vehicle No.', { placeholder: 'GJ12BZ6467' })
-        + _fld('containerNo', 'Container No.', { required: true, placeholder: 'TRKU4414246' })
+        + _fld('containerNo', 'Container No.', { required: true, placeholder: 'TRKU4414246', hint: 'More than one? Separate with commas — the Customer Invoice / Packing List list them all and group items by the Container column.' })
         + _fld('lrNo', 'LR No.')
         + _fld('lrDate', 'LR Date', { placeholder: '20.8.2026' })
         + _fld('bookingNo', 'Booking No.', { placeholder: 'MUN26080233', hint: 'Printed on the VGM sheet.' })
@@ -479,7 +532,7 @@ window.Pages['export-documentation'] = (() => {
       + '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;margin-bottom:14px;">'
         + '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">'
           + '<div><div style="font-size:13px;font-weight:800;color:#0f172a;">Items & Cartons</div>'
-          + '<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">One row per product/carton range. Cartons, net weight and amounts calculate themselves.</div></div>'
+          + '<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">One row per product/carton range. Cartons, net weight and amounts calculate themselves. UOM is chosen per row (PCS / SET); PI Rate is what the Proforma Invoice quoted, shown for reference only.</div></div>'
           + '<button type="button" id="ed-add-item" style="padding:7px 14px;border:none;border-radius:8px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:700;cursor:pointer;">+ Add Row</button>'
         + '</div>'
         + '<div id="ed-items-wrap" style="margin-top:12px;">' + _itemsTableHtml() + '</div>'
@@ -507,6 +560,8 @@ window.Pages['export-documentation'] = (() => {
     ['annexure', 'Annexure'],
     ['dbk', 'DBK Declaration'],
     ['vgm', 'VGM'],
+    ['custInvoice', 'Customer Invoice'],
+    ['custPacking', 'Customer Packing List'],
   ];
 
   // The LUT paperwork itself — FORM GST RFD-11 and its portal acknowledgement.
@@ -596,6 +651,7 @@ window.Pages['export-documentation'] = (() => {
     .sheet .sm { font-size: 10.5px; }
     .sheet .title { text-align: center; font-weight: bold; font-size: 15px; margin: 0 0 8px; }
     .sheet .nb { border: none !important; }
+    .sheet table.xs th, .sheet table.xs td { font-size: 9.5px; padding: 2px 3px; line-height: 1.25; }
   `;
   const _PRINT_CSS = _DOC_CSS + `
     body { font-family: Arial, Helvetica, sans-serif; font-size: 11.5px; color: #000; margin: 0; padding: 24px; background:#fff; }
@@ -889,6 +945,206 @@ window.Pages['export-documentation'] = (() => {
       + _signBlock('For ' + COMPANY.name);
   }
 
+  /* ── 6 & 7. CUSTOMER INVOICE + CUSTOMER PACKING LIST ──────────────────────
+     The copy that goes to the buyer, laid out like their LA-14 set: the same
+     header on every page, items grouped under "CONTAINER NO." sub-headings,
+     and — the point of the format — every page closes with its own running
+     TOTAL and the next page opens with that figure brought forward, so each
+     sheet reads on its own. Rows per page are fixed so a page never spills. */
+  // A page holds this many printed text lines of items (one plain row = 1;
+  // a long name or size that wraps costs more). Sized so the header, the
+  // table and the footer always land on one A4 sheet.
+  const CUST_INV_BUDGET = 25;
+  const CUST_PL_BUDGET = 29;
+  // How many text lines a row will take once its cells wrap at the column
+  // widths set on the table (name ~26 chars, size ~9, swg ~7 per line).
+  const _lineCost = (ln) => ln.type === 'container' ? 1 : Math.max(1,
+    Math.ceil(String(ln.it.itemName || ln.it.invItem || '').length / 26),
+    Math.ceil(String(ln.it.size || '').length / 9),
+    Math.ceil(String(ln.it.swgMm || '').length / 7));
+  // Fills pages up to the budget. A container heading never ends a page —
+  // it moves down with its first item, so no page closes on a bare heading.
+  function _paginate(lines, budget) {
+    const pages = [[]];
+    let used = 0;
+    lines.forEach((ln, i) => {
+      let cost = _lineCost(ln);
+      if (ln.type === 'container' && lines[i + 1]) cost += _lineCost(lines[i + 1]);
+      if (used + cost > budget && pages[pages.length - 1].length) { pages.push([]); used = 0; }
+      pages[pages.length - 1].push(ln);
+      used += _lineCost(ln);
+    });
+    return pages;
+  }
+
+  const _containersOf = (d) => String(d.containerNo || '').split(/[,;\n]+/).map(x => x.trim()).filter(Boolean);
+  // "Diff. Freight = 6000.00" / "SCoC 225.00" → { label, amount }
+  function _extraCharges(d) {
+    return _lines(d.custExtraCharges).map(l => {
+      const m = /^(.*?)[\s=:]*([\d,]+(?:\.\d+)?)\s*$/.exec(l);
+      return m ? { label: m[1].replace(/[=:\s]+$/, '').trim(), amount: num(m[2]) } : null;
+    }).filter(x => x && x.label);
+  }
+  // Items in order, with a container heading wherever the container changes
+  // (a row with no container of its own belongs to the first one on the form).
+  function _custLines(d, c) {
+    const first = _containersOf(d)[0] || '';
+    const lines = [];
+    let cur = null;
+    c.items.forEach(it => {
+      const cont = String(it.container || '').trim() || first;
+      if (cont !== cur) { cur = cont; if (cont) lines.push({ type: 'container', name: cont }); }
+      lines.push({ type: 'item', it });
+    });
+    return lines;
+  }
+  const _cartonRange = (it) => {
+    const f = String(it.cartonFrom || '').trim(), t = String(it.cartonTo || '').trim();
+    return f && t && f !== t ? f + '-' + t : (f || t);
+  };
+
+  function _custHeaderHtml(d, c, opts) {
+    const conts = _containersOf(d);
+    const shipperLabel = opts.shipper ? 'Shipper' : 'Exporter';
+    return '<div class="title" style="margin-bottom:4px;">' + opts.title + '</div>'
+      + '<table class="grid sm">'
+      + '<tr>'
+        + '<td style="width:50%;vertical-align:middle;" rowspan="2"><img src="' + esc(window.location.origin + '/export-header.png') + '" alt="Exporter — LALLUBHAI AMICHAND LIMITED" style="width:100%;max-width:430px;display:block;"></td>'
+        + '<td><span class="sm">Invoice No &amp; Date</span><br><span class="b">' + esc(d.invoiceNo) + '</span> &nbsp; DT. <span class="b">' + esc(d.invoiceDate) + '</span></td>'
+        + '<td style="width:17%;"><span class="sm">Exporter\'s Ref.</span><br><span class="b">PAGE-' + opts.page + '</span>' + (opts.pages > 1 ? '<span class="sm"> of ' + opts.pages + '</span>' : '') + '</td>'
+      + '</tr>'
+      + '<tr><td colspan="2"><span class="sm">CUSTOMER ORDER REF.</span><br><span class="b">' + esc(d.buyersOrderNo) + '</span></td></tr>'
+      + '<tr>'
+        + '<td><span class="sm">' + (opts.shipper ? 'SHIPPER' : 'Consignee') + '</span><br>'
+          + (opts.shipper
+              ? '<span class="b">' + esc(COMPANY.name) + '</span><br>' + esc(COMPANY.addr1) + '<br>' + esc(COMPANY.addr2)
+              : '<span class="b">' + esc(d.consigneeName) + '</span><br>' + _linesHtml(d.consigneeAddress) + (d.consigneeTel ? '<br>TEL ' + esc(d.consigneeTel) : '') + (d.consigneeCr ? '<br>CR NUMBER ' + esc(d.consigneeCr) : ''))
+        + '</td>'
+        + '<td colspan="2"><span class="sm">Buyer (if other than consignee)</span><br><span class="b">' + esc(d.buyer) + '</span>'
+          + (opts.shipper ? conts.map(cn => '<br>CONTAINER NUMBER: <span class="b">' + esc(cn) + '</span>').join('') : '')
+        + '</td>'
+      + '</tr>'
+      + '<tr>'
+        + '<td><span class="sm">' + (opts.shipper ? 'CONSIGNEE' : shipperLabel) + '</span><br>'
+          + (opts.shipper
+              ? '<span class="b">' + esc(d.consigneeName) + '</span><br>' + _linesHtml(d.consigneeAddress) + (d.consigneeTel ? '<br>TEL ' + esc(d.consigneeTel) : '') + (d.consigneeCr ? '<br>CR NUMBER ' + esc(d.consigneeCr) : '')
+              : '<span class="b">' + esc(COMPANY.name) + '</span><br>' + esc(COMPANY.addr1) + '<br>' + esc(COMPANY.addr2))
+        + '</td>'
+        + '<td colspan="2">'
+          + (opts.shipper ? '' : '<span class="sm">Terms of delivery &amp; payment</span><br><span class="b">' + esc(d.deliveryTerms) + ' &nbsp; ' + esc(d.paymentTerms) + '</span>' + conts.map(cn => '<br>CONTAINER NUMBER: <span class="b">' + esc(cn) + '</span>').join('') + '<br>')
+          + 'GROSS WEIGHT KGS. <span class="b">' + esc(d.totalGrossWt) + '</span>'
+          + '<br>NET WEIGHT KGS. <span class="b">' + wt(c.totalNetWt) + '</span>'
+          + '<br>TOTAL CARTONS: <span class="b">' + c.totalCartons + '</span>'
+          + (opts.shipper ? '<br>HSN CODE <span class="b">' + esc(d.hsnCode) + '</span><br>MADE IN INDIA' : '')
+        + '</td>'
+      + '</tr>'
+      + '<tr>'
+        + '<td colspan="3"><table class="plain sm" style="width:100%;"><tr>'
+          + '<td>Pre-Carriage by<br><span class="b">' + esc(d.preCarriage) + '</span></td>'
+          + '<td>Place of receipt by Pre-carrier<br><span class="b">' + esc(d.placeOfReceipt) + '</span></td>'
+          + '<td>Vessel/Flight No.<br><span class="b">' + esc(d.vessel) + '</span></td>'
+          + '<td>Port of Loading<br><span class="b">' + esc(d.portOfLoading) + '</span></td>'
+          + '<td>Country of Origin of Goods<br><span class="b">' + esc(d.countryOrigin) + '</span></td></tr>'
+          + '<tr><td>Port of Discharge<br><span class="b">' + esc(d.portOfDischarge) + '</span></td>'
+          + '<td>Place of Delivery<br><span class="b">' + esc(d.placeOfDelivery) + '</span></td>'
+          + '<td colspan="3">Country of Final Destination<br><span class="b">' + esc(d.countryFinal) + '</span></td></tr>'
+        + '</table></td>'
+      + '</tr>'
+      + '<tr><td colspan="3" class="b sm">' + esc(d.itemDescription) + '</td></tr>'
+      + '</table>';
+  }
+
+  function _docCustInvoice(d) {
+    const c = _calcFrom(d);
+    const pages = _paginate(_custLines(d, c), CUST_INV_BUDGET);
+    const extras = _extraCharges(d);
+    const grand = c.totalCf + extras.reduce((sum, e) => sum + e.amount, 0);
+    let cumQty = 0, cumAmt = 0;
+    return pages.map((lines, p) => {
+      const last = p === pages.length - 1;
+      const rows = [];
+      if (p > 0) rows.push('<td colspan="7" class="b sm">Brought forward from PAGE-' + p + '</td><td class="r b">' + cumQty + '</td><td></td><td class="r b">' + money(cumAmt) + '</td>');
+      lines.forEach(ln => {
+        if (ln.type === 'container') { rows.push('<td colspan="10" class="b" style="text-decoration:underline;">CONTAINER NO.' + esc(ln.name) + '</td>'); return; }
+        const it = ln.it;
+        cumQty += num(it.qty); cumAmt += it.amount;
+        rows.push('<td>' + esc(it.itemName || it.invItem) + '</td>'
+          + '<td class="c">' + esc(_cartonRange(it)) + '</td>'
+          + '<td class="c">' + esc(it.poNo) + '</td>'
+          + '<td class="c">' + esc(it.size) + '</td>'
+          + '<td class="c">' + esc(it.swgMm) + '</td>'
+          + '<td class="c">' + esc(it.productCode) + '</td>'
+          + '<td class="c">' + esc(it.barcode) + '</td>'
+          + '<td class="r">' + esc(it.qty) + '</td>'
+          + '<td class="r">' + money(num(it.rate)) + '</td>'
+          + '<td class="r">' + money(it.amount) + '</td>');
+      });
+      if (last) extras.forEach(e => { rows.push('<td colspan="9" class="r">' + esc(e.label) + '</td><td class="r">' + money(e.amount) + '</td>'); });
+      const marks = '<td rowspan="' + rows.length + '" style="vertical-align:top;overflow-wrap:anywhere;">' + _linesHtml(d.shippingMarks) + '</td>';
+      const body = rows.map((cells, i) => '<tr>' + (i === 0 ? marks : '') + cells + '</tr>').join('');
+      const pageTotal = last ? grand : cumAmt;
+      return '<div class="page"' + (last ? '' : ' style="page-break-after:always;"') + '>'
+        + _custHeaderHtml(d, c, { title: 'INVOICE', page: p + 1, pages: pages.length })
+        + '<table class="grid xs" style="margin-top:-1px;table-layout:fixed;">'
+        + '<tr class="c"><th style="width:12%;">Marks &amp; Nos.</th><th style="width:20%;">Description of Goods (ITEM)</th><th style="width:8%;">Carton No. From-To</th><th style="width:7%;">P.O. No.</th><th style="width:8%;">SIZE</th><th style="width:6%;">SWG MM</th><th style="width:8%;">PRODUCT CODE</th><th style="width:11%;">Barcode</th><th style="width:6%;">Qty. (PCS/SET)</th><th style="width:6%;">Rate (USD) PER PC/SET</th><th>Amount (' + esc(d.deliveryTerms) + ' US$)</th></tr>'
+        + body
+        + '<tr class="b"><td></td><td colspan="7" class="r">TOTAL</td><td class="r">' + cumQty + '</td><td class="r">' + esc(d.deliveryTerms) + ' US$</td><td class="r">' + money(pageTotal) + '</td></tr>'
+        + '</table>'
+        + '<table class="grid" style="margin-top:-1px;"><tr>'
+          + '<td style="width:62%;" class="sm">'
+            + (last ? '<span class="b">' + esc(_usdWords(grand, d.deliveryTerms)) + '</span><br>' : '')
+            + 'IT IS FURTHER DECLARED THAT THE ABOVE GOODS ARE NOT OF ISRAELI ORIGIN/MANUFACTURE NOR DO THEY CONTAIN ANY ISRAELI MATERIAL.<br>'
+            + 'Manufactures: ' + esc(COMPANY.name) + '<br>'
+            + '<span class="b">Declaration</span><br>We hereby declare that this Invoice shows the actual price of the goods described and that particulars are true and correct.'
+          + '</td>'
+          + '<td class="sm"><div class="b">FOR ' + esc(COMPANY.shortName) + '</div><div style="height:46px;"></div><div class="b">DIRECTOR</div></td>'
+        + '</tr><tr><td colspan="2" class="c sm">' + esc(COMPANY.works) + '</td></tr></table>'
+      + '</div>';
+    }).join('');
+  }
+
+  function _docCustPacking(d) {
+    const c = _calcFrom(d);
+    const pages = _paginate(_custLines(d, c), CUST_PL_BUDGET);
+    let cumCartons = 0, cumQty = 0, cumNet = 0;
+    return pages.map((lines, p) => {
+      const last = p === pages.length - 1;
+      const rows = [];
+      if (p > 0) rows.push('<tr class="b"><td colspan="2" class="sm">Brought forward from PAGE-' + p + '</td><td class="r">' + cumCartons + '</td><td colspan="6"></td><td class="r">' + cumQty + '</td><td class="r">' + wt(cumNet) + '</td></tr>');
+      lines.forEach(ln => {
+        if (ln.type === 'container') { rows.push('<tr><td colspan="11" class="b" style="text-decoration:underline;">CONTAINER NO.' + esc(ln.name) + '</td></tr>'); return; }
+        const it = ln.it;
+        cumCartons += it.cartons; cumQty += num(it.qty); cumNet += it.netWt;
+        rows.push('<tr>'
+          + '<td class="c">' + esc(it.cartonFrom) + '</td>'
+          + '<td class="c">' + esc(it.cartonTo) + '</td>'
+          + '<td class="c">' + it.cartons + '</td>'
+          + '<td class="c">' + esc(it.productCode) + '</td>'
+          + '<td>' + esc(it.itemName || it.invItem) + '</td>'
+          + '<td class="c">' + esc(it.size) + '</td>'
+          + '<td class="c">' + esc(it.swgMm) + '</td>'
+          + '<td class="c">' + esc(it.pcsPerCarton) + '</td>'
+          + '<td class="r">' + esc(it.ntWtPerCarton) + '</td>'
+          + '<td class="r">' + esc(it.qty) + '</td>'
+          + '<td class="r">' + wt(it.netWt) + '</td>'
+        + '</tr>');
+      });
+      return '<div class="page"' + (last ? '' : ' style="page-break-after:always;"') + '>'
+        + _custHeaderHtml(d, c, { title: 'PACKING LIST', page: p + 1, pages: pages.length, shipper: true })
+        + '<table class="grid xs" style="margin-top:-1px;table-layout:fixed;">'
+        + '<tr class="c"><th style="width:7%;">CARTON NO FROM</th><th style="width:7%;">CARTON NO TO</th><th style="width:7%;">TOTAL CARTONS</th><th style="width:9%;">PRODUCT CODE</th><th style="width:24%;">ITEM</th><th style="width:9%;">SIZE</th><th style="width:7%;">SWG MM</th><th style="width:7%;">PCS/SET PER CARTON</th><th style="width:7%;">NT.WT. PER CARTON</th><th style="width:7%;">TOTAL PCS/SET</th><th>TOTAL NET WEIGHT</th></tr>'
+        + rows.join('')
+        + '<tr class="b"><td colspan="2" class="r">' + (last ? 'TOTAL' : 'Total this page (carried forward)') + '</td><td class="r">' + cumCartons + '</td><td colspan="6"></td><td class="r">' + cumQty + '</td><td class="r">' + wt(cumNet) + '</td></tr>'
+        + '</table>'
+        + '<table class="plain" style="width:100%;margin-top:10px;"><tr>'
+          + '<td><span class="b sm" style="text-decoration:underline;">shipping mark</span><br>' + _linesHtml(d.shippingMarks) + '</td>'
+          + '<td class="r"><div class="b">FOR ' + esc(COMPANY.name) + '</div><div style="height:46px;"></div>Director.</td>'
+        + '</tr></table>'
+        + '<div class="c sm" style="margin-top:6px;border-top:1px solid #000;padding-top:3px;">' + esc(COMPANY.works) + '</div>'
+      + '</div>';
+    }).join('');
+  }
+
   function _openDoc(docKey, rec) {
     let d = {};
     try { d = JSON.parse(rec.data || '{}'); } catch {}
@@ -899,6 +1155,8 @@ window.Pages['export-documentation'] = (() => {
       annexure: ['Annexure ' + invNo, _docAnnexure],
       dbk:      ['DBK Declaration ' + invNo, _docDbk],
       vgm:      ['VGM ' + invNo, _docVgm],
+      custInvoice: ['Customer Invoice ' + invNo, _docCustInvoice],
+      custPacking: ['Customer Packing List ' + invNo, _docCustPacking],
     };
     const [title, fn] = map[docKey] || [];
     if (!fn) return;
@@ -955,6 +1213,8 @@ window.Pages['export-documentation'] = (() => {
     ['Annexure', _docAnnexure],
     ['DBK Declaration', _docDbk],
     ['VGM', _docVgm],
+    ['Customer Invoice', _docCustInvoice],
+    ['Customer Packing List', _docCustPacking],
   ];
   const _safeInvName = (invNo) => String(invNo || '').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'shipment';
 
@@ -1203,7 +1463,7 @@ window.Pages['export-documentation'] = (() => {
     mc.innerHTML = '<div style="padding:22px 24px 40px;">'
       + '<div style="margin-bottom:16px;">'
         + '<h2 style="margin:0;font-size:20px;font-weight:800;color:#0f172a;">Export Documentation</h2>'
-        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fill the Custom Invoice once — the Packing List, Annexure, DBK Declaration and VGM print themselves from it. LUT ARN details are prefilled and updated once per financial year.</p>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fill the Custom Invoice once — the Packing List, Annexure, DBK Declaration, VGM and the customer\'s own Invoice + Packing List print themselves from it. LUT ARN details are prefilled and updated once per financial year.</p>'
       + '</div>'
       + _tabsHtml()
       + (_view === 'form' ? _formHtml() : _listHtml())
