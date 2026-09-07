@@ -651,6 +651,9 @@ window.Pages['po-creation'] = (() => {
           + (r.status === 'Cancelled' || r.status === 'Rejected'
             ? ''
             : '<button type="button" class="poc-cancel-btn" data-po="' + esc(r.poNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
+          + (r.status === 'Approved' || r.status === 'Rejected' || r.status === 'Cancelled'
+            ? ''
+            : '<button type="button" class="poc-resend-btn" data-po="' + esc(r.poNo) + '" title="Email the approver again with Approve / Reject buttons" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Resend mail</button>')
           + Utils.ownerDeleteBtn('poc-delete-btn', 'po', r.poNo)
         + '</td>'
       + '</tr>').join('');
@@ -684,6 +687,18 @@ window.Pages['po-creation'] = (() => {
         } catch (err) {
           Utils.showToast(err.message || 'Failed to delete', 'error');
         }
+        return;
+      }
+      const resendBtn = e.target.closest('.poc-resend-btn');
+      if (resendBtn) {
+        resendBtn.disabled = true; resendBtn.textContent = 'Sending…';
+        try {
+          const r = await Utils.apiFetch('/api/po-creation/resend-approval?poNo=' + encodeURIComponent(resendBtn.dataset.po), { method: 'POST' });
+          Utils.showToast('Approval mail for PO #' + resendBtn.dataset.po + ' sent to ' + (r.sentTo || 'the approver'), 'success');
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to send', 'error');
+        }
+        resendBtn.disabled = false; resendBtn.textContent = 'Resend mail';
         return;
       }
       const cancelBtn = e.target.closest('.poc-cancel-btn');

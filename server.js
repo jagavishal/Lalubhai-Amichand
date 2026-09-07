@@ -1630,7 +1630,7 @@ async function sendHelpTicketEmail({
 const DEFAULT_PO_APPROVER = 'Sajil Shah';
 async function sendPoApprovalEmail({ poNumber, format, party, department, prNo, totalAmount, pdfLink, createdBy }) {
   const mailer = getMailer();
-  if (!mailer) { console.log('[email] PO approval mail skipped — SMTP not configured'); return; }
+  if (!mailer) { console.log('[email] PO approval mail skipped — SMTP not configured'); return null; }
   let approverName = DEFAULT_PO_APPROVER;
   try {
     const rows = await q(`SELECT "value" FROM app_config WHERE "key" = 'po_approver'`);
@@ -1640,7 +1640,7 @@ async function sendPoApprovalEmail({ poNumber, format, party, department, prNo, 
   const who = await userByName(approverName);
   if (!who || !who.email) {
     console.log('[email] PO approval mail skipped — no login/email found for approver:', approverName);
-    return;
+    return null;
   }
   const rupees = (v) => {
     const n = Number(v);
@@ -1671,6 +1671,7 @@ async function sendPoApprovalEmail({ poNumber, format, party, department, prNo, 
     }),
   });
   console.log('[email] PO approval mail sent to:', who.email, 'for', poNumber);
+  return who.email;
 }
 
 /* Tells whoever raised the PO how the approver decided — the mirror of the
@@ -4432,12 +4433,8 @@ app.post('/leave-action', async (req, res) => {
    database and PO List / GRN Creation already read that column. */
 const PO_LOG_DECISION_HEADERS = ['Decided By', 'Decided At'];
 
-async function _poForToken(token) {
-  const claim = readLeaveToken(token);
-  if (!claim || !String(claim.id).startsWith(PO_TOKEN_NS)) {
-    return { error: 'This link is not valid. It may have been altered in transit — open PO Creation → PO List in the ERP instead.' };
-  }
-  const poNo = claim.id.slice(PO_TOKEN_NS.length);
+// One PO's row off the "ERP PO Log", by PO number — { error } when it isn't there.
+async function _poLogRow(poNo) {
   const auth = getGoogleAuth();
   if (!auth) return { error: 'Google Sheets is not configured on this server.' };
   const { google } = require('googleapis');
@@ -4447,11 +4444,21 @@ async function _poForToken(token) {
   catch (e) { if (e.notFound) return { error: `${poNo} is no longer on the PO log.` }; throw e; }
   const got = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A${rowIndex + 1}:N${rowIndex + 1}`, valueRenderOption: 'FORMATTED_VALUE' });
   const r = got.data.values?.[0] || [];
-  const row = {
+  return { row: {
     poNo: r[0] || poNo, format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', department: r[4] || '',
     total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', prNo: r[9] || '', status: r[11] || 'Active',
     decidedBy: r[12] || '', decidedAt: r[13] || '', rowIndex,
-  };
+  } };
+}
+
+async function _poForToken(token) {
+  const claim = readLeaveToken(token);
+  if (!claim || !String(claim.id).startsWith(PO_TOKEN_NS)) {
+    return { error: 'This link is not valid. It may have been altered in transit — open PO Creation → PO List in the ERP instead.' };
+  }
+  const poNo = claim.id.slice(PO_TOKEN_NS.length);
+  const { error, row } = await _poLogRow(poNo);
+  if (error) return { error };
   return { claim: { ...claim, id: poNo }, row };
 }
 
@@ -5854,6 +5861,26 @@ app.put('/api/po-creation/cancel', requireAuth, async (req, res) => {
     await _setLogRowStatus(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, poNo, 'L', 'Cancelled');
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
+});
+
+// POST /api/po-creation/resend-approval?poNo=... — mails the approver again
+// for a PO still awaiting a decision (the Approve/Reject links are minted
+// fresh, so a PO mailed before those buttons existed gets a usable mail).
+// Refused once the PO is decided or cancelled — nothing left to approve.
+app.post('/api/po-creation/resend-approval', requireAuth, async (req, res) => {
+  try {
+    const poNo = String(req.query.poNo || '').trim();
+    if (!poNo) return res.status(400).json({ error: 'poNo is required' });
+    const { error, row } = await _poLogRow(poNo);
+    if (error) return res.status(404).json({ error });
+    if (_poDecided(row)) return res.status(400).json({ error: `${row.poNo} is already ${row.status} — nothing to approve` });
+    const sentTo = await sendPoApprovalEmail({
+      poNumber: row.poNo, format: row.format, party: row.party, department: row.department, prNo: row.prNo,
+      totalAmount: String(row.total).replace(/[^0-9.-]/g, ''), pdfLink: row.pdfLink, createdBy: row.createdBy,
+    });
+    if (!sentTo) return res.status(500).json({ error: 'Mail not sent — SMTP is not configured or the PO approver has no login email' });
+    return res.json({ success: true, sentTo });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
 // Owner-only. Cancel above keeps the PO on the log; this takes the row out
