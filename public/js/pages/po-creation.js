@@ -337,7 +337,6 @@ window.Pages['po-creation'] = (() => {
       const mapped = mapper(it);
       const codeInput = row.querySelector('.poc-item-code');
       if (codeInput) { codeInput.value = mapped.itemCode || ''; codeInput.readOnly = true; codeInput.style.cssText += READONLY_FIELD_STYLE; }
-      _resolveItemPreview(row, mapped.itemCode);
       Object.entries(mapped).forEach(([field, val]) => {
         if (field === 'itemCode') return;
         const fieldInput = row.querySelector('[data-field="' + field + '"]');
@@ -345,6 +344,10 @@ window.Pages['po-creation'] = (() => {
         fieldInput.value = val;
         if (!poOnlyFields.includes(field)) { fieldInput.readOnly = true; fieldInput.style.cssText += READONLY_FIELD_STYLE; }
       });
+      // After the PR's own values are in (customer code/barcode arrive as ''
+      // — the PR has no source for them) so the item master's fill lands on
+      // top, never underneath a blank written later.
+      _resolveItemPreview(row, mapped.itemCode);
       _recomputeRow(row);
     });
     _recomputeGrandTotal();
