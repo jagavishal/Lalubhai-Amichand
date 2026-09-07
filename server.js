@@ -5384,7 +5384,9 @@ const PO_FORMAT_CONFIG = {
 // VLOOKUP formulas.
 const PO_ITEM_CATALOG_RANGE = {
   PurchaseOrder: 'A2:C6000',
-  'ENR PO': 'AC2:AE6000',
+  // Through AJ, not AE: AJ is the sticker's "Product ID" — the customer's own
+  // code for it, which the ENR PO prints as CUSTOMER CODE/REF. NO.
+  'ENR PO': 'AC2:AJ6000',
   'Diamond PO': 'Q2:S6000',
 };
 
@@ -5403,6 +5405,22 @@ async function _loadPoItemCatalog(format) {
   const rows = (result.data.values || [])
     .filter(r => r[0])
     .map(r => ({ code: r[0] || '', description: r[1] || '', size: r[2] || '' }));
+  // ENR PO lines print a customer code and a barcode per sticker. Both live
+  // on the item master, not the PR — the PR sheet's own copy of the sticker
+  // master (ITEM_CODE(PACKING_STICKER), same 316 codes) carries Barcode in
+  // column I, and Product ID is on both copies. `fill` is what the form
+  // drops into the row's matching inputs when the code is picked; the store
+  // team used to retype both by hand off the physical sticker.
+  if (format === 'ENR PO') {
+    const raw = (result.data.values || []).filter(r => r[0]);
+    const master = new Map((await _loadPrItemCatalog('PACKING_STICKER')).map(m => [m.code.trim().toLowerCase(), m]));
+    rows.forEach((row, i) => {
+      const m = master.get(row.code.trim().toLowerCase());
+      const customerCodeRef = String(m?.customerCodeRef || raw[i][7] || '').trim();
+      const barcode = String(m?.barcode || '').trim();
+      if (customerCodeRef || barcode) row.fill = { customerCodeRef, barcode };
+    });
+  }
   _poItemCatalogCache[format] = { at: Date.now(), rows };
   return rows;
 }
@@ -6036,6 +6054,10 @@ async function _loadPrItemCatalog(format) {
         row.stickerL = String(r[4] || '').trim();
         row.stickerW = String(r[5] || '').trim();
         row.stickerSize = [row.stickerL, row.stickerW].filter(Boolean).join(' × ');
+        // H/I: the customer's own code and the sticker barcode — what an ENR
+        // PO prints beside the item (see _loadPoItemCatalog's ENR merge).
+        row.customerCodeRef = String(r[7] || '').trim();
+        row.barcode = String(r[8] || '').trim();
       }
       return row;
     });

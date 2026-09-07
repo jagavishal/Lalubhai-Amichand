@@ -141,10 +141,13 @@ window.Pages['po-creation'] = (() => {
 
   // Item fields that stay editable once a PR has been applied to the form —
   // either because PR_ITEM_MAPPERS never fills them from the PR (hardcoded
-  // to '' — there's no PR-side source for them), or because price genuinely
-  // needs to move at PO time (a vendor's actual quoted price at PO stage
-  // routinely differs from the PR's own estimate). Every other mapped field
-  // still locks, since it came straight from the approved PR.
+  // to '' — there's no PR-side source for them; ENR's customer code/barcode
+  // are auto-filled off the item master instead, see _applyItemFill, and
+  // stay editable for the ~1/3 of stickers the master has no code for), or
+  // because price genuinely needs to move at PO time (a vendor's actual
+  // quoted price at PO stage routinely differs from the PR's own estimate).
+  // Every other mapped field still locks, since it came straight from the
+  // approved PR.
   const PO_ONLY_ITEM_FIELDS = {
     PurchaseOrder: ['hsnCode', 'unitPrice'],
     'ENR PO': ['customerCodeRef', 'barcode', 'taxPercent', 'rate'],
@@ -394,8 +397,21 @@ window.Pages['po-creation'] = (() => {
       if (!res.ok) return;
       const matches = await res.json();
       const exact = matches.find(m => m.code.toLowerCase() === q.toLowerCase());
-      if (exact) { previewDesc.textContent = exact.description || '—'; previewSize.textContent = exact.size || '—'; }
+      if (exact) { previewDesc.textContent = exact.description || '—'; previewSize.textContent = exact.size || '—'; _applyItemFill(row, exact.fill); }
     } catch {}
+  }
+
+  // Drops the item master's own values (ENR PO: customer code + barcode)
+  // into the row's matching inputs. Only fills what the master actually has,
+  // and never a locked field — a blank on the master leaves the input as
+  // typed, so the store team can still key it off the physical sticker.
+  function _applyItemFill(row, fill) {
+    if (!fill) return;
+    Object.entries(fill).forEach(([field, value]) => {
+      if (!value) return;
+      const inp = row.querySelector('.poc-item-field[data-field="' + field + '"]');
+      if (inp && !inp.readOnly) inp.value = value;
+    });
   }
 
   /* ── Item-code typeahead per row — fixed-position dropdown so it isn't
@@ -415,7 +431,7 @@ window.Pages['po-creation'] = (() => {
           if (!res.ok) return;
           const matches = await res.json();
           if (!matches.length) { dd.style.display = 'none'; return; }
-          dd.innerHTML = matches.map(m => '<div class="poc-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.code) + '" data-desc="' + esc(m.description) + '" data-size="' + esc(m.size) + '">'
+          dd.innerHTML = matches.map(m => '<div class="poc-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.code) + '" data-desc="' + esc(m.description) + '" data-size="' + esc(m.size) + '" data-fill="' + esc(JSON.stringify(m.fill || null)) + '">'
             + '<b>' + esc(m.code) + '</b> — ' + esc(m.description) + (m.size ? ' (' + esc(m.size) + ')' : '') + '</div>').join('');
           const rect = input.getBoundingClientRect();
           dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 260) + 'px';
@@ -431,6 +447,7 @@ window.Pages['po-creation'] = (() => {
       input.value = opt.dataset.code;
       previewDesc.textContent = opt.dataset.desc || '—';
       previewSize.textContent = opt.dataset.size || '—';
+      try { _applyItemFill(row, JSON.parse(opt.dataset.fill || 'null')); } catch {}
       dd.style.display = 'none';
     });
     // Typing an exact, valid code and tabbing/clicking away — without ever
