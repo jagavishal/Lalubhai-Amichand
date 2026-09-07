@@ -77,7 +77,7 @@ window.Pages['export-documentation'] = (() => {
 
   // UOM starts blank on purpose — the team picks PCS or SET per line (a
   // prefilled PCS used to slip through on SET items). swgMm / barcode / poNo /
-  // container print on the customer's Invoice + Packing List only (filled
+  // container print on the customer's Invoice only (filled
   // from the packing list when one is loaded); piRate is the rate the
   // Proforma Invoice quoted for that product — shown beside the invoice rate
   // for reference, never used in any figure.
@@ -494,13 +494,13 @@ window.Pages['export-documentation'] = (() => {
         + _fld('remarks', 'Remarks / Scheme Declaration')
         + '<div style="grid-column:1/-1;">' + _area('shippingMarks', 'Shipping Marks (one line per row)', 4, 'Printed in the invoice "Marks and numbers" column and under the Packing List.') + '</div>')
 
-      + _section('Customer Invoice & Packing List', 'The customer\'s copy prints from the same rows, one page at a time — every page carries its own running total and the next page starts from it.',
+      + _section('Customer Invoice', 'The customer\'s copy prints from the same rows, one page at a time — every page carries its own running total and the next page starts from it.',
           '<div style="grid-column:1/-1;">' + _area('custExtraCharges', 'Additional charges on the Customer Invoice (one per line: label = amount US$)', 2, 'e.g. "Diff. Freight = 6000.00" — added to the customer invoice total only; the customs invoice is not affected.') + '</div>')
 
       + _section('Transport & Container', 'Gross weight comes from the weighbridge; net weight is calculated from the carton rows below.',
           _fld('totalGrossWt', 'Total Gross Weight (KGS)', { required: true, placeholder: '12915.550' })
         + _fld('vehicleNo', 'Vehicle No.', { placeholder: 'GJ12BZ6467' })
-        + _fld('containerNo', 'Container No.', { required: true, placeholder: 'TRKU4414246', hint: 'More than one? Separate with commas — the Customer Invoice / Packing List list them all and group items by the Container column.' })
+        + _fld('containerNo', 'Container No.', { required: true, placeholder: 'TRKU4414246', hint: 'More than one? Separate with commas — the Customer Invoice lists them all and groups items by the Container column.' })
         + _fld('lrNo', 'LR No.')
         + _fld('lrDate', 'LR Date', { placeholder: '20.8.2026' })
         + _fld('bookingNo', 'Booking No.', { placeholder: 'MUN26080233', hint: 'Printed on the VGM sheet.' })
@@ -561,7 +561,6 @@ window.Pages['export-documentation'] = (() => {
     ['dbk', 'DBK Declaration'],
     ['vgm', 'VGM'],
     ['custInvoice', 'Customer Invoice'],
-    ['custPacking', 'Customer Packing List'],
   ];
 
   // The LUT paperwork itself — FORM GST RFD-11 and its portal acknowledgement.
@@ -945,7 +944,7 @@ window.Pages['export-documentation'] = (() => {
       + _signBlock('For ' + COMPANY.name);
   }
 
-  /* ── 6 & 7. CUSTOMER INVOICE + CUSTOMER PACKING LIST ──────────────────────
+  /* ── 6. CUSTOMER INVOICE ──────────────────────────────────────────────────
      The copy that goes to the buyer, laid out like their LA-14 set: the same
      header on every page, items grouped under "CONTAINER NO." sub-headings,
      and — the point of the format — every page closes with its own running
@@ -955,7 +954,6 @@ window.Pages['export-documentation'] = (() => {
   // a long name or size that wraps costs more). Sized so the header, the
   // table and the footer always land on one A4 sheet.
   const CUST_INV_BUDGET = 25;
-  const CUST_PL_BUDGET = 29;
   // How many text lines a row will take once its cells wrap at the column
   // widths set on the table (name ~26 chars, size ~9, swg ~7 per line).
   const _lineCost = (ln) => ln.type === 'container' ? 1 : Math.max(1,
@@ -1005,7 +1003,6 @@ window.Pages['export-documentation'] = (() => {
 
   function _custHeaderHtml(d, c, opts) {
     const conts = _containersOf(d);
-    const shipperLabel = opts.shipper ? 'Shipper' : 'Exporter';
     return '<div class="title" style="margin-bottom:4px;">' + opts.title + '</div>'
       + '<table class="grid sm">'
       + '<tr>'
@@ -1015,27 +1012,20 @@ window.Pages['export-documentation'] = (() => {
       + '</tr>'
       + '<tr><td colspan="2"><span class="sm">CUSTOMER ORDER REF.</span><br><span class="b">' + esc(d.buyersOrderNo) + '</span></td></tr>'
       + '<tr>'
-        + '<td><span class="sm">' + (opts.shipper ? 'SHIPPER' : 'Consignee') + '</span><br>'
-          + (opts.shipper
-              ? '<span class="b">' + esc(COMPANY.name) + '</span><br>' + esc(COMPANY.addr1) + '<br>' + esc(COMPANY.addr2)
-              : '<span class="b">' + esc(d.consigneeName) + '</span><br>' + _linesHtml(d.consigneeAddress) + (d.consigneeTel ? '<br>TEL ' + esc(d.consigneeTel) : '') + (d.consigneeCr ? '<br>CR NUMBER ' + esc(d.consigneeCr) : ''))
+        + '<td><span class="sm">Consignee</span><br>'
+          + '<span class="b">' + esc(d.consigneeName) + '</span><br>' + _linesHtml(d.consigneeAddress) + (d.consigneeTel ? '<br>TEL ' + esc(d.consigneeTel) : '') + (d.consigneeCr ? '<br>CR NUMBER ' + esc(d.consigneeCr) : '')
         + '</td>'
-        + '<td colspan="2"><span class="sm">Buyer (if other than consignee)</span><br><span class="b">' + esc(d.buyer) + '</span>'
-          + (opts.shipper ? conts.map(cn => '<br>CONTAINER NUMBER: <span class="b">' + esc(cn) + '</span>').join('') : '')
-        + '</td>'
+        + '<td colspan="2"><span class="sm">Buyer (if other than consignee)</span><br><span class="b">' + esc(d.buyer) + '</span></td>'
       + '</tr>'
       + '<tr>'
-        + '<td><span class="sm">' + (opts.shipper ? 'CONSIGNEE' : shipperLabel) + '</span><br>'
-          + (opts.shipper
-              ? '<span class="b">' + esc(d.consigneeName) + '</span><br>' + _linesHtml(d.consigneeAddress) + (d.consigneeTel ? '<br>TEL ' + esc(d.consigneeTel) : '') + (d.consigneeCr ? '<br>CR NUMBER ' + esc(d.consigneeCr) : '')
-              : '<span class="b">' + esc(COMPANY.name) + '</span><br>' + esc(COMPANY.addr1) + '<br>' + esc(COMPANY.addr2))
+        + '<td><span class="sm">Exporter</span><br>'
+          + '<span class="b">' + esc(COMPANY.name) + '</span><br>' + esc(COMPANY.addr1) + '<br>' + esc(COMPANY.addr2)
         + '</td>'
         + '<td colspan="2">'
-          + (opts.shipper ? '' : '<span class="sm">Terms of delivery &amp; payment</span><br><span class="b">' + esc(d.deliveryTerms) + ' &nbsp; ' + esc(d.paymentTerms) + '</span>' + conts.map(cn => '<br>CONTAINER NUMBER: <span class="b">' + esc(cn) + '</span>').join('') + '<br>')
+          + '<span class="sm">Terms of delivery &amp; payment</span><br><span class="b">' + esc(d.deliveryTerms) + ' &nbsp; ' + esc(d.paymentTerms) + '</span>' + conts.map(cn => '<br>CONTAINER NUMBER: <span class="b">' + esc(cn) + '</span>').join('') + '<br>'
           + 'GROSS WEIGHT KGS. <span class="b">' + esc(d.totalGrossWt) + '</span>'
           + '<br>NET WEIGHT KGS. <span class="b">' + wt(c.totalNetWt) + '</span>'
           + '<br>TOTAL CARTONS: <span class="b">' + c.totalCartons + '</span>'
-          + (opts.shipper ? '<br>HSN CODE <span class="b">' + esc(d.hsnCode) + '</span><br>MADE IN INDIA' : '')
         + '</td>'
       + '</tr>'
       + '<tr>'
@@ -1103,48 +1093,6 @@ window.Pages['export-documentation'] = (() => {
     }).join('');
   }
 
-  function _docCustPacking(d) {
-    const c = _calcFrom(d);
-    const pages = _paginate(_custLines(d, c), CUST_PL_BUDGET);
-    let cumCartons = 0, cumQty = 0, cumNet = 0;
-    return pages.map((lines, p) => {
-      const last = p === pages.length - 1;
-      const rows = [];
-      if (p > 0) rows.push('<tr class="b"><td colspan="2" class="sm">Brought forward from PAGE-' + p + '</td><td class="r">' + cumCartons + '</td><td colspan="6"></td><td class="r">' + cumQty + '</td><td class="r">' + wt(cumNet) + '</td></tr>');
-      lines.forEach(ln => {
-        if (ln.type === 'container') { rows.push('<tr><td colspan="11" class="b" style="text-decoration:underline;">CONTAINER NO.' + esc(ln.name) + '</td></tr>'); return; }
-        const it = ln.it;
-        cumCartons += it.cartons; cumQty += num(it.qty); cumNet += it.netWt;
-        rows.push('<tr>'
-          + '<td class="c">' + esc(it.cartonFrom) + '</td>'
-          + '<td class="c">' + esc(it.cartonTo) + '</td>'
-          + '<td class="c">' + it.cartons + '</td>'
-          + '<td class="c">' + esc(it.productCode) + '</td>'
-          + '<td>' + esc(it.itemName || it.invItem) + '</td>'
-          + '<td class="c">' + esc(it.size) + '</td>'
-          + '<td class="c">' + esc(it.swgMm) + '</td>'
-          + '<td class="c">' + esc(it.pcsPerCarton) + '</td>'
-          + '<td class="r">' + esc(it.ntWtPerCarton) + '</td>'
-          + '<td class="r">' + esc(it.qty) + '</td>'
-          + '<td class="r">' + wt(it.netWt) + '</td>'
-        + '</tr>');
-      });
-      return '<div class="page"' + (last ? '' : ' style="page-break-after:always;"') + '>'
-        + _custHeaderHtml(d, c, { title: 'PACKING LIST', page: p + 1, pages: pages.length, shipper: true })
-        + '<table class="grid xs" style="margin-top:-1px;table-layout:fixed;">'
-        + '<tr class="c"><th style="width:7%;">CARTON NO FROM</th><th style="width:7%;">CARTON NO TO</th><th style="width:7%;">TOTAL CARTONS</th><th style="width:9%;">PRODUCT CODE</th><th style="width:24%;">ITEM</th><th style="width:9%;">SIZE</th><th style="width:7%;">SWG MM</th><th style="width:7%;">PCS/SET PER CARTON</th><th style="width:7%;">NT.WT. PER CARTON</th><th style="width:7%;">TOTAL PCS/SET</th><th>TOTAL NET WEIGHT</th></tr>'
-        + rows.join('')
-        + '<tr class="b"><td colspan="2" class="r">' + (last ? 'TOTAL' : 'Total this page (carried forward)') + '</td><td class="r">' + cumCartons + '</td><td colspan="6"></td><td class="r">' + cumQty + '</td><td class="r">' + wt(cumNet) + '</td></tr>'
-        + '</table>'
-        + '<table class="plain" style="width:100%;margin-top:10px;"><tr>'
-          + '<td><span class="b sm" style="text-decoration:underline;">shipping mark</span><br>' + _linesHtml(d.shippingMarks) + '</td>'
-          + '<td class="r"><div class="b">FOR ' + esc(COMPANY.name) + '</div><div style="height:46px;"></div>Director.</td>'
-        + '</tr></table>'
-        + '<div class="c sm" style="margin-top:6px;border-top:1px solid #000;padding-top:3px;">' + esc(COMPANY.works) + '</div>'
-      + '</div>';
-    }).join('');
-  }
-
   function _openDoc(docKey, rec) {
     let d = {};
     try { d = JSON.parse(rec.data || '{}'); } catch {}
@@ -1156,7 +1104,6 @@ window.Pages['export-documentation'] = (() => {
       dbk:      ['DBK Declaration ' + invNo, _docDbk],
       vgm:      ['VGM ' + invNo, _docVgm],
       custInvoice: ['Customer Invoice ' + invNo, _docCustInvoice],
-      custPacking: ['Customer Packing List ' + invNo, _docCustPacking],
     };
     const [title, fn] = map[docKey] || [];
     if (!fn) return;
@@ -1214,7 +1161,6 @@ window.Pages['export-documentation'] = (() => {
     ['DBK Declaration', _docDbk],
     ['VGM', _docVgm],
     ['Customer Invoice', _docCustInvoice],
-    ['Customer Packing List', _docCustPacking],
   ];
   const _safeInvName = (invNo) => String(invNo || '').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'shipment';
 
@@ -1463,7 +1409,7 @@ window.Pages['export-documentation'] = (() => {
     mc.innerHTML = '<div style="padding:22px 24px 40px;">'
       + '<div style="margin-bottom:16px;">'
         + '<h2 style="margin:0;font-size:20px;font-weight:800;color:#0f172a;">Export Documentation</h2>'
-        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fill the Custom Invoice once — the Packing List, Annexure, DBK Declaration, VGM and the customer\'s own Invoice + Packing List print themselves from it. LUT ARN details are prefilled and updated once per financial year.</p>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fill the Custom Invoice once — the Packing List, Annexure, DBK Declaration, VGM and the customer\'s own Invoice print themselves from it. LUT ARN details are prefilled and updated once per financial year.</p>'
       + '</div>'
       + _tabsHtml()
       + (_view === 'form' ? _formHtml() : _listHtml())
