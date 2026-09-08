@@ -265,63 +265,179 @@ window.Pages['bulk-email'] = (() => {
 
     const subject = localStorage.getItem(LS_SUBJECT) || DEF_SUBJECT;
     const body = localStorage.getItem(LS_BODY) || DEF_BODY;
-    const nSel = files.filter((f) => _checked.has(f.id)).length;
     const running = !!_job?.running;
-    const unsent = files.filter((f) => f.send_status !== 'Sent').length;
-    const allTicked = files.length && files.every((f) => _checked.has(f.id));
+    const nSel = files.filter((f) => _checked.has(f.id)).length;
+    const nSent = files.filter((f) => f.send_status === 'Sent').length;
+    const nFailed = files.filter((f) => f.send_status === 'Failed').length;
+    const nPending = files.length - nSent - nFailed;
+    const dot = (color, n, label) => `<span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:#475569;">
+      <span style="width:8px;height:8px;border-radius:50%;background:${color};"></span>${n} ${label}</span>`;
 
-    const rows = files.map((f) => [
-      `<input type="checkbox" data-check="${H.esc(f.id)}" ${_checked.has(f.id) ? 'checked' : ''} ${running ? 'disabled' : ''} style="width:15px;height:15px;cursor:pointer;" />`,
-      H.esc(f.file_name),
-      H.esc(f.person_name || '—'),
-      H.esc(f.email),
-      statusCell(f),
-    ]);
+    const rows = files.map((f, i) => {
+      const on = _checked.has(f.id);
+      return `<tr data-row="${H.esc(f.id)}" data-i="${i}" class="bm-row${on ? ' is-on' : ''}">
+        <td style="${H.TD}width:36px;"><input type="checkbox" data-check="${H.esc(f.id)}" ${on ? 'checked' : ''} ${running ? 'disabled' : ''} style="width:15px;height:15px;cursor:pointer;" /></td>
+        <td style="${H.TD}font-weight:600;color:#0f172a;white-space:nowrap;">${H.esc(f.file_name)}</td>
+        <td style="${H.TD}">${H.esc(f.person_name || '—')}</td>
+        <td style="${H.TD}color:#0150AA;">${H.esc(f.email)}</td>
+        <td style="${H.TD}">${statusCell(f)}</td>
+      </tr>`;
+    }).join('');
 
     return `
-      <div style="${CARD}">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
-          <div style="font-size:13px;font-weight:700;color:#0f172a;">Email template</div>
-          ${smtpChip()}
+      <style>
+        .bm-row { cursor:pointer; transition:background .1s; }
+        .bm-row:hover { background:#f8fafc; }
+        .bm-row.is-on { background:#eef4ff; }
+        .bm-row.is-on:hover { background:#e4eeff; }
+        .bm-seg { display:inline-flex; border:1.5px solid #e2e8f0; border-radius:9px; overflow:hidden; background:#fff; }
+        .bm-seg button { border:none; background:none; padding:7px 13px; font-size:12.5px; font-weight:600; color:#475569; cursor:pointer; font-family:inherit; border-right:1.5px solid #e2e8f0; }
+        .bm-seg button:last-child { border-right:none; }
+        .bm-seg button:hover:not(:disabled) { background:#f1f5f9; color:#0f172a; }
+        .bm-seg button:disabled { opacity:.5; cursor:not-allowed; }
+        .bm-grid { display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:16px; align-items:start; margin-bottom:16px; }
+        @media (max-width: 960px) { .bm-grid { grid-template-columns:1fr; } }
+      </style>
+      <div class="bm-grid">
+        <div style="${CARD}margin-bottom:0;">
+          <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:12px;">Email template</div>
+          ${H.grid(H.field('bm-subject', 'Subject', subject, { span: 2 }) + H.textarea('bm-body', 'Message', body, { rows: 5, span: 2 }), 2)}
+          <div style="font-size:11.5px;color:#94a3b8;margin-top:8px;line-height:1.6;">
+            Placeholders: <code>{name}</code> · <code>{year}</code> from the file name (e.g. 2026-27) · <code>{pan}</code> · <code>{file}</code>. The PDF goes as an attachment.</div>
         </div>
-        ${H.grid(
-          H.field('bm-subject', 'Subject', subject, { span: 2 })
-          + H.textarea('bm-body', 'Message', body, { rows: 4, span: 2 }), 2)}
-        <div style="font-size:11.5px;color:#94a3b8;margin-top:8px;">
-          Placeholders: <code>{name}</code> · <code>{year}</code> from the file name (e.g. 2026-27) · <code>{pan}</code> · <code>{file}</code>. The PDF goes as an attachment.</div>
+        <div style="${CARD}margin-bottom:0;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);">
+          <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#94a3b8;">Recipients</div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin-top:6px;">
+            <span id="bm-nsel" style="font-size:34px;font-weight:800;color:#0f172a;letter-spacing:-.03em;line-height:1;">${nSel}</span>
+            <span style="font-size:13px;color:#64748b;">selected of ${files.length}</span>
+          </div>
+          <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;">
+            ${dot('#16a34a', nSent, 'sent')}${dot('#94a3b8', nPending, 'pending')}${dot('#dc2626', nFailed, 'failed')}
+          </div>
+          <div style="margin:14px 0 12px;">${smtpChip()}</div>
+          ${running
+            ? `<button id="bm-stop" class="btn-danger" style="width:100%;padding:12px 20px;font-size:14.5px;">Stop sending</button>`
+            : `<button id="bm-send" class="btn-primary" style="width:100%;padding:12px 20px;font-size:14.5px;" ${!nSel ? 'disabled' : ''}>
+                 ${nSel ? `Send ${nSel} email${nSel === 1 ? '' : 's'}` : 'Select who to send to'}</button>`}
+          <button id="bm-test" class="btn-secondary" style="width:100%;margin-top:8px;" ${running ? 'disabled' : ''}>Send a test to me</button>
+          <div style="font-size:11px;color:#94a3b8;margin-top:8px;text-align:center;">Test goes to ${H.esc(window.currentUser?.email || 'your login email')}</div>
+        </div>
       </div>
 
       ${_job ? progressCard() : ''}
 
-      <div style="${CARD}display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
-                  ${nSel && !running ? 'border-color:var(--color-primary);box-shadow:0 0 0 3px var(--color-primary-light);' : ''}">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <button id="bm-sel-pending" class="btn-secondary" style="font-size:12px;" ${running ? 'disabled' : ''}>Select unsent (${unsent})</button>
-          <button id="bm-sel-all" class="btn-secondary" style="font-size:12px;" ${running ? 'disabled' : ''}>Select all (${files.length})</button>
-          <button id="bm-sel-none" class="btn-ghost" style="font-size:12px;" ${running ? 'disabled' : ''}>Clear</button>
-          <span style="font-size:13px;color:#334155;margin-left:4px;"><b>${nSel}</b> of ${files.length} selected</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span style="font-size:12px;color:#64748b;font-weight:600;">Select:</span>
+          <div class="bm-seg">
+            <button data-sel="all" ${running ? 'disabled' : ''}>All</button>
+            <button data-sel="unsent" ${running ? 'disabled' : ''}>Unsent</button>
+            <button data-sel="failed" ${running ? 'disabled' : ''}>Failed</button>
+            <button data-sel="none" ${running ? 'disabled' : ''}>None</button>
+          </div>
+          <span style="font-size:11.5px;color:#94a3b8;">Click a row to tick it · Shift+click for a range</span>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <button id="bm-test" class="btn-secondary" ${running ? 'disabled' : ''}
-            title="Sends one real email, with the first selected PDF, to ${H.esc(window.currentUser?.email || 'your login email')}">Send a test to me</button>
-          ${running
-            ? `<button id="bm-stop" class="btn-danger" style="padding:10px 22px;font-size:14px;">Stop sending</button>`
-            : `<button id="bm-send" class="btn-primary" style="padding:10px 24px;font-size:14px;" ${!nSel ? 'disabled' : ''}>
-                 ${nSel ? `Send ${nSel} email${nSel === 1 ? '' : 's'}` : 'Select who to send to'}</button>`}
-        </div>
+        <input id="bm-rsearch" type="search" placeholder="Filter by file, name or email…" style="${H.CONTROL}width:250px;" />
       </div>
-      <div id="bm-send-table" data-all="${allTicked ? '1' : ''}" data-running="${running ? '1' : ''}">
-        ${H.table([{ label: '' }, 'File', 'Name', 'Email id', 'Status'], rows, { maxHeight: '480px' })}
+      <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
+        <div style="overflow:auto;max-height:520px;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr>
+              <th style="${H.TH}width:36px;"><input type="checkbox" id="bm-check-all" ${running ? 'disabled' : ''} style="width:15px;height:15px;cursor:pointer;" title="Tick / untick everything shown" /></th>
+              <th style="${H.TH}">File</th><th style="${H.TH}">Name</th><th style="${H.TH}">Email id</th><th style="${H.TH}">Status</th>
+            </tr></thead>
+            <tbody id="bm-rows">${rows}</tbody>
+          </table>
+        </div>
+        <div id="bm-shown" style="padding:8px 14px;font-size:11.5px;color:#94a3b8;border-top:1px solid #f1f5f9;"></div>
       </div>`;
+  }
+
+  /* Selection changes never re-render the page — they patch the rows, the
+     big number and the Send button in place, so ticking feels instant. */
+  let _lastClicked = -1;
+
+  function sendableFiles() { return (_detail?.files || []).filter((f) => f.email); }
+  function visibleRows() { return [...document.querySelectorAll('[data-row]')].filter((tr) => !tr.hidden); }
+
+  function syncSelection() {
+    const n = sendableFiles().filter((f) => _checked.has(f.id)).length;
+    document.querySelectorAll('[data-row]').forEach((tr) => {
+      const on = _checked.has(tr.dataset.row);
+      tr.classList.toggle('is-on', on);
+      const c = tr.querySelector('[data-check]'); if (c) c.checked = on;
+    });
+    const all = document.getElementById('bm-check-all');
+    if (all) {
+      const shown = visibleRows();
+      const onShown = shown.filter((tr) => _checked.has(tr.dataset.row)).length;
+      all.checked = shown.length > 0 && onShown === shown.length;
+      all.indeterminate = onShown > 0 && onShown < shown.length;
+    }
+    const nEl = document.getElementById('bm-nsel'); if (nEl) nEl.textContent = n;
+    const btn = document.getElementById('bm-send');
+    if (btn) { btn.disabled = !n; btn.textContent = n ? `Send ${n} email${n === 1 ? '' : 's'}` : 'Select who to send to'; }
+  }
+
+  function applyFilter() {
+    const needle = (document.getElementById('bm-rsearch')?.value || '').trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('[data-row]').forEach((tr) => {
+      const hit = !needle || tr.textContent.toLowerCase().includes(needle);
+      tr.hidden = !hit; if (hit) shown += 1;
+    });
+    const total = sendableFiles().length;
+    const el = document.getElementById('bm-shown');
+    if (el) el.textContent = needle ? `${shown} of ${total} shown` : `${total} recipient${total === 1 ? '' : 's'}`;
+    syncSelection();
+  }
+
+  function bindSendTab() {
+    if (!document.getElementById('bm-rows')) return;
+    const byId = new Map(sendableFiles().map((f) => [f.id, f]));
+    const toggle = (id, on) => { on ? _checked.add(id) : _checked.delete(id); };
+
+    document.querySelectorAll('[data-row]').forEach((tr) => {
+      tr.addEventListener('click', (e) => {
+        if (_job?.running) return;
+        const id = tr.dataset.row;
+        const i = Number(tr.dataset.i);
+        const box = tr.querySelector('[data-check]');
+        // The checkbox itself has already flipped by the time click fires;
+        // a click elsewhere on the row flips it here.
+        const on = e.target === box ? box.checked : !_checked.has(id);
+        if (e.shiftKey && _lastClicked >= 0 && _lastClicked !== i) {
+          const [a, b] = [Math.min(_lastClicked, i), Math.max(_lastClicked, i)];
+          visibleRows().forEach((r) => { const k = Number(r.dataset.i); if (k >= a && k <= b) toggle(r.dataset.row, on); });
+          window.getSelection()?.removeAllRanges();
+        } else toggle(id, on);
+        _lastClicked = i;
+        syncSelection();
+      });
+    });
+    on('bm-check-all', 'change', (e) => { visibleRows().forEach((tr) => toggle(tr.dataset.row, e.target.checked)); syncSelection(); });
+    document.querySelectorAll('[data-sel]').forEach((b) => b.addEventListener('click', () => {
+      const mode = b.dataset.sel;
+      if (mode === 'none') { _checked = new Set(); return syncSelection(); }
+      const pick = (f) => mode === 'all' || (mode === 'unsent' && f.send_status !== 'Sent') || (mode === 'failed' && f.send_status === 'Failed');
+      visibleRows().map((tr) => byId.get(tr.dataset.row)).filter(Boolean).forEach((f) => toggle(f.id, pick(f)));
+      syncSelection();
+    }));
+    on('bm-rsearch', 'input', applyFilter);
+    on('bm-send', 'click', sendSelected);
+    on('bm-stop', 'click', stopSend);
+    on('bm-test', 'click', sendTest);
+    on('bm-smtp-again', 'click', (e) => { e.preventDefault(); checkSmtp(true); });
+    applyFilter();
   }
 
   function smtpChip() {
     const s = _smtp;
     const box = (bg, border, color, inner) =>
-      `<div id="bm-smtp" style="display:flex;align-items:center;gap:8px;font-size:12px;padding:6px 12px;border-radius:999px;background:${bg};border:1px solid ${border};color:${color};">${inner}</div>`;
+      `<div id="bm-smtp" style="display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;font-size:12px;line-height:1.45;padding:7px 12px;border-radius:10px;background:${bg};border:1px solid ${border};color:${color};">${inner}</div>`;
     if (!s || s.checking) return box('#f8fafc', '#e2e8f0', '#64748b', `<span style="width:8px;height:8px;border-radius:50%;background:#94a3b8;"></span> Checking mail account…`);
     if (s.ok) return box('#f0fdf4', '#bbf7d0', '#166534', `<span style="width:8px;height:8px;border-radius:50%;background:#16a34a;"></span> Mail account OK — ${H.esc(s.user || '')} <a href="#" id="bm-smtp-again" style="color:#166534;opacity:.7;">re-check</a>`);
-    return box('#fef2f2', '#fecaca', '#b91c1c', `<span style="width:8px;height:8px;border-radius:50%;background:#dc2626;"></span> <span style="max-width:520px;">Mail problem: ${H.esc(s.error || 'unknown')}</span> <a href="#" id="bm-smtp-again" style="color:#b91c1c;opacity:.8;white-space:nowrap;">re-check</a>`);
+    return box('#fef2f2', '#fecaca', '#b91c1c', `<span style="width:8px;height:8px;border-radius:50%;background:#dc2626;"></span> <span style="flex:1 1 200px;">Mail problem: ${H.esc(s.error || 'unknown')}</span> <a href="#" id="bm-smtp-again" style="color:#b91c1c;opacity:.8;white-space:nowrap;">re-check</a>`);
   }
 
   function progressCard() {
@@ -709,25 +825,7 @@ window.Pages['bulk-email'] = (() => {
     });
 
     // Send tab
-    document.querySelectorAll('[data-check]').forEach((c) =>
-      c.addEventListener('change', () => { c.checked ? _checked.add(c.dataset.check) : _checked.delete(c.dataset.check); render(); }));
-    const wrap = document.getElementById('bm-send-table');
-    const th0 = wrap?.querySelector('thead th');
-    if (th0) th0.innerHTML = `<input type="checkbox" id="bm-check-all" ${wrap.dataset.all ? 'checked' : ''} ${wrap.dataset.running ? 'disabled' : ''} style="width:15px;height:15px;cursor:pointer;" title="Tick / untick everything" />`;
-    on('bm-check-all', 'change', (e) => {
-      const files = (_detail?.files || []).filter((f) => f.email);
-      _checked = e.target.checked ? new Set(files.map((f) => f.id)) : new Set();
-      render();
-    });
-    on('bm-sel-pending', 'click', () => {
-      _checked = new Set((_detail?.files || []).filter((f) => f.email && f.send_status !== 'Sent').map((f) => f.id)); render();
-    });
-    on('bm-sel-all', 'click', () => { _checked = new Set((_detail?.files || []).filter((f) => f.email).map((f) => f.id)); render(); });
-    on('bm-sel-none', 'click', () => { _checked = new Set(); render(); });
-    on('bm-send', 'click', sendSelected);
-    on('bm-stop', 'click', stopSend);
-    on('bm-test', 'click', sendTest);
-    on('bm-smtp-again', 'click', (e) => { e.preventDefault(); checkSmtp(true); });
+    bindSendTab();
 
     // Master tab
     on('bm-msearch', 'input', (e) => {
