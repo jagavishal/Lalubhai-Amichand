@@ -23,7 +23,7 @@ production always runs on the database.
 server.js                 # all HTTP routes, schema (ensureSchema), mailers, Sheets sync
 backend/
   hrms.js                 # HR module routes (employees, attendance, leave, payroll, assets)
-  bulk-mail.js            # Bulk Email module (Form 16 ZIP → per-PAN mailer)
+  bulk-mail.js            # Bulk Email module (Form 16 PDFs/ZIP/folder → saved master list → per-PAN mailer)
   hr-policies-seed.js
   lib/
     fmsSheet.js           # FMS (Google-Sheet-backed flows)

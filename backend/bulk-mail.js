@@ -1,30 +1,43 @@
 'use strict';
 /* =====================================================================
-   Bulk Email — mail a ZIP of PDFs to the addresses in its own master sheet
+   Bulk Email — mail a set of PDFs, one per person, to a saved master list
    ---------------------------------------------------------------------
    The yearly job this replaces: TDS gives back a folder of Part A PDFs,
    one per person, each named by PAN (AAGPS6986H_2026-27.pdf), plus a
    master sheet ("File Name, Email Ids, ...") saying who gets which file
    — and someone mails them out one by one.
 
-   Here the whole folder comes in as one ZIP. The master Excel/CSV found
-   INSIDE the ZIP is the matching source: each PDF's name is looked up in
-   it, the ones with no address are surfaced as a list to fill in, and a
-   second tab sends every matched PDF to its person as an attachment —
-   recording per-file who got what and when, so a re-run after a bounce
-   only touches the failures.
+   Upload. The PDFs may arrive as a ZIP, as loose files, or as a whole
+   folder — the page sends every file, one request each, into one batch.
+   An Excel/CSV that comes along (inside the ZIP or beside the PDFs) is
+   read for its "File Name / PAN / Name / Email" columns.
+
+   Master list. Every address that sheet carries is saved into
+   bulk_mail_master, keyed by PAN when the file name holds one (else by
+   the file name itself). Next year's PDFs — same PANs, new year in the
+   name — match without any sheet at all, and an address typed in by hand
+   for a missing row is remembered the same way.
+
+   Send. One POST starts a background job on the server that walks the
+   selected rows sequentially over a single pooled Gmail connection; the
+   page polls its progress. No request ever waits on SMTP, so a slow
+   Gmail conversation or a strict proxy timeout can no longer strand a
+   chunk half-way. Each row records Sent/Failed with the real reason, so a
+   re-run only touches the failures. An SMTP check and a "send a test to
+   me" route exist so "mail is not going" gets a concrete answer.
 
    The PDFs sit on the server's own disk (uploads/bulk-mail/<batch>/),
    never in git and never in the DB; only the row metadata is stored. If
    a redeploy ever clears the folder, a send says exactly that per file
-   and a re-upload of the same ZIP rebuilds the batch.
+   and a re-upload of the same files rebuilds the batch.
 
    Same shape as backend/hrms.js: a self-contained CommonJS module that
-   borrows the host's pool, guards and mailer via mountBulkMail(app, ctx).
+   borrows the host's pool, guards and helpers via mountBulkMail(app, ctx).
    ===================================================================== */
 
 const AdmZip = require('adm-zip');
 const XLSX = require('xlsx');
+const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
 
@@ -56,12 +69,27 @@ const BULK_MAIL_SCHEMA = [
      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_bmf_batch ON bulk_mail_files (batch_id)`,
+  // The saved master list. mkey = PAN when the file name carries one, else
+  // the lowercased file name without .pdf — see masterKey().
+  `CREATE TABLE IF NOT EXISTS bulk_mail_master (
+     mkey VARCHAR(255) PRIMARY KEY,
+     pan VARCHAR(32) DEFAULT '',
+     file_key VARCHAR(255) DEFAULT '',
+     person_name VARCHAR(255) DEFAULT '',
+     email VARCHAR(500) DEFAULT '',
+     source VARCHAR(255) DEFAULT '',
+     updated_by VARCHAR(255) DEFAULT '',
+     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_bmm_file_key ON bulk_mail_master (file_key)`,
 ];
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// PAN shown per row is informative only (matching is by file name); pulled
-// from the name when it looks like one. AAGPS6986H = 5 letters, 4 digits, 1.
+// AAGPS6986H = 5 letters, 4 digits, 1 letter.
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+
+const DEF_SUBJECT = 'Form 16 (Part A) – {year}';
+const DEF_BODY = 'Dear {name},\n\nPlease find attached your Form 16 (Part A) for {year}.\n\nThis is an automated email — please do not reply.';
 
 // "Email Ids" cells sometimes carry two addresses split by , ; or /.
 // Valid when every non-empty part is an address; returned normalised.
@@ -69,6 +97,79 @@ function cleanEmails(raw) {
   const parts = String(raw || '').split(/[,;/\s]+/).map((s) => s.trim()).filter(Boolean);
   if (!parts.length || !parts.every((p) => EMAIL_RE.test(p))) return '';
   return parts.join(', ');
+}
+
+// "AAGPS6986H_2026-27.pdf" → { base, pan: 'AAGPS6986H', year: '2026-27' }
+function parsePdfName(name) {
+  const base = String(name).replace(/^.*[\\/]/, '').replace(/\.pdf$/i, '');
+  const m = base.match(/^([A-Za-z0-9]+)[_\-\s]*(.*)$/);
+  const pan = (m ? m[1] : base).toUpperCase().trim();
+  return { base, pan: PAN_RE.test(pan) ? pan : '', year: (m && m[2] ? m[2] : '').trim() };
+}
+
+// File key: lowercased, without .pdf — so a sheet may say either
+// "AAGPS6986H_2026-27" or "AAGPS6986H_2026-27.pdf".
+const keyOf = (name) => String(name || '').trim().replace(/^.*[\\/]/, '').replace(/\.pdf$/i, '').toLowerCase();
+const baseName = (p) => String(p || '').replace(/^.*[\\/]/, '');
+// Master key: the PAN when there is one (survives a change of year in the
+// file name), else the file key.
+const masterKey = (pan, fileKey) => (pan ? pan : fileKey);
+
+const isPdf = (n) => /\.pdf$/i.test(n);
+const isZip = (n) => /\.zip$/i.test(n);
+const isSheet = (n) => /\.(xlsx|xls|csv)$/i.test(n);
+
+/* A master sheet → [{ fileKey, pan, name, email }]. The xlsx lib reads
+   .xlsx, .xls and .csv buffers alike. Header row is found by looking for
+   a "file" or "pan" cell plus a "mail" cell in the first few rows; the
+   name column is whatever "name" header exists (not "file name"), else
+   the column right after the email one — where this sheet keeps
+   "Ramesh Mama" for the rows that have no address yet. */
+function parseMasterSheet(buf) {
+  const wb = XLSX.read(buf, { type: 'buffer' });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
+  if (!rows.length) return [];
+
+  let headerAt = -1, fileIdx = -1, panIdx = -1, emailIdx = -1, nameIdx = -1;
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const cells = rows[i].map((c) => String(c).toLowerCase().trim());
+    const f = cells.findIndex((c) => /file/.test(c));
+    const p = cells.findIndex((c) => /^pan\b/.test(c) || /pan (no|number)/.test(c));
+    const e = cells.findIndex((c) => /mail/.test(c));
+    if (e !== -1 && (f !== -1 || p !== -1)) {
+      headerAt = i; fileIdx = f; panIdx = p; emailIdx = e;
+      nameIdx = cells.findIndex((c) => /name/.test(c) && !/file/.test(c));
+      break;
+    }
+  }
+  // No recognisable header: assume "file, email, name" in the first columns.
+  if (headerAt === -1) { fileIdx = 0; emailIdx = 1; nameIdx = 2; }
+  else if (nameIdx === -1) nameIdx = emailIdx + 1;
+
+  const out = [];
+  for (const row of rows.slice(headerAt + 1)) {
+    const fileRaw = fileIdx !== -1 ? String(row[fileIdx] || '').trim() : '';
+    const panCell = panIdx !== -1 ? String(row[panIdx] || '').toUpperCase().trim() : '';
+    const fileKey = keyOf(fileRaw);
+    const pan = PAN_RE.test(panCell) ? panCell : (fileKey ? parsePdfName(fileRaw).pan : '');
+    if (!fileKey && !pan) continue;
+    out.push({ fileKey, pan, name: String(row[nameIdx] || '').trim(), email: cleanEmails(row[emailIdx]) });
+  }
+  return out;
+}
+
+// Turns a nodemailer error into a sentence the accounts team can act on.
+function explainMailError(e) {
+  const code = String(e?.code || '');
+  const rc = Number(e?.responseCode || 0);
+  const msg = String(e?.message || e || '').replace(/\s+/g, ' ').trim();
+  if (code === 'EAUTH' || rc === 535) return 'Gmail rejected the login — check SMTP_USER / SMTP_PASS on the server (a Google App Password is required)';
+  if (['ECONNECTION', 'ETIMEDOUT', 'ESOCKET', 'ECONNREFUSED', 'EDNS', 'ECONNRESET'].includes(code)) {
+    return 'Could not reach smtp.gmail.com from the server (outbound SMTP blocked or network down): ' + msg.slice(0, 160);
+  }
+  if (code === 'EENVELOPE' || (rc >= 550 && rc < 560)) return 'Recipient rejected by the mail server: ' + msg.slice(0, 260);
+  if (rc === 421 || rc === 450 || rc === 451 || /quota|limit|rate/i.test(msg)) return 'Gmail is throttling this account (daily limit or too many messages) — wait and re-send the failures: ' + msg.slice(0, 200);
+  return msg.slice(0, 400);
 }
 
 function mountBulkMail(app, ctx) {
@@ -79,53 +180,77 @@ function mountBulkMail(app, ctx) {
   } = ctx;
 
   const guard = [requireAuth, requireBulkEmail];
+  const who = (req) => req.session.user?.email || req.session.user?.name || '';
 
-  // "AAGPS6986H_2026-27.pdf" → { base, pan: 'AAGPS6986H', year: '2026-27' }
-  function parsePdfName(name) {
-    const base = String(name).replace(/^.*[\\/]/, '').replace(/\.pdf$/i, '');
-    const m = base.match(/^([A-Za-z0-9]+)[_\-\s]*(.*)$/);
-    const pan = (m ? m[1] : base).toUpperCase().trim();
-    return { base, pan: PAN_RE.test(pan) ? pan : '', year: (m && m[2] ? m[2] : '').trim() };
+  // Raw binary bodies for the file routes. The app's global express.json()
+  // never sees them (the page sends application/octet-stream), so its 10mb
+  // cap does not apply and nothing gets base64-inflated on the wire.
+  const rawBody = express.raw({ type: (req) => !/json/i.test(req.headers['content-type'] || ''), limit: '150mb' });
+
+  /* ── Master list ────────────────────────────────────────────────── */
+
+  async function loadMaster() {
+    const rows = await q(`SELECT * FROM bulk_mail_master`);
+    const byPan = new Map(), byFile = new Map();
+    for (const r of rows) {
+      if (r.pan) byPan.set(r.pan, r);
+      if (r.file_key) byFile.set(r.file_key, r);
+      if (!r.pan && !r.file_key) byFile.set(r.mkey, r);
+    }
+    return { byPan, byFile, size: rows.length };
   }
 
-  // Lookup key: file name, lowercased, without .pdf — so the sheet may say
-  // either "AAGPS6986H_2026-27" or "AAGPS6986H_2026-27.pdf".
-  const keyOf = (name) => String(name || '').trim().replace(/\.pdf$/i, '').toLowerCase();
+  const lookup = (master, pan, fileKey) => (pan && master.byPan.get(pan)) || master.byFile.get(fileKey) || null;
 
-  /* The master sheet from inside the ZIP → Map(file key → { email, name }).
-     The xlsx lib reads .xlsx, .xls and .csv buffers alike. Header row is
-     found by looking for "file" + "mail" cells in the first few rows; the
-     name column is whatever "name" header exists, else the column right
-     after the email one — where this sheet keeps "Ramesh Mama" for the
-     rows that have no address yet. */
-  function parseMaster(buf) {
-    const wb = XLSX.read(buf, { type: 'buffer' });
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
-    if (!rows.length) return null;
+  /* Upsert one master entry. An incoming row with no email must never blank
+     an address we already have (the sheet often lists the person with the
+     email cell empty — that is exactly the row somebody filled in by hand
+     last year). Names update only when the new one is non-empty. */
+  async function upsertMaster({ pan, fileKey, name, email, source, by }) {
+    const mkey = masterKey(pan, fileKey);
+    if (!mkey) return false;
+    await q(
+      `INSERT INTO bulk_mail_master (mkey, pan, file_key, person_name, email, source, updated_by, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+       ON CONFLICT (mkey) DO UPDATE SET
+         pan = CASE WHEN EXCLUDED.pan <> '' THEN EXCLUDED.pan ELSE bulk_mail_master.pan END,
+         file_key = CASE WHEN EXCLUDED.file_key <> '' THEN EXCLUDED.file_key ELSE bulk_mail_master.file_key END,
+         person_name = CASE WHEN EXCLUDED.person_name <> '' THEN EXCLUDED.person_name ELSE bulk_mail_master.person_name END,
+         email = CASE WHEN EXCLUDED.email <> '' THEN EXCLUDED.email ELSE bulk_mail_master.email END,
+         source = EXCLUDED.source, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+      [mkey, pan || '', fileKey || '', name || '', email || '', (source || '').slice(0, 250), by]);
+    return true;
+  }
 
-    let headerAt = -1, fileIdx = 0, emailIdx = 1, nameIdx = -1;
-    for (let i = 0; i < Math.min(rows.length, 10); i++) {
-      const cells = rows[i].map((c) => String(c).toLowerCase());
-      const f = cells.findIndex((c) => /file/.test(c));
-      const e = cells.findIndex((c) => /mail/.test(c));
-      if (f !== -1 && e !== -1) {
-        headerAt = i; fileIdx = f; emailIdx = e;
-        nameIdx = cells.findIndex((c) => /name/.test(c) && !/file/.test(c));
-        break;
-      }
+  // A sheet buffer → master upserts. Returns { rows, withEmail }.
+  async function absorbSheet(buf, source, by) {
+    const entries = parseMasterSheet(buf);
+    let withEmail = 0;
+    for (const e of entries) {
+      if (await upsertMaster({ ...e, source, by }) && e.email) withEmail += 1;
     }
-    if (nameIdx === -1) nameIdx = emailIdx + 1;
+    return { rows: entries.length, withEmail };
+  }
 
-    const map = new Map();
-    for (const row of rows.slice(headerAt + 1)) {
-      const key = keyOf(row[fileIdx]);
-      if (!key) continue;
-      map.set(key, {
-        email: cleanEmails(row[emailIdx]),
-        name: String(row[nameIdx] || '').trim(),
-      });
+  /* Re-run the match for every row in a batch that is not yet Ready — after
+     a sheet arrives, or after somebody typed an address into the master. */
+  async function rematchBatch(batchId) {
+    const rows = await q(`SELECT id, file_name, pan, email, person_name, match_status FROM bulk_mail_files WHERE batch_id = $1`, [batchId]);
+    if (!rows.length) return 0;
+    const master = await loadMaster();
+    let changed = 0;
+    for (const r of rows) {
+      if (r.match_status === 'Ready' && r.email) continue;
+      const hit = lookup(master, r.pan, keyOf(r.file_name));
+      const email = hit ? cleanEmails(hit.email) : '';
+      const status = hit ? (email ? 'Ready' : 'No Email') : 'No Match';
+      const name = hit?.person_name || r.person_name || '';
+      if (status === r.match_status && email === (r.email || '') && name === (r.person_name || '')) continue;
+      await q(`UPDATE bulk_mail_files SET email = $1, person_name = $2, match_status = $3, error = '' WHERE id = $4`,
+        [email, name, status, r.id]);
+      changed += 1;
     }
-    return map.size ? map : null;
+    return changed;
   }
 
   async function batchSummary(batchId) {
@@ -146,76 +271,137 @@ function mountBulkMail(app, ctx) {
     return s;
   }
 
-  /* ── Upload ─────────────────────────────────────────────────────────
-     The ZIP travels as a raw binary body (Content-Type: application/zip),
-     not JSON — the app's global express.json() and its 10mb cap never see
-     it, and nothing gets base64-inflated on the wire. express.raw() here
-     is route-local for the same reason. ─────────────────────────────── */
-  app.post('/api/bulk-mail/upload', ...guard,
-    express.raw({ type: ['application/zip', 'application/x-zip-compressed', 'application/octet-stream'], limit: '150mb' }),
-    async (req, res) => {
-      try {
-        await ensureSchema();
-        if (!Buffer.isBuffer(req.body) || !req.body.length) {
-          return res.status(400).json({ error: 'Send the ZIP file as the request body (Content-Type: application/zip)' });
-        }
+  async function refreshCount(batchId) {
+    await q(`UPDATE bulk_mail_batches SET file_count = (SELECT COUNT(*) FROM bulk_mail_files WHERE batch_id = $1) WHERE id = $2`, [batchId, batchId]);
+  }
 
-        let zip;
-        try { zip = new AdmZip(req.body); }
-        catch { return res.status(400).json({ error: 'That file is not a readable ZIP archive' }); }
+  /* Store one PDF into a batch and match it. A file already in the batch
+     (same name) is overwritten on disk and its row kept — re-dropping the
+     same folder is idempotent, not a duplicate. */
+  async function addPdf(batchId, name, buf, master) {
+    const { base, pan, year } = parsePdfName(name);
+    const hit = lookup(master, pan, keyOf(base));
+    const email = hit ? cleanEmails(hit.email) : '';
+    const matchStatus = hit ? (email ? 'Ready' : 'No Email') : 'No Match';
+    // The name on disk is minted here, never taken raw from the upload — a
+    // crafted "../" name must not be able to write outside the batch dir.
+    const safe = base.replace(/[^\w.\- ]/g, '_') + '.pdf';
+    const dir = path.join(UPLOAD_ROOT, batchId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, safe), buf);
+    const relPath = path.join('uploads', 'bulk-mail', batchId, safe);
 
-        const all = zip.getEntries().filter((e) => !e.isDirectory);
-        const pdfs = all.filter((e) => /\.pdf$/i.test(e.entryName));
-        const masterEntry = all.find((e) => /\.(xlsx|xls|csv)$/i.test(e.entryName));
-        if (!pdfs.length) return res.status(400).json({ error: 'No PDF files found inside the ZIP' });
-        if (!masterEntry) return res.status(400).json({ error: 'No master Excel/CSV found inside the ZIP — it must contain a sheet with "File Name" and "Email" columns' });
-        if (pdfs.length > 2000) return res.status(400).json({ error: 'ZIP holds more than 2000 PDFs — split it up' });
-
-        let master;
-        try { master = parseMaster(masterEntry.getData()); } catch { master = null; }
-        if (!master) return res.status(400).json({ error: `Could not read the master sheet (${masterEntry.entryName.replace(/^.*[\\/]/, '')}) — it needs "File Name" and "Email" columns` });
-
-        const zipName = String(req.query.name || 'upload.zip').slice(0, 250);
-        const by = req.session.user?.email || req.session.user?.name || '';
-
-        const batchId = await withSeqId('bulk_mail_batches', 'BM', 4, async (id) => {
-          await q(`INSERT INTO bulk_mail_batches (id, zip_name, master_name, file_count, uploaded_by) VALUES ($1,$2,$3,$4,$5)`,
-            [id, zipName, masterEntry.entryName.replace(/^.*[\\/]/, '').slice(0, 250), pdfs.length, by]);
-        });
-
-        const dir = path.join(UPLOAD_ROOT, batchId);
-        fs.mkdirSync(dir, { recursive: true });
-
-        let n = 0;
-        for (const e of pdfs) {
-          n += 1;
-          const { base, pan, year } = parsePdfName(e.entryName);
-          const hit = master.get(keyOf(base));
-          const matchStatus = hit ? (hit.email ? 'Ready' : 'No Email') : 'No Match';
-          // The name on disk is minted here, never taken raw from the archive —
-          // a crafted "../" entry must not be able to write outside the batch dir.
-          const safe = base.replace(/[^\w.\- ]/g, '_') + '.pdf';
-          fs.writeFileSync(path.join(dir, safe), e.getData());
-          await q(
-            `INSERT INTO bulk_mail_files
-               (id, batch_id, file_name, pan, doc_year, person_name, email, match_status, file_path)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-            [`${batchId}-${String(n).padStart(4, '0')}`, batchId, base + '.pdf', pan, year,
-             hit?.name || '', hit?.email || '', matchStatus, path.join('uploads', 'bulk-mail', batchId, safe)]);
-        }
-
-        res.json({ batchId, summary: await batchSummary(batchId) });
-      } catch (e) {
-        console.error('[bulk-mail] upload failed:', e);
-        res.status(500).json({ error: e.message });
-      }
-    });
+    const existing = (await q(`SELECT id FROM bulk_mail_files WHERE batch_id = $1 AND file_name = $2`, [batchId, base + '.pdf']))[0];
+    if (existing) {
+      await q(`UPDATE bulk_mail_files SET file_path = $1 WHERE id = $2`, [relPath, existing.id]);
+      return { id: existing.id, matchStatus, duplicate: true };
+    }
+    const n = Number((await q(`SELECT COUNT(*) AS c FROM bulk_mail_files WHERE batch_id = $1`, [batchId]))[0]?.c || 0) + 1;
+    let id = `${batchId}-${String(n).padStart(4, '0')}`;
+    // Ids are batch-local counters; a deleted row could make the count
+    // collide with a live id, so bump until free.
+    for (let bump = 0; bump < 50; bump++) {
+      const taken = (await q(`SELECT id FROM bulk_mail_files WHERE id = $1`, [id]))[0];
+      if (!taken) break;
+      id = `${batchId}-${String(n + bump + 1).padStart(4, '0')}`;
+    }
+    await q(
+      `INSERT INTO bulk_mail_files
+         (id, batch_id, file_name, pan, doc_year, person_name, email, match_status, file_path)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [id, batchId, base + '.pdf', pan, year, hit?.person_name || '', email, matchStatus, relPath]);
+    return { id, matchStatus, duplicate: false };
+  }
 
   /* ── Batches ──────────────────────────────────────────────────────── */
+
+  // Start an empty batch; the page then posts files into it one by one.
+  app.post('/api/bulk-mail/batches', ...guard, async (req, res) => {
+    try {
+      await ensureSchema();
+      // Batches that never received a file (an upload that died on its first
+      // request) are noise in the picker — clear the stale ones.
+      await q(`DELETE FROM bulk_mail_batches WHERE file_count = 0 AND created_at < NOW() - INTERVAL 1 DAY`).catch(() => {});
+      const name = String(req.body?.name || 'Upload').slice(0, 250);
+      const by = who(req);
+      const batchId = await withSeqId('bulk_mail_batches', 'BM', 4, async (id) => {
+        await q(`INSERT INTO bulk_mail_batches (id, zip_name, master_name, file_count, uploaded_by) VALUES ($1,$2,'',0,$3)`, [id, name, by]);
+      });
+      res.json({ batchId });
+    } catch (e) {
+      console.error('[bulk-mail] create batch failed:', e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  /* One file into a batch: a PDF is stored and matched; a ZIP is opened and
+     every PDF/sheet inside handled the same way; an Excel/CSV feeds the
+     master list and re-matches the batch. Body = raw file bytes, name in
+     ?name=. */
+  app.post('/api/bulk-mail/batches/:id/files', ...guard, rawBody, async (req, res) => {
+    try {
+      await ensureSchema();
+      const batchId = String(req.params.id);
+      const batch = (await q(`SELECT id FROM bulk_mail_batches WHERE id = $1`, [batchId]))[0];
+      if (!batch) return res.status(404).json({ error: 'Batch not found' });
+      if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'Empty file' });
+      const name = baseName(req.query.name || '');
+      if (!name) return res.status(400).json({ error: 'File name missing (?name=)' });
+      const by = who(req);
+
+      const out = { name, pdfs: 0, sheets: 0, masterRows: 0, duplicates: 0, skipped: [] };
+
+      if (isSheet(name)) {
+        let r;
+        try { r = await absorbSheet(req.body, name, by); }
+        catch (e) { return res.status(400).json({ error: `Could not read ${name}: ${e.message}` }); }
+        if (!r.rows) return res.status(400).json({ error: `${name} has no rows with a File Name / PAN and an Email column` });
+        out.sheets = 1; out.masterRows = r.rows;
+        await q(`UPDATE bulk_mail_batches SET master_name = $1 WHERE id = $2`, [name.slice(0, 250), batchId]);
+        await rematchBatch(batchId);
+      } else if (isPdf(name)) {
+        const master = await loadMaster();
+        const r = await addPdf(batchId, name, req.body, master);
+        out.pdfs = 1; if (r.duplicate) out.duplicates = 1;
+      } else if (isZip(name)) {
+        let zip;
+        try { zip = new AdmZip(req.body); }
+        catch { return res.status(400).json({ error: `${name} is not a readable ZIP archive` }); }
+        const all = zip.getEntries().filter((e) => !e.isDirectory && !/(^|\/)__MACOSX\//.test(e.entryName) && !/(^|\/)\./.test(baseName(e.entryName)));
+        const pdfs = all.filter((e) => isPdf(e.entryName));
+        const sheets = all.filter((e) => isSheet(e.entryName));
+        if (pdfs.length > 2000) return res.status(400).json({ error: 'ZIP holds more than 2000 PDFs — split it up' });
+        // Sheets first, so the PDFs that follow match against a fresh master.
+        for (const s of sheets) {
+          try {
+            const r = await absorbSheet(s.getData(), baseName(s.entryName), by);
+            out.sheets += 1; out.masterRows += r.rows;
+            await q(`UPDATE bulk_mail_batches SET master_name = $1 WHERE id = $2`, [baseName(s.entryName).slice(0, 250), batchId]);
+          } catch (e) { out.skipped.push(`${baseName(s.entryName)}: ${e.message}`); }
+        }
+        const master = await loadMaster();
+        for (const e of pdfs) {
+          const r = await addPdf(batchId, e.entryName, e.getData(), master);
+          out.pdfs += 1; if (r.duplicate) out.duplicates += 1;
+        }
+        if (sheets.length) await rematchBatch(batchId);
+        if (!pdfs.length && !sheets.length) return res.status(400).json({ error: `${name} holds no PDF or Excel/CSV files` });
+      } else {
+        return res.status(400).json({ error: `${name}: only PDF, ZIP and Excel/CSV files are accepted` });
+      }
+
+      await refreshCount(batchId);
+      res.json({ ...out, summary: await batchSummary(batchId) });
+    } catch (e) {
+      console.error('[bulk-mail] file upload failed:', e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get('/api/bulk-mail/batches', ...guard, async (req, res) => {
     try {
       await ensureSchema();
-      const batches = await q(`SELECT * FROM bulk_mail_batches ORDER BY id DESC LIMIT 100`);
+      const batches = await q(`SELECT * FROM bulk_mail_batches WHERE file_count > 0 ORDER BY id DESC LIMIT 100`);
       const out = [];
       for (const b of batches) out.push({ ...b, summary: await batchSummary(b.id) });
       res.json(out);
@@ -237,97 +423,260 @@ function mountBulkMail(app, ctx) {
   app.delete('/api/bulk-mail/batches/:id', requireAuth, requireSuperAdmin, async (req, res) => {
     try {
       await ensureSchema();
-      await q(`DELETE FROM bulk_mail_files WHERE batch_id = $1`, [req.params.id]);
-      await q(`DELETE FROM bulk_mail_batches WHERE id = $1`, [req.params.id]);
       const id = String(req.params.id);
+      if (job?.running && job.batchId === id) return res.status(409).json({ error: 'A send is running on this batch — stop it first' });
+      await q(`DELETE FROM bulk_mail_files WHERE batch_id = $1`, [id]);
+      await q(`DELETE FROM bulk_mail_batches WHERE id = $1`, [id]);
       if (/^BM\d+$/.test(id)) fs.rmSync(path.join(UPLOAD_ROOT, id), { recursive: true, force: true });
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  /* ── Fill in a missing address ─────────────────────────────────────── */
+  /* ── Fill in a missing address ─────────────────────────────────────
+     Saved on the row AND into the master, so next year's file for the
+     same PAN needs no typing. */
   app.patch('/api/bulk-mail/files/:id', ...guard, async (req, res) => {
     try {
       await ensureSchema();
       const email = cleanEmails(req.body?.email);
       if (!email) return res.status(400).json({ error: 'Enter a valid email address' });
-      const row = (await q(`SELECT id FROM bulk_mail_files WHERE id = $1`, [req.params.id]))[0];
+      const row = (await q(`SELECT * FROM bulk_mail_files WHERE id = $1`, [req.params.id]))[0];
       if (!row) return res.status(404).json({ error: 'File not found' });
-      await q(`UPDATE bulk_mail_files SET email = $1, match_status = 'Ready', error = '' WHERE id = $2`,
-        [email, row.id]);
+      const name = String(req.body?.name ?? row.person_name ?? '').trim().slice(0, 250);
+      await q(`UPDATE bulk_mail_files SET email = $1, person_name = $2, match_status = 'Ready', error = '' WHERE id = $3`,
+        [email, name, row.id]);
+      await upsertMaster({ pan: row.pan, fileKey: keyOf(row.file_name), name, email, source: 'typed in', by: who(req) });
       res.json({ ok: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  /* ── Send ───────────────────────────────────────────────────────────
-     Takes a SMALL list of file ids per call — the page sends in chunks of
-     five so its 45s request timeout can never outlast a Gmail conversation,
-     and a progress bar falls out for free. Sequential on purpose: Gmail
-     throttles parallel blasts from one account. */
+  /* ── Master list routes ───────────────────────────────────────────── */
+
+  app.get('/api/bulk-mail/master', ...guard, async (req, res) => {
+    try {
+      await ensureSchema();
+      const rows = await q(`SELECT * FROM bulk_mail_master ORDER BY updated_at DESC, mkey ASC LIMIT 5000`);
+      const withEmail = rows.filter((r) => r.email).length;
+      const lastUpdated = rows.reduce((m, r) => (r.updated_at && (!m || r.updated_at > m) ? r.updated_at : m), null);
+      res.json({ count: rows.length, withEmail, lastUpdated, rows });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // A sheet on its own (no batch), e.g. the yearly list refreshed in advance.
+  // ?batch=BMxxxx re-matches that batch afterwards.
+  app.post('/api/bulk-mail/master/upload', ...guard, rawBody, async (req, res) => {
+    try {
+      await ensureSchema();
+      const name = baseName(req.query.name || 'master.xlsx');
+      if (!isSheet(name)) return res.status(400).json({ error: 'Upload an Excel (.xlsx/.xls) or CSV file' });
+      if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'Empty file' });
+      let r;
+      try { r = await absorbSheet(req.body, name, who(req)); }
+      catch (e) { return res.status(400).json({ error: `Could not read ${name}: ${e.message}` }); }
+      if (!r.rows) return res.status(400).json({ error: `${name} has no rows with a File Name / PAN and an Email column` });
+      let rematched = 0;
+      const batchId = String(req.query.batch || '');
+      if (batchId) rematched = await rematchBatch(batchId);
+      res.json({ rows: r.rows, withEmail: r.withEmail, rematched });
+    } catch (e) {
+      console.error('[bulk-mail] master upload failed:', e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Add or edit one entry by hand.
+  app.post('/api/bulk-mail/master', ...guard, async (req, res) => {
+    try {
+      await ensureSchema();
+      const pan = String(req.body?.pan || '').toUpperCase().trim();
+      const fileKey = keyOf(req.body?.fileKey || '');
+      const email = cleanEmails(req.body?.email);
+      const name = String(req.body?.name || '').trim().slice(0, 250);
+      if (pan && !PAN_RE.test(pan)) return res.status(400).json({ error: 'That is not a valid PAN (e.g. AAGPS6986H)' });
+      if (!pan && !fileKey) return res.status(400).json({ error: 'Give a PAN or a file name' });
+      if (!email) return res.status(400).json({ error: 'Enter a valid email address' });
+      const mkey = masterKey(pan, fileKey);
+      // A direct edit is allowed to change everything, unlike a sheet upsert.
+      await q(
+        `INSERT INTO bulk_mail_master (mkey, pan, file_key, person_name, email, source, updated_by, updated_at)
+         VALUES ($1,$2,$3,$4,$5,'typed in',$6,NOW())
+         ON CONFLICT (mkey) DO UPDATE SET
+           file_key = CASE WHEN EXCLUDED.file_key <> '' THEN EXCLUDED.file_key ELSE bulk_mail_master.file_key END,
+           person_name = EXCLUDED.person_name, email = EXCLUDED.email,
+           source = EXCLUDED.source, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+        [mkey, pan, fileKey, name, email, who(req)]);
+      const batchId = String(req.body?.batchId || '');
+      if (batchId) await rematchBatch(batchId);
+      res.json({ ok: true, mkey });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.delete('/api/bulk-mail/master/:key', ...guard, async (req, res) => {
+    try {
+      await ensureSchema();
+      await q(`DELETE FROM bulk_mail_master WHERE mkey = $1`, [String(req.params.key)]);
+      res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  /* ── Mail ───────────────────────────────────────────────────────────
+     A pooled transport per job: one Gmail connection reused for every
+     message instead of a fresh TLS handshake + login per mail (which is
+     what made five mails take twenty seconds). */
+  function makeTransport() {
+    const user = process.env.SMTP_USER, pass = process.env.SMTP_PASS;
+    if (!user || !pass) return null;
+    return nodemailer.createTransport({
+      service: 'gmail', auth: { user, pass },
+      pool: true, maxConnections: 1, maxMessages: 200,
+      connectionTimeout: 20000, greetingTimeout: 20000, socketTimeout: 90000,
+    });
+  }
+
+  const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const fill = (tpl, r) => String(tpl)
+    .replace(/\{name\}/g, r.person_name || 'Sir/Madam')
+    .replace(/\{pan\}/g, r.pan || '')
+    .replace(/\{year\}/g, r.doc_year || '')
+    .replace(/\{file\}/g, r.file_name || '');
+
+  function readPdf(r) {
+    try { return fs.readFileSync(path.join(__dirname, '..', r.file_path)); }
+    catch { return null; }
+  }
+
+  function buildMessage(r, subjectTpl, bodyTpl, pdf, to) {
+    const subject = fill(subjectTpl, r);
+    const text = fill(bodyTpl, r);
+    return {
+      from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+      to,
+      subject,
+      text,
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:520px;padding:24px;border:1px solid #e2e8f0;border-radius:8px">
+          <h2 style="color:#0150AA;margin:0 0 16px">${escHtml(subject)}</h2>
+          <p style="color:#374151;white-space:pre-line">${escHtml(text)}</p>
+          <p style="color:#94a3b8;font-size:12px;margin-top:24px">Attachment: ${escHtml(r.file_name)}</p>
+        </div>`,
+      attachments: [{ filename: r.file_name, content: pdf, contentType: 'application/pdf' }],
+    };
+  }
+
+  // Is the mail account usable from this server? Same login Gmail sees on a
+  // real send, no message goes out.
+  app.get('/api/bulk-mail/smtp-check', ...guard, async (req, res) => {
+    const t = makeTransport();
+    if (!t) return res.json({ ok: false, error: 'SMTP_USER / SMTP_PASS are not set on the server' });
+    const t0 = Date.now();
+    try {
+      await Promise.race([t.verify(), new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timed out after 25s'), { code: 'ETIMEDOUT' })), 25000))]);
+      res.json({ ok: true, user: process.env.SMTP_USER, ms: Date.now() - t0 });
+    } catch (e) {
+      console.error('[bulk-mail] smtp check failed:', e.code, e.message);
+      res.json({ ok: false, user: process.env.SMTP_USER, error: explainMailError(e), ms: Date.now() - t0 });
+    } finally { t.close(); }
+  });
+
+  // One real message, to the person clicking, with the chosen row's PDF —
+  // the row itself is left untouched.
+  app.post('/api/bulk-mail/send/test', ...guard, async (req, res) => {
+    let t = null;
+    try {
+      await ensureSchema();
+      const to = cleanEmails(req.session.user?.email);
+      if (!to) return res.status(400).json({ error: 'Your login has no email address to send the test to' });
+      const r = (await q(`SELECT * FROM bulk_mail_files WHERE id = $1`, [String(req.body?.fileId || '')]))[0];
+      if (!r) return res.status(404).json({ error: 'Pick a file to send as the test' });
+      const pdf = readPdf(r);
+      if (!pdf) return res.status(400).json({ error: 'PDF missing on server (cleared by a redeploy?) — re-upload the files' });
+      t = makeTransport();
+      if (!t) return res.status(500).json({ error: 'Email is not configured (SMTP_USER / SMTP_PASS missing)' });
+      const msg = buildMessage(r, '[TEST] ' + String(req.body?.subject || DEF_SUBJECT), String(req.body?.body || DEF_BODY), pdf, to);
+      await t.sendMail(msg);
+      res.json({ ok: true, to, subject: msg.subject });
+    } catch (e) {
+      console.error('[bulk-mail] test mail failed:', e.code, e.message);
+      res.status(500).json({ error: explainMailError(e) });
+    } finally { if (t) t.close(); }
+  });
+
+  /* ── Send job ─────────────────────────────────────────────────────
+     One job at a time per process, kept in memory: the POST returns at
+     once and the page polls /send/status. If the process restarts mid-way
+     the job is gone but every row already sent is marked, so "Select
+     unsent" resumes from where it stopped. */
+  let job = null;
+
+  const jobView = () => (job ? {
+    id: job.id, batchId: job.batchId, running: job.running, cancelled: job.cancelled,
+    total: job.total, done: job.done, sent: job.sent, failed: job.failed,
+    current: job.current, startedAt: job.startedAt, finishedAt: job.finishedAt, by: job.by,
+    lastError: job.lastError,
+  } : { running: false });
+
+  async function runJob(j, subjectTpl, bodyTpl) {
+    const t = makeTransport();
+    try {
+      for (const id of j.ids) {
+        if (j.cancel) { j.cancelled = true; break; }
+        const r = (await q(`SELECT * FROM bulk_mail_files WHERE id = $1`, [id]))[0];
+        j.current = r ? r.file_name : id;
+        const fail = async (msg) => {
+          j.failed += 1; j.lastError = msg;
+          if (r) await q(`UPDATE bulk_mail_files SET send_status = 'Failed', error = $1 WHERE id = $2`, [msg.slice(0, 490), id]).catch(() => {});
+        };
+        if (!r) { await fail('File not found'); j.done += 1; continue; }
+        const to = cleanEmails(r.email);
+        if (!to) { await fail('No valid email on this row'); j.done += 1; continue; }
+        const pdf = readPdf(r);
+        if (!pdf) { await fail('PDF missing on server (cleared by a redeploy?) — re-upload the files'); j.done += 1; continue; }
+        try {
+          await t.sendMail(buildMessage(r, subjectTpl, bodyTpl, pdf, to));
+          await q(`UPDATE bulk_mail_files SET send_status = 'Sent', sent_at = NOW(), sent_by = $1, error = '' WHERE id = $2`, [j.by, id]);
+          j.sent += 1;
+        } catch (e) {
+          console.error('[bulk-mail] send failed for', id, '→', to, ':', e.code || '', e.message);
+          await fail(explainMailError(e));
+        }
+        j.done += 1;
+        // A breath between messages keeps Gmail's rate limiter friendly.
+        await new Promise((ok) => setTimeout(ok, 250));
+      }
+    } catch (e) {
+      console.error('[bulk-mail] send job crashed:', e);
+      j.lastError = String(e.message || e);
+    } finally {
+      j.running = false; j.current = ''; j.finishedAt = new Date().toISOString();
+      try { t?.close(); } catch { /* already closed */ }
+    }
+  }
+
   app.post('/api/bulk-mail/send', ...guard, async (req, res) => {
     try {
       await ensureSchema();
-      const mailer = getMailer();
-      if (!mailer) return res.status(500).json({ error: 'Email is not configured (SMTP_USER / SMTP_PASS missing)' });
-
-      const ids = Array.isArray(req.body?.ids) ? req.body.ids.slice(0, 10) : [];
+      if (!getMailer()) return res.status(500).json({ error: 'Email is not configured (SMTP_USER / SMTP_PASS missing)' });
+      if (job?.running) return res.status(409).json({ error: `A send is already running (${job.done}/${job.total}) — wait for it to finish or stop it` });
+      const ids = Array.isArray(req.body?.ids) ? [...new Set(req.body.ids.map(String))].slice(0, 5000) : [];
       if (!ids.length) return res.status(400).json({ error: 'No files selected' });
-      const subjectTpl = String(req.body?.subject || 'Form 16 (Part A) – {year}');
-      const bodyTpl = String(req.body?.body ||
-        'Dear {name},\n\nPlease find attached your Form 16 (Part A) for {year}.\n\nThis is an automated email — please do not reply.');
-      const by = req.session.user?.email || req.session.user?.name || '';
-
-      const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      const fill = (tpl, r) => tpl
-        .replace(/\{name\}/g, r.person_name || 'Sir/Madam')
-        .replace(/\{pan\}/g, r.pan || '')
-        .replace(/\{year\}/g, r.doc_year || '')
-        .replace(/\{file\}/g, r.file_name || '');
-
-      const results = [];
-      for (const id of ids) {
-        const r = (await q(`SELECT * FROM bulk_mail_files WHERE id = $1`, [id]))[0];
-        if (!r) { results.push({ id, ok: false, error: 'File not found' }); continue; }
-        const to = cleanEmails(r.email);
-        if (!to) { results.push({ id, ok: false, error: 'No valid email on this row' }); continue; }
-
-        let pdf = null;
-        try { pdf = fs.readFileSync(path.join(__dirname, '..', r.file_path)); }
-        catch {
-          const msg = 'PDF missing on server (cleared by a redeploy?) — re-upload the ZIP';
-          await q(`UPDATE bulk_mail_files SET send_status = 'Failed', error = $1 WHERE id = $2`, [msg, id]).catch(() => {});
-          results.push({ id, ok: false, error: msg });
-          continue;
-        }
-
-        try {
-          const subject = fill(subjectTpl, r);
-          const text = fill(bodyTpl, r);
-          await mailer.sendMail({
-            from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
-            to,
-            subject,
-            html: `
-              <div style="font-family:Arial,sans-serif;max-width:520px;padding:24px;border:1px solid #e2e8f0;border-radius:8px">
-                <h2 style="color:#0150AA;margin:0 0 16px">${escHtml(subject)}</h2>
-                <p style="color:#374151;white-space:pre-line">${escHtml(text)}</p>
-                <p style="color:#94a3b8;font-size:12px;margin-top:24px">Attachment: ${escHtml(r.file_name)}</p>
-              </div>`,
-            attachments: [{ filename: r.file_name, content: pdf, contentType: 'application/pdf' }],
-          });
-          await q(`UPDATE bulk_mail_files SET send_status = 'Sent', sent_at = NOW(), sent_by = $1, error = '' WHERE id = $2`, [by, id]);
-          results.push({ id, ok: true });
-        } catch (e) {
-          const msg = String(e.message || e).slice(0, 490);
-          await q(`UPDATE bulk_mail_files SET send_status = 'Failed', error = $1 WHERE id = $2`, [msg, id]).catch(() => {});
-          results.push({ id, ok: false, error: msg });
-        }
-        // A breath between messages keeps Gmail's rate limiter friendly.
-        await new Promise((ok) => setTimeout(ok, 300));
-      }
-      res.json({ results });
+      const batchId = String(req.body?.batchId || ids[0].replace(/-\d+$/, ''));
+      job = {
+        id: 'J' + Date.now().toString(36), batchId, ids, running: true, cancel: false, cancelled: false,
+        total: ids.length, done: 0, sent: 0, failed: 0, current: '', lastError: '',
+        startedAt: new Date().toISOString(), finishedAt: null, by: who(req),
+      };
+      // Not awaited — the job outlives this request on purpose.
+      runJob(job, String(req.body?.subject || DEF_SUBJECT), String(req.body?.body || DEF_BODY));
+      res.json({ ok: true, job: jobView() });
     } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.get('/api/bulk-mail/send/status', ...guard, (req, res) => res.json(jobView()));
+
+  app.post('/api/bulk-mail/send/cancel', ...guard, (req, res) => {
+    if (job?.running) job.cancel = true;
+    res.json(jobView());
   });
 }
 
-module.exports = { BULK_MAIL_SCHEMA, mountBulkMail };
+module.exports = { BULK_MAIL_SCHEMA, mountBulkMail, parseMasterSheet, parsePdfName, cleanEmails, explainMailError };
