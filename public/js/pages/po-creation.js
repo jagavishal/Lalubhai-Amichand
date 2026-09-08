@@ -10,7 +10,7 @@ window.Pages = window.Pages || {};
 window.Pages['po-creation'] = (() => {
   const FORMATS = ['PurchaseOrder', 'ENR PO', 'Diamond PO', 'Service PO'];
   const FORMAT_LABEL = { PurchaseOrder: 'Purchase Order', 'ENR PO': 'ENR PO', 'Diamond PO': 'Diamond PO', 'Service PO': 'Service PO' };
-  const PARTY_LABEL  = { PurchaseOrder: 'Customer Name', 'ENR PO': 'Vendor', 'Diamond PO': 'Vendor', 'Service PO': 'Vendor' };
+  const PARTY_LABEL  = { PurchaseOrder: 'Customer Name', 'ENR PO': 'Vendor', 'Diamond PO': 'Vendor', 'Service PO': 'Vendor Name' };
   const ITEM_CODE_LABEL = { PurchaseOrder: 'Item Code', 'ENR PO': 'Item #', 'Diamond PO': 'Item #', 'Service PO': 'Service Description' };
 
   // Service PO is the one fully manual format: services aren't raised through a
@@ -20,14 +20,19 @@ window.Pages['po-creation'] = (() => {
   // lines from the PR they're raised against). Everything below keyed off this
   // list rather than a hardcoded === 'Service PO' scattered through the file.
   const MANUAL_FORMATS = ['Service PO'];
-  const SHIP_TO_FORMATS = ['PurchaseOrder', 'Service PO'];
-  const EXTRA_FORMATS = ['PurchaseOrder', 'Service PO'];   // Terms & Conditions + Comments
+  // Laid out like the Purchase Requisition (its sheet tab IS a copy of the PR
+  // template): Requested By + Person Who Raised + Estimated Del. Date + Terms
+  // of Payment in the header, no Ship To / PO validity / T&C / comments.
+  const PR_STYLE_FORMATS = ['Service PO'];
+  const SHIP_TO_FORMATS = ['PurchaseOrder'];
+  const EXTRA_FORMATS = ['PurchaseOrder'];   // Terms & Conditions + Comments
   const TEST_CERT_FORMATS = ['PurchaseOrder'];             // goods-only — a service has nothing to certify
   // Which item field is the line's identity, i.e. what the first column holds
   // and what a row must have filled in to count as a real line.
   const ITEM_KEY_FIELD = { PurchaseOrder: 'itemCode', 'ENR PO': 'itemCode', 'Diamond PO': 'itemCode', 'Service PO': 'description' };
 
   function _isManual() { return MANUAL_FORMATS.includes(_format); }
+  function _isPrStyle() { return PR_STYLE_FORMATS.includes(_format); }
 
   // Departments are the app-wide master list (Utils' shared cache, primed from
   // /api/po-creation/masters and served by GET /api/departments) — the same one
@@ -59,17 +64,18 @@ window.Pages['po-creation'] = (() => {
       { key: 'plateQty',  label: 'Plate Qty (Nos.)', numeric: true },
       { key: 'plateRate', label: 'Plate Rate (INR)', numeric: true },
     ],
-    // Same D:H column set as PurchaseOrder, minus HSN (a service carries a
-    // SAC code in column C instead) — Size is typed here rather than looked
-    // up, since there's no catalog behind a service line. Amount is the
-    // sheet's own qty x unit price formula, like the goods formats.
+    // The Purchase Requisition's own item columns, in its order (the Service
+    // PO tab is a copy of that template) — SAC Code stands in for the PR's
+    // Item No., and Description is typed rather than looked up.
     'Service PO': [
-      { key: 'sacCode',   label: 'SAC Code' },
-      { key: 'size',      label: 'Size' },
-      { key: 'uom',       label: 'UOM' },
-      { key: 'qty',       label: 'Qty', numeric: true },
-      { key: 'unitPrice', label: 'Unit Price (INR)', numeric: true },
-      { key: 'gst',       label: 'GST %', numeric: true },
+      { key: 'sacCode',            label: 'SAC Code' },
+      { key: 'monthlyConsumption', label: 'Monthly Consumption' },
+      { key: 'qty',                label: 'Qty Required', numeric: true },
+      { key: 'uom',                label: 'UOM' },
+      { key: 'stock',              label: 'Stock' },
+      { key: 'lastOrderedDate',    label: 'Last Ordered Date' },
+      { key: 'unitPrice',          label: 'Unit Price (INR)', numeric: true },
+      { key: 'gst',                label: 'Tax %', numeric: true },
     ],
   };
 
@@ -87,9 +93,9 @@ window.Pages['po-creation'] = (() => {
     'Diamond PO': [
       { key: 'total', label: 'Total (INR)', compute: v => _num(v.boxQty) * _num(v.boxRate) + _num(v.plateQty) * _num(v.plateRate) },
     ],
+    // Same as the PR's TOTAL column: qty x unit price, tax shown but not added.
     'Service PO': [
-      { key: 'amount',        label: 'Amount (INR)',         compute: v => _num(v.qty) * _num(v.unitPrice) },
-      { key: 'amountWithTax', label: 'Amount w/ Tax (INR)',   compute: v => { const a = _num(v.qty) * _num(v.unitPrice); return a + a * _num(v.gst) / 100; } },
+      { key: 'total', label: 'Total (INR)', compute: v => _num(v.qty) * _num(v.unitPrice) },
     ],
   };
 
@@ -113,12 +119,8 @@ window.Pages['po-creation'] = (() => {
       { key: 'other',           label: 'Other' },
       { key: 'discountPercent', label: 'Discount %' },
     ],
-    // Freight/Packing don't apply to a service — their cells still exist on the
-    // tab (and the server zeroes them on every submit so nothing bleeds through)
-    // but there's no reason to show them here.
-    'Service PO': [
-      { key: 'discount', label: 'Discount' },
-    ],
+    // The PR layout has no summary band — its TOTAL is just the column sum.
+    'Service PO': [],
   };
 
   // Maps a PR Creation tab name (returned as prTabName by /pending-prs) to the
@@ -489,8 +491,7 @@ window.Pages['po-creation'] = (() => {
       } else if (_format === 'Diamond PO') {
         itemsSum += _num(vals.boxQty) * _num(vals.boxRate) + _num(vals.plateQty) * _num(vals.plateRate);
       } else if (_format === 'Service PO') {
-        const amt = _num(vals.qty) * _num(vals.unitPrice);
-        taxInclusive += amt + amt * _num(vals.gst) / 100;
+        itemsSum += _num(vals.qty) * _num(vals.unitPrice);
       }
     });
 
@@ -506,7 +507,7 @@ window.Pages['po-creation'] = (() => {
       const gstAmt = itemsSum * _num(s.gstPercent) / 100;
       total = itemsSum + gstAmt + _num(s.shipping) + _num(s.other) - itemsSum * _num(s.discountPercent) / 100;
     } else if (_format === 'Service PO') {
-      total = taxInclusive - _num(s.discount);
+      total = itemsSum;
     }
     el.textContent = '₹' + _fmtMoney(total);
   }
@@ -811,6 +812,7 @@ window.Pages['po-creation'] = (() => {
       // omitted entirely rather than shown-and-ignored, and that tab's sheet
       // template has no P.R. NO cell either.
       + (_isManual() ? '' : _prNoField())
+      + (_isPrStyle() ? _textField('poc-requested-by', 'Requested By', { placeholder: 'Who needs the service' }) : '')
       + _fieldWrap('Department', '<select id="poc-department" style="' + _inputStyle + 'background:#fff;">' + deptOptions + '</select>')
       + _partyField();
 
@@ -818,11 +820,12 @@ window.Pages['po-creation'] = (() => {
       ? _fieldWrap('Ship To', '<select id="poc-ship-to" style="' + _inputStyle + 'background:#fff;">' + shipToOptions + '</select>')
       : '';
 
+    const prStyle = _isPrStyle();
     const terms = ''
-      + _textField('poc-delivery-schedule', 'Delivery Schedule', { type: 'date' })
-      + _textField('poc-po-validity', 'PO Validity From Date of Issuing', { placeholder: '1 MONTH', value: '1 MONTH' })
-      + _textField('poc-payment-terms', 'Payment Terms', { placeholder: '30 days', value: '30 days' })
-      + _textField('poc-po-made-by', 'PO Made By', { value: (window.currentUser && window.currentUser.name) || '' });
+      + _textField('poc-delivery-schedule', prStyle ? 'Estimated Del. Date' : 'Delivery Schedule', { type: 'date' })
+      + (prStyle ? '' : _textField('poc-po-validity', 'PO Validity From Date of Issuing', { placeholder: '1 MONTH', value: '1 MONTH' }))
+      + _textField('poc-payment-terms', prStyle ? 'Terms of Payment' : 'Payment Terms', { placeholder: '30 days', value: '30 days' })
+      + _textField('poc-po-made-by', prStyle ? 'Person Who Raised the PO' : 'PO Made By', { value: (window.currentUser && window.currentUser.name) || '' });
 
     return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">' + common + shipTo + terms + '</div>';
   }
@@ -922,8 +925,11 @@ window.Pages['po-creation'] = (() => {
     const department = document.getElementById('poc-department').value;
     const party = document.getElementById('poc-party').value.trim();
     const shipTo = SHIP_TO_FORMATS.includes(_format) ? document.getElementById('poc-ship-to').value : '';
+    const requestedByInput = document.getElementById('poc-requested-by'); // PR-style formats only
+    const requestedBy = requestedByInput ? requestedByInput.value.trim() : '';
     const deliverySchedule = document.getElementById('poc-delivery-schedule').value;
-    const poValidity = document.getElementById('poc-po-validity').value.trim();
+    const poValidityInput = document.getElementById('poc-po-validity');   // absent on PR-style formats
+    const poValidity = poValidityInput ? poValidityInput.value.trim() : '';
     const paymentTerms = document.getElementById('poc-payment-terms').value.trim();
     const poMadeBy = document.getElementById('poc-po-made-by').value.trim();
     const items = _collectItems();
@@ -943,7 +949,7 @@ window.Pages['po-creation'] = (() => {
     try {
       const result = await Utils.apiFetch('/api/po-creation', {
         method: 'POST',
-        body: JSON.stringify({ format: _format, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired }),
+        body: JSON.stringify({ format: _format, date, prNo, requestedBy, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired }),
       });
       await _loadMasters();
       renderPage();
