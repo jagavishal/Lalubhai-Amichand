@@ -1,8 +1,9 @@
 window.Pages = window.Pages || {};
 
-// ── PR (Form + Creation + Summary, all in one tab) ────────────────────────────
-// Three in-page views, same pattern as po-creation.js folding in PO List:
-//   'form'   — the digitized PR intake Google Form (was pr-form.js)
+// ── PR (Creation + Summary, all in one tab) ───────────────────────────────────
+// Two in-page views, same pattern as po-creation.js folding in PO List (the
+// digitized Google-Form intake that used to sit here as a 'PR Form' tab was
+// retired in Sep 2026 — every PR is raised on a template tab now):
 //   'create' — fills one of 4 live template tabs in the "PR July 2026" Google
 //              Sheet (Purchase Requisition / Packing Sticker / Packing Box /
 //              Aluminium), exports a PDF (saved to Drive), logs it
@@ -113,46 +114,8 @@ window.Pages['pr-creation'] = (() => {
     ALU: [],
   };
 
-  /* ── PR Form constants — transcribed verbatim from the store team's PR Form
-     (Google Form PDF); prefixed PF_ to avoid clashing with the Creation-view
-     constants above ─────────────────────────────────────────────────────── */
-  const PF_VENDOR_LIST = [
-    'ABK LOGISTICS INDIA PVT LTD', 'ADINATH EQUIPMENTS', 'AKIL LIME CO', 'ALLCAST METAL',
-    'AMAFF ENTERPRICES', 'AMI METAL INDUSTRY', 'AMUL INDUSTRIES', 'APARNA INDUSTRIAL ENGINEERS',
-    'ARYA TRADERS', 'AUTO EQUIPEMENT', 'BOMBAY TRADING CO.', 'CISCO INDUSTRIES', 'DHIREN PAINTS',
-    'DIAMOND CORRUGATED BOX', 'ENR CREATIVE SOLUTIONS', 'FAIR FASTENERS', 'GREEN FEIELD RESOURCE',
-    'J.D TIMBERS', 'JAGDISH WIRE', 'JAY ENTERPRICES', 'KARNAVATI ELECTRICALS AND CONTROLS',
-    'KIRTI TOOLS', 'KRISHNA GAS SERVICE', 'MEHTA METALS', 'NACHIKET SALES', 'NEPTUNE CHEMICALS',
-    'OSWAL CHEMICALS', 'PARSHWANATH TRADERS', 'PARTH METAL CAST ODHAV', 'PATEL CASTING',
-    'RADHESHYAM ACID', 'RUSHABH TRD.', 'SHREE BHAVANI TRADING COMPANY', 'SHREE KRISHNA ENGINEERING WORK',
-    'SHRENATHJI COAL', 'Shri vallabh chemicals', 'TAPAN OXYGEN', 'TIWARI ENTERPTISE & ENGINEERING WORKS',
-    'UMIYA PRODUCTS', 'UNICORN METAL INDUSTRIES', 'VAKHARIYA LALUMINIUM INDUSTRIES', 'VASANT ENTERPRICES',
-    'VIKRAM OIL INDUSTRIES', 'VIKRANT INDUSTRIES', 'Yamuna Enterprise', 'Unity Sales Corporation',
-    'Rippal Chemicals', 'Shree Ram Plastics', 'RUSHABH ELECTRICALS', 'GOPAL TRADERS',
-    'SHREENATHJI TRD COMPANY', 'JAI MATADI CORPORATION', 'PARASNATH PACAKAGING',
-  ];
-
-  // The PR Form tab's Department options — the app-wide master list again (this
-  // was its own hardcoded, differently-spelled copy). No "+ Add new" row here:
-  // this form already has its own "If New Department then Enter Here" field,
-  // which is what the paper form it mirrors uses.
-  function _pfDepartmentList() { return Utils.departments(); }
-
-  const PF_PRODUCT_CATALOG = {
-    accessory: ['BACK LIGHT MILK JUG KNOB', 'BRASS INSERT', 'S.S MILK JUG SCREW', 'STEEL CAP RIVET'],
-    brazing: ['ALU.BRAZING POWDER (MUMBAI)', 'ALU.BRAZING POWDER (PUNA)'],
-    consumable: ['-297 EX.COARSE PAPER', 'APPRON', 'COCONUT OIL', 'COTTON HAND GLOVES JE', 'COTTON WASTE', 'EMERY PAPER 320 NO', 'EMERY PAPER J-297 FINE', 'EXTRA PAPER J-297.', 'GREEN BAR', 'GREEN SCOTCH BRIGHT HAND PAD', 'GUMBOOT', 'KEROSENE', 'KNITTED HAND GLOVES HEAVY', 'KNITTED HAND GLOVES SMALL', 'A.P. - GREASE', 'M.S. WIRE', 'MADRASI BUFF 12 * 12', 'MS WELDING ROD NO.08', 'MS WELDING ROD NO.10', 'PVC COATED HAND GLOVES', 'QUENCHING OIL', 'RANI PAPER', 'SAFETY GOGGALS', 'SAFETY MASK', 'STEEL WOOL', 'TAPPER WHEEL', 'WHITE COTTON WASTE', 'WOODEN DHOKHA', 'WOODEN STICK', 'WOODEN WASTE', 'YELLOW CLOTHS'],
-    electric: ['2.5 MFD CAPECITOR', '35 A R/F SWITCH', '4 MFD CAPECITOR', '6 MFD CAPECITOR', 'HALOZEN LIGHT 200W', 'L&T MK-1 4 TO 10 A', 'L&T MK-1 4 TO 6.5 A', 'TUBE LIGHT', 'TUBE LIGHT 36 W'],
-    packing: ['B.O.P.P TAPP ROLL (BROWN)', 'POLYTHENE BAG 10*10', 'POLYTHENE BAG 10*12', 'POLYTHENE BAG 11*13', 'POLYTHENE BAG 12*12', 'POLYTHENE BAG 13*15', 'POLYTHENE BAG 14*16', 'POLYTHENE BAG 16*18', 'POLYTHENE BAG 18*20', 'POLYTHENE BAG 20*20', 'POLYTHENE BAG 20*22', 'POLYTHENE BAG 24*24', 'POLYTHENE BAG 26*26', 'POLYTHENE BAG 28*28', 'POLYTHENE BAG 32*32', 'POLYTHENE BAG 8*8', 'WHITE TAPE ROLL 1/2"', 'WHITE TAPE ROLL 3"', 'Pp bag 32×32'],
-    pressing: ['ALU DRWMATE POWDER', 'COMPRESSOR OIL 220 NO', 'HYDROLIC OIL 68 NO', 'LUBRICANT OIL 40 NO', 'HP EP 220 NO GEAR OIL'],
-    washing: ['AMONIUM ALUM', 'CAUSTIC SODA', 'CHROMIC ACID', 'HYDROFLORIC ACID', 'LIME POWDER', 'LIME POWDER LIQUID', 'LPG CYLENDER', 'NITRIC ACID', 'PHOSPHURIC ACID', 'SULPHURIC ACID', 'Saw firewood'],
-    welding: ['ALU WELDING ROD 1.63 MM SMALL', 'ALU.WELDING ROD 2 MM', 'OXYGEN CYLENDER'],
-  };
-
-  const PF_CNC_PRODUCTS = ['HYDROPAC OIL 100 FOR CNC'];
-
   /* ── state ──────────────────────────────────────────────────── */
-  let _view = 'form'; // 'form' | 'create' | 'list'
+  let _view = 'create'; // 'create' | 'list'
   let _format = 'ITEM_CODE';
   let _mastersLoaded = false;
   let _vendors = [];
@@ -668,12 +631,24 @@ window.Pages['pr-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
-          + (r.status === 'Cancelled'
-            ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
+          + _sumStatusPill(r)
+          + (r.status === 'Cancelled' || r.status === 'Rejected'
+            ? ''
             : '<button type="button" class="pcr-cancel-btn" data-pr="' + esc(r.prNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
           + Utils.ownerDeleteBtn('pcr-delete-btn', 'pr', r.prNo)
         + '</td>'
       + '</tr>').join('');
+  }
+
+  // Approval state, decided from the approver's email (see /pr-action in
+  // server.js). "Active" is the not-yet-decided state — shown as Pending.
+  function _sumStatusPill(r) {
+    const pill = (label, bg, fg, title) => '<span title="' + esc(title || '') + '" style="display:inline-flex;margin-right:6px;padding:2px 8px;border-radius:10px;background:' + bg + ';color:' + fg + ';font-size:11px;font-weight:600;">' + esc(label) + '</span>';
+    const who = r.decidedBy ? 'by ' + r.decidedBy + (r.decidedAt ? ' on ' + r.decidedAt : '') : '';
+    if (r.status === 'Cancelled') return pill('Cancelled', '#f1f5f9', '#64748b');
+    if (r.status === 'Approved')  return pill('Approved', '#dcfce7', '#15803d', who);
+    if (r.status === 'Rejected')  return pill('Rejected', '#fee2e2', '#b91c1c', who);
+    return pill('Pending', '#fef3c7', '#b45309');
   }
 
   function _sumBindRowActions() {
@@ -757,233 +732,6 @@ window.Pages['pr-creation'] = (() => {
       + '</div>';
   }
 
-  /* ── PR Form view (digitized Google Form intake) ───────────────────────── */
-  function _pfFieldWrap(label, sublabel, innerHtml, required, full) {
-    return '<div class="' + (full ? 'pr-form-full ' : '') + 'pr-form-card" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;">'
-      + '<div style="font-size:13px;font-weight:700;color:#1e293b;">' + esc(label) + (required ? ' <span style="color:#ef4444;">*</span>' : '') + '</div>'
-      + '<div style="font-size:11.5px;color:#94a3b8;margin:2px 0 10px;">' + esc(sublabel) + '</div>'
-      + innerHtml
-      + '</div>';
-  }
-
-  function _pfTextField(id, label, sublabel, required, full) {
-    return _pfFieldWrap(label, sublabel,
-      '<input type="text" id="' + id + '" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;" />',
-      required, full);
-  }
-
-  function _pfNumberField(id, label, sublabel, required, full) {
-    return _pfFieldWrap(label, sublabel,
-      '<input type="text" inputmode="decimal" id="' + id + '" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;" />',
-      required, full);
-  }
-
-  function _pfChkRow(cls, value, isOther) {
-    return '<label class="pr-chk-row' + (isOther ? ' pr-other-row' : '') + '" data-name="' + esc(value.toLowerCase()) + '" style="display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:13px;color:#374151;cursor:pointer;">'
-      + '<input type="checkbox" class="' + cls + '" value="' + esc(value) + '" style="width:15px;height:15px;cursor:pointer;accent-color:var(--color-primary);flex-shrink:0;" />'
-      + esc(value)
-      + '</label>';
-  }
-
-  const _PF_CHEVRON = '<svg class="pr-msd-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .15s;flex-shrink:0;color:#94a3b8;"><path d="m6 9 6 6 6-6"/></svg>';
-
-  // Closed-by-default multi-select "dropdown" — looks like a single select field until
-  // clicked, then opens a floating panel of checkboxes so several options can be picked
-  // without permanently occupying page height (unlike a plain checkbox grid).
-  function _pfMultiSelectDropdown(cls, label, sublabel, options, includeOther, cfg) {
-    cfg = cfg || {};
-    const placeholder = cfg.placeholder || 'Select…';
-    const rows = options.map(o => _pfChkRow(cls, o)).join('') + (includeOther ? _pfChkRow(cls, 'Other', true) : '');
-    const searchHtml = cfg.searchable
-      ? '<input type="text" class="pr-msd-search" placeholder="Search…" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12.5px;margin-bottom:6px;outline:none;" />'
-      : '';
-    const inner = '<div class="pr-msd" data-cls="' + cls + '" data-placeholder="' + esc(placeholder) + '">'
-        + '<button type="button" class="pr-msd-control" style="width:100%;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;background:#fff;cursor:pointer;">'
-          + '<span class="pr-msd-summary" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;color:#94a3b8;">' + esc(placeholder) + '</span>'
-          + _PF_CHEVRON
-        + '</button>'
-        + '<div class="pr-msd-panel" style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:40;background:#fff;border:1.5px solid #e2e8f0;border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.14);padding:8px;">'
-          + searchHtml
-          + '<div class="pr-msd-options" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:2px 10px;max-height:240px;overflow-y:auto;">' + rows + '</div>'
-        + '</div>'
-      + '</div>';
-    return _pfFieldWrap(label, sublabel, inner, cfg.required !== false, cfg.full);
-  }
-
-  function _pfCncGroup() {
-    const opts = PF_CNC_PRODUCTS.concat(['Other']).map(o => '<option value="' + esc(o) + '">' + esc(o) + '</option>').join('');
-    const inner = '<select id="pr-cnc-select" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;background:#fff;">'
-      + '<option value="">Choose…</option>' + opts
-      + '</select>';
-    return _pfFieldWrap('CNC Product Name', 'સીએનસી ઉત્પાદનનું નામ / सीएनसी उत्पाद का नाम', inner, false);
-  }
-
-  function _pfCheckedValues(cls) {
-    return Array.from(document.querySelectorAll('.' + cls + ':checked')).map(cb => cb.value);
-  }
-
-  async function _pfSubmit(e) {
-    e.preventDefault();
-    const prNo             = document.getElementById('pr-no').value.trim();
-    const filledBy         = document.getElementById('pr-filled-by').value.trim();
-    const vendors           = _pfCheckedValues('pr-vendor-chk');
-    const vendorOther       = document.getElementById('pr-vendor-other').value.trim();
-    const department        = _pfCheckedValues('pr-dept-chk');
-    const departmentOther   = document.getElementById('pr-dept-other').value.trim();
-    const accessoryProduct  = _pfCheckedValues('pr-accessory-chk');
-    const brazingProduct    = _pfCheckedValues('pr-brazing-chk');
-    const cncProduct        = document.getElementById('pr-cnc-select').value;
-    const consumableProduct = _pfCheckedValues('pr-consumable-chk');
-    const electricProduct   = _pfCheckedValues('pr-electric-chk');
-    const packingProduct    = _pfCheckedValues('pr-packing-chk');
-    const pressingProduct   = _pfCheckedValues('pr-pressing-chk');
-    const washingProduct    = _pfCheckedValues('pr-washing-chk');
-    const weldingProduct    = _pfCheckedValues('pr-welding-chk');
-    const newProduct        = document.getElementById('pr-new-product').value.trim();
-    const currentStock      = document.getElementById('pr-current-stock').value.trim();
-    const quantityRequired  = document.getElementById('pr-qty-required').value.trim();
-    const previousRate      = document.getElementById('pr-previous-rate').value.trim();
-
-    if (!prNo)     { Utils.showToast('PR No. is required', 'error'); return; }
-    if (!filledBy) { Utils.showToast('Name of person filling the form is required', 'error'); return; }
-    if (!vendors.length && !vendorOther) { Utils.showToast('Select at least one vendor, or enter a new vendor', 'error'); return; }
-    if (!department.length && !departmentOther) { Utils.showToast('Select at least one department, or enter a new department', 'error'); return; }
-    if (!currentStock || !quantityRequired || !previousRate) { Utils.showToast('Current Stock, Quantity Required and Previous Rate are required', 'error'); return; }
-
-    const btn = document.getElementById('pr-submit-btn');
-    btn.disabled = true; btn.textContent = 'Submitting…';
-    try {
-      await Utils.apiFetch('/api/pr-requisitions', {
-        method: 'POST',
-        body: JSON.stringify({
-          pr_no: prNo, filled_by: filledBy,
-          vendors, vendor_other: vendorOther,
-          department, department_other: departmentOther,
-          accessory_product: accessoryProduct, brazing_product: brazingProduct, cnc_product: cncProduct,
-          consumable_product: consumableProduct, electric_product: electricProduct, packing_product: packingProduct,
-          pressing_product: pressingProduct, washing_product: washingProduct, welding_product: weldingProduct,
-          new_product: newProduct,
-          current_stock: currentStock, quantity_required: quantityRequired, previous_rate: previousRate,
-        }),
-      });
-      Utils.showToast('PR submitted successfully', 'success');
-      renderPage();
-    } catch (err) {
-      Utils.showToast(err.message || 'Failed to submit', 'error');
-      btn.disabled = false; btn.textContent = 'Submit PR';
-    }
-  }
-
-  /* ── PR Form multi-select dropdown behaviour (open/close, live summary, search) ── */
-  let _pfDocClickHandler = null;
-
-  function _pfCloseAllDropdowns(formEl) {
-    formEl.querySelectorAll('.pr-msd.open').forEach(m => _pfSetDropdownOpen(m, false));
-  }
-
-  function _pfSetDropdownOpen(msd, open) {
-    msd.classList.toggle('open', open);
-    const panel   = msd.querySelector('.pr-msd-panel');
-    const chevron = msd.querySelector('.pr-msd-chevron');
-    if (panel)   panel.style.display   = open ? 'block' : 'none';
-    if (chevron) chevron.style.transform = open ? 'rotate(180deg)' : '';
-  }
-
-  function _pfUpdateDropdownSummary(msd) {
-    const cls     = msd.dataset.cls;
-    const summary = msd.querySelector('.pr-msd-summary');
-    const values   = _pfCheckedValues(cls);
-    if (!values.length) {
-      summary.textContent = msd.dataset.placeholder;
-      summary.style.color = '#94a3b8';
-    } else {
-      summary.textContent = values.length === 1 ? values[0] : (values[0] + '  +' + (values.length - 1) + ' more');
-      summary.style.color = '#1e293b';
-    }
-  }
-
-  function _pfBindMultiSelectDropdowns(formEl) {
-    formEl.addEventListener('click', (e) => {
-      const control = e.target.closest('.pr-msd-control');
-      if (control) {
-        const msd = control.closest('.pr-msd');
-        const willOpen = !msd.classList.contains('open');
-        _pfCloseAllDropdowns(formEl);
-        _pfSetDropdownOpen(msd, willOpen);
-        return;
-      }
-      if (!e.target.closest('.pr-msd')) _pfCloseAllDropdowns(formEl);
-    });
-
-    formEl.addEventListener('change', (e) => {
-      if (!e.target.matches('input[type="checkbox"]')) return;
-      const msd = e.target.closest('.pr-msd');
-      if (msd) _pfUpdateDropdownSummary(msd);
-    });
-
-    formEl.addEventListener('input', (e) => {
-      if (!e.target.matches('.pr-msd-search')) return;
-      const panel = e.target.closest('.pr-msd-panel');
-      const q = e.target.value.trim().toLowerCase();
-      panel.querySelectorAll('.pr-chk-row').forEach(row => {
-        if (row.classList.contains('pr-other-row')) return;
-        row.style.display = (!q || (row.dataset.name || '').includes(q)) ? 'flex' : 'none';
-      });
-    });
-
-    if (_pfDocClickHandler) document.removeEventListener('click', _pfDocClickHandler);
-    _pfDocClickHandler = (e) => { if (!formEl.contains(e.target)) _pfCloseAllDropdowns(formEl); };
-    document.addEventListener('click', _pfDocClickHandler);
-  }
-
-  function _formViewHtml() {
-    return '<style>'
-        + '.pr-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start;}'
-        + '.pr-form-full{grid-column:1 / -1;}'
-        + '.pr-msd{position:relative;}'
-        + '.pr-msd-control:hover{border-color:#cbd5e1;}'
-        + '@media (max-width:760px){.pr-form-grid{grid-template-columns:1fr;}}'
-      + '</style>'
-      + '<form id="pr-form-el" class="pr-form-grid">'
-        + _pfTextField('pr-no', 'Purchase Requisition Number (PR NO.)', 'पी.आर. नंबर / પી.આર. નંબર', true)
-        + _pfTextField('pr-filled-by', 'Name of Person Filling the Form', 'फ़ॉर्म भरने वाले व्यक्ति का नाम / ફોર્મ ભરતા વ્યક્તિનું નામ', true)
-        + _pfMultiSelectDropdown('pr-vendor-chk', 'Available Options of Vendors', 'ઉપલબ્ધ વેન્ડરના વિકલ્પો / वेंडरों के उपलब्ध विकल्प', PF_VENDOR_LIST, true, { placeholder: 'Select vendor(s)…', searchable: true, full: true })
-        + _pfTextField('pr-vendor-other', 'If New Vendor then Enter Here', 'જો નવો વેન્ડર હોય તો અહીં દાખલ કરો / अगर नया वेंडर हो तो यहां दर्ज करें', false)
-        + _pfMultiSelectDropdown('pr-dept-chk', 'Department', 'વિભાગ / विभाग', _pfDepartmentList(), true, { placeholder: 'Select department(s)…' })
-        + _pfTextField('pr-dept-other', 'If New Department then Enter Here', 'જો નવો વિભાગ હોય તો અહીં દાખલ કરો / अगर नया विभाग हो तो यहां दर्ज करें', false)
-        + '<div class="pr-form-full" style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Product Name (optional)</div>'
-        + _pfMultiSelectDropdown('pr-accessory-chk', 'Accessory Product Name', 'અનુસંગી ઉત્પાદનનું નામ / सहायक उत्पाद का नाम', PF_PRODUCT_CATALOG.accessory, true, { required: false })
-        + _pfMultiSelectDropdown('pr-brazing-chk', 'Brazing Product Name', 'બ્રેઝિંગ ઉત્પાદનનું નામ / ब्रेजिंग उत्पाद का नाम', PF_PRODUCT_CATALOG.brazing, false, { required: false })
-        + _pfCncGroup()
-        + _pfMultiSelectDropdown('pr-consumable-chk', 'Consumable Product Name', 'ઉપયોગી વસ્તુનું નામ / उपभोज्य उत्पाद का नाम', PF_PRODUCT_CATALOG.consumable, true, { required: false, searchable: true })
-        + _pfMultiSelectDropdown('pr-electric-chk', 'Electric Product Name', 'ઇલેક્ટ્રિક ઉત્પાદનનું નામ / विद्युत उत्पाद का नाम', PF_PRODUCT_CATALOG.electric, true, { required: false })
-        + _pfMultiSelectDropdown('pr-packing-chk', 'Packing Product Name', 'પેકિંગ ઉત્પાદનનું નામ / पैकिंग उत्पाद का नाम', PF_PRODUCT_CATALOG.packing, true, { required: false })
-        + _pfMultiSelectDropdown('pr-pressing-chk', 'Pressing Product Name', 'પેકિંગ ઉત્પાદનનું નામ / पैकिंग उत्पाद का नाम', PF_PRODUCT_CATALOG.pressing, true, { required: false })
-        + _pfMultiSelectDropdown('pr-washing-chk', 'Washing Product Name', 'ધોઈ ઉત્પાદનનું નામ / धोनेका उत्पाद का नाम', PF_PRODUCT_CATALOG.washing, true, { required: false })
-        + _pfMultiSelectDropdown('pr-welding-chk', 'Welding Product Name', 'વેલ્ડીંગ ઉત્પાદનનું નામ / वेल्डिंग उत्पाद का नाम', PF_PRODUCT_CATALOG.welding, true, { required: false })
-        + _pfTextField('pr-new-product', 'If New Product then Enter Here', 'જો નવો ઉત્પાદન હોય તો અહીં દાખલ કરો / अगर नया उत्पाद है तो यहाँ दर्ज करें', false)
-        + '<div class="pr-form-full" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">'
-          + _pfNumberField('pr-current-stock', 'Current Stock', 'वर्तमान स्टॉक / હાલનું સ્ટોક', true)
-          + _pfNumberField('pr-qty-required', 'Quantity Required', 'आवश्यक मात्रा / જરૂરી પ્રમાણ', true)
-          + _pfNumberField('pr-previous-rate', 'Previous Rate', 'पिछली दर / પહેલી દર', true)
-        + '</div>'
-        + '<button type="submit" id="pr-submit-btn" class="pr-form-full" style="justify-self:start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Submit PR</button>'
-      + '</form>';
-  }
-
-  function _bindFormView() {
-    const formEl = document.getElementById('pr-form-el');
-    formEl.addEventListener('submit', _pfSubmit);
-    Utils.guardEnterSubmit(formEl);
-    _pfBindMultiSelectDropdowns(formEl);
-    // This view's Department checkboxes are built synchronously from the cached
-    // master list. Opening PR Form first (before anything has fetched it) would
-    // otherwise leave that one dropdown empty — fetch, then re-render.
-    if (!Utils.hasDepartments()) {
-      Utils.getDepartments().then(list => { if (list.length && _view === 'form') renderPage(); });
-    }
-  }
-
   /* ── Tabs ───────────────────────────────────────────────────────────── */
   function _tabTab(label, active, extraAttrs) {
     return '<button type="button" ' + extraAttrs + ' style="'
@@ -994,10 +742,9 @@ window.Pages['pr-creation'] = (() => {
   }
 
   function _tabsHtml() {
-    const formTab = _tabTab('PR Form', _view === 'form', 'class="pcr-form-tab"');
     const formatTabs = FORMATS.map(f => _tabTab(FORMAT_LABEL[f], _view === 'create' && f === _format, 'class="pcr-format-tab" data-format="' + esc(f) + '"')).join('');
     const summaryTab = _tabTab('PR Summary', _view === 'list', 'class="pcr-summary-tab"');
-    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;flex-wrap:wrap;">' + formatTabs + formTab + summaryTab + '</div>';
+    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;flex-wrap:wrap;">' + formatTabs + summaryTab + '</div>';
   }
 
   /* ── Render ─────────────────────────────────────────────────────────── */
@@ -1005,25 +752,23 @@ window.Pages['pr-creation'] = (() => {
     const el = document.getElementById('main-content');
     if (!el) return;
 
-    const bodyHtml = _view === 'form' ? _formViewHtml() : (_view === 'list' ? _summaryViewHtml() : _createViewHtml());
-    const maxWidth = _view === 'list' ? '1200px' : (_view === 'form' ? '980px' : '1080px');
+    const bodyHtml = _view === 'list' ? _summaryViewHtml() : _createViewHtml();
+    const maxWidth = _view === 'list' ? '1200px' : '1080px';
 
     el.innerHTML = '<div style="max-width:' + maxWidth + ';margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">PR</h1>'
-        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Raise a PR via the store team\'s Google Form, fill their live PR Google Sheet directly, or browse everything already created.</p>'
+        + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fill the store team\'s live PR Google Sheet directly, or browse everything already created. Every PR goes to the approver by email; its decision shows in PR Summary.</p>'
       + '</div>'
       + _tabsHtml()
       + bodyHtml
     + '</div>';
 
-    document.querySelector('.pcr-form-tab')?.addEventListener('click', () => { _view = 'form'; renderPage(); });
     document.querySelectorAll('.pcr-format-tab').forEach(btn => {
       btn.addEventListener('click', () => { _view = 'create'; _format = btn.dataset.format; renderPage(); });
     });
     document.querySelector('.pcr-summary-tab')?.addEventListener('click', () => { _view = 'list'; renderPage(); });
 
-    if (_view === 'form') { _bindFormView(); return; }
     if (_view === 'list') { _sumBindFilterBar(); _sumBindRowActions(); _sumLoad(); return; }
     _bindCreateView();
   }

@@ -1631,12 +1631,7 @@ const DEFAULT_PO_APPROVER = 'Sajil Shah';
 async function sendPoApprovalEmail({ poNumber, format, party, department, prNo, totalAmount, pdfLink, createdBy }) {
   const mailer = getMailer();
   if (!mailer) { console.log('[email] PO approval mail skipped — SMTP not configured'); return null; }
-  let approverName = DEFAULT_PO_APPROVER;
-  try {
-    const rows = await q(`SELECT "value" FROM app_config WHERE "key" = 'po_approver'`);
-    const v = rows.length ? String(rows[0].value || '').trim().replace(/^"+|"+$/g, '') : '';
-    if (v) approverName = v;
-  } catch {}
+  const approverName = await _configuredApprover('po_approver');
   const who = await userByName(approverName);
   if (!who || !who.email) {
     console.log('[email] PO approval mail skipped — no login/email found for approver:', approverName);
@@ -1676,24 +1671,104 @@ async function sendPoApprovalEmail({ poNumber, format, party, department, prNo, 
 
 /* Tells whoever raised the PO how the approver decided — the mirror of the
    mail above, so the store team is not left refreshing PO List. */
+// Who is told, besides whoever raised it, when a SERVICE PO is approved — the
+// store, the factory office and Khurshid, who act on it. Goods POs keep going
+// to their creator alone.
+const SERVICE_PO_APPROVED_NOTIFY = ['khurshidalam@laltd.in', 'factory.ahd@laltd.in', 'store@laltd.in'];
+
 async function sendPoDecisionEmail({ poNumber, format, party, department, totalAmount, pdfLink, createdBy, status, decidedBy }) {
   const mailer = getMailer();
   if (!mailer) return;
+  const approved = status === 'Approved';
   const who = await userByName(createdBy);
-  if (!who || !who.email) { console.log('[email] PO decision mail skipped — no login/email for creator:', createdBy); return; }
+  const to = [];
+  if (who?.email) to.push(who.email);
+  if (approved && format === 'Service PO') SERVICE_PO_APPROVED_NOTIFY.forEach(a => { if (!to.some(t => t.toLowerCase() === a.toLowerCase())) to.push(a); });
+  if (!to.length) { console.log('[email] PO decision mail skipped — no login/email for creator:', createdBy); return; }
+  const n = Number(totalAmount);
+  await mailer.sendMail({
+    from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+    to: to.join(', '),
+    subject: `${poNumber} ${approved ? 'approved' : 'rejected'}${party ? ' — ' + party : ''}`,
+    html: _leaveMailHtml({
+      heading: `Purchase Order ${status}`,
+      colour: approved ? '#15803d' : '#b91c1c',
+      lead: `${who?.name ? 'Hi <b>' + who.name + '</b>, ' : ''}<b>${decidedBy || 'the approver'}</b> has <b>${status.toLowerCase()}</b> ${poNumber}${format ? ' (' + format + ')' : ''}.`,
+      rows: [['PO No', poNumber], ['Format', format], ['Party', party], ['Department', department], ['Total', Number.isFinite(n) && String(totalAmount ?? '').trim() !== '' ? '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '']],
+      actions: pdfLink ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open PO PDF</a></td></tr></table>` : '',
+      footer: approved ? 'The PDF carries the approval stamp. You can send it to the vendor.' : 'Speak to the approver before raising it again.',
+    }),
+  });
+  console.log('[email] PO decision mail sent to:', to.join(', '), 'for', poNumber, status);
+}
+
+/* ── PR approval — the same bridge as the PO one, for Purchase Requisitions.
+   Sent to the PR approver the moment a PR is created, with Approve / Reject
+   buttons that open /pr-action. Who approves is app_config 'pr_approver',
+   falling back to the PO approver. */
+const PR_TOKEN_NS = 'pr:';
+const prActionUrl = (prNo, decision, email) =>
+  `${APP_ORIGIN}/pr-action?t=${encodeURIComponent(leaveTokenFor(PR_TOKEN_NS + prNo, decision, email))}`;
+
+async function _configuredApprover(key) {
+  let name = DEFAULT_PO_APPROVER;
+  try {
+    const rows = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [key]);
+    const v = rows.length ? String(rows[0].value || '').trim().replace(/^"+|"+$/g, '') : '';
+    if (v) name = v;
+  } catch {}
+  return name;
+}
+
+async function sendPrApprovalEmail({ prNumber, format, party, department, requestedBy, totalAmount, pdfLink, createdBy }) {
+  const mailer = getMailer();
+  if (!mailer) { console.log('[email] PR approval mail skipped — SMTP not configured'); return; }
+  const approverName = await _configuredApprover('pr_approver');
+  const who = await userByName(approverName);
+  if (!who || !who.email) { console.log('[email] PR approval mail skipped — no login/email found for approver:', approverName); return; }
+  const n = Number(totalAmount);
+  await mailer.sendMail({
+    from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+    to: who.email,
+    subject: `Approval needed — ${prNumber}${party ? ' (' + party + ')' : ''}`,
+    html: _leaveMailHtml({
+      heading: 'Purchase Requisition Awaiting Your Approval',
+      colour: '#0150AA',
+      lead: `Hi <b>${who.name}</b>, <b>${createdBy || requestedBy || 'the store team'}</b> has raised a Purchase Requisition in the ERP. Please review the PDF and approve or reject it below.`,
+      rows: [
+        ['PR No', prNumber], ['Format', format], ['Vendor / Party', party], ['Department', department],
+        ['Requested By', requestedBy],
+        ['Total', Number.isFinite(n) && String(totalAmount ?? '').trim() !== '' ? '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : ''],
+        ['Created By', createdBy],
+      ],
+      actions: (pdfLink
+        ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open PR PDF</a></td></tr></table>`
+        : '')
+        + _decisionButtons(prActionUrl(prNumber, 'Approved', who.email), prActionUrl(prNumber, 'Rejected', who.email)),
+      footer: 'Each button opens a page that asks you to confirm — nothing is decided until you press the button there. Open <b>PR → PR Summary</b> in the ERP to see every PR and its approval status.',
+    }),
+  });
+  console.log('[email] PR approval mail sent to:', who.email, 'for', prNumber);
+}
+
+async function sendPrDecisionEmail({ prNumber, format, party, department, requestedBy, totalAmount, pdfLink, createdBy, status, decidedBy }) {
+  const mailer = getMailer();
+  if (!mailer) return;
+  const who = (await userByName(createdBy)) || (await userByName(requestedBy));
+  if (!who || !who.email) { console.log('[email] PR decision mail skipped — no login/email for creator:', createdBy); return; }
   const approved = status === 'Approved';
   const n = Number(totalAmount);
   await mailer.sendMail({
     from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
     to: who.email,
-    subject: `${poNumber} ${approved ? 'approved' : 'rejected'}${party ? ' — ' + party : ''}`,
+    subject: `${prNumber} ${approved ? 'approved' : 'rejected'}${party ? ' — ' + party : ''}`,
     html: _leaveMailHtml({
-      heading: `Purchase Order ${status}`,
+      heading: `Purchase Requisition ${status}`,
       colour: approved ? '#15803d' : '#b91c1c',
-      lead: `Hi <b>${who.name}</b>, <b>${decidedBy || 'the approver'}</b> has <b>${status.toLowerCase()}</b> ${poNumber}.`,
-      rows: [['PO No', poNumber], ['Format', format], ['Party', party], ['Department', department], ['Total', Number.isFinite(n) && String(totalAmount ?? '').trim() !== '' ? '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '']],
-      actions: pdfLink ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open PO PDF</a></td></tr></table>` : '',
-      footer: approved ? 'You can send it to the vendor.' : 'Speak to the approver before raising it again.',
+      lead: `Hi <b>${who.name}</b>, <b>${decidedBy || 'the approver'}</b> has <b>${status.toLowerCase()}</b> ${prNumber}.`,
+      rows: [['PR No', prNumber], ['Format', format], ['Vendor / Party', party], ['Department', department], ['Total', Number.isFinite(n) && String(totalAmount ?? '').trim() !== '' ? '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '']],
+      actions: pdfLink ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open PR PDF</a></td></tr></table>` : '',
+      footer: approved ? 'You can raise the PO against it in PO Creation.' : 'Speak to the approver before raising it again.',
     }),
   });
 }
@@ -4446,7 +4521,7 @@ async function _poLogRow(poNo) {
   const r = got.data.values?.[0] || [];
   return { row: {
     poNo: r[0] || poNo, format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', department: r[4] || '',
-    total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', prNo: r[9] || '', status: r[11] || 'Active',
+    total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', prNo: r[9] || '', formJson: r[10] || '', status: r[11] || 'Active',
     decidedBy: r[12] || '', decidedAt: r[13] || '', rowIndex,
   } };
 }
@@ -4476,6 +4551,32 @@ const _poAlreadyPage = (row) => _leaveActionPage({
   rows: _poRows(row),
 });
 const _poDecided = (row) => ['Approved', 'Rejected', 'Cancelled'].includes(row.status);
+
+// Re-fills the PO's template tab from the log's Form JSON with the approval
+// stamp in the "APPROVED BY" space, exports it, files the new PDF in Drive and
+// points the log row's PDF Link at it. Returns the new link (null when the PO
+// has no snapshot or its format has no stamp cell). Takes the same sheet lock
+// as a create — the template tab is shared with every PO being raised.
+async function _restampPoPdf(row, by, when) {
+  let form = null;
+  try { form = JSON.parse(row.formJson || 'null'); } catch {}
+  const cfg = form && PO_FORMAT_CONFIG[form.format];
+  if (!cfg || !cfg.approvalCell) return null;
+  return withSheetLock('po', async () => {
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
+    const { sheetIdByTitle } = await _poSheetMeta();
+    const stamp = `Approver: ${by}\nStatus: APPROVED\nDate: ${when}`;
+    const { pdfLink } = await _fillPoTemplateAndExport(sheets, cfg, form, row.poNo, sheetIdByTitle, stamp);
+    if (pdfLink) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!G${row.rowIndex + 1}`,
+        valueInputOption: 'USER_ENTERED', requestBody: { values: [[pdfLink]] },
+      });
+    }
+    return pdfLink || null;
+  });
+}
 
 app.get('/po-action', async (req, res) => {
   try {
@@ -4524,17 +4625,128 @@ app.post('/po-action', async (req, res) => {
     if (!(head.data.values?.[0] || []).some(c => String(c ?? '').trim())) data.push({ range: `'${PO_CREATION_LOG_TAB}'!M1:N1`, values: [PO_LOG_DECISION_HEADERS] });
     await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PO_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
 
+    // An approved PO goes out with the approver's stamp printed under
+    // "APPROVED BY" — re-fill the template from the logged snapshot and
+    // export again. Slow (a Sheets fill + export), so the approver sees the
+    // decision recorded even if this part fails; the unstamped PDF then stays.
+    let pdfLink = row.pdfLink;
+    if (status === 'Approved') {
+      try { pdfLink = (await _restampPoPdf(row, by, when)) || row.pdfLink; }
+      catch (e) { console.error('[po-action] re-stamp failed for', row.poNo + ':', e.message); }
+    }
+
     sendPoDecisionEmail({
       poNumber: row.poNo, format: row.format, party: row.party, department: row.department,
-      totalAmount: String(row.total).replace(/[^0-9.-]/g, ''), pdfLink: row.pdfLink, createdBy: row.createdBy, status, decidedBy: by,
+      totalAmount: String(row.total).replace(/[^0-9.-]/g, ''), pdfLink, createdBy: row.createdBy, status, decidedBy: by,
     }).catch((e) => console.error('[po-action] decision mail failed:', e.message));
 
     const good = status === 'Approved';
     res.send(_leaveActionPage({
       title: good ? 'Approved' : 'Rejected',
       tone: good ? 'good' : 'bad',
-      lead: `<b>${escHtml(row.poNo)}</b> has been marked <b>${status.toLowerCase()}</b>.${row.createdBy ? ' ' + escHtml(row.createdBy) + ' has been emailed.' : ''}`,
+      lead: `<b>${escHtml(row.poNo)}</b> has been marked <b>${status.toLowerCase()}</b>.`
+        + (good && pdfLink !== row.pdfLink ? ' The PO PDF now carries your approval stamp.' : '')
+        + (row.createdBy ? ' ' + escHtml(row.createdBy) + ' has been emailed.' : ''),
       rows: _poRows({ ...row, status }),
+      note: pdfLink ? `<a href="${escHtml(pdfLink)}" target="_blank" rel="noopener">Open the ${good ? 'approved ' : ''}PO PDF</a>. You can close this tab.` : 'You can close this tab.',
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Could not record the decision', tone: 'bad', lead: escHtml(e.message) }));
+  }
+});
+
+/* ── Deciding a PR from the email — mirrors /po-action on the "ERP PR Log":
+   Status (L) becomes Approved/Rejected with who/when in M/N. PR Summary reads
+   that column; PO Creation's pending-PR picker drops Rejected PRs. */
+async function _prForToken(token) {
+  const claim = readLeaveToken(token);
+  if (!claim || !String(claim.id).startsWith(PR_TOKEN_NS)) {
+    return { error: 'This link is not valid. It may have been altered in transit — open PR → PR Summary in the ERP instead.' };
+  }
+  const prNo = claim.id.slice(PR_TOKEN_NS.length);
+  const auth = getGoogleAuth();
+  if (!auth) return { error: 'Google Sheets is not configured on this server.' };
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  let rowIndex;
+  try { rowIndex = await _findRowIndexByKey(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, prNo); }
+  catch (e) { if (e.notFound) return { error: `${prNo} is no longer on the PR log.` }; throw e; }
+  const got = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A${rowIndex + 1}:N${rowIndex + 1}`, valueRenderOption: 'FORMATTED_VALUE' });
+  const r = got.data.values?.[0] || [];
+  const row = {
+    prNo: r[0] || prNo, format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', requestedBy: r[4] || '',
+    department: r[5] || '', total: r[6] || '', pdfLink: r[7] || '', createdBy: r[8] || '', status: r[11] || 'Active',
+    decidedBy: r[12] || '', decidedAt: r[13] || '', rowIndex,
+  };
+  return { claim: { ...claim, id: prNo }, row };
+}
+const _prRows = (row) => [
+  ['PR No', row.prNo], ['Format', row.format], ['Vendor / Party', row.party], ['Department', row.department],
+  ['Requested By', row.requestedBy], ['Total (INR)', row.total], ['Created By', row.createdBy],
+];
+const _prAlreadyPage = (row) => _leaveActionPage({
+  title: row.status === 'Cancelled' ? 'PR cancelled' : 'Already decided', tone: 'plain',
+  lead: row.status === 'Cancelled'
+    ? `${escHtml(row.prNo)} was cancelled by the store team, so there is nothing to approve.`
+    : `${escHtml(row.prNo)} was already marked <b>${escHtml(row.status)}</b>${row.decidedBy ? ' by ' + escHtml(row.decidedBy) : ''}${row.decidedAt ? ' on ' + escHtml(row.decidedAt) : ''}. Nothing more to do.`,
+  rows: _prRows(row),
+});
+
+app.get('/pr-action', async (req, res) => {
+  try {
+    const { error, claim, row } = await _prForToken(req.query.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    if (_poDecided(row)) return res.send(_prAlreadyPage(row));
+    const good = /^approved$/i.test(claim.decision);
+    const other = good ? 'Rejected' : 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? `Approve ${row.prNo}?` : `Reject ${row.prNo}?`,
+      tone: good ? 'good' : 'bad',
+      lead: `You are about to mark <b>${escHtml(row.prNo)}</b>${row.party ? ' for <b>' + escHtml(row.party) + '</b>' : ''} as <b>${escHtml(claim.decision)}</b>. `
+        + (row.pdfLink ? `<a href="${escHtml(row.pdfLink)}" target="_blank" rel="noopener">Open the PR PDF</a> to check it first.` : ''),
+      rows: _prRows(row),
+      form: `<form method="POST" action="/pr-action">
+               <input type="hidden" name="t" value="${escHtml(String(req.query.t))}">
+               <button type="submit">Yes, ${good ? 'approve' : 'reject'} it</button>
+             </form>`,
+      note: `Meant to do the opposite? <a href="/pr-action?t=${encodeURIComponent(leaveTokenFor(PR_TOKEN_NS + row.prNo, other, claim.email))}">Switch to ${other}</a>.`,
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Something went wrong', tone: 'bad', lead: escHtml(e.message) }));
+  }
+});
+
+app.post('/pr-action', async (req, res) => {
+  try {
+    const { error, claim, row } = await _prForToken(req.body?.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    if (_poDecided(row)) return res.send(_prAlreadyPage(row));
+
+    const status = /^approved$/i.test(claim.decision) ? 'Approved' : 'Rejected';
+    let by = claim.email || 'Approver (by email)';
+    if (claim.email && USE_DB) {
+      const u = (await q('SELECT name FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [claim.email]).catch(() => []))[0];
+      if (u?.name) by = u.name;
+    }
+    const when = _timestampForSheet();
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
+    const data = [{ range: `'${PR_CREATION_LOG_TAB}'!L${row.rowIndex + 1}:N${row.rowIndex + 1}`, values: [[status, by, when]] }];
+    const head = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!M1:N1`, valueRenderOption: 'FORMATTED_VALUE' });
+    if (!(head.data.values?.[0] || []).some(c => String(c ?? '').trim())) data.push({ range: `'${PR_CREATION_LOG_TAB}'!M1:N1`, values: [PO_LOG_DECISION_HEADERS] });
+    await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PR_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
+
+    sendPrDecisionEmail({
+      prNumber: row.prNo, format: row.format, party: row.party, department: row.department, requestedBy: row.requestedBy,
+      totalAmount: String(row.total).replace(/[^0-9.-]/g, ''), pdfLink: row.pdfLink, createdBy: row.createdBy, status, decidedBy: by,
+    }).catch((e) => console.error('[pr-action] decision mail failed:', e.message));
+
+    const good = status === 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? 'Approved' : 'Rejected',
+      tone: good ? 'good' : 'bad',
+      lead: `<b>${escHtml(row.prNo)}</b> has been marked <b>${status.toLowerCase()}</b>.${row.createdBy ? ' ' + escHtml(row.createdBy) + ' has been emailed.' : ''}`,
+      rows: _prRows({ ...row, status }),
       note: 'You can close this tab.',
     }));
   } catch (e) {
@@ -5324,6 +5536,11 @@ const PO_FORMAT_CONFIG = {
     // cell itself with no separate value cell, so there's nowhere safe to
     // write those two without overwriting the label text.
     extra: { termsAndConditionsRows: ['A60', 'A61', 'A62', 'A63', 'A64'], comments: 'B66', testCertificateRequired: 'B67' },
+    // The signature space under "APPROVED BY" (H65): where the approver's
+    // "Approver / Status / Date" stamp is printed once the PO is approved
+    // from the email (see _restampPoPdf). Written blank on every create so a
+    // previous PO's stamp can never print on a new one.
+    approvalCell: 'H66',
   },
   'ENR PO': {
     tabName: 'ENR PO',
@@ -5332,6 +5549,7 @@ const PO_FORMAT_CONFIG = {
     header: { poNo: 'J9', date: 'J8', prNo: 'J10', department: 'J11', party: 'A16', deliverySchedule: 'F23', poValidity: 'G23', paymentTerms: 'B23', poMadeBy: 'A23' },
     items: { firstRow: 26, lastRow: 55, clearCols: ['A', 'J'], fields: { itemCode: 'A', customerCodeRef: 'D', barcode: 'E', stickerQty: 'G', rate: 'H', taxPercent: 'I' } },
     summary: { fields: { shipping: 'J57', other: 'J58', discountPercent: 'I59' }, totalCell: 'J60' },
+    approvalCell: 'H66',   // the H66:J69 signature merge above "Director/Authorized Signatory"
   },
   'Diamond PO': {
     tabName: 'Diamond PO',
@@ -5345,6 +5563,7 @@ const PO_FORMAT_CONFIG = {
     // this format is ever submitted. Confirmed still intact; keep it that way.
     items: { firstRow: 27, lastRow: 55, clearCols: ['A', 'K'], fields: { itemCode: 'A', boxQty: 'H', boxRate: 'I', plateQty: 'J', plateRate: 'K' } },
     summary: { fields: { gstPercent: 'J57', shipping: 'K58', other: 'K59', discountPercent: 'J60' }, totalCell: 'K61' },
+    approvalCell: 'H66',   // the H66:L69 signature merge above "Director/Authorized Signatory"
   },
   // Services, not goods — the one format with no PR upstream and no ITEM_CODES
   // catalog behind it: every line is typed by hand. Its tab was built by
@@ -5376,6 +5595,7 @@ const PO_FORMAT_CONFIG = {
     // No testCertificateRequired: that's a goods-inspection concept, and its
     // printed label was removed from this tab.
     extra: { termsAndConditionsRows: ['A40', 'A41', 'A42', 'A43', 'A44'], comments: 'B46' },
+    approvalCell: 'H46',   // under "APPROVED BY" (H45), the H46:J47 merge
   },
 };
 
@@ -5678,48 +5898,17 @@ async function _exportSheetTabPdf(spreadsheetId, sourceSheetId, colRange) {
   return buf;
 }
 
-// POST /api/po-creation — fills the live template tab for the chosen format,
-// exports it as a PDF (saved to Drive), and logs the PO in "ERP PO Log". This
-// IS the database write; nothing is stored locally.
-app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res) => {
-  try {
-    const cfg = PO_FORMAT_CONFIG[req.body?.format];
-    if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
-    const { date, prNo, department: departmentRaw, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
-    // One spelling on the sheet, the PO log and the app — see canonicalDept.
-    const department = await canonicalDept(departmentRaw);
-    if (!date || !party || !poMadeBy) return res.status(400).json({ error: 'Date, ' + cfg.partyLabel + ' and PO Made By are required' });
-    // A line "exists" if its identity column is filled — Item Code on the three
-    // goods formats, Description on Service PO (which has no item codes at all).
-    const keyField = cfg.items.keyField || 'itemCode';
-    const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it[keyField] || '').trim());
-    if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
-    // The template has a fixed number of item rows and anything past the last
-    // one used to be dropped without a word — the user was told the PO had
-    // been created while lines were missing from the PDF and from the log's own
-    // Form JSON. Refusing is the only honest answer.
-    const poCapacity = cfg.items.lastRow - cfg.items.firstRow + 1;
-    if (cleanItems.length > poCapacity) return res.status(400).json({ error: `This PO format fits ${poCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one PO.` });
-
-    // Same user re-submitting the identical PO (a timed-out first attempt, a
-    // double-fired submit) gets the first create's result back, not a second PO.
-    const dupeKey = _createFingerprint('po', req, { format: req.body.format, party, items: cleanItems });
-    const prevResult = _recentCreateResult(dupeKey);
-    if (prevResult) {
-      console.log('[po-creation] duplicate submit absorbed — returning', prevResult.poNumber);
-      return res.json(prevResult);
-    }
-
-    const auth = getGoogleAuth();
-    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
-    const { google } = require('googleapis');
-    const sheets = google.sheets({ version: 'v4', auth });
-
-    const { nextPoNo, sheetIdByTitle } = await _poSheetMeta();
-    const poNoFormatted = _padSeqNo('PO', nextPoNo);
-    const tab = cfg.tabName;
-    const sourceSheetId = sheetIdByTitle[tab];
-    if (sourceSheetId === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the PO sheet` });
+// Fills a PO template tab from one PO's fields, reads back the sheet's own
+// Total and exports the tab as a PDF into Drive. Shared by the create route
+// and by the approval re-stamp (an approved PO is re-filled from its logged
+// Form JSON with the approver's stamp and exported again). Caller holds the
+// 'po' sheet lock. `form` carries exactly what Form JSON stores.
+async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetIdByTitle, approvalStamp) {
+  const { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, summary, termsAndConditions, comments, testCertificateRequired } = form;
+  const cleanItems = Array.isArray(form.items) ? form.items : [];
+  const tab = cfg.tabName;
+  const sourceSheetId = sheetIdByTitle[tab];
+  if (sourceSheetId === undefined) throw new Error(`Template tab "${tab}" not found in the PO sheet`);
 
     // 1) Clear the previous PO's item rows so nothing from it bleeds into this one.
     await sheets.spreadsheets.values.clear({
@@ -5749,6 +5938,8 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res
     put(cfg.header.poValidity, poValidity);
     put(cfg.header.paymentTerms, paymentTerms);
     put(cfg.header.poMadeBy, poMadeBy);
+    // Always written, blank or stamped — see approvalCell in PO_FORMAT_CONFIG.
+    if (cfg.approvalCell) put(cfg.approvalCell, approvalStamp || '');
 
     Object.entries(cfg.summary.fields).forEach(([field, a1]) => {
       data.push({ range: `'${tab}'!${a1}`, values: [[parseFloat(summary?.[field]) || 0]] });
@@ -5800,6 +5991,53 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res
       const pdfBuffer = await _exportSheetTabPdf(PO_CREATION_SHEET_ID, sourceSheetId);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${poNoFormatted} - ${tab}.pdf`, PO_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[po-creation] PDF export failed:', e.message); }
+  return { totalAmount, pdfLink };
+}
+
+// POST /api/po-creation — fills the live template tab for the chosen format,
+// exports it as a PDF (saved to Drive), and logs the PO in "ERP PO Log". This
+// IS the database write; nothing is stored locally.
+app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res) => {
+  try {
+    const cfg = PO_FORMAT_CONFIG[req.body?.format];
+    if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
+    const { date, prNo, department: departmentRaw, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
+    // One spelling on the sheet, the PO log and the app — see canonicalDept.
+    const department = await canonicalDept(departmentRaw);
+    if (!date || !party || !poMadeBy) return res.status(400).json({ error: 'Date, ' + cfg.partyLabel + ' and PO Made By are required' });
+    // A line "exists" if its identity column is filled — Item Code on the three
+    // goods formats, Description on Service PO (which has no item codes at all).
+    const keyField = cfg.items.keyField || 'itemCode';
+    const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it[keyField] || '').trim());
+    if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
+    // The template has a fixed number of item rows and anything past the last
+    // one used to be dropped without a word — the user was told the PO had
+    // been created while lines were missing from the PDF and from the log's own
+    // Form JSON. Refusing is the only honest answer.
+    const poCapacity = cfg.items.lastRow - cfg.items.firstRow + 1;
+    if (cleanItems.length > poCapacity) return res.status(400).json({ error: `This PO format fits ${poCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one PO.` });
+
+    // Same user re-submitting the identical PO (a timed-out first attempt, a
+    // double-fired submit) gets the first create's result back, not a second PO.
+    const dupeKey = _createFingerprint('po', req, { format: req.body.format, party, items: cleanItems });
+    const prevResult = _recentCreateResult(dupeKey);
+    if (prevResult) {
+      console.log('[po-creation] duplicate submit absorbed — returning', prevResult.poNumber);
+      return res.json(prevResult);
+    }
+
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const { nextPoNo, sheetIdByTitle } = await _poSheetMeta();
+    const poNoFormatted = _padSeqNo('PO', nextPoNo);
+    const tab = cfg.tabName;
+    if (sheetIdByTitle[tab] === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the PO sheet` });
+    const { totalAmount, pdfLink } = await _fillPoTemplateAndExport(sheets, cfg,
+      { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary, termsAndConditions, comments, testCertificateRequired },
+      poNoFormatted, sheetIdByTitle, '');
 
     // 5) Log this PO so the ERP can list it (the sheet is still the database —
     // this is just another tab in it, same pattern as the existing Monitoring/
@@ -6346,7 +6584,7 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr'), async (req, res
     // Summary's "Cancel" action flips it to "Cancelled" in place (see PUT
     // /api/pr-creation/cancel below), which also excludes it from PO
     // Creation's pending-PR picker.
-    await ensureLogTab(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, ['PR No', 'Format', 'Date', 'Vendor/Party', 'Requested By', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Form JSON', 'Status']);
+    await ensureLogTab(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, ['PR No', 'Format', 'Date', 'Vendor/Party', 'Requested By', 'Department', 'Total Amount (INR)', 'PDF Link', 'Created By', 'Created At', 'Form JSON', 'Status', ...PO_LOG_DECISION_HEADERS]);
     await appendLogRow(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, [
       // Leading "'" forces the ISO date to stay literal text instead of being
       // reparsed into a Sheets date value — same convention as ERP PO/GRN/PI
@@ -6382,6 +6620,12 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr'), async (req, res
       console.log('[pr-creation] PR Form Responses sync: row appended for', prNoFormatted, '| PDF link:', pdfLink ? 'yes' : 'none');
     } catch (e) { console.error('[pr-creation] PR Form Responses sync failed:', e.message); }
 
+    // 7) Tell the PR approver — fire-and-forget, same as the PO's own mail.
+    sendPrApprovalEmail({
+      prNumber: prNoFormatted, format: tab, party, department: departmentOut, requestedBy,
+      totalAmount, pdfLink, createdBy: sessUser?.name || '',
+    }).catch((e) => console.error('[pr-creation] approval mail failed:', e.message));
+
     const resultPayload = { success: true, prNumber: prNoFormatted, totalAmount, department: departmentOut, pdfLink };
     _mastersCache.delete('pr'); // so the next masters fetch shows the advanced next-number
     _rememberCreate(dupeKey, resultPayload);
@@ -6397,14 +6641,14 @@ app.get('/api/pr-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:N1000`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).filter(r => r[0]).map(r => {
       let form = null;
       try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
       return {
         prNo: r[0] || '', format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', requestedBy: r[4] || '',
         department: r[5] || '', total: r[6] || '', pdfLink: r[7] || '', createdBy: r[8] || '', createdAt: r[9] || '', form,
-        status: r[11] || 'Active',
+        status: r[11] || 'Active', decidedBy: r[12] || '', decidedAt: r[13] || '',
       };
     }).reverse();
     return res.json(rows.slice(0, 200));
@@ -6565,7 +6809,7 @@ async function _buildFmsPoPending() {
   // the real PO number next to an FMS step that only records "PO Made: YES".
   const erpPoByPr = new Map();
   for (const r of erpPoRows) {
-    if (!r[0] || (r[11] || 'Active') === 'Cancelled') continue;
+    if (!r[0] || ['Cancelled', 'Rejected'].includes(r[11] || 'Active')) continue;
     const k = _normalizePrNo(r[9]);
     if (k && !erpPoByPr.has(k)) erpPoByPr.set(k, { poNo: r[0], date: _sheetDateToIso(r[2]), party: r[3] || '', total: r[5] || '' });
   }
@@ -6633,7 +6877,7 @@ async function _buildFmsPoPending() {
   // PRs the ERP knows about that never entered the approval chain at all.
   const inFms = new Set(rows.map(r => r.prKey));
   const notInFms = erpPrRows
-    .filter(r => r[0] && (r[11] || 'Active') !== 'Cancelled' && !inFms.has(_normalizePrNo(r[0])))
+    .filter(r => r[0] && !['Cancelled', 'Rejected'].includes(r[11] || 'Active') && !inFms.has(_normalizePrNo(r[0])))
     .map(r => {
       const k = _normalizePrNo(r[0]);
       const po = erpPoByPr.get(k);
