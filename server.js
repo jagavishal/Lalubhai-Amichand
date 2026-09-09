@@ -11188,10 +11188,12 @@ app.post('/api/developer/reset-users', async (req, res) => {
 const BOOTED_AT = new Date().toISOString();
 const BUILD_COMMIT = (() => {
   try {
+    // `fs` in this file is the promises API — read synchronously here.
+    const readFileSync = require('fs').readFileSync;
     const gitDir = path.join(__dirname, '.git');
-    const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+    const head = readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
     const ref = head.startsWith('ref:') ? head.slice(4).trim() : '';
-    const sha = ref ? fs.readFileSync(path.join(gitDir, ref), 'utf8').trim() : head;
+    const sha = ref ? readFileSync(path.join(gitDir, ref), 'utf8').trim() : head;
     return sha.slice(0, 7);
   } catch { return process.env.SOURCE_COMMIT?.slice(0, 7) || 'unknown'; }
 })();
