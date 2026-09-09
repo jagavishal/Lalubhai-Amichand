@@ -164,7 +164,14 @@ window.Pages['po-creation'] = (() => {
   let _vendors = [];
   let _shipToLocations = [];
   let _nextPoNumber = null;
-  let _pendingPrsLoaded = false;
+  // When the pending-PR list was last fetched. The page module lives for the
+  // whole SPA session, so a once-only load went stale the moment someone
+  // raised a PR after PO Creation was first opened — "PR231 approved ho gaya
+  // but PO me PR No. dalne par kuch nahi aa raha". Every visit and every
+  // focus of the P.R. NO field re-fetches once this is older than
+  // PENDING_PRS_MAX_AGE_MS; the current list stays usable meanwhile.
+  let _pendingPrsAt = 0;
+  const PENDING_PRS_MAX_AGE_MS = 20000;
   let _pendingPrs = []; // PRs (from the PR Creation sheet) not yet used on any PO
   let _pendingPrToApply = null; // set when a PR selection also needs a format switch + re-render first
 
@@ -245,13 +252,21 @@ window.Pages['po-creation'] = (() => {
     }
   }
 
-  async function _loadPendingPrs() {
-    try {
-      _pendingPrs = await Utils.apiFetch('/api/po-creation/pending-prs') || [];
-      _pendingPrsLoaded = true;
-    } catch (e) {
-      Utils.showToast(e.message || 'Failed to load pending PRs', 'error');
-    }
+  let _pendingPrsInFlight = null;
+  function _loadPendingPrs(force) {
+    if (_pendingPrsInFlight) return _pendingPrsInFlight;
+    if (!force && (Date.now() - _pendingPrsAt) < PENDING_PRS_MAX_AGE_MS) return Promise.resolve();
+    _pendingPrsInFlight = (async () => {
+      try {
+        _pendingPrs = await Utils.apiFetch('/api/po-creation/pending-prs') || [];
+        _pendingPrsAt = Date.now();
+      } catch (e) {
+        Utils.showToast(e.message || 'Failed to load pending PRs', 'error');
+      } finally {
+        _pendingPrsInFlight = null;
+      }
+    })();
+    return _pendingPrsInFlight;
   }
 
   /* ── P.R. NO — free-text input (still fully editable/typeable) with a
@@ -280,7 +295,12 @@ window.Pages['po-creation'] = (() => {
       dd.style.display = 'block';
     };
     input.addEventListener('input', showMatches);
-    input.addEventListener('focus', showMatches);
+    // Focus re-fetches a list older than PENDING_PRS_MAX_AGE_MS, then redraws
+    // the dropdown so a PR raised while this page sat open turns up too.
+    input.addEventListener('focus', () => {
+      showMatches();
+      _loadPendingPrs().then(() => { if (document.activeElement === input) showMatches(); });
+    });
     dd.addEventListener('mousedown', (e) => {
       const opt = e.target.closest('.poc-prno-opt');
       if (!opt) return;
@@ -1033,8 +1053,9 @@ window.Pages['po-creation'] = (() => {
 
     if (!_mastersLoaded) _loadMasters();
     // Manual formats never touch PRs, so don't pay for the pending-PR fetch
-    // just because that tab happened to be the first one opened.
-    if (!_pendingPrsLoaded && !_isManual()) _loadPendingPrs();
+    // just because that tab happened to be the first one opened. Every other
+    // render refreshes the list (subject to PENDING_PRS_MAX_AGE_MS).
+    if (!_isManual()) _loadPendingPrs();
 
     if (_pendingPrToApply) {
       const pr = _pendingPrToApply;
