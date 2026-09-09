@@ -38,6 +38,7 @@
 const AdmZip = require('adm-zip');
 const XLSX = require('xlsx');
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -82,6 +83,16 @@ const BULK_MAIL_SCHEMA = [
      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_bmm_file_key ON bulk_mail_master (file_key)`,
+  // A user's own mailbox for sending — see "Send from your own email".
+  // `secret` is the Gmail App Password, AES-256-GCM encrypted (sealSecret).
+  `CREATE TABLE IF NOT EXISTS bulk_mail_senders (
+     user_id VARCHAR(64) PRIMARY KEY,
+     email VARCHAR(255) NOT NULL,
+     secret TEXT,
+     enabled TINYINT NOT NULL DEFAULT 1,
+     verified_at DATETIME DEFAULT NULL,
+     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 ];
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -529,13 +540,64 @@ function mountBulkMail(app, ctx) {
   // logged in, so this needs that mailbox's own App Password:
   // BULK_MAIL_SMTP_USER / BULK_MAIL_SMTP_PASS in .env.local. Until both are
   // set it falls back to SMTP_USER / SMTP_PASS, so nothing breaks meanwhile.
-  function mailAccount() {
+  function systemAccount() {
     const u = String(process.env.BULK_MAIL_SMTP_USER || '').trim(), p = String(process.env.BULK_MAIL_SMTP_PASS || '').trim();
-    return u && p ? { user: u, pass: p } : { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS };
+    const acct = u && p ? { user: u, pass: p } : { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS };
+    return { ...acct, name: 'Lallubhai Amichand', own: false };
   }
 
-  function makeTransport() {
-    const { user, pass } = mailAccount();
+  /* ── Send from your own email ──────────────────────────────────────
+     "User khud ki email ko enable kare aur uski email se mail aaye": a
+     user pastes a Gmail App Password for their own mailbox once, and every
+     bulk mail they send goes out as them — recipients see and reply to
+     that address, not the shared account. Gmail will only send as the
+     mailbox that logged in, so the password has to be that mailbox's own
+     (2-Step Verification on, App Password generated at
+     myaccount.google.com/apppasswords). It is verified against Gmail
+     before it is saved, kept AES-256-GCM encrypted under the session
+     secret, and never sent back to the browser. Switching the toggle off
+     keeps the password but sends from the company account again. */
+  const sealKey = () => {
+    const raw = process.env.MAIL_CRED_KEY || process.env.NEXTAUTH_SECRET || process.env.SESSION_SECRET || '';
+    return raw ? crypto.createHash('sha256').update(String(raw)).digest() : null;
+  };
+  function sealSecret(plain) {
+    const key = sealKey();
+    if (!key) throw new Error('NEXTAUTH_SECRET is not set on the server, so a mail password cannot be stored safely');
+    const iv = crypto.randomBytes(12);
+    const c = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const enc = Buffer.concat([c.update(String(plain), 'utf8'), c.final()]);
+    return ['v1', iv.toString('base64'), c.getAuthTag().toString('base64'), enc.toString('base64')].join('.');
+  }
+  function openSecret(sealed) {
+    const key = sealKey();
+    const [v, iv, tag, enc] = String(sealed || '').split('.');
+    if (!key || v !== 'v1' || !iv || !tag || !enc) return '';
+    try {
+      const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
+      d.setAuthTag(Buffer.from(tag, 'base64'));
+      return Buffer.concat([d.update(Buffer.from(enc, 'base64')), d.final()]).toString('utf8');
+    } catch { return ''; }
+  }
+
+  const senderRow = async (req) => {
+    const id = String(req.session?.user?.id || '');
+    return id ? (await q(`SELECT * FROM bulk_mail_senders WHERE user_id = $1`, [id]).catch(() => []))[0] || null : null;
+  };
+
+  // The account this request's mail goes out as: the user's own mailbox when
+  // they have enabled one and its password still opens, else the company's.
+  async function mailAccount(req) {
+    const s = await senderRow(req);
+    if (s && Number(s.enabled) && s.email) {
+      const pass = openSecret(s.secret);
+      if (pass) return { user: s.email, pass, name: req.session?.user?.name || s.email, own: true };
+    }
+    return systemAccount();
+  }
+
+  function makeTransport(acct) {
+    const { user, pass } = acct || {};
     if (!user || !pass) return null;
     return nodemailer.createTransport({
       service: 'gmail', auth: { user, pass },
@@ -543,6 +605,76 @@ function mountBulkMail(app, ctx) {
       connectionTimeout: 20000, greetingTimeout: 20000, socketTimeout: 90000,
     });
   }
+
+  const verifyTransport = (t) => Promise.race([
+    t.verify(),
+    new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timed out after 25s'), { code: 'ETIMEDOUT' })), 25000)),
+  ]);
+
+  const senderView = (s, sys) => ({
+    system: sys.user || '',
+    own: s ? { email: s.email, enabled: !!Number(s.enabled), verifiedAt: s.verified_at || null, hasPassword: !!s.secret } : null,
+    loginEmail: '',
+  });
+
+  app.get('/api/bulk-mail/sender', ...guard, async (req, res) => {
+    try {
+      await ensureSchema();
+      const v = senderView(await senderRow(req), systemAccount());
+      v.loginEmail = req.session?.user?.email || '';
+      res.json(v);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Save (and verify) the user's own mailbox, or just flip it on/off when
+  // no new password is given.
+  app.post('/api/bulk-mail/sender', ...guard, async (req, res) => {
+    let t = null;
+    try {
+      await ensureSchema();
+      const userId = String(req.session?.user?.id || '');
+      if (!userId) return res.status(400).json({ error: 'No user on this session' });
+      const existing = await senderRow(req);
+      const email = cleanEmails(req.body?.email ?? existing?.email ?? req.session?.user?.email);
+      const appPassword = String(req.body?.appPassword || '').replace(/\s+/g, '');
+      const enabled = req.body?.enabled === undefined ? true : !!req.body.enabled;
+      if (!email || email.includes(',')) return res.status(400).json({ error: 'Enter one valid email address' });
+      if (!appPassword && !existing?.secret) return res.status(400).json({ error: 'Paste the App Password for this mailbox' });
+      if (appPassword && appPassword.length < 8) return res.status(400).json({ error: 'That does not look like a Gmail App Password (16 characters)' });
+
+      let secret = existing?.secret || null, verifiedAt = existing?.verified_at || null;
+      if (appPassword || (existing && email !== existing.email)) {
+        const pass = appPassword || openSecret(existing.secret);
+        t = makeTransport({ user: email, pass });
+        if (!t) return res.status(400).json({ error: 'Paste the App Password for this mailbox' });
+        try { await verifyTransport(t); }
+        catch (e) { return res.status(400).json({ error: 'Gmail did not accept this login: ' + explainMailError(e) }); }
+        secret = sealSecret(pass);
+        verifiedAt = new Date();
+      }
+      await q(
+        `INSERT INTO bulk_mail_senders (user_id, email, secret, enabled, verified_at, updated_at) VALUES ($1, $2, $3, $4, $5, NOW())
+         ON DUPLICATE KEY UPDATE email = VALUES(email), secret = VALUES(secret), enabled = VALUES(enabled), verified_at = VALUES(verified_at), updated_at = NOW()`,
+        [userId, email, secret, enabled ? 1 : 0, verifiedAt],
+      );
+      const v = senderView(await senderRow(req), systemAccount());
+      v.loginEmail = req.session?.user?.email || '';
+      res.json(v);
+    } catch (e) {
+      console.error('[bulk-mail] sender save failed:', e.message);
+      res.status(500).json({ error: e.message });
+    } finally { if (t) t.close(); }
+  });
+
+  app.delete('/api/bulk-mail/sender', ...guard, async (req, res) => {
+    try {
+      await ensureSchema();
+      await q(`DELETE FROM bulk_mail_senders WHERE user_id = $1`, [String(req.session?.user?.id || '')]);
+      const v = senderView(null, systemAccount());
+      v.loginEmail = req.session?.user?.email || '';
+      res.json(v);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
 
   const escHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const fill = (tpl, r) => String(tpl)
@@ -556,11 +688,11 @@ function mountBulkMail(app, ctx) {
     catch { return null; }
   }
 
-  function buildMessage(r, subjectTpl, bodyTpl, pdf, to) {
+  function buildMessage(r, subjectTpl, bodyTpl, pdf, to, acct) {
     const subject = fill(subjectTpl, r);
     const text = fill(bodyTpl, r);
     return {
-      from: `"Lallubhai Amichand" <${mailAccount().user}>`,
+      from: `"${String(acct?.name || 'Lallubhai Amichand').replace(/"/g, '')}" <${acct?.user || ''}>`,
       to,
       subject,
       text,
@@ -577,15 +709,17 @@ function mountBulkMail(app, ctx) {
   // Is the mail account usable from this server? Same login Gmail sees on a
   // real send, no message goes out.
   app.get('/api/bulk-mail/smtp-check', ...guard, async (req, res) => {
-    const t = makeTransport();
+    await ensureSchema().catch(() => {});
+    const acct = await mailAccount(req);
+    const t = makeTransport(acct);
     if (!t) return res.json({ ok: false, error: 'SMTP_USER / SMTP_PASS are not set on the server' });
     const t0 = Date.now();
     try {
-      await Promise.race([t.verify(), new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timed out after 25s'), { code: 'ETIMEDOUT' })), 25000))]);
-      res.json({ ok: true, user: mailAccount().user, ms: Date.now() - t0 });
+      await verifyTransport(t);
+      res.json({ ok: true, user: acct.user, own: acct.own, ms: Date.now() - t0 });
     } catch (e) {
       console.error('[bulk-mail] smtp check failed:', e.code, e.message);
-      res.json({ ok: false, user: mailAccount().user, error: explainMailError(e), ms: Date.now() - t0 });
+      res.json({ ok: false, user: acct.user, own: acct.own, error: explainMailError(e), ms: Date.now() - t0 });
     } finally { t.close(); }
   });
 
@@ -601,11 +735,12 @@ function mountBulkMail(app, ctx) {
       if (!r) return res.status(404).json({ error: 'Pick a file to send as the test' });
       const pdf = readPdf(r);
       if (!pdf) return res.status(400).json({ error: 'PDF missing on server (cleared by a redeploy?) — re-upload the files' });
-      t = makeTransport();
+      const acct = await mailAccount(req);
+      t = makeTransport(acct);
       if (!t) return res.status(500).json({ error: 'Email is not configured (SMTP_USER / SMTP_PASS missing)' });
-      const msg = buildMessage(r, '[TEST] ' + String(req.body?.subject || DEF_SUBJECT), String(req.body?.body || DEF_BODY), pdf, to);
+      const msg = buildMessage(r, '[TEST] ' + String(req.body?.subject || DEF_SUBJECT), String(req.body?.body || DEF_BODY), pdf, to, acct);
       await t.sendMail(msg);
-      res.json({ ok: true, to, subject: msg.subject });
+      res.json({ ok: true, to, from: acct.user, subject: msg.subject });
     } catch (e) {
       console.error('[bulk-mail] test mail failed:', e.code, e.message);
       res.status(500).json({ error: explainMailError(e) });
@@ -622,12 +757,12 @@ function mountBulkMail(app, ctx) {
   const jobView = () => (job ? {
     id: job.id, batchId: job.batchId, running: job.running, cancelled: job.cancelled,
     total: job.total, done: job.done, sent: job.sent, failed: job.failed,
-    current: job.current, startedAt: job.startedAt, finishedAt: job.finishedAt, by: job.by,
+    current: job.current, startedAt: job.startedAt, finishedAt: job.finishedAt, by: job.by, from: job.from || '',
     lastError: job.lastError,
   } : { running: false });
 
-  async function runJob(j, subjectTpl, bodyTpl) {
-    const t = makeTransport();
+  async function runJob(j, subjectTpl, bodyTpl, acct) {
+    const t = makeTransport(acct);
     try {
       for (const id of j.ids) {
         if (j.cancel) { j.cancelled = true; break; }
@@ -643,7 +778,7 @@ function mountBulkMail(app, ctx) {
         const pdf = readPdf(r);
         if (!pdf) { await fail('PDF missing on server (cleared by a redeploy?) — re-upload the files'); j.done += 1; continue; }
         try {
-          await t.sendMail(buildMessage(r, subjectTpl, bodyTpl, pdf, to));
+          await t.sendMail(buildMessage(r, subjectTpl, bodyTpl, pdf, to, acct));
           await q(`UPDATE bulk_mail_files SET send_status = 'Sent', sent_at = NOW(), sent_by = $1, error = '' WHERE id = $2`, [j.by, id]);
           j.sent += 1;
         } catch (e) {
@@ -666,7 +801,10 @@ function mountBulkMail(app, ctx) {
   app.post('/api/bulk-mail/send', ...guard, async (req, res) => {
     try {
       await ensureSchema();
-      if (!getMailer()) return res.status(500).json({ error: 'Email is not configured (SMTP_USER / SMTP_PASS missing)' });
+      // The account is fixed when the job starts, so a toggle flipped
+      // mid-send changes the next job, never this one.
+      const acct = await mailAccount(req);
+      if (!acct.user || !acct.pass) return res.status(500).json({ error: 'Email is not configured (SMTP_USER / SMTP_PASS missing)' });
       if (job?.running) return res.status(409).json({ error: `A send is already running (${job.done}/${job.total}) — wait for it to finish or stop it` });
       const ids = Array.isArray(req.body?.ids) ? [...new Set(req.body.ids.map(String))].slice(0, 5000) : [];
       if (!ids.length) return res.status(400).json({ error: 'No files selected' });
@@ -674,10 +812,10 @@ function mountBulkMail(app, ctx) {
       job = {
         id: 'J' + Date.now().toString(36), batchId, ids, running: true, cancel: false, cancelled: false,
         total: ids.length, done: 0, sent: 0, failed: 0, current: '', lastError: '',
-        startedAt: new Date().toISOString(), finishedAt: null, by: who(req),
+        startedAt: new Date().toISOString(), finishedAt: null, by: who(req), from: acct.user,
       };
       // Not awaited — the job outlives this request on purpose.
-      runJob(job, String(req.body?.subject || DEF_SUBJECT), String(req.body?.body || DEF_BODY));
+      runJob(job, String(req.body?.subject || DEF_SUBJECT), String(req.body?.body || DEF_BODY), acct);
       res.json({ ok: true, job: jobView() });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

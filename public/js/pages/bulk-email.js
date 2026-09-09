@@ -38,6 +38,7 @@ window.Pages['bulk-email'] = (() => {
   // Which stat card on Upload & Match is pressed in — the tables below show
   // only that slice ("card ko clickable banao"). '' = everything.
   let _matchFilter = '';
+  let _sender = null;      // { system, own: { email, enabled, verifiedAt, hasPassword } | null, loginEmail }
 
   const LS_SUBJECT = 'bulkmail.subject';
   const LS_BODY = 'bulkmail.body';
@@ -342,7 +343,8 @@ window.Pages['bulk-email'] = (() => {
           <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;">
             ${dot('#16a34a', nSent, 'sent')}${dot('#94a3b8', nPending, 'pending')}${dot('#dc2626', nFailed, 'failed')}
           </div>
-          <div style="margin:14px 0 12px;">${smtpChip()}</div>
+          <div style="margin:14px 0 10px;">${smtpChip()}</div>
+          ${senderPanel()}
           ${running
             ? `<button id="bm-stop" class="btn-danger" style="width:100%;padding:12px 20px;font-size:14.5px;">Stop sending</button>`
             : `<button id="bm-send" class="btn-primary" style="width:100%;padding:12px 20px;font-size:14.5px;" ${!nSel ? 'disabled' : ''}>
@@ -456,7 +458,98 @@ window.Pages['bulk-email'] = (() => {
     on('bm-stop', 'click', stopSend);
     on('bm-test', 'click', sendTest);
     on('bm-smtp-again', 'click', (e) => { e.preventDefault(); checkSmtp(true); });
+    bindSenderPanel();
     applyFilter();
+  }
+
+  /* ── Send from your own email ─────────────────────────────────────
+     A switch on the Send tab: off, mail goes from the company account;
+     on, from the mailbox whose App Password this user saved. The
+     password is checked with Gmail when saved and never shown again. */
+  function senderPanel() {
+    const s = _sender;
+    const wrap = (inner) => `<div id="bm-sender" style="border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;margin-bottom:12px;background:#fff;">${inner}</div>`;
+    if (!s) return wrap(`<div style="font-size:12px;color:#94a3b8;">Loading sender…</div>`);
+    const own = s.own;
+    const usingOwn = !!(own && own.enabled && own.hasPassword);
+    const from = usingOwn ? own.email : s.system;
+    const toggle = `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;font-weight:600;color:#0f172a;">
+        <input type="checkbox" id="bm-sender-on" ${usingOwn ? 'checked' : ''} style="width:15px;height:15px;cursor:pointer;" />
+        Send from my own email
+      </label>`;
+    return wrap(`
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+        ${toggle}
+        ${own && own.hasPassword
+          ? `<span style="display:flex;gap:10px;font-size:11.5px;">
+               <a href="#" id="bm-sender-edit" style="color:var(--color-primary);">Change</a>
+               <a href="#" id="bm-sender-remove" style="color:#b91c1c;opacity:.8;">Remove</a>
+             </span>`
+          : `<a href="#" id="bm-sender-edit" style="font-size:11.5px;color:var(--color-primary);">Set up →</a>`}
+      </div>
+      <div style="font-size:11.5px;color:#64748b;margin-top:6px;line-height:1.5;">
+        Mails go out as <b style="color:#0f172a;">${H.esc(from || 'not configured')}</b>${usingOwn ? ' (your account)' : ' (company account)'}.
+        ${own && own.hasPassword && !usingOwn ? `Your saved mailbox <b>${H.esc(own.email)}</b> is switched off.` : ''}
+      </div>`);
+  }
+
+  async function loadSender() {
+    try { _sender = await H.api('/api/bulk-mail/sender'); }
+    catch (e) { _sender = { system: '', own: null, loginEmail: '', error: e.message }; }
+    const box = document.getElementById('bm-sender');
+    if (box) { box.outerHTML = senderPanel(); bindSenderPanel(); }
+  }
+
+  function bindSenderPanel() {
+    on('bm-sender-on', 'change', async (e) => {
+      const want = e.target.checked;
+      if (want && !(_sender?.own && _sender.own.hasPassword)) { e.target.checked = false; return openSenderModal(); }
+      try {
+        _sender = await H.post('/api/bulk-mail/sender', { enabled: want });
+        H.toast(want ? `Mails will now go from ${_sender.own?.email}` : `Back to the company account (${_sender.system})`, 'success');
+      } catch (err) { H.fail(err); }
+      const box = document.getElementById('bm-sender');
+      if (box) { box.outerHTML = senderPanel(); bindSenderPanel(); }
+      checkSmtp(true);
+    });
+    on('bm-sender-edit', 'click', (e) => { e.preventDefault(); openSenderModal(); });
+    on('bm-sender-remove', 'click', async (e) => {
+      e.preventDefault();
+      if (!confirm('Remove your saved mailbox? Bulk mail will go from the company account again.')) return;
+      try { _sender = await H.del('/api/bulk-mail/sender'); H.toast('Your mailbox has been removed', 'success'); }
+      catch (err) { H.fail(err); }
+      const box = document.getElementById('bm-sender');
+      if (box) { box.outerHTML = senderPanel(); bindSenderPanel(); }
+      checkSmtp(true);
+    });
+  }
+
+  function openSenderModal() {
+    const email = _sender?.own?.email || _sender?.loginEmail || window.currentUser?.email || '';
+    H.openModal({
+      id: 'bmsd', title: 'Send from my own email', width: 520, confirmText: 'Verify & save',
+      subtitle: 'Recipients will see and reply to this address',
+      bodyHTML: `
+        ${H.grid(
+          H.field('bmsd-email', 'Your email (Gmail / Google Workspace)', email, { type: 'email', required: true, span: 2 })
+          + H.field('bmsd-pass', 'App Password', '', { type: 'password', required: true, span: 2, placeholder: '16-character App Password, not your login password',
+              hint: 'The password is checked with Gmail before it is saved, stored encrypted, and never shown again.' }), 2)}
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:12px;color:#475569;line-height:1.6;margin-top:12px;">
+          <b>How to get an App Password</b><br>
+          1. Turn on 2-Step Verification in your Google account.<br>
+          2. Open <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" style="color:var(--color-primary);">myaccount.google.com/apppasswords</a>, create one named "ERP", and paste the 16 characters here.
+        </div>`,
+      onConfirm: async () => {
+        const em = H.val('bmsd-email').trim(), pw = H.val('bmsd-pass');
+        if (!em || !pw) throw new Error('Enter both the email and the App Password');
+        _sender = await H.post('/api/bulk-mail/sender', { email: em, appPassword: pw, enabled: true });
+        H.closeModal('bmsd');
+        H.toast(`Verified — mails will now go from ${_sender.own?.email}`, 'success');
+        const box = document.getElementById('bm-sender');
+        if (box) { box.outerHTML = senderPanel(); bindSenderPanel(); }
+        checkSmtp(true);
+      },
+    });
   }
 
   function smtpChip() {
@@ -649,6 +742,7 @@ window.Pages['bulk-email'] = (() => {
   /* ── Send actions ─────────────────────────────────────────────────── */
 
   async function checkSmtp(force) {
+    if (!_sender || force) loadSender();
     if (_smtp && !force) return;
     _smtp = { checking: true };
     const chip = document.getElementById('bm-smtp');
