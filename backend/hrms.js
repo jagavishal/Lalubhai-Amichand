@@ -650,12 +650,13 @@ function mountHrms(app, ctx) {
           `INSERT INTO hr_policies (id, title, body, sort_order) VALUES ($1,$2,$3,$4)
            ON CONFLICT (id) DO NOTHING`,
           [pol.id, pol.title, pol.body, pol.sort_order],
-        ).catch(() => {});
+        ).catch((e) => console.error('[hrms] policy seed insert failed for', pol.id + ':', e.message));
         await pool.query(
           `UPDATE hr_policies SET title = $1, body = $2, sort_order = $3
             WHERE id = $4 AND (updated_by IS NULL OR updated_by = '') AND (title <> $5 OR body <> $6 OR sort_order <> $7)`,
           [pol.title, pol.body, pol.sort_order, pol.id, pol.title, pol.body, pol.sort_order],
-        ).catch(() => {});
+        ).then((r) => { if (r?.rowCount) console.log('[hrms] policy refreshed from seed:', pol.id); })
+          .catch((e) => console.error('[hrms] policy seed refresh failed for', pol.id + ':', e.message));
       }
     })().catch((e) => { console.error('[hrms] seed failed:', e.message); });
     return _seeded;

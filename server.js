@@ -11179,6 +11179,24 @@ app.post('/api/developer/reset-users', async (req, res) => {
 // actually be fetched — without ever returning the key material itself.
 // Deliberately builds a FRESH GoogleAuth (not getGoogleAuth's cached one) so
 // it reflects the env as loaded at this boot.
+// Which build is actually running. Hostinger serves new static files the
+// moment a push lands, but the Node process only picks up server.js and
+// backend/* when it restarts — so "is the backend up on the new code?" has
+// had no answer other than trying a changed feature. This is that answer:
+// the commit the process booted from and when it booted. Public and
+// harmless — a short hash and a timestamp.
+const BOOTED_AT = new Date().toISOString();
+const BUILD_COMMIT = (() => {
+  try {
+    const gitDir = path.join(__dirname, '.git');
+    const head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+    const ref = head.startsWith('ref:') ? head.slice(4).trim() : '';
+    const sha = ref ? fs.readFileSync(path.join(gitDir, ref), 'utf8').trim() : head;
+    return sha.slice(0, 7);
+  } catch { return process.env.SOURCE_COMMIT?.slice(0, 7) || 'unknown'; }
+})();
+app.get('/api/version', (req, res) => res.json({ commit: BUILD_COMMIT, bootedAt: BOOTED_AT, uptimeSec: Math.round(process.uptime()) }));
+
 app.get('/api/google-cred-check', requireAuth, requireAdmin, async (req, res) => {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim() || '';
   const rawPem = process.env.GOOGLE_PRIVATE_KEY || '';
