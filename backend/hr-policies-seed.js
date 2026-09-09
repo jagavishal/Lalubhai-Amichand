@@ -60,7 +60,7 @@ const POSH_AHMEDABAD_BODY = POSH_MUMBAI.body
 
 POLICIES.push({
   id: "posh-policy-ahmedabad",
-  title: "POSH Policy — Ahmedabad Unit",
+  title: "POSH Policy — Ahmedabad",
   sort_order: 4,
   doc: { fileId: "1jCPChMhoGey9RiDUOuxG7cN5gSFW3pbJ", name: "POSH Policy Ahemdabad.pdf" },
   body: POSH_AHMEDABAD_BODY,
