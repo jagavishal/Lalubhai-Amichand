@@ -640,14 +640,20 @@ window.Pages['pr-creation'] = (() => {
       + '</tr>').join('');
   }
 
-  // Approval state, decided from the approver's email (see /pr-action in
-  // server.js). "Active" is the not-yet-decided state — shown as Pending.
+  // Approval state — from the approver's email button (/pr-action) or, far
+  // more often, from the Stores FMS Google Forms the approvers actually use
+  // (see _fmsPrApprovals in server.js). "Active" is the not-yet-decided
+  // state: Pending, or "Factory Approved" once the Factory Manager's Form
+  // says YES and only the Manager's answer is still awaited. Hover the pill
+  // for who decided and when.
   function _sumStatusPill(r) {
     const pill = (label, bg, fg, title) => '<span title="' + esc(title || '') + '" style="display:inline-flex;margin-right:6px;padding:2px 8px;border-radius:10px;background:' + bg + ';color:' + fg + ';font-size:11px;font-weight:600;">' + esc(label) + '</span>';
     const who = r.decidedBy ? 'by ' + r.decidedBy + (r.decidedAt ? ' on ' + r.decidedAt : '') : '';
+    const factory = r.factoryBy ? 'Factory Manager ' + r.factoryBy + (r.factoryOn ? ' on ' + r.factoryOn : '') : '';
     if (r.status === 'Cancelled') return pill('Cancelled', '#f1f5f9', '#64748b');
-    if (r.status === 'Approved')  return pill('Approved', '#dcfce7', '#15803d', who);
+    if (r.status === 'Approved')  return pill('Approved', '#dcfce7', '#15803d', [who, factory].filter(Boolean).join('; '));
     if (r.status === 'Rejected')  return pill('Rejected', '#fee2e2', '#b91c1c', who);
+    if (r.stage === 'factory')    return pill('Factory Approved', '#ccfbf1', '#0f766e', factory + ' — Manager approval pending');
     return pill('Pending', '#fef3c7', '#b45309');
   }
 

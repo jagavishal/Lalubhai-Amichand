@@ -6636,16 +6636,30 @@ app.get('/api/pr-creation/list', requireAuth, async (req, res) => {
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
     const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:N1000`, valueRenderOption: 'FORMATTED_VALUE' });
-    const rows = (result.data.values || []).filter(r => r[0]).map(r => {
+    // The approvers answer the Stores FMS's Google Forms, not this log's
+    // email button, so a PR the log still calls Active may well be approved
+    // there — see _fmsPrApprovals. A Monitoring read failure only costs the
+    // Form-derived statuses, never the list itself.
+    const fms = await _fmsPrApprovals().catch(e => { console.error('[pr-creation] FMS approval read failed:', e.message); return null; });
+    const rows = (result.data.values || []).map((r, i) => ({ r, sheetRow: i + 2 })).filter(x => x.r[0]).map(({ r, sheetRow }) => {
       let form = null;
       try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
-      return {
+      const row = {
         prNo: r[0] || '', format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', requestedBy: r[4] || '',
         department: r[5] || '', total: r[6] || '', pdfLink: r[7] || '', createdBy: r[8] || '', createdAt: r[9] || '', form,
-        status: r[11] || 'Active', decidedBy: r[12] || '', decidedAt: r[13] || '',
+        status: r[11] || 'Active', decidedBy: r[12] || '', decidedAt: r[13] || '', sheetRow,
       };
+      return fms ? _applyFmsPrApproval(row, fms.get(_normalizePrNo(row.prNo))) : row;
     }).reverse();
-    return res.json(rows.slice(0, 200));
+    // Final Form decisions are copied into the log's own Status / Decided
+    // By / Decided At (L:N) — exactly what /pr-action writes — so PO
+    // Creation's picker, the email button's "already decided" page and this
+    // list all agree, and the decision outlives the Monitoring row (the FMS
+    // archives old rows to another tab). Rows already decided are never
+    // touched, and the copy is fire-and-forget: the list has what it needs.
+    const synced = rows.filter(r => r.fmsDecided);
+    if (synced.length) _syncFmsPrDecisions(sheets, synced).catch(e => console.error('[pr-creation] FMS approval sync to log failed:', e.message));
+    return res.json(rows.slice(0, 200).map(({ sheetRow, fmsDecided, ...r }) => r));
   } catch (e) {
     // No PR has been created via the ERP yet — the log tab doesn't exist.
     if (/unable to parse range/i.test(e.message || '')) return res.json([]);
@@ -6718,6 +6732,78 @@ const FMS_PO_STEPS = [
 // this list, so an ignored step can never become the answer to "kahan atka
 // hai" nor make a finished chain look unfinished.
 const FMS_PO_STEPS_ACTIVE = FMS_PO_STEPS.filter(s => !s.ignored);
+
+// ── PR approval as the Stores FMS records it ──────────────────────────────
+// The PR approvers do not press the ERP email's Approve button: Khurshid Alam
+// (Factory Manager, Step 2) and Kanaiyalal (Manager, Step 3) each answer a
+// Google Form, and the Form writes YES/NO plus their name and the date into
+// that step's block on the Monitoring tab. Until this was read, PR Summary
+// showed every such PR as Pending — the ERP PR Log's Status column was only
+// ever filled by the email button nobody used ("approved hone ke baad bhi
+// pending dikhta hai"). Keyed like the PO Pending report: a block naming a
+// different PR than its row belongs to that named PR.
+let _fmsPrApprovalCache = { at: 0, map: null };
+const FMS_PR_APPROVAL_TTL_MS = 45000;
+const FMS_PR_APPROVAL_STEPS = [['factory', 'S2'], ['manager', 'S3']]
+  .map(([slot, key]) => [slot, FMS_PO_STEPS.find(s => s.key === key)]);
+
+async function _fmsPrApprovals(force) {
+  const c = _fmsPrApprovalCache;
+  if (!force && c.map && (Date.now() - c.at) < FMS_PR_APPROVAL_TTL_MS) return c.map;
+  const auth = getGoogleAuth();
+  if (!auth) throw new Error('Google Sheets is not configured on this server');
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  // A4 onward: rows 1-3 are the header bands. AJ covers Step 3's block.
+  const got = await sheets.spreadsheets.values.get({ spreadsheetId: FMS_MONITORING_SHEET_ID, range: `'${FMS_MONITORING_TAB}'!A4:AJ1000`, valueRenderOption: 'FORMATTED_VALUE' });
+  const map = new Map(); // prKey -> { factory?: {approval, by, on}, manager?: {...} }
+  for (const row of got.data.values || []) {
+    const rowPr = _normalizePrNo(row[1]);
+    for (const [slot, step] of FMS_PR_APPROVAL_STEPS) {
+      const own = _normalizePrNo(_fmsBlockValue(row, step, 'prCol')) || rowPr;
+      const approval = _fmsBlockValue(row, step, 'approval').toUpperCase();
+      const actual = _fmsBlockValue(row, step, 'actual');
+      if (!own || !approval) continue;
+      const entry = map.get(own) || {};
+      if (!entry[slot]) entry[slot] = { approval, by: _fmsBlockValue(row, step, 'by'), on: _fmsParseDate(actual).display };
+      map.set(own, entry);
+    }
+  }
+  _fmsPrApprovalCache = { at: Date.now(), map };
+  return map;
+}
+
+// Folds the Form answers into a log row the email button never decided. A
+// NO at either step is Rejected; the Manager's YES is the final Approved
+// (it always follows the Factory Manager's); a Factory YES alone is still
+// Active but carries the intermediate stage so the list can say who has
+// approved and who is yet to. `fmsDecided` marks rows whose final decision
+// came from here and is still to be copied into the log.
+function _applyFmsPrApproval(row, fms) {
+  if (!fms || row.status !== 'Active') return row;
+  const factory = fms.factory || {}, manager = fms.manager || {};
+  const rejected = [factory, manager].find(s => s.approval === 'NO');
+  if (rejected) return { ...row, status: 'Rejected', decidedBy: rejected.by, decidedAt: rejected.on, fmsDecided: true };
+  if (manager.approval === 'YES') {
+    return { ...row, status: 'Approved', decidedBy: manager.by, decidedAt: manager.on, fmsDecided: true, factoryBy: factory.by || '', factoryOn: factory.on || '' };
+  }
+  if (factory.approval === 'YES') return { ...row, stage: 'factory', factoryBy: factory.by, factoryOn: factory.on };
+  return row;
+}
+
+// Writes the Form decisions into ERP PR Log L:N the way /pr-action does,
+// adding the M1:N1 headers if the tab predates them. The date is quoted so
+// Sheets keeps it as text (see the Date column's note in POST /api/pr-creation).
+async function _syncFmsPrDecisions(sheets, rows) {
+  const data = rows.map(r => ({
+    range: `'${PR_CREATION_LOG_TAB}'!L${r.sheetRow}:N${r.sheetRow}`,
+    values: [[r.status, r.decidedBy, r.decidedAt ? "'" + r.decidedAt : '']],
+  }));
+  const head = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!M1:N1`, valueRenderOption: 'FORMATTED_VALUE' });
+  if (!(head.data.values?.[0] || []).some(c => String(c ?? '').trim())) data.push({ range: `'${PR_CREATION_LOG_TAB}'!M1:N1`, values: [PO_LOG_DECISION_HEADERS] });
+  await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PR_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
+  console.log('[pr-creation] FMS decisions copied to ERP PR Log:', rows.map(r => `${r.prNo}=${r.status}`).join(', '));
+}
 
 // Row 4 of the live sheet holds PR175's Step 1 but Step 9's response for
 // PR172 — a step's Form appends to the next free row of its OWN block, which
