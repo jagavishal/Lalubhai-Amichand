@@ -641,12 +641,20 @@ function mountHrms(app, ctx) {
       }
       // DO NOTHING on purpose: this text is the starting version, and an
       // Admin's edits from the HR Policies page must survive every deploy.
+      // A policy nobody has edited (updated_by still blank) is the seed's to
+      // keep current, so a refreshed seed — a new section, a corrected
+      // committee — lands on the next boot without touching edited ones.
       const { POLICIES } = require('./hr-policies-seed.js');
       for (const pol of POLICIES) {
         await pool.query(
           `INSERT INTO hr_policies (id, title, body, sort_order) VALUES ($1,$2,$3,$4)
            ON CONFLICT (id) DO NOTHING`,
           [pol.id, pol.title, pol.body, pol.sort_order],
+        ).catch(() => {});
+        await pool.query(
+          `UPDATE hr_policies SET title = $1, body = $2, sort_order = $3
+            WHERE id = $4 AND (updated_by IS NULL OR updated_by = '') AND (title <> $5 OR body <> $6 OR sort_order <> $7)`,
+          [pol.title, pol.body, pol.sort_order, pol.id, pol.title, pol.body, pol.sort_order],
         ).catch(() => {});
       }
     })().catch((e) => { console.error('[hrms] seed failed:', e.message); });
@@ -3122,8 +3130,13 @@ function mountHrms(app, ctx) {
     /* ── Policies ── read by every employee, edited by Admin. ── */
     app.get('/api/hr/policies', requireAuth, hrReady, async (req, res) => {
       try {
-        res.json(await q(`SELECT id, title, body, sort_order, updated_by, updated_at
-                            FROM hr_policies ORDER BY sort_order ASC, title ASC`));
+        // Each policy links back to the original document in management's
+        // Drive folder — the seed knows which file it was taken from.
+        const { POLICIES, docUrl } = require('./hr-policies-seed.js');
+        const docs = Object.fromEntries(POLICIES.map((p) => [p.id, p.doc]));
+        const rows = await q(`SELECT id, title, body, sort_order, updated_by, updated_at
+                                FROM hr_policies ORDER BY sort_order ASC, title ASC`);
+        res.json(rows.map((r) => ({ ...r, doc_url: docUrl(docs[r.id]), doc_name: docs[r.id]?.name || '' })));
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

@@ -26,7 +26,11 @@ window.Pages['hr-policies'] = (() => {
 
   /* ── Markdown-lite → HTML. Every text node passes through H.esc first. ── */
   function md(text) {
-    const inline = (t) => H.esc(t).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+    // Bare http(s) links become clickable — the POSH text points at the
+    // internal site. Escaped first, so the href can only ever be a URL.
+    const inline = (t) => H.esc(t)
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      .replace(/(https?:\/\/[^\s<]+[^\s<.,;:)])/g, '<a href="$1" target="_blank" rel="noopener" style="color:var(--color-primary);">$1</a>');
     const out = [];
     let list = null;
     const closeList = () => { if (list) { out.push('</ul>'); list = null; } };
@@ -88,10 +92,21 @@ window.Pages['hr-policies'] = (() => {
     bind();
   }
 
+  // The original document (PDF / Word in management's Drive folder) sits
+  // beside the title, for anyone who wants the signed copy or the print.
   const reader = (p) => `
-    <div style="font-size:17px;font-weight:800;color:#0f172a;margin-bottom:2px;">${H.esc(p.title)}</div>
-    <div style="font-size:11.5px;color:#94a3b8;margin-bottom:6px;">
-      ${p.updated_by ? `Last updated by ${H.esc(p.updated_by)}${fmtWhen(p.updated_at) ? ' · ' + fmtWhen(p.updated_at) : ''}` : 'Company policy'}
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div>
+        <div style="font-size:17px;font-weight:800;color:#0f172a;margin-bottom:2px;">${H.esc(p.title)}</div>
+        <div style="font-size:11.5px;color:#94a3b8;margin-bottom:6px;">
+          ${p.updated_by ? `Last updated by ${H.esc(p.updated_by)}${fmtWhen(p.updated_at) ? ' · ' + fmtWhen(p.updated_at) : ''}` : 'Company policy'}
+        </div>
+      </div>
+      ${p.doc_url ? `<a href="${H.esc(p.doc_url)}" target="_blank" rel="noopener" class="btn-secondary btn-sm" title="${H.esc(p.doc_name || '')}"
+          style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap;text-decoration:none;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Open original ${/\.docx?$/i.test(p.doc_name || '') ? 'document' : 'PDF'}
+        </a>` : ''}
     </div>
     ${md(p.body)}`;
 
