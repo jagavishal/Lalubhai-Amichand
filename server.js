@@ -5581,6 +5581,8 @@ const PO_FORMAT_CONFIG = {
     tabName: 'Service PO',
     partyLabel: 'VENDOR NAME',
     hasShipTo: false,
+    // The one format that may be raised without a PR — see POST /api/po-creation.
+    standalone: true,
     header: { poNo: 'B4', requestedBy: 'C4', department: 'D4', party: 'E4', poMadeBy: 'F4', deliverySchedule: 'I4', paymentTerms: 'J4', date: 'L4' },
     items: { firstRow: 7, lastRow: 20, clearCols: ['B', 'K'], keyField: 'description', fields: { sacCode: 'B', description: 'C', monthlyConsumption: 'D', qty: 'E', uom: 'F', stock: 'G', lastOrderedDate: 'H', unitPrice: 'I', gst: 'J' } },
     summary: { fields: {}, totalCell: 'L21' },
@@ -5991,14 +5993,47 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
 // POST /api/po-creation — fills the live template tab for the chosen format,
 // exports it as a PDF (saved to Drive), and logs the PO in "ERP PO Log". This
 // IS the database write; nothing is stored locally.
+// The ERP PR Log row for a PR number, in any spelling ("231", "PR231",
+// "pr 231"), or null. Read fresh each time: a PR cancelled a minute ago must
+// not still take a PO.
+async function _erpPrLogRow(prNo) {
+  const key = _normalizePrNo(prNo);
+  if (!key) return null;
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
+  let rows = [];
+  try {
+    const r = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    rows = r.data.values || [];
+  } catch (e) {
+    if (/unable to parse range/i.test(e.message || '')) return null;
+    throw e;
+  }
+  const row = rows.find(x => x[0] && _normalizePrNo(x[0]) === key);
+  return row ? { prNo: String(row[0]).trim(), format: row[1] || '', party: row[3] || '', status: row[11] || 'Active' } : null;
+}
+
 app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res) => {
   try {
     const cfg = PO_FORMAT_CONFIG[req.body?.format];
     if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
-    const { date, prNo, requestedBy, department: departmentRaw, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
+    const { date, prNo: prNoRaw, requestedBy, department: departmentRaw, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
     // One spelling on the sheet, the PO log and the app — see canonicalDept.
     const department = await canonicalDept(departmentRaw);
     if (!date || !party || !poMadeBy) return res.status(400).json({ error: 'Date, ' + cfg.partyLabel + ' and PO Made By are required' });
+    // Every goods PO is raised against a PR; only a Service PO stands on its
+    // own ("PO without PR nahi banna chahiye, sirf Service wala PO bane"). The
+    // PR has to be on the ERP PR Log and neither cancelled nor rejected — the
+    // page's picker enforces the same, this is the check that cannot be typed
+    // around. The log's own spelling of the number is what gets written.
+    let prNo = String(prNoRaw || '').trim();
+    if (!cfg.standalone) {
+      if (!prNo) return res.status(400).json({ error: 'A PO cannot be raised without a PR — pick a pending PR in the P.R. NO field. Only a Service PO can be created without one.' });
+      const pr = await _erpPrLogRow(prNo);
+      if (!pr) return res.status(400).json({ error: `${prNo} is not on the ERP PR Log — create the PR first, then raise the PO against it.` });
+      if (['Cancelled', 'Rejected'].includes(pr.status)) return res.status(400).json({ error: `${pr.prNo} is ${pr.status.toLowerCase()} — a PO cannot be raised against it.` });
+      prNo = pr.prNo;
+    }
     // A line "exists" if its identity column is filled — Item Code on the three
     // goods formats, Description on Service PO (which has no item codes at all).
     const keyField = cfg.items.keyField || 'itemCode';

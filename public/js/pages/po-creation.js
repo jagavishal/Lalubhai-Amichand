@@ -274,7 +274,7 @@ window.Pages['po-creation'] = (() => {
      on any PO); picking one prefills Party/Department from that PR ──────── */
   function _prNoField() {
     return _fieldWrap('P.R. NO', ''
-      + '<input type="text" id="poc-pr-no" autocomplete="off" placeholder="Type, or pick a pending PR…" style="' + _inputStyle + '" />'
+      + '<input type="text" id="poc-pr-no" autocomplete="off" placeholder="Pick a pending PR (required)" style="' + _inputStyle + '" />'
       + '<div id="poc-prno-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>');
   }
 
@@ -960,6 +960,22 @@ window.Pages['po-creation'] = (() => {
     const testCertificateRequired = TEST_CERT_FORMATS.includes(_format) ? document.getElementById('poc-test-cert').value : '';
 
     if (!date) { Utils.showToast('Date is required', 'error'); return; }
+    // Every goods PO is raised against a PR — only a Service PO may be created
+    // without one ("PO without PR nahi banna chahiye, sirf Service wala PO
+    // bane"). The number has to be one of the pending PRs the picker offers;
+    // a typed number that matches none is refused here, and the server checks
+    // the ERP PR Log again regardless.
+    let prNoOut = prNo;
+    if (!_isManual()) {
+      const key = prNo.replace(/^[A-Za-z\s]+/, '').replace(/^0+/, '');
+      const match = prNo && _pendingPrs.find(p => String(p.prNo).replace(/^[A-Za-z\s]+/, '').replace(/^0+/, '') === key);
+      if (!match) {
+        Utils.showToast(prNo ? prNo + ' is not a pending PR — pick one from the P.R. NO list' : 'A PO cannot be raised without a PR — pick a pending PR in P.R. NO (only a Service PO can be created without one)', 'error');
+        document.getElementById('poc-pr-no')?.focus();
+        return;
+      }
+      prNoOut = match.prNo;
+    }
     if (!party) { Utils.showToast(PARTY_LABEL[_format] + ' is required', 'error'); return; }
     if (!poMadeBy) { Utils.showToast('PO Made By is required', 'error'); return; }
     if (!items.length) { Utils.showToast(_isManual() ? 'Add at least one service line' : 'Add at least one item', 'error'); return; }
@@ -969,7 +985,7 @@ window.Pages['po-creation'] = (() => {
     try {
       const result = await Utils.apiFetch('/api/po-creation', {
         method: 'POST',
-        body: JSON.stringify({ format: _format, date, prNo, requestedBy, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired }),
+        body: JSON.stringify({ format: _format, date, prNo: prNoOut, requestedBy, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired }),
       });
       await _loadMasters();
       renderPage();
