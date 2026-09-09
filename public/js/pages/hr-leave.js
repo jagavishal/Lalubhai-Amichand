@@ -36,6 +36,11 @@ window.Pages['hr-leave'] = (() => {
     _leaves = await H.api('/api/hr/leaves?' + p.toString()) || [];
   };
   const loadBalances = async () => { _balances = await H.api(`/api/hr/leave-balances?year=${_year}`); };
+  // The caller's own row for the "My Leave Balance" strip — fetched as
+  // employeeId=me so an Admin gets themselves too, not the company grid that
+  // their unscoped read returns ("admin ka my leave cards nahi dikh rahe").
+  let _myBalances = null;
+  const loadMyBalances = async () => { _myBalances = await H.api(`/api/hr/leave-balances?year=${_year}&employeeId=me`); };
   const loadHolidays = async () => { _holidays = await H.api(`/api/hr/holidays?year=${_year}`) || []; };
 
   /* ── Shell ────────────────────────────────────────────────────────── */
@@ -85,18 +90,19 @@ window.Pages['hr-leave'] = (() => {
 
   /* ── Requests ─────────────────────────────────────────────────────── */
 
-  /* An employee's own entitlements, as a strip of cards above their requests.
-     The company-wide grid on the Balances tab is an HR tool and stays behind
-     requireAdmin; this is the one number every employee actually wants —
-     how much leave they have left — and it is their own row, which the server
-     scopes for them. */
+  /* Everyone's own entitlements, as a strip of cards above the requests —
+     Admin included, since an Admin takes leave too. The company-wide grid on
+     the Balances tab is an HR tool and stays behind requireAdmin; this is the
+     one number every employee actually wants — how much leave they have
+     left — and it is their own row (employeeId=me), which the server scopes
+     for them. Blank when the login has no employee record to read from. */
   function myBalanceStrip() {
-    const row = (_balances?.rows || [])[0];
+    const row = (_myBalances?.rows || [])[0];
     if (!row) return '';
-    const types = _balances.types || [];
+    const types = _myBalances.types || [];
     return `<div style="margin-bottom:16px;">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
-           color:var(--color-primary);margin-bottom:9px;">My Leave Balance — ${_balances.year}</div>
+           color:var(--color-primary);margin-bottom:9px;">My Leave Balance — ${_myBalances.year}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;">
         ${types.map((t) => {
           const c = row.cells[t.code] || { opening: 0, accrued: 0, used: 0, balance: 0 };
@@ -153,7 +159,7 @@ window.Pages['hr-leave'] = (() => {
     const shownRows = rows.map((r) => (admin ? r : r.slice(1, 7)));
 
     return `
-      ${admin ? '' : myBalanceStrip()}
+      ${myBalanceStrip()}
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px;align-items:end;">
         ${H.select('hrl-f-status', 'Status', _statusFilter, ['All', ...STATUSES])}
@@ -288,7 +294,7 @@ window.Pages['hr-leave'] = (() => {
       _holidays = [];
       reload(async () => {
         await loadRequests();
-        if (!H.isAdmin()) await loadBalances();
+        await loadMyBalances();
       });
     });
     on('hrl-b-year', 'change', (e) => { _year = Number(e.target.value); reload(loadBalances); });
@@ -665,11 +671,10 @@ window.Pages['hr-leave'] = (() => {
       try {
         await loadMasters();
         await loadRequests();
-        // An employee sees their own entitlements above their requests, so the
-        // balances come along on the first load rather than behind a tab they
-        // do not get. For an Admin this is the company-wide grid and stays on
-        // its own tab, fetched only when they open it.
-        if (!H.isAdmin()) await loadBalances();
+        // Everyone sees their own entitlements above the requests, so that row
+        // comes along on the first load. The Admin's company-wide grid is a
+        // separate fetch that stays on its own tab, made only when opened.
+        await loadMyBalances();
         render();
       } catch (e) {
         if (el) el.innerHTML = H.empty('Could not load leave', e.message);

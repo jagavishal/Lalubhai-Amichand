@@ -523,8 +523,19 @@ function mountBulkMail(app, ctx) {
      A pooled transport per job: one Gmail connection reused for every
      message instead of a fresh TLS handshake + login per mail (which is
      what made five mails take twenty seconds). */
+  // Bulk mail goes out as accounts@laltd.in, not the ERP's own mis@ account
+  // that every other notification uses ("bulk mail mis@laltd.in se jaa raha
+  // hai, isko accounts@laltd.in"). Gmail only sends as the mailbox that
+  // logged in, so this needs that mailbox's own App Password:
+  // BULK_MAIL_SMTP_USER / BULK_MAIL_SMTP_PASS in .env.local. Until both are
+  // set it falls back to SMTP_USER / SMTP_PASS, so nothing breaks meanwhile.
+  function mailAccount() {
+    const u = String(process.env.BULK_MAIL_SMTP_USER || '').trim(), p = String(process.env.BULK_MAIL_SMTP_PASS || '').trim();
+    return u && p ? { user: u, pass: p } : { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS };
+  }
+
   function makeTransport() {
-    const user = process.env.SMTP_USER, pass = process.env.SMTP_PASS;
+    const { user, pass } = mailAccount();
     if (!user || !pass) return null;
     return nodemailer.createTransport({
       service: 'gmail', auth: { user, pass },
@@ -549,7 +560,7 @@ function mountBulkMail(app, ctx) {
     const subject = fill(subjectTpl, r);
     const text = fill(bodyTpl, r);
     return {
-      from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+      from: `"Lallubhai Amichand" <${mailAccount().user}>`,
       to,
       subject,
       text,
@@ -571,10 +582,10 @@ function mountBulkMail(app, ctx) {
     const t0 = Date.now();
     try {
       await Promise.race([t.verify(), new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timed out after 25s'), { code: 'ETIMEDOUT' })), 25000))]);
-      res.json({ ok: true, user: process.env.SMTP_USER, ms: Date.now() - t0 });
+      res.json({ ok: true, user: mailAccount().user, ms: Date.now() - t0 });
     } catch (e) {
       console.error('[bulk-mail] smtp check failed:', e.code, e.message);
-      res.json({ ok: false, user: process.env.SMTP_USER, error: explainMailError(e), ms: Date.now() - t0 });
+      res.json({ ok: false, user: mailAccount().user, error: explainMailError(e), ms: Date.now() - t0 });
     } finally { t.close(); }
   });
 

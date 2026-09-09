@@ -700,11 +700,34 @@ window.Pages.users = (() => {
     }
   }
 
+  // The list is grouped by department ("User mai group bana do department
+  // wise"): one band per department with its head-count, users A–Z inside,
+  // and anyone without a department in a final "No Department" band so they
+  // cannot go missing. The search still works across every band.
+  const NO_DEPT = 'No Department';
+  function groupedByDepartment(rows) {
+    const map = new Map();
+    for (const u of rows) {
+      const d = (u.department || '').trim() || NO_DEPT;
+      if (!map.has(d)) map.set(d, []);
+      map.get(d).push(u);
+    }
+    return [...map.entries()].sort(([a], [b]) => (a === NO_DEPT) - (b === NO_DEPT) || a.localeCompare(b));
+  }
+  function departmentBandHtml(dept, count) {
+    return `<tr>
+      <td colspan="${_isAdmin ? 8 : 7}" style="padding:8px 14px;background:#f1f5f9;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;">
+        <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#334155;">${esc(dept)}</span>
+        <span style="margin-left:8px;font-size:11px;color:#64748b;">${count} user${count === 1 ? '' : 's'}</span>
+      </td>
+    </tr>`;
+  }
+
   function renderUsersTab() {
     const rows = filtered();
     const tableRows = rows.length === 0
       ? `<tr><td colspan="${_isAdmin ? 8 : 7}" class="table-td text-center text-slate-400 py-10">No users found</td></tr>`
-      : rows.map(u => {
+      : groupedByDepartment(rows).map(([dept, list]) => departmentBandHtml(dept, list.length) + list.map(u => {
           const isAdminOrHod = normalizeRoles(u.roles).some(r => r === 'Admin' || r === 'HOD');
           // Forcing someone out of every device is owner-only, same as the
           // destructive deletes elsewhere. The server enforces it regardless.
@@ -761,7 +784,7 @@ window.Pages.users = (() => {
             </tr>` : '';
 
           return mainRow + expandRow;
-        }).join('');
+        }).join('')).join('');
 
     return `
       <div class="card overflow-hidden">

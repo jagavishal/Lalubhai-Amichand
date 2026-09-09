@@ -2047,8 +2047,11 @@ function mountHrms(app, ctx) {
         const year = Number(req.query.year) || new Date().getFullYear();
         const types = await leaveTypes();
         // Same scoping as the request list: your own balances unless you are
-        // the one who approves leave.
-        const scopedId = isAdminUser(req.session?.user)
+        // the one who approves leave. employeeId=me is always the caller's own
+        // row, Admin included — the "My Leave Balance" strip needs it, because
+        // an Admin's unscoped read is the whole company, not themselves.
+        const wantSelf = String(req.query.employeeId || '') === 'me';
+        const scopedId = (isAdminUser(req.session?.user) && !wantSelf)
           ? String(req.query.employeeId || '')
           : ((await selfEmployee(req.session?.user))?.id || NO_MATCH);
         const emps = scopedId

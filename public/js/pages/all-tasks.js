@@ -2,8 +2,10 @@ window.Pages['all-tasks'] = (function () {
   /* ─── state ─────────────────────────────────────────────────────────────── */
   let _users    = [];
   let _grouped  = [];          // [{ doer, tasks:[] }]
+  let _masters  = [];          // every checklist occurrence, future ones included — the Master view needs them
+  let _doneMasterIds = new Set();
   let _tab      = 'Delegation';
-  let _statusTab = 'All';
+  let _statusTab = 'All';      // 'All' | 'Pending' | 'Completed' | 'Master' (Checklist tab only)
   let _expanded  = {};          // { [doer]: true }
   let _search    = '';
   let _employeeFilter = 'All';
@@ -156,6 +158,8 @@ window.Pages['all-tasks'] = (function () {
     const doneIds = new Set(
       (completions || []).map(c => c.master_id || c.masterId)
     );
+    _masters = masters;
+    _doneMasterIds = doneIds;
     const todayStr = new Date().toISOString().split('T')[0];
 
     // Build grouped structure: merge delegations + checklist masters. Occurrences whose
@@ -471,6 +475,88 @@ window.Pages['all-tasks'] = (function () {
       </li>`;
   }
 
+  /* ─── Checklist master view ─────────────────────────────────────────────
+     A recurring checklist is stored as one row per dated occurrence, so the
+     ordinary list shows "Send GST summary" thirty times for a daily task.
+     The Master tab folds those back into one line per task per doer
+     ("master mai ek task ek baar aaye") with its frequency and the next
+     occurrence that is still to be done. Same scoping and filters as the
+     list: non-admins see their own, the employee filter and search apply. */
+  function masterRows() {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const admin = isAdmin();
+    const me = currentUserName();
+    const s = _search.toLowerCase();
+    const map = new Map();
+    for (const m of _masters) {
+      const doer = m.assignedTo || '(Unassigned)';
+      if (!admin && doer !== me) continue;
+      if (_employeeFilter !== 'All' && doer !== _employeeFilter) continue;
+      const task = String(m.task || '').trim();
+      if (s && !task.toLowerCase().includes(s)) continue;
+      const key = doer + ' ' + task.toLowerCase();
+      if (!map.has(key)) map.set(key, { doer, task, frequency: '', remarks: '', total: 0, done: 0, nextDue: null, lastDone: null, overdue: false, anyId: m.id });
+      const r = map.get(key);
+      r.total++;
+      if (m.frequency && !r.frequency) r.frequency = m.frequency;
+      if (m.remarks && !r.remarks) r.remarks = m.remarks;
+      const due = m.startDate || null;
+      if (_doneMasterIds.has(m.id)) {
+        r.done++;
+        if (due && (!r.lastDone || due > r.lastDone)) r.lastDone = due;
+      } else if (due && (!r.nextDue || due < r.nextDue)) {
+        r.nextDue = due;
+      }
+    }
+    const rows = [...map.values()];
+    for (const r of rows) r.overdue = !!r.nextDue && r.nextDue < todayStr;
+    rows.sort((a, b) => a.doer.localeCompare(b.doer) || a.task.localeCompare(b.task));
+    return rows;
+  }
+
+  function masterViewHTML(rows) {
+    if (!rows.length) {
+      return `<div style="padding:56px;text-align:center">
+        <div style="font-size:14px;font-weight:500;color:#475569">No checklist tasks match the filters</div>
+        <div style="font-size:12px;color:#94a3b8;margin-top:4px">Try clearing search or the employee filter.</div>
+      </div>`;
+    }
+    const cap = (f) => f ? f.charAt(0).toUpperCase() + f.slice(1) : '—';
+    return `<div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="background:#f8fafc">
+            <th class="at-th">#</th>
+            <th class="at-th">Task</th>
+            <th class="at-th">Doer</th>
+            <th class="at-th">Frequency</th>
+            <th class="at-th">Next Due Date</th>
+            <th class="at-th">Last Done</th>
+            <th class="at-th">Occurrences</th>
+            <th class="at-th">Remarks</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((r, i) => `
+            <tr class="at-table-row">
+              <td class="at-td" style="font-size:11px;color:#94a3b8;font-family:monospace">${i + 1}</td>
+              <td class="at-td" style="max-width:320px;font-weight:500;color:#1e293b">${esc(r.task)}</td>
+              <td class="at-td" style="color:#475569;white-space:nowrap">${esc(r.doer)}</td>
+              <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${esc(cap(r.frequency))}</td>
+              <td class="at-td" style="white-space:nowrap;font-size:12px;${r.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#1e293b;font-weight:600;'}">
+                ${r.nextDue ? fmt(r.nextDue) + (r.overdue ? ' <span style="font-size:10px;font-weight:600;">(overdue)</span>' : '') : '<span style="color:#94a3b8;font-weight:400;">All done</span>'}
+              </td>
+              <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${r.lastDone ? fmt(r.lastDone) : '—'}</td>
+              <td class="at-td" style="white-space:nowrap;font-size:12px">
+                ${window.UI.pill(`${r.done} done`, { variant: 'success' })} ${r.total - r.done > 0 ? window.UI.pill(`${r.total - r.done} pending`, { variant: 'danger' }) : ''}
+              </td>
+              <td class="at-td" style="color:#94a3b8;max-width:180px;font-size:12px">${esc(r.remarks || '—')}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  }
+
   /* ─── main content render ───────────────────────────────────────────────── */
   function renderContent() {
     const el = document.getElementById('main-content');
@@ -539,10 +625,14 @@ window.Pages['all-tasks'] = (function () {
          </button>`
       : '';
 
-    /* status tabs */
-    const statusBtns = ['All', 'Pending', 'Completed'].map(t =>
+    /* status tabs — the Checklist tab gets a fourth, Master: each recurring
+       task once, with its frequency and next due date, instead of one row
+       per dated occurrence. */
+    const masterMode = _tab === 'Checklist' && _statusTab === 'Master';
+    const statusBtns = ['All', 'Pending', 'Completed', ...(_tab === 'Checklist' ? ['Master'] : [])].map(t =>
       `<button class="at-seg-btn${_statusTab === t ? ' at-seg-active' : ''}" data-stab="${esc(t)}">${esc(t)}</button>`
     ).join('');
+    const masterRowsList = masterMode ? masterRows() : [];
 
     /* groups list */
     let serial = 1;
@@ -617,17 +707,20 @@ window.Pages['all-tasks'] = (function () {
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
           <div class="at-seg" id="at-status-seg">${statusBtns}</div>
           <div style="font-size:13px;color:#475569">
-            <b style="color:#1e293b">${visGroups.length}</b> doer${visGroups.length === 1 ? '' : 's'} ·
-            <b style="color:#1e293b">${totalTasks}</b> task${totalTasks === 1 ? '' : 's'}
+            ${masterMode
+              ? `<b style="color:#1e293b">${new Set(masterRowsList.map(r => r.doer)).size}</b> doer${new Set(masterRowsList.map(r => r.doer)).size === 1 ? '' : 's'} ·
+                 <b style="color:#1e293b">${masterRowsList.length}</b> master task${masterRowsList.length === 1 ? '' : 's'}`
+              : `<b style="color:#1e293b">${visGroups.length}</b> doer${visGroups.length === 1 ? '' : 's'} ·
+                 <b style="color:#1e293b">${totalTasks}</b> task${totalTasks === 1 ? '' : 's'}`}
           </div>
-          <div style="display:flex;gap:4px">
+          <div style="display:flex;gap:4px;${masterMode ? 'visibility:hidden;' : ''}">
             <button id="at-expand-all"   style="padding:4px 10px;border-radius:6px;font-size:12px;background:none;border:1px solid #e2e8f0;cursor:pointer;color:#475569">Expand all</button>
             <button id="at-collapse-all" style="padding:4px 10px;border-radius:6px;font-size:12px;background:none;border:1px solid #e2e8f0;cursor:pointer;color:#475569">Collapse all</button>
           </div>
         </div>
 
-        <!-- Groups -->
-        <div class="at-card">${groupsHTML}</div>
+        <!-- Groups (or the Checklist master table) -->
+        <div class="at-card">${masterMode ? masterViewHTML(masterRowsList) : groupsHTML}</div>
 
       </div>`;
 
@@ -640,6 +733,8 @@ window.Pages['all-tasks'] = (function () {
     document.querySelectorAll('#at-tab-seg .at-seg-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         _tab = btn.dataset.tab;
+        // Master exists only on the Checklist tab.
+        if (_tab !== 'Checklist' && _statusTab === 'Master') _statusTab = 'All';
         renderContent();
       });
     });

@@ -35,6 +35,9 @@ window.Pages['bulk-email'] = (() => {
   let _smtp = null;        // { checking, ok, user, error, ms }
   let _checked = null;     // Set of file ids ticked on the Send tab
   let _masterSearch = '';
+  // Which stat card on Upload & Match is pressed in — the tables below show
+  // only that slice ("card ko clickable banao"). '' = everything.
+  let _matchFilter = '';
 
   const LS_SUBJECT = 'bulkmail.subject';
   const LS_BODY = 'bulkmail.body';
@@ -209,11 +212,35 @@ window.Pages['bulk-email'] = (() => {
     </div>`;
   }
 
+  // The six counters as press-able cards: clicking one narrows both tables
+  // below to that slice, clicking it again (or "PDFs in batch") shows all.
+  const MATCH_FILTERS = {
+    ready:   (f) => !!f.email,
+    noEmail: (f) => !f.email,
+    noMatch: (f) => f.match_status === 'No Match',
+    sent:    (f) => f.send_status === 'Sent',
+    failed:  (f) => f.send_status === 'Failed',
+  };
+  function statCards(items) {
+    return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">
+      ${items.map((s) => {
+        const on = (_matchFilter || '') === (s.key || '');
+        return `<button type="button" data-bm-stat="${H.esc(s.key || '')}" title="${on && s.key ? 'Show everything' : 'Show only these'}"
+          style="text-align:left;cursor:pointer;font-family:inherit;background:${on ? '#eef4ff' : '#fff'};border:1.5px solid ${on ? 'var(--color-primary)' : '#e2e8f0'};border-radius:11px;padding:13px 15px;transition:border-color .1s,background .1s;">
+          <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:${on ? 'var(--color-primary)' : '#94a3b8'};">${H.esc(s.label)}</div>
+          <div style="font-size:20px;font-weight:700;color:${H.esc(s.color || 'var(--color-primary)')};margin-top:5px;letter-spacing:-.02em;">${H.esc(s.value)}</div>
+        </button>`;
+      }).join('')}
+    </div>`;
+  }
+
   function matchResults() {
     const s = _detail.summary;
-    const files = _detail.files;
+    const pick = MATCH_FILTERS[_matchFilter] || (() => true);
+    const files = _detail.files.filter(pick);
     const noEmail = files.filter((f) => !f.email);
     const ready = files.filter((f) => f.email);
+    const filtering = !!MATCH_FILTERS[_matchFilter];
 
     const fixRow = (f) => [
       H.esc(f.file_name),
@@ -226,14 +253,15 @@ window.Pages['bulk-email'] = (() => {
     ];
 
     return `
-      ${H.stats([
-        { label: 'PDFs in batch', value: s.total },
-        { label: 'Ready to send', value: s.ready, color: '#16a34a' },
-        { label: 'Email missing', value: s.noEmail, color: '#d97706' },
-        { label: 'Not in master list', value: s.noMatch, color: '#dc2626' },
-        { label: 'Sent', value: s.sent, color: '#16a34a' },
-        { label: 'Failed', value: s.failed, color: s.failed ? '#dc2626' : '#94a3b8' },
+      ${statCards([
+        { key: '', label: 'PDFs in batch', value: s.total },
+        { key: 'ready', label: 'Ready to send', value: s.ready, color: '#16a34a' },
+        { key: 'noEmail', label: 'Email missing', value: s.noEmail, color: '#d97706' },
+        { key: 'noMatch', label: 'Not in master list', value: s.noMatch, color: '#dc2626' },
+        { key: 'sent', label: 'Sent', value: s.sent, color: '#16a34a' },
+        { key: 'failed', label: 'Failed', value: s.failed, color: s.failed ? '#dc2626' : '#94a3b8' },
       ])}
+      ${filtering ? `<div style="font-size:12px;color:#64748b;margin:-6px 0 10px;">Showing <b>${files.length}</b> of ${s.total} PDFs — click the highlighted card again to see everything.</div>` : ''}
       ${noEmail.length ? `
         <div style="display:flex;align-items:center;justify-content:space-between;margin:4px 0 8px;gap:8px;flex-wrap:wrap;">
           <div style="font-size:13px;font-weight:700;color:#b45309;">Missing email ids — fill them in here (${noEmail.length})</div>
@@ -241,10 +269,10 @@ window.Pages['bulk-email'] = (() => {
         </div>
         ${H.table(['File', 'PAN', 'Name', 'Email id'], noEmail.map(fixRow))}
         <div style="font-size:11.5px;color:#94a3b8;margin:6px 0 16px;">An email saved here goes into the master list too, so the same PAN needs no typing next year.</div>
-      ` : `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 16px;font-size:13px;color:#166534;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+      ` : filtering ? '' : `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 16px;font-size:13px;color:#166534;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
              <span>Every PDF has an email id.</span>
              <button id="bm-go-send" class="btn-primary" style="font-size:12.5px;">Go to Send Emails →</button></div>`}
-      <div style="font-size:13px;font-weight:700;color:#334155;margin:4px 0 8px;">Matched &amp; ready (${ready.length})</div>
+      ${(!filtering || ready.length) ? `<div style="font-size:13px;font-weight:700;color:#334155;margin:4px 0 8px;">Matched &amp; ready (${ready.length})</div>` : ''}
       ${H.table(['File', 'PAN', 'Name', 'Email id', 'Status'],
         ready.map((f) => [H.esc(f.file_name), H.esc(f.pan || '—'), H.esc(f.person_name || '—'), H.esc(f.email), statusCell(f)]),
         { maxHeight: '420px' })}`;
@@ -812,6 +840,11 @@ window.Pages['bulk-email'] = (() => {
     on('bm-upload', 'click', startUpload);
     on('bm-up-done', 'click', () => { _upload = null; render(); });
     on('bm-go-send', 'click', () => { _tab = 'send'; render(); checkSmtp(false); });
+    document.querySelectorAll('[data-bm-stat]').forEach((b) => b.addEventListener('click', () => {
+      const key = b.dataset.bmStat;
+      _matchFilter = (!key || _matchFilter === key) ? '' : key;
+      render();
+    }));
     on('bm-master-open', 'click', () => { _tab = 'master'; render(); });
     on('bm-master-up', 'click', () => document.getElementById('bm-in-master')?.click());
     on('bm-in-master', 'change', (e) => uploadMasterSheet(e.target.files[0]));
