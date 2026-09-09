@@ -6734,17 +6734,22 @@ const FMS_PO_STEPS = [
 const FMS_PO_STEPS_ACTIVE = FMS_PO_STEPS.filter(s => !s.ignored);
 
 // ── PR approval as the Stores FMS records it ──────────────────────────────
-// The PR approvers do not press the ERP email's Approve button: Khurshid Alam
-// (Factory Manager, Step 2) and Kanaiyalal (Manager, Step 3) each answer a
-// Google Form, and the Form writes YES/NO plus their name and the date into
-// that step's block on the Monitoring tab. Until this was read, PR Summary
-// showed every such PR as Pending — the ERP PR Log's Status column was only
-// ever filled by the email button nobody used ("approved hone ke baad bhi
-// pending dikhta hai"). Keyed like the PO Pending report: a block naming a
-// different PR than its row belongs to that named PR.
+// The approvers do not press the ERP email's Approve button: Khurshid Alam
+// (Factory Manager, Step 2), Kanaiyalal (Manager, Step 3) and Sajil Sir
+// (Quotations Approval, Step 4B) each answer a Google Form, and the Form
+// writes YES/NO plus their name and the date into that step's block on the
+// Monitoring tab. Until this was read, PR Summary showed every such PR as
+// Pending — the ERP PR Log's Status column was only ever filled by the email
+// button nobody used ("approved hone ke baad bhi pending dikhta hai").
+//
+// "Approved" is Sajil Sir's YES — "Sajil sir ke approval ke baad PR mai
+// approved aana chahiye". The two earlier YESes are reported as stages on
+// the way there. Keyed like the PO Pending report: a block naming a
+// different PR than its row belongs to that named PR (Step 4B's block has
+// no PR column, so it always belongs to its row).
 let _fmsPrApprovalCache = { at: 0, map: null };
 const FMS_PR_APPROVAL_TTL_MS = 45000;
-const FMS_PR_APPROVAL_STEPS = [['factory', 'S2'], ['manager', 'S3']]
+const FMS_PR_APPROVAL_STEPS = [['factory', 'S2'], ['manager', 'S3'], ['final', 'S4B']]
   .map(([slot, key]) => [slot, FMS_PO_STEPS.find(s => s.key === key)]);
 
 async function _fmsPrApprovals(force) {
@@ -6754,9 +6759,9 @@ async function _fmsPrApprovals(force) {
   if (!auth) throw new Error('Google Sheets is not configured on this server');
   const { google } = require('googleapis');
   const sheets = google.sheets({ version: 'v4', auth });
-  // A4 onward: rows 1-3 are the header bands. AJ covers Step 3's block.
-  const got = await sheets.spreadsheets.values.get({ spreadsheetId: FMS_MONITORING_SHEET_ID, range: `'${FMS_MONITORING_TAB}'!A4:AJ1000`, valueRenderOption: 'FORMATTED_VALUE' });
-  const map = new Map(); // prKey -> { factory?: {approval, by, on}, manager?: {...} }
+  // A4 onward: rows 1-3 are the header bands. BH covers Step 4B's block.
+  const got = await sheets.spreadsheets.values.get({ spreadsheetId: FMS_MONITORING_SHEET_ID, range: `'${FMS_MONITORING_TAB}'!A4:BH1000`, valueRenderOption: 'FORMATTED_VALUE' });
+  const map = new Map(); // prKey -> { factory?: {approval, by, on}, manager?: {...}, final?: {...} }
   for (const row of got.data.values || []) {
     const rowPr = _normalizePrNo(row[1]);
     for (const [slot, step] of FMS_PR_APPROVAL_STEPS) {
@@ -6774,20 +6779,20 @@ async function _fmsPrApprovals(force) {
 }
 
 // Folds the Form answers into a log row the email button never decided. A
-// NO at either step is Rejected; the Manager's YES is the final Approved
-// (it always follows the Factory Manager's); a Factory YES alone is still
-// Active but carries the intermediate stage so the list can say who has
-// approved and who is yet to. `fmsDecided` marks rows whose final decision
-// came from here and is still to be copied into the log.
+// NO at any step is Rejected; Sajil Sir's YES (Step 4B) is Approved; the
+// Factory Manager's and Manager's YESes leave the row Active but carry the
+// stage reached, so the list can say who has approved and who is yet to.
+// `fmsDecided` marks rows whose final decision came from here and is still
+// to be copied into the log.
 function _applyFmsPrApproval(row, fms) {
   if (!fms || row.status !== 'Active') return row;
-  const factory = fms.factory || {}, manager = fms.manager || {};
-  const rejected = [factory, manager].find(s => s.approval === 'NO');
-  if (rejected) return { ...row, status: 'Rejected', decidedBy: rejected.by, decidedAt: rejected.on, fmsDecided: true };
-  if (manager.approval === 'YES') {
-    return { ...row, status: 'Approved', decidedBy: manager.by, decidedAt: manager.on, fmsDecided: true, factoryBy: factory.by || '', factoryOn: factory.on || '' };
-  }
-  if (factory.approval === 'YES') return { ...row, stage: 'factory', factoryBy: factory.by, factoryOn: factory.on };
+  const factory = fms.factory || {}, manager = fms.manager || {}, final = fms.final || {};
+  const stages = { factoryBy: factory.by || '', factoryOn: factory.on || '', managerBy: manager.by || '', managerOn: manager.on || '' };
+  const rejected = [factory, manager, final].find(s => s.approval === 'NO');
+  if (rejected) return { ...row, ...stages, status: 'Rejected', decidedBy: rejected.by, decidedAt: rejected.on, fmsDecided: true };
+  if (final.approval === 'YES') return { ...row, ...stages, status: 'Approved', decidedBy: final.by, decidedAt: final.on, fmsDecided: true };
+  if (manager.approval === 'YES') return { ...row, ...stages, stage: 'manager' };
+  if (factory.approval === 'YES') return { ...row, ...stages, stage: 'factory' };
   return row;
 }
 

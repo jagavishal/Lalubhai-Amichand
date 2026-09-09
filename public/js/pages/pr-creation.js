@@ -642,18 +642,21 @@ window.Pages['pr-creation'] = (() => {
 
   // Approval state — from the approver's email button (/pr-action) or, far
   // more often, from the Stores FMS Google Forms the approvers actually use
-  // (see _fmsPrApprovals in server.js). "Active" is the not-yet-decided
-  // state: Pending, or "Factory Approved" once the Factory Manager's Form
-  // says YES and only the Manager's answer is still awaited. Hover the pill
-  // for who decided and when.
+  // (see _fmsPrApprovals in server.js). "Approved" is Sajil Sir's YES.
+  // "Active" is everything before that: Pending, then "Factory Approved"
+  // (Khurshid Alam's YES) and "Manager Approved" (Kanaiyalal's YES) while
+  // Sajil Sir's answer is still awaited. Hover the pill for who and when.
   function _sumStatusPill(r) {
     const pill = (label, bg, fg, title) => '<span title="' + esc(title || '') + '" style="display:inline-flex;margin-right:6px;padding:2px 8px;border-radius:10px;background:' + bg + ';color:' + fg + ';font-size:11px;font-weight:600;">' + esc(label) + '</span>';
     const who = r.decidedBy ? 'by ' + r.decidedBy + (r.decidedAt ? ' on ' + r.decidedAt : '') : '';
     const factory = r.factoryBy ? 'Factory Manager ' + r.factoryBy + (r.factoryOn ? ' on ' + r.factoryOn : '') : '';
+    const manager = r.managerBy ? 'Manager ' + r.managerBy + (r.managerOn ? ' on ' + r.managerOn : '') : '';
+    const trail = [who, factory, manager].filter(Boolean).join('; ');
     if (r.status === 'Cancelled') return pill('Cancelled', '#f1f5f9', '#64748b');
-    if (r.status === 'Approved')  return pill('Approved', '#dcfce7', '#15803d', [who, factory].filter(Boolean).join('; '));
-    if (r.status === 'Rejected')  return pill('Rejected', '#fee2e2', '#b91c1c', who);
-    if (r.stage === 'factory')    return pill('Factory Approved', '#ccfbf1', '#0f766e', factory + ' — Manager approval pending');
+    if (r.status === 'Approved')  return pill('Approved', '#dcfce7', '#15803d', trail);
+    if (r.status === 'Rejected')  return pill('Rejected', '#fee2e2', '#b91c1c', trail);
+    if (r.stage === 'manager')    return pill('Manager Approved', '#ccfbf1', '#0f766e', trail + ' — Sajil Sir\'s approval pending');
+    if (r.stage === 'factory')    return pill('Factory Approved', '#e0f2fe', '#0369a1', trail + ' — Manager and Sajil Sir\'s approval pending');
     return pill('Pending', '#fef3c7', '#b45309');
   }
 
