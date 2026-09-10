@@ -185,6 +185,27 @@ window.Sidebar = {
     return roles.includes('Admin') || roles.includes('HOD');
   },
 
+  /* Re-read the pending count and redraw only the Approvals badge (rail and
+     bottom nav) — called after a request is raised or decided so the number
+     does not wait for the next full page load. Deliberately not render(): that
+     rebuilds the whole rail and binds another hashchange listener each time. */
+  async refreshBadge() {
+    const user = this._user || window.currentUser;
+    if (!user || !this._isAdmin(user)) return;
+    const count = await this._fetchPendingCount();
+    this._pendingCount = count;
+    const link = document.querySelector('#sidebar a[data-route="approvals"]');
+    const iconWrap = link && link.querySelector('span[style*="flex-shrink:0"]');
+    if (iconWrap) {
+      iconWrap.querySelector('span[style*="top:-5px"]')?.remove();
+      if (count > 0) {
+        iconWrap.insertAdjacentHTML('beforeend',
+          `<span style="position:absolute;top:-5px;right:-5px;box-shadow:0 0 0 2px var(--sidebar-bg);border-radius:9999px;line-height:0;">${window.UI.badge(count, { variant: 'primary' })}</span>`);
+      }
+    }
+    this._renderBottomNav(user, count);
+  },
+
   async _fetchPendingCount() {
     try {
       const res = await fetch('/api/approvals/pending-count');

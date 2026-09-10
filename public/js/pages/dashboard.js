@@ -397,6 +397,10 @@ window.Pages.dashboard = (function () {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               Help Ticket
             </button>
+            <button id="db-btn-urgent-payment" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:#dc2626;color:#fff;border:none;cursor:pointer;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 8h12M6 13l6 8M6 13h4a4 4 0 0 0 0-8"/></svg>
+              Urgent Payment
+            </button>
             <button id="db-btn-announcement" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#8b5cf6;color:#fff;border:none;cursor:pointer;">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
               Announcement
@@ -1213,6 +1217,144 @@ window.Pages.dashboard = (function () {
     });
   }
 
+  /* ── Urgent Payment request modal ──────────────────────────────────
+     Replaces the Google Form the office used for urgent payments. Saved to
+     /api/urgent-payments; the server mails the approvers, the accounts desk
+     and the requester, and the request shows under Approvals → Urgent
+     Payment for an Admin/HOD to approve or reject. */
+  function _openUrgentPaymentModal() {
+    const existing = document.getElementById('db-up-modal');
+    if (existing) existing.remove();
+    const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    const me = window.currentUser || {};
+    const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const inp = 'width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;';
+    const ro  = 'width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#64748b;outline:none;box-sizing:border-box;background:#f8fafc;';
+    const lbl = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;';
+    const req = '<span style="color:#ef4444">*</span>';
+    const modes = ['NEFT / RTGS', 'IMPS / UPI', 'Cheque', 'Cash', 'Other'];
+    const html = `
+      <div id="db-up-modal" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);backdrop-filter:blur(4px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
+        <div style="background:#fff;border-radius:20px;box-shadow:0 20px 48px rgba(0,0,0,0.14);width:100%;max-width:520px;max-height:calc(100vh - 32px);display:flex;flex-direction:column;overflow:hidden;" onclick="event.stopPropagation()">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid #f1f5f9;flex-shrink:0;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="width:34px;height:34px;border-radius:10px;background:#fee2e2;color:#dc2626;display:flex;align-items:center;justify-content:center;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 8h12M6 13l6 8M6 13h4a4 4 0 0 0 0-8"/></svg>
+              </div>
+              <div>
+                <div style="font-size:15px;font-weight:700;color:#0f172a;">Urgent Payment Request</div>
+                <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">Goes to Saloni, Sajil and Accounts for approval</div>
+              </div>
+            </div>
+            <button id="db-up-close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;color:#64748b;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div style="padding:20px 22px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div>
+                <label style="${lbl}">Requested By</label>
+                <input id="db-up-by" style="${ro}" value="${esc(me.name || me.email || '')}" readonly />
+              </div>
+              <div>
+                <label style="${lbl}">Department</label>
+                <input id="db-up-dept" style="${inp}" value="${esc(me.department || '')}" placeholder="Department" />
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div>
+                <label style="${lbl}">Request Date ${req}</label>
+                <input id="db-up-date" type="date" style="${inp}" value="${today}" />
+              </div>
+              <div>
+                <label style="${lbl}">Payment Required By ${req}</label>
+                <input id="db-up-required" type="date" style="${inp}" value="${today}" min="${today}" />
+              </div>
+            </div>
+            <div>
+              <label style="${lbl}">Pay To (Party / Vendor Name) ${req}</label>
+              <input id="db-up-payee" style="${inp}" placeholder="Who is to be paid" />
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+              <div>
+                <label style="${lbl}">Amount (₹) ${req}</label>
+                <input id="db-up-amount" type="number" min="1" step="0.01" style="${inp}" placeholder="0.00" />
+              </div>
+              <div>
+                <label style="${lbl}">Payment Mode</label>
+                <select id="db-up-mode" style="${inp}">
+                  ${modes.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label style="${lbl}">Purpose of Payment ${req}</label>
+              <textarea id="db-up-purpose" rows="3" style="${inp}resize:none;font-family:inherit;" placeholder="Why is this payment urgent? What is it for?"></textarea>
+            </div>
+            <div>
+              <label style="${lbl}">Bill / Invoice / Reference No.</label>
+              <input id="db-up-ref" style="${inp}" placeholder="Optional" />
+            </div>
+            <div>
+              <label style="${lbl}">Bank Details of Payee</label>
+              <textarea id="db-up-bank" rows="2" style="${inp}resize:none;font-family:inherit;" placeholder="Account name, A/c no., IFSC, bank — or UPI id (optional)"></textarea>
+            </div>
+            <div>
+              <label style="${lbl}">Remarks</label>
+              <input id="db-up-remarks" style="${inp}" placeholder="Optional" />
+            </div>
+            <div id="db-up-err" style="display:none;font-size:12px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:8px 12px;"></div>
+          </div>
+          <div style="padding:16px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
+            <button id="db-up-cancel" class="btn-secondary">Cancel</button>
+            <button id="db-up-submit" class="btn-primary" style="background:#dc2626;border-color:#dc2626;">Submit Request</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+
+    const closeModal = () => { document.getElementById('db-up-modal')?.remove(); };
+    document.getElementById('db-up-modal').addEventListener('click', closeModal);
+    document.getElementById('db-up-close').addEventListener('click', closeModal);
+    document.getElementById('db-up-cancel').addEventListener('click', closeModal);
+    document.getElementById('db-up-payee')?.focus();
+
+    document.getElementById('db-up-submit').addEventListener('click', async () => {
+      const v = (id) => (document.getElementById(id)?.value ?? '').trim();
+      const errEl = document.getElementById('db-up-err');
+      const btn   = document.getElementById('db-up-submit');
+      const fail  = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
+      const body = {
+        request_date: v('db-up-date'),
+        required_by:  v('db-up-required'),
+        department:   v('db-up-dept'),
+        payee:        v('db-up-payee'),
+        amount:       v('db-up-amount'),
+        payment_mode: v('db-up-mode'),
+        purpose:      v('db-up-purpose'),
+        reference_no: v('db-up-ref'),
+        bank_details: v('db-up-bank'),
+        remarks:      v('db-up-remarks'),
+      };
+      if (!body.payee)                      return fail('Please enter who is to be paid.');
+      if (!(Number(body.amount) > 0))       return fail('Please enter a valid amount.');
+      if (!body.purpose)                    return fail('Please describe the purpose of the payment.');
+      if (!body.required_by)                return fail('Please pick the date the payment is required by.');
+      errEl.style.display = 'none';
+
+      btn.disabled = true; btn.textContent = 'Submitting…';
+      try {
+        const r = await Utils.apiFetch('/api/urgent-payments', { method: 'POST', body: JSON.stringify(body) });
+        closeModal();
+        Utils.showToast(`Urgent payment request ${r?.id || ''} submitted — approvers and Accounts have been mailed`, 'success');
+        if (window.Sidebar?.refreshBadge) { try { window.Sidebar.refreshBadge(); } catch {} }
+      } catch (e) {
+        fail(e.message || 'Failed to submit the request.');
+        btn.disabled = false; btn.textContent = 'Submit Request';
+      }
+    });
+  }
+
   /* ── Announcement quick modal ────────────────────────────────────── */
   function _openAnnouncementModal(admin) {
     if (!admin) { Utils.showToast('Only Admin/HOD can post announcements', 'error'); return; }
@@ -1525,6 +1667,9 @@ window.Pages.dashboard = (function () {
 
     const btnHelpTicket = el.querySelector('#db-btn-help-ticket');
     if (btnHelpTicket) btnHelpTicket.addEventListener('click', () => _openHelpTicketModal());
+
+    const btnUrgentPayment = el.querySelector('#db-btn-urgent-payment');
+    if (btnUrgentPayment) btnUrgentPayment.addEventListener('click', () => _openUrgentPaymentModal());
 
     const btnAnnouncement = el.querySelector('#db-btn-announcement');
     if (btnAnnouncement) btnAnnouncement.addEventListener('click', () => _openAnnouncementModal(admin));

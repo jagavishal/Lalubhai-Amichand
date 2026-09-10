@@ -342,6 +342,8 @@ const SCHEMA = [
   // wants a toner cartridge and a ₹40,000 rewire in the same queue. Blank on
   // every row raised before the split — read with the fallback in kindOf().
   `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS kind VARCHAR(16) DEFAULT ''`,
+  `CREATE TABLE IF NOT EXISTS urgent_payments (id VARCHAR(16) PRIMARY KEY, request_date DATE DEFAULT NULL, requested_by VARCHAR(255) NOT NULL DEFAULT '', requested_by_id VARCHAR(16) DEFAULT NULL, department VARCHAR(128) DEFAULT '', payee VARCHAR(255) NOT NULL, amount DECIMAL(15,2) NOT NULL DEFAULT 0, purpose TEXT DEFAULT NULL, payment_mode VARCHAR(32) DEFAULT '', required_by DATE DEFAULT NULL, reference_no VARCHAR(128) DEFAULT '', bank_details TEXT DEFAULT NULL, remarks TEXT DEFAULT NULL, status VARCHAR(16) NOT NULL DEFAULT 'pending', decided_by VARCHAR(255) DEFAULT '', decided_at DATETIME DEFAULT NULL, decision_note TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_up_status ON urgent_payments (status)`,
   `CREATE TABLE IF NOT EXISTS announcements (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, message TEXT DEFAULT NULL, posted_by VARCHAR(255) NOT NULL DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS vendor_submissions (id VARCHAR(16) PRIMARY KEY, business_name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', phone VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', gst_no VARCHAR(32) DEFAULT '', address TEXT DEFAULT NULL, products TEXT DEFAULT NULL, notes TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS pr_requisitions (id VARCHAR(16) PRIMARY KEY, pr_no VARCHAR(64) NOT NULL, filled_by VARCHAR(255) NOT NULL DEFAULT '', vendors TEXT DEFAULT NULL, vendor_other VARCHAR(255) DEFAULT '', department TEXT DEFAULT NULL, department_other VARCHAR(255) DEFAULT '', accessory_product TEXT DEFAULT NULL, brazing_product TEXT DEFAULT NULL, cnc_product VARCHAR(255) DEFAULT '', consumable_product TEXT DEFAULT NULL, electric_product TEXT DEFAULT NULL, packing_product TEXT DEFAULT NULL, pressing_product TEXT DEFAULT NULL, washing_product TEXT DEFAULT NULL, welding_product TEXT DEFAULT NULL, new_product VARCHAR(255) DEFAULT '', current_stock VARCHAR(64) NOT NULL DEFAULT '', quantity_required VARCHAR(64) NOT NULL DEFAULT '', previous_rate VARCHAR(64) NOT NULL DEFAULT '', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -687,7 +689,7 @@ async function fixCollations() {
   // add new tables here the same day they're added to SCHEMA above.
   const tables = ['users','delegations','masters','clients','checklist_completions','daily_tasks','leaves','user_sessions',
     'fms_sheets','fms_sheet_steps','fms_step_doers','fms_extra_rows','fms_intake_fields',
-    'holidays','profile','app_config','dev_backups','help_tickets','announcements',
+    'holidays','profile','app_config','dev_backups','help_tickets','urgent_payments','announcements',
     'vendor_submissions','pr_requisitions','payment_entries','ims_items','ims_transactions','departments',
     'hr_employees','hr_salary_structure','hr_leave_types','hr_leave_balances','hr_attendance',
     'hr_payroll_runs','hr_payslips','hr_onboarding','hr_exits','hr_documents'];
@@ -3165,6 +3167,251 @@ app.patch('/api/help-tickets', requireAuth, async (req, res) => {
       await pool.query('UPDATE help_tickets SET status=COALESCE($1,status) WHERE id=$2', [status??null, id]);
     }
     return res.json({ success: true });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// ── Urgent Payment Requests ───────────────────────────────────────────────────
+// A form on the dashboard (see dashboard.js → _openUrgentPaymentModal) and an
+// "Urgent Payment" tab on the Approvals page. It replaced a Google Form the
+// office used to fill, so the request is in the ERP with everything else and
+// the people who need to know are mailed the moment it is raised — the two
+// directors, the accounts desk and the person who filled it — and again once
+// an Admin/HOD decides it.
+//
+// Who is mailed lives in app_config under 'urgent_payment_notify' so it can be
+// changed without a deploy. Each entry is either a user's name (resolved to
+// their login / notification address) or a bare email address.
+const DEFAULT_URGENT_PAYMENT_NOTIFY = ['Saloni Anchan', 'Sajil Shah', 'accounts@laltd.in'];
+const URGENT_PAYMENT_MODES = ['NEFT / RTGS', 'IMPS / UPI', 'Cheque', 'Cash', 'Other'];
+
+function upOut(r) {
+  if (!r) return null;
+  return {
+    id: r.id,
+    request_date: toDateStr(r.request_date),
+    requested_by: r.requested_by || '',
+    requested_by_id: r.requested_by_id || null,
+    department: r.department || '',
+    payee: r.payee || '',
+    amount: r.amount == null ? 0 : Number(r.amount),
+    purpose: r.purpose || '',
+    payment_mode: r.payment_mode || '',
+    required_by: toDateStr(r.required_by),
+    reference_no: r.reference_no || '',
+    bank_details: r.bank_details || '',
+    remarks: r.remarks || '',
+    status: r.status || 'pending',
+    decided_by: r.decided_by || '',
+    decided_at: toIso(r.decided_at),
+    decision_note: r.decision_note || '',
+    created_at: toIso(r.created_at),
+  };
+}
+
+/* Every address an urgent-payment mail goes to: the configured list plus the
+   requester, resolved against the user list so a name becomes a login and a
+   login becomes its notification address. Works in both storage modes because
+   readStore() does. */
+async function urgentPaymentRecipients(requester) {
+  const cfg = await readAuthority('urgent_payment_notify', DEFAULT_URGENT_PAYMENT_NOTIFY);
+  let users = [];
+  try { users = (await readStore()).users || []; } catch {}
+  const byName = (name) => {
+    const want = String(name || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!want) return null;
+    const exact = users.find(u => String(u.name || '').trim().toLowerCase() === want);
+    if (exact) return exact;
+    const first = want.split(' ')[0];
+    if (first.length < 3) return null;
+    const like = users.filter(u => String(u.name || '').trim().toLowerCase().startsWith(first));
+    return like.length === 1 ? like[0] : null;
+  };
+  const out = [];
+  const seen = new Set();
+  const add = (email) => {
+    const e = String(email || '').trim();
+    if (!e || !e.includes('@') || seen.has(e.toLowerCase())) return;
+    seen.add(e.toLowerCase());
+    out.push(e);
+  };
+  for (const entry of cfg) {
+    const s = String(entry || '').trim();
+    if (!s) continue;
+    if (s.includes('@')) {
+      const u = users.find(x => String(x.email || '').trim().toLowerCase() === s.toLowerCase());
+      add(await notifyAddressFor(u?.id, s));
+    } else {
+      const u = byName(s);
+      if (u) add(await notifyAddressFor(u.id, u.email));
+      else console.log('[urgent-payment] no user matches notify entry:', s);
+    }
+  }
+  if (requester) add(await notifyAddressFor(requester.id, requester.email));
+  return out;
+}
+
+async function sendUrgentPaymentEmail({ to, row, stage }) {
+  const mailer = getMailer();
+  if (!mailer || !to || !to.length) {
+    console.log('[email] urgent payment not sent — mailer:', !!mailer, '| to:', (to || []).join(', ') || '(none)');
+    return;
+  }
+  const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const rupees = '₹' + Number(row.amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  const fmtD = (d) => { if (!d) return ''; const [y, m, dd] = String(d).slice(0, 10).split('-'); return `${dd}/${m}/${y}`; };
+  const decided = stage === 'decided';
+  const approved = /^approved$/i.test(row.status || '');
+  const rows = [
+    ['Request No.', row.id],
+    ['Requested By', esc(row.requested_by) + (row.department ? ` (${esc(row.department)})` : '')],
+    ['Request Date', fmtD(row.request_date)],
+    ['Pay To', esc(row.payee)],
+    ['Amount', rupees],
+    ['Purpose', esc(row.purpose).replace(/\n/g, '<br>')],
+    ['Payment Mode', esc(row.payment_mode)],
+    ['Required By', fmtD(row.required_by)],
+    ['Bill / Reference', esc(row.reference_no)],
+    ['Bank Details', esc(row.bank_details).replace(/\n/g, '<br>')],
+    ['Remarks', esc(row.remarks).replace(/\n/g, '<br>')],
+    ['Decision', decided ? `<b>${esc(row.status)}</b> by ${esc(row.decided_by)}` : ''],
+    ['Decision Note', decided ? esc(row.decision_note).replace(/\n/g, '<br>') : ''],
+  ];
+  const subject = decided
+    ? `Urgent Payment ${row.status}: ${rupees} to ${row.payee} (${row.id})`
+    : `Urgent Payment Request: ${rupees} to ${row.payee} — ${row.requested_by} (${row.id})`;
+  try {
+    await mailer.sendMail({
+      from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+      to: to.join(', '),
+      subject,
+      html: _leaveMailHtml({
+        heading: decided ? `Urgent Payment ${row.status}` : 'Urgent Payment Request',
+        colour: decided ? (approved ? '#15803d' : '#b91c1c') : '#dc2626',
+        lead: decided
+          ? `The urgent payment request <b>${esc(row.id)}</b> raised by <b>${esc(row.requested_by)}</b> has been <b>${esc(String(row.status).toLowerCase())}</b> by <b>${esc(row.decided_by)}</b>.`
+          : `<b>${esc(row.requested_by)}</b> has raised an urgent payment request. It is waiting for approval under <b>Approvals → Urgent Payment</b> in the ERP.`,
+        rows,
+        footer: decided
+          ? (approved ? 'Accounts: please release this payment.' : 'Speak to the approver if this needs reconsidering.')
+          : 'This mail goes to the approvers, the accounts desk and the person who raised the request.',
+      }),
+    });
+    console.log('[email] urgent payment', stage, 'mail sent to:', to.join(', '));
+  } catch (e) {
+    console.error('[email] urgent payment mail failed:', e.message);
+  }
+}
+
+app.get('/api/urgent-payments', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const user = req.session.user;
+    const admin = isAdminUser(user);
+    let rows;
+    if (USE_DB) {
+      rows = admin
+        ? await q('SELECT * FROM urgent_payments ORDER BY created_at DESC', [])
+        : await q('SELECT * FROM urgent_payments WHERE requested_by_id=$1 ORDER BY created_at DESC', [user.id]);
+    } else {
+      const store = await readStore();
+      rows = (store.urgentPayments || []).filter(r => admin || r.requested_by_id === user.id)
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    }
+    return res.json(rows.map(upOut));
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/urgent-payments', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const user = req.session.user;
+    const b = req.body || {};
+    const payee = String(b.payee || '').trim();
+    const purpose = String(b.purpose || '').trim();
+    const amount = toAmount(b.amount);
+    const requiredBy = String(b.required_by || '').slice(0, 10);
+    if (!payee) return res.status(400).json({ error: 'Pay To (party name) is required' });
+    if (amount === null || amount <= 0) return res.status(400).json({ error: 'A valid amount is required' });
+    if (!purpose) return res.status(400).json({ error: 'Purpose of payment is required' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(requiredBy)) return res.status(400).json({ error: 'Required-by date is required' });
+    const mode = URGENT_PAYMENT_MODES.includes(b.payment_mode) ? b.payment_mode : (String(b.payment_mode || '').trim() || 'NEFT / RTGS');
+    const row = {
+      request_date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.request_date || '')) ? String(b.request_date) : todayIST(),
+      requested_by: user.name || user.email || '',
+      requested_by_id: user.id,
+      department: String(b.department || user.department || '').trim().slice(0, 128),
+      payee: payee.slice(0, 255),
+      amount,
+      purpose,
+      payment_mode: mode.slice(0, 32),
+      required_by: requiredBy,
+      reference_no: String(b.reference_no || '').trim().slice(0, 128),
+      bank_details: String(b.bank_details || '').trim(),
+      remarks: String(b.remarks || '').trim(),
+      status: 'pending',
+    };
+    let id;
+    if (USE_DB) {
+      id = await withSeqId('urgent_payments', 'UP', 4, (nid) => pool.query(
+        `INSERT INTO urgent_payments (id,request_date,requested_by,requested_by_id,department,payee,amount,purpose,payment_mode,required_by,reference_no,bank_details,remarks,status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [nid, row.request_date, row.requested_by, row.requested_by_id, row.department, row.payee, row.amount, row.purpose,
+         row.payment_mode, row.required_by, row.reference_no, row.bank_details, row.remarks, row.status]));
+    } else {
+      const store = await readStore();
+      store.urgentPayments = store.urgentPayments || [];
+      let n = 0;
+      for (const r of store.urgentPayments) { const t = String(r.id || '').replace(/^UP/, ''); if (/^\d+$/.test(t)) n = Math.max(n, +t); }
+      id = 'UP' + String(n + 1).padStart(4, '0');
+      store.urgentPayments.push({ ...row, id, created_at: new Date().toISOString() });
+      await writeStore(store);
+    }
+    const saved = upOut({ ...row, id, created_at: new Date() });
+    // Fire-and-forget, like every other notification here: the request is
+    // stored, and a slow SMTP must not make the requester wait or see a failure.
+    (async () => {
+      const to = await urgentPaymentRecipients(user);
+      await sendUrgentPaymentEmail({ to, row: saved, stage: 'raised' });
+    })().catch((e) => console.error('[urgent-payment] mail failed:', e.message));
+    return res.status(201).json(saved);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/urgent-payments', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const user = req.session.user;
+    if (!isAdminUser(user)) return res.status(403).json({ error: 'Only Admin/HOD can decide an urgent payment' });
+    const { id, status, note } = req.body || {};
+    if (!id) return res.status(400).json({ error: 'id required' });
+    const decision = /^approved$/i.test(status) ? 'Approved' : /^rejected$/i.test(status) ? 'Rejected' : null;
+    if (!decision) return res.status(400).json({ error: 'status must be Approved or Rejected' });
+    const decidedBy = user.name || user.email || '';
+    const decisionNote = String(note || '').trim();
+    let current;
+    if (USE_DB) {
+      current = (await q('SELECT * FROM urgent_payments WHERE id=$1', [id]))[0];
+      if (!current) return res.status(404).json({ error: 'Request not found' });
+      if (current.status !== 'pending') return res.status(409).json({ error: `Already ${current.status}` });
+      await pool.query('UPDATE urgent_payments SET status=$1, decided_by=$2, decided_at=NOW(), decision_note=$3 WHERE id=$4',
+        [decision, decidedBy, decisionNote, id]);
+      current = (await q('SELECT * FROM urgent_payments WHERE id=$1', [id]))[0];
+    } else {
+      const store = await readStore();
+      current = (store.urgentPayments || []).find(r => r.id === id);
+      if (!current) return res.status(404).json({ error: 'Request not found' });
+      if (current.status !== 'pending') return res.status(409).json({ error: `Already ${current.status}` });
+      Object.assign(current, { status: decision, decided_by: decidedBy, decided_at: new Date().toISOString(), decision_note: decisionNote });
+      await writeStore(store);
+    }
+    const saved = upOut(current);
+    (async () => {
+      let requester = null;
+      try { requester = ((await readStore()).users || []).find(u => u.id === saved.requested_by_id) || null; } catch {}
+      const to = await urgentPaymentRecipients(requester);
+      await sendUrgentPaymentEmail({ to, row: saved, stage: 'decided' });
+    })().catch((e) => console.error('[urgent-payment] decision mail failed:', e.message));
+    return res.json(saved);
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -10963,15 +11210,17 @@ app.get('/api/approvals/pending-count', requireAuth, async (req, res) => {
   if (!isAdminUser(req.session?.user)) return res.json({ count:0 });
   try {
     if (USE_DB) {
-      const [revise, tasks] = await Promise.all([
+      const [revise, tasks, urgent] = await Promise.all([
         q(`SELECT COUNT(*) AS cnt FROM delegations WHERE status='revise_requested'`),
         q(`SELECT COUNT(*) AS cnt FROM delegations WHERE approval='Approval Required' AND status='pending'`),
+        q(`SELECT COUNT(*) AS cnt FROM urgent_payments WHERE status='pending'`).catch(() => []),
       ]);
-      return res.json({ count:Number(revise[0]?.cnt||0)+Number(tasks[0]?.cnt||0) });
+      return res.json({ count:Number(revise[0]?.cnt||0)+Number(tasks[0]?.cnt||0)+Number(urgent[0]?.cnt||0) });
     }
     const store = await readStore();
     const dels = store.delegations||[];
-    const count = dels.filter(d=>d.status==='revise_requested').length + dels.filter(d=>d.approval==='Approval Required'&&d.status==='pending').length;
+    const count = dels.filter(d=>d.status==='revise_requested').length + dels.filter(d=>d.approval==='Approval Required'&&d.status==='pending').length
+      + (store.urgentPayments||[]).filter(r=>r.status==='pending').length;
     return res.json({ count });
   } catch { return res.json({ count:0 }); }
 });

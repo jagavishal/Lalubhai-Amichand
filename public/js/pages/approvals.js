@@ -11,6 +11,13 @@ window.Pages.approvals = {
   // page filtering a wider list it should not have been given.
   _leaveRequests: [],
   _leaveBusy: '',
+  // Urgent payment requests. Admin/HOD see every request and decide the
+  // pending ones; everyone else sees only what they raised. Fetched for both
+  // because the tab is shown to both — see _renderContent.
+  _urgentPayments: [],
+  _upBusy: '',
+  _upShowAll: false,
+  _upDecide: null,          // { id, status } while the decision modal is open
   _seenRevise: new Set(),
   _seenApprovals: new Set(),
   _grantTask: null,
@@ -237,6 +244,198 @@ window.Pages.approvals = {
     return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="m9 16 2 2 4-4"/></svg>`;
   },
 
+  /* ── Urgent payment requests ────────────────────────────────────────── */
+  async _fetchUrgent() {
+    try {
+      const rows = await Utils.apiFetch('/api/urgent-payments');
+      this._urgentPayments = Array.isArray(rows) ? rows : [];
+    } catch {
+      this._urgentPayments = [];
+    }
+  },
+
+  _rupees(v) {
+    const n = Number(v || 0);
+    return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
+  },
+
+  async _decideUrgent(id, status, note) {
+    this._upBusy = id;
+    this._renderContent();
+    try {
+      const r = await Utils.apiFetch('/api/urgent-payments', {
+        method: 'PATCH', body: JSON.stringify({ id, status, note }),
+      });
+      Utils.showToast(status === 'Approved' ? 'Payment approved — Accounts and the requester have been mailed' : 'Request rejected');
+      if (r && r.id) this._urgentPayments = this._urgentPayments.map(x => x.id === r.id ? r : x);
+      if (window.Sidebar?.refreshBadge) { try { window.Sidebar.refreshBadge(); } catch {} }
+    } catch (e) {
+      Utils.showToast(e.message || 'Could not record the decision', 'error');
+    }
+    this._upBusy = '';
+    this._upDecide = null;
+    document.getElementById('up-decide-overlay')?.remove();
+    this._renderContent();
+  },
+
+  _buildUrgentTable(admin) {
+    const esc = this._esc.bind(this);
+    const all = this._urgentPayments;
+    const items = admin && !this._upShowAll ? all.filter(r => r.status === 'pending') : all;
+    const STATUS = {
+      pending:  { label: 'Pending',  cls: 'bg-amber-50 text-amber-700'     },
+      Approved: { label: 'Approved', cls: 'bg-emerald-50 text-emerald-700' },
+      Rejected: { label: 'Rejected', cls: 'bg-red-50 text-red-700'         },
+    };
+    const toggle = admin ? `<div class="flex items-center justify-between flex-wrap gap-2 px-4 py-2.5 border-b border-slate-100 bg-white">
+        <div class="text-[12px] text-slate-500">${items.length} request${items.length === 1 ? '' : 's'}${this._upShowAll ? '' : ' waiting for a decision'}</div>
+        <label class="flex items-center gap-2 text-[12px] text-slate-600 cursor-pointer">
+          <input type="checkbox" id="up-show-all" ${this._upShowAll ? 'checked' : ''}> Show decided requests too
+        </label>
+      </div>` : '';
+
+    if (items.length === 0) {
+      const empty = this._emptyState(this._urgentIconSvg('w-8 h-8 text-primary-400'),
+        admin ? (this._upShowAll ? 'No urgent payment requests yet' : 'No urgent payments waiting on you')
+              : 'No urgent payment requests',
+        admin ? 'Requests raised from the dashboard\'s Urgent Payment button land here.'
+              : 'Raise one from the Urgent Payment button on the dashboard.');
+      return toggle ? `<div class="card overflow-hidden">${toggle}${empty.replace('class="card p-14', 'class="p-14')}</div>` : empty;
+    }
+
+    const rows = items.map((r, i) => {
+      const s = STATUS[r.status] || STATUS.pending;
+      const busy = this._upBusy === r.id;
+      const pending = r.status === 'pending';
+      const decided = !pending && (r.decided_by || r.decision_note)
+        ? `<div class="text-[11px] text-slate-400 mt-1">by ${esc(r.decided_by || '—')}${r.decision_note ? ' · ' + esc(r.decision_note) : ''}</div>` : '';
+      const extra = [r.reference_no ? 'Ref: ' + esc(r.reference_no) : '', r.bank_details ? esc(r.bank_details) : '', r.remarks ? esc(r.remarks) : '']
+        .filter(Boolean).join(' · ');
+      return `<tr class="table-row" ${pending && admin ? 'style="background:rgba(245,158,11,0.06)"' : ''}>
+        <td class="table-td text-slate-400 text-xs font-mono">${i + 1}</td>
+        <td class="table-td whitespace-nowrap">
+          <div class="font-semibold text-slate-800 text-xs font-mono">${esc(r.id)}</div>
+          <div class="text-[11px] text-slate-400">${this._fmt(r.request_date || r.created_at)}</div>
+        </td>
+        ${admin ? `<td class="table-td">
+          <div class="text-slate-800 font-medium">${esc(r.requested_by || '—')}</div>
+          <div class="text-[11px] text-slate-400">${esc(r.department || '')}</div>
+        </td>` : ''}
+        <td class="table-td">
+          <div class="text-slate-800 font-medium">${esc(r.payee)}</div>
+          <div class="text-[11px] text-slate-400">${esc(r.payment_mode || '')}</div>
+        </td>
+        <td class="table-td text-right font-semibold text-slate-900 whitespace-nowrap">${this._rupees(r.amount)}</td>
+        <td class="table-td text-slate-600 max-w-[260px]">
+          <div style="white-space:pre-line">${esc(r.purpose || '—')}</div>
+          ${extra ? `<div class="text-[11px] text-slate-400 mt-1">${extra}</div>` : ''}
+        </td>
+        <td class="table-td text-slate-600 whitespace-nowrap">${this._fmt(r.required_by)}</td>
+        <td class="table-td">
+          <span class="pill font-semibold ${s.cls}">${s.label}</span>${decided}
+        </td>
+        ${admin ? `<td class="table-td whitespace-nowrap">${pending ? `
+          <div class="flex gap-1.5">
+            ${this._hasFeature('approve') ? `<button data-up-ok="${esc(r.id)}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer" ${busy ? 'disabled' : ''}>${busy ? '…' : 'Approve'}</button>` : ''}
+            ${this._hasFeature('reject') ? `<button data-up-no="${esc(r.id)}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer" ${busy ? 'disabled' : ''}>Reject</button>` : ''}
+          </div>` : '<span class="text-[11px] text-slate-400">—</span>'}</td>` : ''}
+      </tr>`;
+    }).join('');
+
+    return `<div class="card overflow-hidden">
+      ${toggle}
+      <div class="overflow-x-auto"><table class="w-full text-sm">
+        <thead class="bg-slate-50/80">
+          <tr>
+            <th class="table-th">#</th>
+            <th class="table-th">Request</th>
+            ${admin ? '<th class="table-th">Requested By</th>' : ''}
+            <th class="table-th">Pay To</th>
+            <th class="table-th text-right">Amount</th>
+            <th class="table-th">Purpose</th>
+            <th class="table-th">Required By</th>
+            <th class="table-th">Status</th>
+            ${admin ? '<th class="table-th">Action</th>' : ''}
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>`;
+  },
+
+  _bindUrgentEvents() {
+    const root = document.getElementById('approvals-root');
+    if (!root) return;
+    root.querySelector('#up-show-all')?.addEventListener('change', (e) => {
+      this._upShowAll = !!e.target.checked;
+      this._renderContent();
+    });
+    root.querySelectorAll('[data-up-ok]').forEach(b =>
+      b.addEventListener('click', () => { this._upDecide = { id: b.dataset.upOk, status: 'Approved' }; this._renderUrgentDecideModal(); }));
+    root.querySelectorAll('[data-up-no]').forEach(b =>
+      b.addEventListener('click', () => { this._upDecide = { id: b.dataset.upNo, status: 'Rejected' }; this._renderUrgentDecideModal(); }));
+  },
+
+  _renderUrgentDecideModal() {
+    document.getElementById('up-decide-overlay')?.remove();
+    if (!this._upDecide) return;
+    const r = this._urgentPayments.find(x => x.id === this._upDecide.id);
+    if (!r) { this._upDecide = null; return; }
+    const esc = this._esc.bind(this);
+    const approve = this._upDecide.status === 'Approved';
+    const overlay = document.createElement('div');
+    overlay.id = 'up-decide-overlay';
+    overlay.className = 'fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4';
+    overlay.innerHTML = `
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+        <div class="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl ${approve ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'} grid place-items-center shrink-0">
+            ${this._urgentIconSvg('w-5 h-5')}
+          </div>
+          <div class="flex-1">
+            <h2 class="text-base font-semibold">${approve ? 'Approve' : 'Reject'} Urgent Payment</h2>
+            <p class="text-xs text-slate-500 mt-0.5">${esc(r.id)} · raised by ${esc(r.requested_by || '—')}</p>
+          </div>
+          <button id="up-decide-close" class="w-8 h-8 grid place-items-center rounded-lg text-slate-400 hover:bg-slate-100">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="p-6 space-y-3">
+          <div class="rounded-lg bg-slate-50 border border-slate-100 p-3 text-sm space-y-1.5">
+            <div class="flex justify-between gap-3"><span class="text-slate-400 text-xs">Pay To</span><b class="text-slate-800 text-right">${esc(r.payee)}</b></div>
+            <div class="flex justify-between gap-3"><span class="text-slate-400 text-xs">Amount</span><b class="text-slate-900">${this._rupees(r.amount)}</b></div>
+            <div class="flex justify-between gap-3"><span class="text-slate-400 text-xs">Mode</span><span class="text-slate-700">${esc(r.payment_mode || '—')}</span></div>
+            <div class="flex justify-between gap-3"><span class="text-slate-400 text-xs">Required By</span><span class="text-slate-700">${this._fmt(r.required_by)}</span></div>
+            <div class="pt-2 border-t border-slate-200 text-xs text-slate-600" style="white-space:pre-line">${esc(r.purpose || '')}</div>
+          </div>
+          <div>
+            <label class="block text-[10.5px] font-bold uppercase tracking-wider text-slate-500 mb-1">Note ${approve ? '(optional)' : ''}</label>
+            <textarea id="up-decide-note" rows="2" class="w-full text-sm rounded-lg border border-slate-200 px-3 py-2" style="resize:none;font-family:inherit;outline:none;" placeholder="${approve ? 'Anything Accounts should know' : 'Why is this being rejected?'}"></textarea>
+          </div>
+        </div>
+        <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
+          <button id="up-decide-cancel" class="btn-secondary">Cancel</button>
+          <button id="up-decide-confirm" class="${approve ? 'btn-success' : 'btn-danger'}">${approve ? 'Approve Payment' : 'Reject Request'}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => { this._upDecide = null; overlay.remove(); };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('#up-decide-close').addEventListener('click', close);
+    overlay.querySelector('#up-decide-cancel').addEventListener('click', close);
+    overlay.querySelector('#up-decide-note').focus();
+    overlay.querySelector('#up-decide-confirm').addEventListener('click', () => {
+      const note = overlay.querySelector('#up-decide-note').value.trim();
+      const btn = overlay.querySelector('#up-decide-confirm');
+      btn.disabled = true; btn.textContent = 'Saving…';
+      this._decideUrgent(r.id, this._upDecide.status, note);
+    });
+  },
+
+  _urgentIconSvg(cls) {
+    return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 8h12M6 13l6 8M6 13h4a4 4 0 0 0 0-8"/></svg>`;
+  },
+
   /* ── render entry ──────────────────────────────────────── */
   async render() {
     const el = document.getElementById('main-content');
@@ -260,6 +459,7 @@ window.Pages.approvals = {
     await Promise.all([
       isAdmin ? this._fetchAdmin() : this._fetchUser(),
       this._fetchLeaves(),
+      this._fetchUrgent(),
     ]);
 
     this._renderContent();
@@ -277,11 +477,10 @@ window.Pages.approvals = {
       root.innerHTML = this._buildAdminView();
       this._bindAdminEvents();
       this._startSeenTimer();
-    } else if (this._leaveRequests.length) {
-      /* A non-admin with leave to decide. Their own revise requests are
-         read-only, so the page grows a two-tab shell only for the people who
-         actually have somebody's leave waiting on them — everyone else keeps
-         the plain single table it has always been. */
+    } else {
+      /* Non-admins: their own revise requests (read-only), their own urgent
+         payment requests, and — only for the people who actually have
+         somebody's leave waiting on them — a Leave Requests tab to decide. */
       const tab = (key, count) => {
         const on = this._tab === key;
         const cls = on ? 'bg-white border-slate-200 text-slate-900 shadow-card'
@@ -290,23 +489,28 @@ window.Pages.approvals = {
         return `<button data-tab="${key}" class="approvals-tab flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition border ${cls}">
           ${key}<span class="pill ${pill}">${count}</span></button>`;
       };
-      if (this._tab !== 'My Requests' && this._tab !== 'Leave Requests') this._tab = 'Leave Requests';
+      const hasLeave = this._leaveRequests.length > 0;
+      const valid = ['My Requests', 'Urgent Payment'].concat(hasLeave ? ['Leave Requests'] : []);
+      if (!valid.includes(this._tab)) this._tab = hasLeave ? 'Leave Requests' : 'My Requests';
+      const upPending = this._urgentPayments.filter(r => r.status === 'pending').length;
+      const content = this._tab === 'My Requests' ? this._buildUserView()
+        : this._tab === 'Urgent Payment' ? this._buildUrgentTable(false)
+        : this._buildLeaveTable();
       root.innerHTML = `
         <div class="flex gap-2 flex-wrap">
-          ${tab('Leave Requests', this._leaveRequests.length)}
+          ${hasLeave ? tab('Leave Requests', this._leaveRequests.length) : ''}
           ${tab('My Requests', this._myRequests.length)}
+          ${tab('Urgent Payment', upPending)}
         </div>
-        <div id="approvals-content">${this._tab === 'My Requests' ? this._buildUserView() : this._buildLeaveTable()}</div>`;
+        <div id="approvals-content">${content}</div>`;
       root.querySelectorAll('.approvals-tab').forEach(btn => {
         btn.addEventListener('click', () => { this._tab = btn.dataset.tab; this._renderContent(); });
       });
-    } else {
-      root.innerHTML = this._buildUserView();
-      // no events needed for user view (read-only table)
     }
 
     // Approve/Reject live in both shells, so they are bound once here.
     this._bindLeaveEvents();
+    this._bindUrgentEvents();
 
     // Re-attach grant modal if open
     if (this._grantTask) {
@@ -320,6 +524,7 @@ window.Pages.approvals = {
       { key: 'Shift Requests', count: this._reviseRequests.length, icon: 'revise' },
       { key: 'Task Approvals',  count: this._taskApprovals.length,  icon: 'task'   },
       { key: 'Leave Requests',  count: this._leaveRequests.length,  icon: 'leave'  },
+      { key: 'Urgent Payment',  count: this._urgentPayments.filter(r => r.status === 'pending').length, icon: 'urgent' },
     ];
 
     const tabHtml = tabs.map(({ key, count, icon }) => {
@@ -330,6 +535,7 @@ window.Pages.approvals = {
         : 'bg-transparent border-transparent text-slate-600 hover:bg-white/60 hover:border-slate-200';
       const iconHtml = icon === 'revise' ? this._reviseIconSvg('w-4 h-4')
         : icon === 'leave' ? this._leaveIconSvg('w-4 h-4')
+        : icon === 'urgent' ? this._urgentIconSvg('w-4 h-4')
         : this._taskIconSvg('w-4 h-4');
       const iconColorCls = active ? 'text-primary-600' : 'text-slate-400';
       return `<button data-tab="${key}" class="approvals-tab flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition border ${btnCls}">
@@ -344,6 +550,8 @@ window.Pages.approvals = {
       contentHtml = this._buildReviseTable();
     } else if (this._tab === 'Leave Requests') {
       contentHtml = this._buildLeaveTable();
+    } else if (this._tab === 'Urgent Payment') {
+      contentHtml = this._buildUrgentTable(true);
     } else {
       contentHtml = this._buildTaskApprovalsTable();
     }

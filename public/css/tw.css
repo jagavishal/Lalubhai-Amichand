@@ -244,6 +244,7 @@ img,video{max-width:100%;height:auto}
 .shadow-sm{box-shadow:0 1px 2px 0 rgb(0 0 0 / 0.05)}
 .shrink{flex-shrink:1}
 .shrink-0{flex-shrink:0}
+.space-y-1\.5 > :not([hidden]) ~ :not([hidden]){margin-top:0.375rem}
 .space-y-2 > :not([hidden]) ~ :not([hidden]){margin-top:0.5rem}
 .space-y-3 > :not([hidden]) ~ :not([hidden]){margin-top:0.75rem}
 .space-y-4 > :not([hidden]) ~ :not([hidden]){margin-top:1rem}
