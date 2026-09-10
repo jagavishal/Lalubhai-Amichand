@@ -3186,10 +3186,15 @@ app.patch('/api/help-tickets', requireAuth, async (req, res) => {
 // directors, the accounts desk and the person who filled it — and again once
 // an Admin/HOD decides it.
 //
-// Who is mailed lives in app_config under 'urgent_payment_notify' so it can be
-// changed without a deploy. Each entry is either a user's name (resolved to
-// their login / notification address) or a bare email address.
-const DEFAULT_URGENT_PAYMENT_NOTIFY = ['Saloni Anchan', 'Sajil Shah', 'accounts@laltd.in'];
+// Who is mailed lives in app_config so it can be changed without a deploy:
+// 'urgent_payment_mail_to' is the To line (the accounts desk — it acts on the
+// mail), 'urgent_payment_mail_cc' the CC (the approvers; the requester is
+// always added). An entry is either a user's name, resolved to that person's
+// notification address, or a bare email address used exactly as written — a
+// shared mailbox like accounts@ must reach the mailbox, not whichever personal
+// Gmail the person currently holding that login set on their profile.
+const DEFAULT_URGENT_PAYMENT_MAIL_TO = ['accounts@laltd.in'];
+const DEFAULT_URGENT_PAYMENT_MAIL_CC = ['Saloni Anchan', 'Sajil Shah'];
 const URGENT_PAYMENT_MODES = ['NEFT / RTGS', 'IMPS / UPI', 'Cheque', 'Cash', 'Other'];
 
 /* Supporting documents (bills, quotations, screenshots) ride along as data
@@ -3267,12 +3272,15 @@ function upOut(r) {
   };
 }
 
-/* Every address an urgent-payment mail goes to: the configured list plus the
-   requester, resolved against the user list so a name becomes a login and a
-   login becomes its notification address. Works in both storage modes because
-   readStore() does. */
+/* The To and CC lines of an urgent-payment mail: the two configured lists,
+   plus the requester in CC. Names are resolved against the user list so a
+   name becomes that person's notification address. Works in both storage
+   modes because readStore() does. */
 async function urgentPaymentRecipients(requester) {
-  const cfg = await readAuthority('urgent_payment_notify', DEFAULT_URGENT_PAYMENT_NOTIFY);
+  const [toCfg, ccCfg] = await Promise.all([
+    readAuthority('urgent_payment_mail_to', DEFAULT_URGENT_PAYMENT_MAIL_TO),
+    readAuthority('urgent_payment_mail_cc', DEFAULT_URGENT_PAYMENT_MAIL_CC),
+  ]);
   let users = [];
   try { users = (await readStore()).users || []; } catch {}
   const byName = (name) => {
@@ -3285,34 +3293,45 @@ async function urgentPaymentRecipients(requester) {
     const like = users.filter(u => String(u.name || '').trim().toLowerCase().startsWith(first));
     return like.length === 1 ? like[0] : null;
   };
-  const out = [];
   const seen = new Set();
-  const add = (email) => {
-    const e = String(email || '').trim();
-    if (!e || !e.includes('@') || seen.has(e.toLowerCase())) return;
-    seen.add(e.toLowerCase());
-    out.push(e);
-  };
-  for (const entry of cfg) {
-    const s = String(entry || '').trim();
-    if (!s) continue;
-    if (s.includes('@')) {
-      const u = users.find(x => String(x.email || '').trim().toLowerCase() === s.toLowerCase());
-      add(await notifyAddressFor(u?.id, s));
-    } else {
-      const u = byName(s);
-      if (u) add(await notifyAddressFor(u.id, u.email));
-      else console.log('[urgent-payment] no user matches notify entry:', s);
+  const resolve = async (list) => {
+    const out = [];
+    const add = (email) => {
+      const e = String(email || '').trim();
+      if (!e || !e.includes('@') || seen.has(e.toLowerCase())) return;
+      seen.add(e.toLowerCase());
+      out.push(e);
+    };
+    for (const entry of list) {
+      const s = String(entry || '').trim();
+      if (!s) continue;
+      if (s.includes('@')) add(s);
+      else {
+        const u = byName(s);
+        if (u) add(await notifyAddressFor(u.id, u.email));
+        else console.log('[urgent-payment] no user matches mail entry:', s);
+      }
     }
+    return out;
+  };
+  const to = await resolve(toCfg);
+  const cc = await resolve(ccCfg);
+  if (requester) {
+    const e = String(await notifyAddressFor(requester.id, requester.email) || '').trim();
+    if (e && e.includes('@') && !seen.has(e.toLowerCase())) { seen.add(e.toLowerCase()); cc.push(e); }
   }
-  if (requester) add(await notifyAddressFor(requester.id, requester.email));
-  return out;
+  return { to, cc };
 }
 
-async function sendUrgentPaymentEmail({ to, row, stage }) {
+async function sendUrgentPaymentEmail({ to, cc, row, stage }) {
   const mailer = getMailer();
-  if (!mailer || !to || !to.length) {
-    console.log('[email] urgent payment not sent — mailer:', !!mailer, '| to:', (to || []).join(', ') || '(none)');
+  to = Array.isArray(to) ? to : [];
+  cc = Array.isArray(cc) ? cc : [];
+  // Nobody configured on To must not swallow the mail — the CC people still
+  // need to hear about it, so the first of them takes the To line.
+  if (!to.length && cc.length) to = [cc.shift()];
+  if (!mailer || !to.length) {
+    console.log('[email] urgent payment not sent — mailer:', !!mailer, '| to:', to.join(', ') || '(none)', '| cc:', cc.join(', ') || '(none)');
     return;
   }
   const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -3356,6 +3375,7 @@ async function sendUrgentPaymentEmail({ to, row, stage }) {
     await mailer.sendMail({
       from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
       to: to.join(', '),
+      cc: cc.length ? cc.join(', ') : undefined,
       subject,
       attachments,
       html: _leaveMailHtml({
@@ -3367,10 +3387,10 @@ async function sendUrgentPaymentEmail({ to, row, stage }) {
         rows,
         footer: decided
           ? (approved ? 'Accounts: please release this payment.' : 'Speak to the approver if this needs reconsidering.')
-          : 'This mail goes to the approvers, the accounts desk and the person who raised the request.',
+          : 'Sent to Accounts, with the approvers and the person who raised the request in CC.',
       }),
     });
-    console.log('[email] urgent payment', stage, 'mail sent to:', to.join(', '));
+    console.log('[email] urgent payment', stage, 'mail sent to:', to.join(', '), '| cc:', cc.join(', ') || '(none)');
   } catch (e) {
     console.error('[email] urgent payment mail failed:', e.message);
   }
@@ -3467,8 +3487,8 @@ app.post('/api/urgent-payments', requireAuth, async (req, res) => {
     // Fire-and-forget, like every other notification here: the request is
     // stored, and a slow SMTP must not make the requester wait or see a failure.
     (async () => {
-      const to = await urgentPaymentRecipients(user);
-      await sendUrgentPaymentEmail({ to, row: forMail, stage: 'raised' });
+      const rcpt = await urgentPaymentRecipients(user);
+      await sendUrgentPaymentEmail({ ...rcpt, row: forMail, stage: 'raised' });
     })().catch((e) => console.error('[urgent-payment] mail failed:', e.message));
     return res.status(201).json({ ...saved, documentsFailed: docs.length > 0 && documents.length === 0 });
   } catch (e) { return res.status(500).json({ error: e.message }); }
@@ -3528,8 +3548,8 @@ app.patch('/api/urgent-payments', requireAuth, async (req, res) => {
     (async () => {
       let requester = null;
       try { requester = ((await readStore()).users || []).find(u => u.id === saved.requested_by_id) || null; } catch {}
-      const to = await urgentPaymentRecipients(requester);
-      await sendUrgentPaymentEmail({ to, row: saved, stage: 'decided' });
+      const rcpt = await urgentPaymentRecipients(requester);
+      await sendUrgentPaymentEmail({ ...rcpt, row: saved, stage: 'decided' });
     })().catch((e) => console.error('[urgent-payment] decision mail failed:', e.message));
     return res.json(saved);
   } catch (e) { return res.status(500).json({ error: e.message }); }
