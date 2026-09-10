@@ -881,7 +881,7 @@ async function readStoreDb() {
 
 async function _loadStoreDb() {
   await ensureSchema();
-  const [users, delegations, masters, holidays, profileRows, completedMasters] = await Promise.all([
+  const [users, delegations, masters, holidays, profileRows, completedMasters, leaveDays] = await Promise.all([
     // No `picture`: the avatars are base64 blobs, and nothing that reads the
     // store needs them — leaving them out is most of the payload.
     q('SELECT id, name, email, phone, department, branch, roles, active, permissions, created_at FROM users ORDER BY id ASC'),
@@ -893,6 +893,9 @@ async function _loadStoreDb() {
     // separate rows), so a checklist item is "done" once it has any completion at all —
     // not just one recorded today.
     q('SELECT DISTINCT master_id FROM checklist_completions'),
+    // Approved leave per doer — see getLeaveDayContext. Occurrences dated inside
+    // it are "on leave", not pending, for the dashboard and MIS.
+    getLeaveDayContext(),
   ]);
   const profile = profileRows[0] ? { userId:profileRows[0].user_id, notificationEmail:profileRows[0].notification_email||'' } : { userId:null, notificationEmail:'' };
   return {
@@ -902,6 +905,7 @@ async function _loadStoreDb() {
     holidays: holidays.map(r => ({ id:r.id, date:toDateStr(r.date), name:r.name, type:r.type||'' })),
     approvals:{ tasks:[], transfers:[], leaves:[] }, profile,
     completedMasterIds: completedMasters.map(r => r.master_id),
+    leaveDays,
   };
 }
 
@@ -970,6 +974,9 @@ function computeDashboard(store, filter='all', doerFilter='') {
     const doneIds = new Set(store.completedMasterIds || []);
     (store.masters||[]).forEach(m => {
       if (!matchesDoer(m.assignedTo)) return;
+      // Dated inside the doer's approved leave and not done: nobody was there to
+      // do it, so it is neither pending nor part of their total.
+      if (!doneIds.has(m.id) && m.startDate && leaveOn(store.leaveDays, m.assignedTo, m.startDate)) return;
       total++;
       const dateStr = m.startDate || now.toISOString();
       if (doneIds.has(m.id)) {
@@ -3574,7 +3581,14 @@ app.get('/api/masters', requireAuth, async (req, res) => {
   }
   await ensureSchema();
   const { rows } = await pool.query('SELECT * FROM masters ORDER BY created_at DESC');
-  let mapped = rows.map(r => ({ id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate:toDateStr(r.start_date), endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at) }));
+  const leaveCtx = await getLeaveDayContext();
+  // onLeave: the leave type when the doer's approved full-day leave covers this
+  // occurrence's date — All Tasks shows it as "On Leave" instead of pending.
+  let mapped = rows.map(r => {
+    const startDate = toDateStr(r.start_date);
+    const onLeave = leaveOn(leaveCtx, r.assigned_to, startDate);
+    return { id:r.id, task:r.task, assignedTo:r.assigned_to||'', department:r.department||'', frequency:r.frequency, startDate, endDate:toDateStr(r.end_date), remarks:r.remarks||'', createdAt:toIso(r.created_at), ...(onLeave ? { onLeave } : {}) };
+  });
   if (isHOD) {
     // Department subquery keys off the HOD's own id, never a cached session string.
     const teamRows = await q('SELECT LOWER(TRIM(name)) AS n FROM users WHERE LOWER(TRIM(department))=(SELECT LOWER(TRIM(department)) FROM users WHERE id=$1)', [userId]);
@@ -3678,6 +3692,58 @@ function nonWorkingReason(dateStr, ctx) {
   if (ctx.weekOffs.has(String(dow))) return 'a week-off';
   return null;
 }
+/* Approved leave, per person. A checklist occurrence dated inside somebody's
+   approved leave is not "pending" — they were not at work, the same way a
+   week-off or holiday is not a working day. Leave is only known once it is
+   applied for and approved, long after the series was generated, so it cannot
+   be skipped at generation time the way holidays are; instead every reader
+   (All Tasks, the dashboard, MIS) asks this and treats those occurrences as
+   "on leave": neither pending nor done, and never counted against the doer.
+   Half-day leave is a working day and does not count. Leave rows carry the
+   applicant's user id (users table), a free-text user_name and, from the HRMS,
+   an employee id — the checklist stores the doer by users.name, so every name
+   the row can be known by goes into the map. */
+async function getLeaveDayContext() {
+  const byName = new Map(); // lowercased doer name → Map('YYYY-MM-DD' → leave type)
+  if (!USE_DB) return byName;
+  let rows = [];
+  try {
+    rows = await q(`SELECT l.id, l.user_name, l.leave_type, l.type, l.half_day, l.from_date, l.to_date, u.name AS uname
+                      FROM leaves l LEFT JOIN users u ON u.id = l.user_id
+                     WHERE LOWER(l.status) = 'approved' AND l.from_date IS NOT NULL AND l.to_date IS NOT NULL`);
+  } catch { return byName; }
+  const empNames = new Map(); // leave id → [hr_employees.name, that employee's users.name]
+  try {
+    const e = await q(`SELECT l.id, e.name AS ename, u.name AS euname
+                        FROM leaves l JOIN hr_employees e ON e.id = l.employee_id
+                        LEFT JOIN users u ON u.id = e.user_id
+                       WHERE LOWER(l.status) = 'approved'`);
+    for (const r of e) empNames.set(r.id, [r.ename, r.euname]);
+  } catch {}
+  for (const r of rows) {
+    if (String(r.half_day || 'full') !== 'full') continue;
+    const from = toDateStr(r.from_date), to = toDateStr(r.to_date);
+    if (!from || !to || to < from) continue;
+    const names = new Set([r.user_name, r.uname, ...(empNames.get(r.id) || [])]
+      .map((n) => String(n || '').trim().toLowerCase()).filter(Boolean));
+    if (!names.size) continue;
+    const type = r.leave_type || r.type || 'Leave';
+    for (let d = from, hops = 0; d <= to && hops < 120; d = _checklistPlusDays(d, 1), hops++) {
+      for (const n of names) {
+        if (!byName.has(n)) byName.set(n, new Map());
+        byName.get(n).set(d, type);
+      }
+    }
+  }
+  return byName;
+}
+// Leave type when `name` is on approved full-day leave on `dateStr`, else null.
+function leaveOn(leaveCtx, name, dateStr) {
+  if (!leaveCtx || !dateStr) return null;
+  const days = leaveCtx.get(String(name || '').trim().toLowerCase());
+  return days ? (days.get(dateStr) || null) : null;
+}
+
 const CHECKLIST_SHIFT_FREQS = new Set(['weekly', 'alternative_week', 'alternate_week', 'monthly', 'quarterly', 'yearly']);
 function skipNonWorkingDays(dates, freq, ctx) {
   const shift = CHECKLIST_SHIFT_FREQS.has(String(freq || '').toLowerCase());
@@ -11176,22 +11242,30 @@ app.get('/api/mis', requireAuth, async (req, res) => {
     // modal rendered one blank row per employee. The date window matters as much
     // as the branch does — see inChecklistWindow.
     if (employee&&type==='Checklist MIS') {
-      const [masters, completions] = await Promise.all([
+      const [masters, completions, leaveCtx] = await Promise.all([
         q('SELECT id, task, frequency, start_date FROM masters WHERE LOWER(TRIM(assigned_to))=LOWER(TRIM($1)) AND ((start_date IS NOT NULL AND start_date BETWEEN $2 AND $3) OR (start_date IS NULL AND created_at BETWEEN $4 AND $5)) ORDER BY start_date, id', [employee,start,end,fromDT,toDT]),
         q('SELECT master_id FROM checklist_completions WHERE date BETWEEN $1 AND $2', [start,end]).catch(()=>[]),
+        getLeaveDayContext(),
       ]);
       const doneSet = new Set(completions.map(c=>c.master_id));
-      const rows = masters.map((m,i) => ({'#':i+1,'Description':(m.task||'').substring(0,100),'Assigned By':'—','Due Date':m.start_date?fmtDate(m.start_date):(m.frequency||'—'),'Status':doneSet.has(m.id)?'done':'pending'}));
+      // An occurrence inside approved leave reads "on leave" — it is listed so the
+      // drill-down matches the calendar, but it is not a pending task.
+      const rows = masters.map((m,i) => ({'#':i+1,'Description':(m.task||'').substring(0,100),'Assigned By':'—','Due Date':m.start_date?fmtDate(m.start_date):(m.frequency||'—'),'Status':doneSet.has(m.id)?'done':(leaveOn(leaveCtx, employee, toDateStr(m.start_date))?'on leave':'pending')}));
       return res.json({ rows, summary:{} });
     }
     if (type==='Checklist MIS') {
-      const [mastersRaw, completions] = await Promise.all([
-        q('SELECT id, task, assigned_to, frequency FROM masters WHERE (start_date IS NOT NULL AND start_date BETWEEN $1 AND $2) OR (start_date IS NULL AND created_at BETWEEN $3 AND $4) ORDER BY assigned_to, start_date, id', [start,end,fromDT,toDT]),
+      const [mastersRaw, completions, leaveCtx] = await Promise.all([
+        q('SELECT id, task, assigned_to, frequency, start_date FROM masters WHERE (start_date IS NOT NULL AND start_date BETWEEN $1 AND $2) OR (start_date IS NULL AND created_at BETWEEN $3 AND $4) ORDER BY assigned_to, start_date, id', [start,end,fromDT,toDT]),
         q('SELECT master_id FROM checklist_completions WHERE date BETWEEN $1 AND $2', [start,end]).catch(()=>[]),
+        getLeaveDayContext(),
       ]);
-      const masters = misKeep(mastersRaw, (m) => m.assigned_to);
       const doneSet={};
       for (const c of completions) doneSet[c.master_id]=(doneSet[c.master_id]||0)+1;
+      // Occurrences inside the doer's approved leave (and not done anyway) are
+      // dropped before scoring: a week of leave must not read as a week of
+      // missed checklists.
+      const masters = misKeep(mastersRaw, (m) => m.assigned_to)
+        .filter((m) => doneSet[m.id] > 0 || !leaveOn(leaveCtx, m.assigned_to, toDateStr(m.start_date)));
       const empMap={};
       for (const m of masters) { const name=m.assigned_to||'Unknown'; if(!empMap[name]) empMap[name]={name,total:0,completed:0,pending:0,revised:0,delayed:0}; empMap[name].total++; if(doneSet[m.id]>0) empMap[name].completed++; else empMap[name].pending++; }
       const rows=Object.values(empMap).map(e=>({...e,score:misScore(e)}));

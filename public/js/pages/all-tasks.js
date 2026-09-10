@@ -41,7 +41,7 @@ window.Pages['all-tasks'] = (function () {
 
   const getUserName = (id) => _users.find(u => u.id === id)?.name || id || '—';
 
-  const STATUS_RANK = { revise: 0, revise_requested: 1, pending: 2, done: 3 };
+  const STATUS_RANK = { revise: 0, revise_requested: 1, pending: 2, leave: 3, done: 4 };
 
   /* ─── column sort (click a header, like Google Sheets) ─────────────────── */
   const SORT_ACCESSORS = {
@@ -177,7 +177,10 @@ window.Pages['all-tasks'] = (function () {
           delegatedBy: null,
           dueDate:     m.startDate || null,
           client:      '',
-          status:      doneIds.has(m.id) ? 'done' : 'pending',
+          // 'leave': the server found the doer's approved leave covering this
+          // date (see getLeaveDayContext) — shown as On Leave, never as pending.
+          status:      doneIds.has(m.id) ? 'done' : (m.onLeave ? 'leave' : 'pending'),
+          onLeave:     m.onLeave || '',
           type:        'Checklist',
           priority:    'Low',
           frequency:   m.frequency || '',
@@ -341,6 +344,7 @@ window.Pages['all-tasks'] = (function () {
       revise:           { variant: 'warning', label: 'Shifted' },
       revise_requested: { variant: 'warning', label: 'Shifted' },
       pending:          { variant: 'danger',  label: 'Pending' },
+      leave:            { variant: 'info',    label: 'On Leave' },
     };
     const s = map[status] || map.pending;
     return window.UI.pill(s.label, { variant: s.variant });
@@ -421,6 +425,7 @@ window.Pages['all-tasks'] = (function () {
     const pending   = g.tasks.filter(t => t.status === 'pending').length;
     const completed = g.tasks.filter(t => t.status === 'done').length;
     const revised   = g.tasks.filter(t => t.status === 'revise').length;
+    const onLeave   = g.tasks.filter(t => t.status === 'leave').length;
     const open      = !!_expanded[g.doer];
     const endSerial = startSerial + g.tasks.length - 1;
 
@@ -428,6 +433,7 @@ window.Pages['all-tasks'] = (function () {
       completed > 0 ? window.UI.pill(`${completed} done`, { variant: 'success' })  : '',
       pending   > 0 ? window.UI.pill(`${pending} pending`, { variant: 'danger' })   : '',
       revised   > 0 ? window.UI.pill(`${revised} shifted`, { variant: 'warning' })  : '',
+      onLeave   > 0 ? window.UI.pill(`${onLeave} on leave`, { variant: 'info' })    : '',
     ].join('');
 
     const sortTh = (col, label) =>
@@ -495,17 +501,22 @@ window.Pages['all-tasks'] = (function () {
       const task = String(m.task || '').trim();
       if (s && !task.toLowerCase().includes(s)) continue;
       const key = doer + ' ' + task.toLowerCase();
-      if (!map.has(key)) map.set(key, { doer, task, frequency: '', remarks: '', total: 0, done: 0, nextDue: null, lastDone: null, overdue: false, anyId: m.id });
+      if (!map.has(key)) map.set(key, { doer, task, frequency: '', remarks: '', total: 0, done: 0, leave: 0, nextDue: null, lastDone: null, overdue: false, anyId: m.id });
       const r = map.get(key);
-      r.total++;
       if (m.frequency && !r.frequency) r.frequency = m.frequency;
       if (m.remarks && !r.remarks) r.remarks = m.remarks;
       const due = m.startDate || null;
       if (_doneMasterIds.has(m.id)) {
+        r.total++;
         r.done++;
         if (due && (!r.lastDone || due > r.lastDone)) r.lastDone = due;
-      } else if (due && (!r.nextDue || due < r.nextDue)) {
-        r.nextDue = due;
+      } else if (m.onLeave) {
+        // Inside the doer's approved leave: counted on its own, outside the
+        // total, so "N pending" is only the days they were actually at work.
+        r.leave++;
+      } else {
+        r.total++;
+        if (due && (!r.nextDue || due < r.nextDue)) r.nextDue = due;
       }
     }
     const rows = [...map.values()];
@@ -548,7 +559,7 @@ window.Pages['all-tasks'] = (function () {
               </td>
               <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${r.lastDone ? fmt(r.lastDone) : '—'}</td>
               <td class="at-td" style="white-space:nowrap;font-size:12px">
-                ${window.UI.pill(`${r.done} done`, { variant: 'success' })} ${r.total - r.done > 0 ? window.UI.pill(`${r.total - r.done} pending`, { variant: 'danger' }) : ''}
+                ${window.UI.pill(`${r.done} done`, { variant: 'success' })} ${r.total - r.done > 0 ? window.UI.pill(`${r.total - r.done} pending`, { variant: 'danger' }) : ''} ${r.leave > 0 ? window.UI.pill(`${r.leave} on leave`, { variant: 'info' }) : ''}
               </td>
               <td class="at-td" style="color:#94a3b8;max-width:180px;font-size:12px">${esc(r.remarks || '—')}</td>
             </tr>`).join('')}

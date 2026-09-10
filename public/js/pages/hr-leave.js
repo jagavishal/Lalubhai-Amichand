@@ -98,7 +98,18 @@ window.Pages['hr-leave'] = (() => {
      for them. Blank when the login has no employee record to read from. */
   function myBalanceStrip() {
     const row = (_myBalances?.rows || [])[0];
-    if (!row) return '';
+    if (!row) {
+      // Loaded fine but no employee row answers to this login. Admins run the
+      // company grid from the Balances tab and may legitimately have no record;
+      // for everyone else a silent blank looked like a bug ("meri leaves nahi
+      // dikh rahi"), so say what is missing and who fixes it.
+      if (!_myBalances || H.isAdmin()) return '';
+      return `<div style="margin-bottom:16px;background:#fffbeb;border:1px solid #fde68a;border-radius:11px;padding:11px 14px;font-size:12.5px;color:#92400e;">
+        <b>Leave balance not available.</b> Your login is not linked to an employee record yet.
+        Ask HR to open <b>HR → Employees</b>, edit your record and set <b>Login Account</b> to your login
+        (or use <b>Link Logins</b>).
+      </div>`;
+    }
     const types = _myBalances.types || [];
     return `<div style="margin-bottom:16px;">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;

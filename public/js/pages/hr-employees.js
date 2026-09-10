@@ -37,19 +37,27 @@ window.Pages['hr-employees'] = (() => {
     return Math.floor((Date.now() - d.getTime()) / (365.25 * 24 * 3600 * 1000));
   }
 
+  let _users = null; // login accounts, fetched once per page open
   async function load() {
     const params = new URLSearchParams();
     if (_filters.status !== 'All') params.set('status', _filters.status);
     if (_filters.branch !== 'All') params.set('branch', _filters.branch);
     if (_filters.department !== 'All') params.set('department', _filters.department);
     if (_filters.q) params.set('q', _filters.q);
-    const [list, masters] = await Promise.all([
+    const [list, masters, users] = await Promise.all([
       H.api('/api/hr/employees?' + params.toString()),
       _masters.branches.length ? Promise.resolve(_masters) : H.api('/api/hr/masters'),
+      // Login accounts, for the "Login Account" picker on the employee form.
+      _users ? Promise.resolve(_users) : H.api('/api/users?lite=1').catch(() => []),
     ]);
     _list = Array.isArray(list) ? list : [];
     if (masters) _masters = masters;
+    _users = Array.isArray(users) ? users : [];
   }
+  const loginLabel = (uid) => {
+    const u = (_users || []).find((x) => x.id === uid);
+    return u ? `${u.name}${u.email ? ' · ' + u.email : ''}` : (uid || '');
+  };
 
   /* ── List view ────────────────────────────────────────────────────── */
 
@@ -183,6 +191,10 @@ window.Pages['hr-employees'] = (() => {
       ${H.field('hre-name', 'Full Name', e.name || '', { required: true })}
       ${H.field('hre-email', 'Email', e.email || '', { type: 'email' })}
       ${H.field('hre-phone', 'Contact No', e.phone || '')}
+      ${H.select('hre-user_id', 'Login Account', e.user_id || '',
+        (_users || []).map((u) => ({ value: u.id, label: `${u.name}${u.email ? ' (' + u.email + ')' : ''}` })),
+        { placeholder: '— Not linked —',
+          hint: 'The ERP login this person uses. Their leave balance, payslips and attendance are read through this link.' })}
 
       ${H.sectionTitle('Job')}
       ${H.field('hre-designation', 'Designation', e.designation || '')}
@@ -220,7 +232,7 @@ window.Pages['hr-employees'] = (() => {
       ${H.textarea('hre-notes', 'Notes', e.notes || '', { rows: 2 })}
     `);
 
-    const FIELDS = ['name', 'email', 'phone', 'designation', 'department', 'branch', 'emp_type', 'doj', 'status',
+    const FIELDS = ['user_id', 'name', 'email', 'phone', 'designation', 'department', 'branch', 'emp_type', 'doj', 'status',
       'reporting_to', 'probation_months', 'confirmed_on', 'dol', 'dob', 'gender', 'marital_status', 'blood_group',
       'qualification', 'experience', 'address', 'emergency_name', 'emergency_phone', 'uan', 'aadhar_no', 'pan_no',
       'bank_name', 'account_no', 'ifsc', 'aadhar_url', 'pan_url', 'avatar_url', 'notes'];
@@ -234,6 +246,8 @@ window.Pages['hr-employees'] = (() => {
       confirmText: isNew ? 'Add Employee' : 'Save Changes',
       onConfirm: async () => {
         const payload = Object.fromEntries(FIELDS.map((f) => [f, H.val('hre-' + f)]));
+        // "Not linked" is NULL, not an empty string — selfEmployee() keys on it.
+        if (!String(payload.user_id || '').trim()) payload.user_id = null;
         if (!payload.name.trim()) { H.toast('Employee name is required', 'error'); throw new Error('validation'); }
         if (isNew) payload.id = H.val('hre-id').trim();
         else payload.id = e.id;
@@ -345,7 +359,7 @@ window.Pages['hr-employees'] = (() => {
           ${H.readout('Bank', e.bank_name)}
           ${H.readout('Account No', e.account_no)}
           ${H.readout('IFSC', e.ifsc)}
-          ${H.readout('Linked Login', e.user_id ? 'Yes' : 'Not linked')}
+          ${H.readout('Linked Login', e.user_id ? loginLabel(e.user_id) : 'Not linked')}
         </div>
       </div>`;
     }

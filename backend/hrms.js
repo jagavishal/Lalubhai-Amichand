@@ -788,15 +788,32 @@ function mountHrms(app, ctx) {
      scopes to "me" goes through this one function; there used to be two
      near-identical copies, which is how the three self-service screens end
      up disagreeing about who you are. */
+  /* The employee record behind a login. A hand-set user_id wins; otherwise
+     the email, then the name. The exact name match missed real people — the
+     login "Janhavi Gorakh" next to an employee row "Gorakh Janhavi", a double
+     space, a stray dot — and with no email on the employee row that left "My
+     Leave Balance" blank for them. So when SQL finds nothing, the whole
+     (small) employee list is compared loosely: same words in the name in any
+     order, or the same last-10-digit phone number (the login's phone comes
+     from the users table — the session copy does not carry it). */
   async function selfEmployee(user) {
     if (!user) return null;
     const rows = await q(
       `SELECT * FROM hr_employees
-        WHERE user_id = $1 OR (email <> '' AND LOWER(email) = LOWER($2)) OR LOWER(name) = LOWER($3)
+        WHERE user_id = $1 OR (email <> '' AND LOWER(email) = LOWER($2)) OR LOWER(TRIM(name)) = LOWER(TRIM($3))
         ORDER BY CASE WHEN user_id = $4 THEN 0 ELSE 1 END LIMIT 1`,
       [user.id || '', user.email || '', user.name || '', user.id || ''],
     ).catch(() => []);
-    return rows[0] || null;
+    if (rows[0]) return rows[0];
+    const nameKey = (n) => String(n || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean).sort().join(' ');
+    const phoneKey = (p) => String(p || '').replace(/\D/g, '').slice(-10);
+    const wantName = nameKey(user.name);
+    const login = user.id ? (await q(`SELECT phone FROM users WHERE id = $1`, [user.id]).catch(() => []))[0] : null;
+    const wantPhone = phoneKey(user.phone || login?.phone);
+    if (!wantName && wantPhone.length < 10) return null;
+    const all = await q(`SELECT * FROM hr_employees ORDER BY CASE WHEN status = 'Active' THEN 0 ELSE 1 END, id ASC`).catch(() => []);
+    return all.find((e) => (wantName && nameKey(e.name) === wantName)
+      || (wantPhone.length === 10 && phoneKey(e.phone) === wantPhone)) || null;
   }
 
   async function bumpUsed(employeeId, year, code, delta) {
