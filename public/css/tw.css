@@ -142,6 +142,7 @@ img,video{max-width:100%;height:auto}
 .hover\:bg-amber-100:hover{background-color:#fef3c7}
 .hover\:bg-emerald-100:hover{background-color:#d1fae5}
 .hover\:bg-indigo-100:hover{background-color:#e0e7ff}
+.hover\:bg-primary-100:hover{background-color:var(--color-primary-ring)}
 .hover\:bg-red-100:hover{background-color:#fee2e2}
 .hover\:bg-red-50:hover{background-color:#fef2f2}
 .hover\:bg-slate-100:hover{background-color:#f1f5f9}

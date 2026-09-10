@@ -254,6 +254,15 @@ window.Pages.approvals = {
     }
   },
 
+  _upDocLinks(r, cls) {
+    const docs = Array.isArray(r.documents) ? r.documents : [];
+    if (!docs.length) return '';
+    const esc = this._esc.bind(this);
+    return `<div class="${cls || 'flex flex-wrap gap-1.5 mt-1'}">${docs.map((d, i) =>
+      `<a href="/api/urgent-payments/${encodeURIComponent(r.id)}/documents/${i}" target="_blank" rel="noopener"
+          class="pill bg-primary-50 text-primary-700 hover:bg-primary-100" title="${esc(d.name)}" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;">📎 ${esc(d.name)}</a>`).join('')}</div>`;
+  },
+
   _rupees(v) {
     const n = Number(v || 0);
     return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2 });
@@ -329,6 +338,7 @@ window.Pages.approvals = {
         <td class="table-td text-slate-600 max-w-[260px]">
           <div style="white-space:pre-line">${esc(r.purpose || '—')}</div>
           ${extra ? `<div class="text-[11px] text-slate-400 mt-1">${extra}</div>` : ''}
+          ${this._upDocLinks(r)}
         </td>
         <td class="table-td text-slate-600 whitespace-nowrap">${this._fmt(r.required_by)}</td>
         <td class="table-td">
@@ -407,6 +417,7 @@ window.Pages.approvals = {
             <div class="flex justify-between gap-3"><span class="text-slate-400 text-xs">Mode</span><span class="text-slate-700">${esc(r.payment_mode || '—')}</span></div>
             <div class="flex justify-between gap-3"><span class="text-slate-400 text-xs">Required By</span><span class="text-slate-700">${this._fmt(r.required_by)}</span></div>
             <div class="pt-2 border-t border-slate-200 text-xs text-slate-600" style="white-space:pre-line">${esc(r.purpose || '')}</div>
+            ${this._upDocLinks(r, 'flex flex-wrap gap-1.5 pt-2')}
           </div>
           <div>
             <label class="block text-[10.5px] font-bold uppercase tracking-wider text-slate-500 mb-1">Note ${approve ? '(optional)' : ''}</label>

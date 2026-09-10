@@ -344,6 +344,7 @@ const SCHEMA = [
   `ALTER TABLE help_tickets ADD COLUMN IF NOT EXISTS kind VARCHAR(16) DEFAULT ''`,
   `CREATE TABLE IF NOT EXISTS urgent_payments (id VARCHAR(16) PRIMARY KEY, request_date DATE DEFAULT NULL, requested_by VARCHAR(255) NOT NULL DEFAULT '', requested_by_id VARCHAR(16) DEFAULT NULL, department VARCHAR(128) DEFAULT '', payee VARCHAR(255) NOT NULL, amount DECIMAL(15,2) NOT NULL DEFAULT 0, purpose TEXT DEFAULT NULL, payment_mode VARCHAR(32) DEFAULT '', required_by DATE DEFAULT NULL, reference_no VARCHAR(128) DEFAULT '', bank_details TEXT DEFAULT NULL, remarks TEXT DEFAULT NULL, status VARCHAR(16) NOT NULL DEFAULT 'pending', decided_by VARCHAR(255) DEFAULT '', decided_at DATETIME DEFAULT NULL, decision_note TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_up_status ON urgent_payments (status)`,
+  `ALTER TABLE urgent_payments ADD COLUMN IF NOT EXISTS documents TEXT DEFAULT NULL`,
   `CREATE TABLE IF NOT EXISTS announcements (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, message TEXT DEFAULT NULL, posted_by VARCHAR(255) NOT NULL DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS vendor_submissions (id VARCHAR(16) PRIMARY KEY, business_name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', phone VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', gst_no VARCHAR(32) DEFAULT '', address TEXT DEFAULT NULL, products TEXT DEFAULT NULL, notes TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS pr_requisitions (id VARCHAR(16) PRIMARY KEY, pr_no VARCHAR(64) NOT NULL, filled_by VARCHAR(255) NOT NULL DEFAULT '', vendors TEXT DEFAULT NULL, vendor_other VARCHAR(255) DEFAULT '', department TEXT DEFAULT NULL, department_other VARCHAR(255) DEFAULT '', accessory_product TEXT DEFAULT NULL, brazing_product TEXT DEFAULT NULL, cnc_product VARCHAR(255) DEFAULT '', consumable_product TEXT DEFAULT NULL, electric_product TEXT DEFAULT NULL, packing_product TEXT DEFAULT NULL, pressing_product TEXT DEFAULT NULL, washing_product TEXT DEFAULT NULL, welding_product TEXT DEFAULT NULL, new_product VARCHAR(255) DEFAULT '', current_stock VARCHAR(64) NOT NULL DEFAULT '', quantity_required VARCHAR(64) NOT NULL DEFAULT '', previous_rate VARCHAR(64) NOT NULL DEFAULT '', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -3191,6 +3192,56 @@ app.patch('/api/help-tickets', requireAuth, async (req, res) => {
 const DEFAULT_URGENT_PAYMENT_NOTIFY = ['Saloni Anchan', 'Sajil Shah', 'accounts@laltd.in'];
 const URGENT_PAYMENT_MODES = ['NEFT / RTGS', 'IMPS / UPI', 'Cheque', 'Cash', 'Other'];
 
+/* Supporting documents (bills, quotations, screenshots) ride along as data
+   URLs in the JSON body — the same way FMS and export-docs uploads do — and
+   are written to uploads/urgent-payments/<id>/ on the server's disk, which is
+   git-ignored like the bulk-mail PDFs. The row keeps only a JSON list of
+   {name, file, size, type}; downloads go through the authenticated route
+   below by index, never by a path from the client. */
+const URGENT_PAYMENT_UPLOAD_ROOT = pathMod.join(__dirname, 'uploads', 'urgent-payments');
+const URGENT_PAYMENT_DOC_MAX = 5;
+const URGENT_PAYMENT_DOC_BYTES = 4 * 1024 * 1024;      // per file
+const URGENT_PAYMENT_DOC_TOTAL = 7 * 1024 * 1024;      // all files together (express.json caps the body at 10mb of base64)
+const URGENT_PAYMENT_DOC_TYPES = {
+  'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+  'application/vnd.ms-excel': 'xls', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/msword': 'doc', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+};
+
+function upDocsOf(r) {
+  try { const d = typeof r.documents === 'string' ? JSON.parse(r.documents) : r.documents; return Array.isArray(d) ? d : []; }
+  catch { return []; }
+}
+
+/* Validate the uploaded list before anything is stored, so a bad file rejects
+   the whole request rather than leaving a half-saved one. Returns the decoded
+   files or throws with a message fit for the user. */
+function upDecodeDocuments(list) {
+  if (!Array.isArray(list) || !list.length) return [];
+  if (list.length > URGENT_PAYMENT_DOC_MAX) throw new Error(`At most ${URGENT_PAYMENT_DOC_MAX} supporting documents`);
+  let total = 0;
+  return list.map((d, i) => {
+    const name = String(d?.name || `document-${i + 1}`).replace(/[\\/]+/g, '_').slice(0, 120);
+    const parsed = _parseAnyDataUrl(d?.dataUrl);
+    if (!parsed) throw new Error(`Could not read "${name}"`);
+    const ext = URGENT_PAYMENT_DOC_TYPES[parsed.mimeType];
+    if (!ext) throw new Error(`"${name}": only PDF, images, Excel and Word files are accepted`);
+    if (parsed.buffer.length > URGENT_PAYMENT_DOC_BYTES) throw new Error(`"${name}" is over 4 MB`);
+    total += parsed.buffer.length;
+    if (total > URGENT_PAYMENT_DOC_TOTAL) throw new Error('Supporting documents together must be under 7 MB');
+    const safe = name.replace(/[^\w.\- ()]/g, '_').replace(/\.[^.]*$/, '') || 'document';
+    return { name, file: `${String(i + 1).padStart(2, '0')}-${safe}.${ext}`, size: parsed.buffer.length, type: parsed.mimeType, buffer: parsed.buffer };
+  });
+}
+
+async function upWriteDocuments(id, docs) {
+  if (!docs.length) return [];
+  const dir = pathMod.join(URGENT_PAYMENT_UPLOAD_ROOT, id);
+  await fs.mkdir(dir, { recursive: true });
+  for (const d of docs) await fs.writeFile(pathMod.join(dir, d.file), d.buffer);
+  return docs.map(({ name, file, size, type }) => ({ name, file, size, type }));
+}
+
 function upOut(r) {
   if (!r) return null;
   return {
@@ -3212,6 +3263,7 @@ function upOut(r) {
     decided_at: toIso(r.decided_at),
     decision_note: r.decision_note || '',
     created_at: toIso(r.created_at),
+    documents: upDocsOf(r).map(({ name, size, type }) => ({ name, size, type })),
   };
 }
 
@@ -3280,17 +3332,32 @@ async function sendUrgentPaymentEmail({ to, row, stage }) {
     ['Bill / Reference', esc(row.reference_no)],
     ['Bank Details', esc(row.bank_details).replace(/\n/g, '<br>')],
     ['Remarks', esc(row.remarks).replace(/\n/g, '<br>')],
+    ['Documents', (row.documents || []).map(d => esc(d.name)).join('<br>')],
     ['Decision', decided ? `<b>${esc(row.status)}</b> by ${esc(row.decided_by)}` : ''],
     ['Decision Note', decided ? esc(row.decision_note).replace(/\n/g, '<br>') : ''],
   ];
   const subject = decided
     ? `Urgent Payment ${row.status}: ${rupees} to ${row.payee} (${row.id})`
     : `Urgent Payment Request: ${rupees} to ${row.payee} — ${row.requested_by} (${row.id})`;
+  // The documents go along as attachments on the raise mail — the whole
+  // reason they were asked for is so the approver can see the bill without
+  // opening the ERP. Capped at what Gmail will carry; past that the mail
+  // still goes and names them, and they download from the Approvals tab.
+  let attachments;
+  if (!decided && (row.documents || []).length) {
+    const total = row.documents.reduce((n, d) => n + (Number(d.size) || 0), 0);
+    if (total <= 15 * 1024 * 1024) {
+      attachments = row.documents.filter(d => d.file).map(d => ({
+        filename: d.name, path: pathMod.join(URGENT_PAYMENT_UPLOAD_ROOT, row.id, d.file), contentType: d.type || undefined,
+      }));
+    }
+  }
   try {
     await mailer.sendMail({
       from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
       to: to.join(', '),
       subject,
+      attachments,
       html: _leaveMailHtml({
         heading: decided ? `Urgent Payment ${row.status}` : 'Urgent Payment Request',
         colour: decided ? (approved ? '#15803d' : '#b91c1c') : '#dc2626',
@@ -3342,6 +3409,9 @@ app.post('/api/urgent-payments', requireAuth, async (req, res) => {
     if (!purpose) return res.status(400).json({ error: 'Purpose of payment is required' });
     if (!/^\d{4}-\d{2}-\d{2}$/.test(requiredBy)) return res.status(400).json({ error: 'Required-by date is required' });
     const mode = URGENT_PAYMENT_MODES.includes(b.payment_mode) ? b.payment_mode : (String(b.payment_mode || '').trim() || 'NEFT / RTGS');
+    let docs;
+    try { docs = upDecodeDocuments(b.documents); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
     const row = {
       request_date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.request_date || '')) ? String(b.request_date) : todayIST(),
       requested_by: user.name || user.email || '',
@@ -3373,14 +3443,57 @@ app.post('/api/urgent-payments', requireAuth, async (req, res) => {
       store.urgentPayments.push({ ...row, id, created_at: new Date().toISOString() });
       await writeStore(store);
     }
-    const saved = upOut({ ...row, id, created_at: new Date() });
+    let documents = [];
+    if (docs.length) {
+      try {
+        documents = await upWriteDocuments(id, docs);
+        if (USE_DB) {
+          await pool.query('UPDATE urgent_payments SET documents=$1 WHERE id=$2', [JSON.stringify(documents), id]);
+        } else {
+          const store = await readStore();
+          const r = (store.urgentPayments || []).find(x => x.id === id);
+          if (r) { r.documents = documents; await writeStore(store); }
+        }
+      } catch (e) {
+        // The request itself is saved; a disk problem must not lose it. The
+        // requester is told so they can send the bill by hand.
+        console.error('[urgent-payment] could not store documents for', id, '—', e.message);
+        documents = [];
+      }
+    }
+    const saved = upOut({ ...row, id, documents, created_at: new Date() });
+    // Mail attachments need the on-disk names; the API response does not carry them.
+    const forMail = { ...saved, documents };
     // Fire-and-forget, like every other notification here: the request is
     // stored, and a slow SMTP must not make the requester wait or see a failure.
     (async () => {
       const to = await urgentPaymentRecipients(user);
-      await sendUrgentPaymentEmail({ to, row: saved, stage: 'raised' });
+      await sendUrgentPaymentEmail({ to, row: forMail, stage: 'raised' });
     })().catch((e) => console.error('[urgent-payment] mail failed:', e.message));
-    return res.status(201).json(saved);
+    return res.status(201).json({ ...saved, documentsFailed: docs.length > 0 && documents.length === 0 });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// One supporting document, by position in the request's list. Admin/HOD or
+// the requester only — the same people who can see the request at all.
+app.get('/api/urgent-payments/:id/documents/:n', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const user = req.session.user;
+    const id = String(req.params.id || '');
+    const n = parseInt(req.params.n, 10);
+    if (!/^UP\d+$/.test(id) || !(n >= 0)) return res.status(400).json({ error: 'Bad request' });
+    let row;
+    if (USE_DB) row = (await q('SELECT * FROM urgent_payments WHERE id=$1', [id]))[0];
+    else row = ((await readStore()).urgentPayments || []).find(r => r.id === id);
+    if (!row) return res.status(404).json({ error: 'Request not found' });
+    if (!isAdminUser(user) && row.requested_by_id !== user.id) return res.status(403).json({ error: 'Not your request' });
+    const doc = upDocsOf(row)[n];
+    if (!doc || !doc.file) return res.status(404).json({ error: 'Document not found' });
+    const abs = pathMod.join(URGENT_PAYMENT_UPLOAD_ROOT, id, pathMod.basename(doc.file));
+    return res.download(abs, doc.name, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: 'File is missing on the server' });
+    });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 

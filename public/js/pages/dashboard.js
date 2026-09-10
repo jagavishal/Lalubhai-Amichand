@@ -1230,20 +1230,29 @@ window.Pages.dashboard = (function () {
     const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
     const inp = 'width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;';
     const ro  = 'width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#64748b;outline:none;box-sizing:border-box;background:#f8fafc;';
-    const lbl = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;';
     const req = '<span style="color:#ef4444">*</span>';
-    const modes = ['NEFT / RTGS', 'IMPS / UPI', 'Cheque', 'Cash', 'Other'];
+    // Every label in the three languages the office reads — the Google Form
+    // this replaced was trilingual, and the people filling it are not all
+    // comfortable in English alone.
+    const lbl = (en, hi, gu, required) => `<label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;line-height:1.5;">
+        ${en} ${required ? req : ''}<span style="display:block;font-weight:500;text-transform:none;letter-spacing:0;color:#94a3b8;font-size:11px;">${hi} · ${gu}</span></label>`;
+    const modes = [
+      ['NEFT / RTGS', 'NEFT / RTGS'], ['IMPS / UPI', 'IMPS / UPI'], ['Cheque', 'Cheque · चेक · ચેક'],
+      ['Cash', 'Cash · नकद · રોકડ'], ['Other', 'Other · अन्य · અન્ય'],
+    ];
+    const MAX_FILES = 5, MAX_FILE = 4 * 1024 * 1024, MAX_TOTAL = 7 * 1024 * 1024;
+    let files = [];
     const html = `
       <div id="db-up-modal" style="position:fixed;inset:0;background:rgba(15,23,42,0.45);backdrop-filter:blur(4px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;">
-        <div style="background:#fff;border-radius:20px;box-shadow:0 20px 48px rgba(0,0,0,0.14);width:100%;max-width:520px;max-height:calc(100vh - 32px);display:flex;flex-direction:column;overflow:hidden;" onclick="event.stopPropagation()">
+        <div style="background:#fff;border-radius:20px;box-shadow:0 20px 48px rgba(0,0,0,0.14);width:100%;max-width:540px;max-height:calc(100vh - 32px);display:flex;flex-direction:column;overflow:hidden;" onclick="event.stopPropagation()">
           <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid #f1f5f9;flex-shrink:0;">
             <div style="display:flex;align-items:center;gap:10px;">
-              <div style="width:34px;height:34px;border-radius:10px;background:#fee2e2;color:#dc2626;display:flex;align-items:center;justify-content:center;">
+              <div style="width:34px;height:34px;border-radius:10px;background:#fee2e2;color:#dc2626;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 8h12M6 13l6 8M6 13h4a4 4 0 0 0 0-8"/></svg>
               </div>
               <div>
                 <div style="font-size:15px;font-weight:700;color:#0f172a;">Urgent Payment Request</div>
-                <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">Goes to Saloni, Sajil and Accounts for approval</div>
+                <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">तत्काल भुगतान अनुरोध · તાત્કાલિક ચુકવણી વિનંતી</div>
               </div>
             </div>
             <button id="db-up-close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;color:#64748b;cursor:pointer;display:flex;align-items:center;justify-content:center;">
@@ -1253,61 +1262,71 @@ window.Pages.dashboard = (function () {
           <div style="padding:20px 22px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label style="${lbl}">Requested By</label>
+                ${lbl('Requested By', 'अनुरोधकर्ता', 'વિનંતી કરનાર')}
                 <input id="db-up-by" style="${ro}" value="${esc(me.name || me.email || '')}" readonly />
               </div>
               <div>
-                <label style="${lbl}">Department</label>
+                ${lbl('Department', 'विभाग', 'વિભાગ')}
                 <input id="db-up-dept" style="${inp}" value="${esc(me.department || '')}" placeholder="Department" />
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label style="${lbl}">Request Date ${req}</label>
+                ${lbl('Request Date', 'अनुरोध की तारीख', 'વિનંતીની તારીખ', true)}
                 <input id="db-up-date" type="date" style="${inp}" value="${today}" />
               </div>
               <div>
-                <label style="${lbl}">Payment Required By ${req}</label>
+                ${lbl('Payment Required By', 'भुगतान कब तक चाहिए', 'ચુકવણી ક્યાં સુધી જોઈએ', true)}
                 <input id="db-up-required" type="date" style="${inp}" value="${today}" min="${today}" />
               </div>
             </div>
             <div>
-              <label style="${lbl}">Pay To (Party / Vendor Name) ${req}</label>
+              ${lbl('Pay To (Party / Vendor Name)', 'किसे भुगतान करना है (पार्टी / विक्रेता)', 'કોને ચુકવણી કરવાની છે (પાર્ટી / વિક્રેતા)', true)}
               <input id="db-up-payee" style="${inp}" placeholder="Who is to be paid" />
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
               <div>
-                <label style="${lbl}">Amount (₹) ${req}</label>
+                ${lbl('Amount (₹)', 'राशि', 'રકમ', true)}
                 <input id="db-up-amount" type="number" min="1" step="0.01" style="${inp}" placeholder="0.00" />
               </div>
               <div>
-                <label style="${lbl}">Payment Mode</label>
+                ${lbl('Payment Mode', 'भुगतान का तरीका', 'ચુકવણીની રીત')}
                 <select id="db-up-mode" style="${inp}">
-                  ${modes.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('')}
+                  ${modes.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('')}
                 </select>
               </div>
             </div>
             <div>
-              <label style="${lbl}">Purpose of Payment ${req}</label>
+              ${lbl('Purpose of Payment', 'भुगतान का उद्देश्य', 'ચુકવણીનો હેતુ', true)}
               <textarea id="db-up-purpose" rows="3" style="${inp}resize:none;font-family:inherit;" placeholder="Why is this payment urgent? What is it for?"></textarea>
             </div>
             <div>
-              <label style="${lbl}">Bill / Invoice / Reference No.</label>
+              ${lbl('Bill / Invoice / Reference No.', 'बिल / इनवॉइस / संदर्भ नंबर', 'બિલ / ઇન્વોઇસ / સંદર્ભ નંબર')}
               <input id="db-up-ref" style="${inp}" placeholder="Optional" />
             </div>
             <div>
-              <label style="${lbl}">Bank Details of Payee</label>
+              ${lbl('Bank Details of Payee', 'प्राप्तकर्ता के बैंक विवरण', 'લાભાર્થીની બેંક વિગતો')}
               <textarea id="db-up-bank" rows="2" style="${inp}resize:none;font-family:inherit;" placeholder="Account name, A/c no., IFSC, bank — or UPI id (optional)"></textarea>
             </div>
             <div>
-              <label style="${lbl}">Remarks</label>
+              ${lbl('Supporting Documents', 'सहायक दस्तावेज़ (बिल, कोटेशन)', 'સહાયક દસ્તાવેજો (બિલ, ક્વોટેશન)')}
+              <input id="db-up-files" type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.xls,.xlsx,.doc,.docx" style="display:none" />
+              <button type="button" id="db-up-files-btn" style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:8px;border:1.5px dashed #cbd5e1;background:#f8fafc;color:#475569;font-size:12.5px;font-weight:600;cursor:pointer;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                Attach files · फ़ाइल जोड़ें · ફાઇલ જોડો
+              </button>
+              <div style="font-size:11px;color:#94a3b8;margin-top:4px;">PDF, images, Excel or Word · up to 5 files, 4 MB each</div>
+              <div id="db-up-files-list" style="display:flex;flex-direction:column;gap:4px;margin-top:6px;"></div>
+            </div>
+            <div>
+              ${lbl('Remarks', 'टिप्पणी', 'નોંધ')}
               <input id="db-up-remarks" style="${inp}" placeholder="Optional" />
             </div>
             <div id="db-up-err" style="display:none;font-size:12px;color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:7px;padding:8px 12px;"></div>
           </div>
           <div style="padding:16px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
             <button id="db-up-cancel" class="btn-secondary">Cancel</button>
-            <button id="db-up-submit" class="btn-primary" style="background:#dc2626;border-color:#dc2626;">Submit Request</button>
+            <button id="db-up-submit" class="btn-primary" style="background:#dc2626;border-color:#dc2626;">Submit · भेजें · મોકલો</button>
           </div>
         </div>
       </div>`;
@@ -1319,11 +1338,42 @@ window.Pages.dashboard = (function () {
     document.getElementById('db-up-cancel').addEventListener('click', closeModal);
     document.getElementById('db-up-payee')?.focus();
 
+    const errEl = document.getElementById('db-up-err');
+    const fail  = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
+    const fmtSize = (n) => n >= 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+    const renderFiles = () => {
+      const box = document.getElementById('db-up-files-list');
+      if (!box) return;
+      box.innerHTML = files.map((f, i) => `<div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#334155;background:#f1f5f9;border-radius:6px;padding:4px 8px;">
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(f.name)}</span>
+          <span style="color:#94a3b8;flex-shrink:0;">${fmtSize(f.size)}</span>
+          <button type="button" data-rm="${i}" style="border:none;background:none;color:#94a3b8;cursor:pointer;padding:0 2px;font-size:14px;line-height:1;" title="Remove">&times;</button>
+        </div>`).join('');
+      box.querySelectorAll('[data-rm]').forEach(b => b.addEventListener('click', () => { files.splice(+b.dataset.rm, 1); renderFiles(); }));
+    };
+    const fileInput = document.getElementById('db-up-files');
+    document.getElementById('db-up-files-btn').addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      errEl.style.display = 'none';
+      for (const f of Array.from(fileInput.files || [])) {
+        if (files.length >= MAX_FILES) { fail(`At most ${MAX_FILES} files.`); break; }
+        if (f.size > MAX_FILE) { fail(`"${f.name}" is over 4 MB.`); continue; }
+        if (files.reduce((n, x) => n + x.size, 0) + f.size > MAX_TOTAL) { fail('All files together must be under 7 MB.'); break; }
+        if (!files.some(x => x.name === f.name && x.size === f.size)) files.push(f);
+      }
+      fileInput.value = '';
+      renderFiles();
+    });
+    const readAsDataUrl = (f) => new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(new Error('Could not read ' + f.name));
+      r.readAsDataURL(f);
+    });
+
     document.getElementById('db-up-submit').addEventListener('click', async () => {
       const v = (id) => (document.getElementById(id)?.value ?? '').trim();
-      const errEl = document.getElementById('db-up-err');
       const btn   = document.getElementById('db-up-submit');
-      const fail  = (m) => { errEl.textContent = m; errEl.style.display = 'block'; };
       const body = {
         request_date: v('db-up-date'),
         required_by:  v('db-up-required'),
@@ -1336,21 +1386,24 @@ window.Pages.dashboard = (function () {
         bank_details: v('db-up-bank'),
         remarks:      v('db-up-remarks'),
       };
-      if (!body.payee)                      return fail('Please enter who is to be paid.');
-      if (!(Number(body.amount) > 0))       return fail('Please enter a valid amount.');
-      if (!body.purpose)                    return fail('Please describe the purpose of the payment.');
-      if (!body.required_by)                return fail('Please pick the date the payment is required by.');
+      if (!body.payee)                      return fail('Please enter who is to be paid. · किसे भुगतान करना है, लिखें।');
+      if (!(Number(body.amount) > 0))       return fail('Please enter a valid amount. · सही राशि लिखें।');
+      if (!body.purpose)                    return fail('Please describe the purpose of the payment. · भुगतान का उद्देश्य लिखें।');
+      if (!body.required_by)                return fail('Please pick the date the payment is required by. · तारीख चुनें।');
       errEl.style.display = 'none';
 
       btn.disabled = true; btn.textContent = 'Submitting…';
       try {
+        body.documents = [];
+        for (const f of files) body.documents.push({ name: f.name, dataUrl: await readAsDataUrl(f) });
         const r = await Utils.apiFetch('/api/urgent-payments', { method: 'POST', body: JSON.stringify(body) });
         closeModal();
         Utils.showToast(`Urgent payment request ${r?.id || ''} submitted — approvers and Accounts have been mailed`, 'success');
+        if (r?.documentsFailed) Utils.showToast('The request was saved but its documents could not be stored — please mail them to Accounts.', 'error');
         if (window.Sidebar?.refreshBadge) { try { window.Sidebar.refreshBadge(); } catch {} }
       } catch (e) {
         fail(e.message || 'Failed to submit the request.');
-        btn.disabled = false; btn.textContent = 'Submit Request';
+        btn.disabled = false; btn.textContent = 'Submit · भेजें · મોકલો';
       }
     });
   }
