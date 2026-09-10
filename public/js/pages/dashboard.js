@@ -300,9 +300,13 @@ window.Pages.dashboard = (function () {
     const { data, users, holidays } = _state;
     const allDoers = [...new Set((users || []).map(u => u.name))].sort();
     const me = window.currentUser;
-    const myDept = me?.department || '';
+    // Department is free text, so compare trimmed + lowercased — same rule as
+    // normDept() in server.js, otherwise a teammate whose department differs
+    // only in case/whitespace silently drops out of the HOD's picker.
+    const normDept = d => String(d || '').trim().toLowerCase();
+    const myDept = normDept((users || []).find(u => u.id === me?.id)?.department ?? me?.department);
     // HOD's picker only ever lists their own department's team, never the whole company.
-    const teamUsers = hod ? (users || []).filter(u => (u.department || '') === myDept && u.name !== me?.name) : [];
+    const teamUsers = hod ? (users || []).filter(u => normDept(u.department) === myDept && u.name !== me?.name) : [];
 
     const perf = admin ? computePerf(_state.delegations, users) : null;
 

@@ -13,6 +13,7 @@ window.Pages['all-tasks'] = (function () {
   let _toDate    = '';
   let _sortCol   = null;         // 'description' | 'doer' | 'assignee' | 'dueDate' | 'remarks' | 'status'
   let _sortDir   = 'asc';        // 'asc' | 'desc'
+  let _masterRowsCache = [];     // latest masterRows() output — Master view Edit/Delete look rows up by index
 
   /* ─── helpers ───────────────────────────────────────────────────────────── */
   const isAdmin = () => {
@@ -31,8 +32,37 @@ window.Pages['all-tasks'] = (function () {
     return pageFeats.includes(feat);
   };
 
+  // HOD who is not also a true Admin: sees only their own department's team.
+  // Mirrors isHODUser() in server.js — keep the two in sync.
+  const isHOD = () => {
+    const roles = window.currentUser?.roles;
+    if (!roles) return false;
+    const arr = Array.isArray(roles) ? roles : String(roles).split(',').map(r => r.trim());
+    return arr.includes('HOD') && !arr.includes('Admin');
+  };
+
   const currentUserName = () => window.currentUser?.name || '';
   const currentUserId   = () => window.currentUser?.id   || '';
+
+  // A checklist's assignedTo / a delegation's doer is stored as free text and
+  // can differ from the user's name in case or stray whitespace. Every doer
+  // comparison goes through this — a raw `===` silently matches nothing, which
+  // looks exactly like "All shows data but picking one employee shows none".
+  const normName = (s) => String(s || '').trim().toLowerCase();
+  const sameName = (a, b) => normName(a) === normName(b);
+  const normDept = (d) => String(d || '').trim().toLowerCase();
+
+  // Users the employee filter may list: everyone for Admin, only the HOD's own
+  // department (themself included) for an HOD. The API already scopes the
+  // rows the same way, so the dropdown just has to stop offering names whose
+  // tasks the HOD can never receive.
+  const filterableUsers = () => {
+    if (!isHOD()) return _users;
+    // Fresh off /api/users by id, not the login-time session snapshot — a
+    // department assigned after login would otherwise match nobody.
+    const myDept = normDept(_users.find(u => u.id === currentUserId())?.department ?? window.currentUser?.department);
+    return _users.filter(u => normDept(u.department) === myDept || sameName(u.name, currentUserName()));
+  };
 
   const fmt = (iso) => {
     if (!iso) return '—';
@@ -85,7 +115,7 @@ window.Pages['all-tasks'] = (function () {
   function getBaseGroups(tab) {
     return (isAdmin() || tab === 'Delegate by Me')
       ? _grouped
-      : _grouped.filter(g => g.doer === currentUserName());
+      : _grouped.filter(g => sameName(g.doer, currentUserName()));
   }
 
   function tabCount(tabName) {
@@ -135,7 +165,7 @@ window.Pages['all-tasks'] = (function () {
 
   function getVisibleGroups() {
     return getBaseGroups(_tab)
-      .filter(g => _employeeFilter === 'All' || g.doer === _employeeFilter)
+      .filter(g => _employeeFilter === 'All' || sameName(g.doer, _employeeFilter))
       .map(g => ({ ...g, tasks: filterTasks(g.tasks) }))
       .filter(g => g.tasks.length > 0);
   }
@@ -354,7 +384,9 @@ window.Pages['all-tasks'] = (function () {
   function taskRowHTML(t, serial) {
     // FMS rows aren't owned by this app's CRUD — their data lives in the live
     // Google Sheet, so Edit/Delete/Shift don't apply, only Done.
-    const canEdit   = t.type !== 'FMS';
+    // Checklist occurrences are generated from the master, so they are not
+    // edited one by one either — Edit is for delegations only.
+    const canEdit   = t.type !== 'FMS' && t.type !== 'Checklist';
     const canDelete = t.type !== 'FMS';
     const canRevise = t.type !== 'Checklist' && t.type !== 'FMS' && t.status !== 'done' && t.status !== 'revise' && t.status !== 'revise_requested';
     const canDone   = t.status !== 'done';
@@ -496,13 +528,14 @@ window.Pages['all-tasks'] = (function () {
     const map = new Map();
     for (const m of _masters) {
       const doer = m.assignedTo || '(Unassigned)';
-      if (!admin && doer !== me) continue;
-      if (_employeeFilter !== 'All' && doer !== _employeeFilter) continue;
+      if (!admin && !sameName(doer, me)) continue;
+      if (_employeeFilter !== 'All' && !sameName(doer, _employeeFilter)) continue;
       const task = String(m.task || '').trim();
       if (s && !task.toLowerCase().includes(s)) continue;
       const key = doer + ' ' + task.toLowerCase();
-      if (!map.has(key)) map.set(key, { doer, task, frequency: '', remarks: '', total: 0, done: 0, leave: 0, nextDue: null, lastDone: null, overdue: false, anyId: m.id });
+      if (!map.has(key)) map.set(key, { doer, task, frequency: '', remarks: '', total: 0, done: 0, leave: 0, nextDue: null, lastDone: null, overdue: false, anyId: m.id, ids: [] });
       const r = map.get(key);
+      r.ids.push(m.id);
       if (m.frequency && !r.frequency) r.frequency = m.frequency;
       if (m.remarks && !r.remarks) r.remarks = m.remarks;
       const due = m.startDate || null;
@@ -522,50 +555,139 @@ window.Pages['all-tasks'] = (function () {
     const rows = [...map.values()];
     for (const r of rows) r.overdue = !!r.nextDue && r.nextDue < todayStr;
     rows.sort((a, b) => a.doer.localeCompare(b.doer) || a.task.localeCompare(b.task));
+    rows.forEach((r, i) => { r.idx = i; });
+    _masterRowsCache = rows;
     return rows;
   }
 
-  function masterViewHTML(rows) {
-    if (!rows.length) {
+  // Master rows are the whole series (every dated occurrence of one task for
+  // one doer), so Edit and Delete here act on all of those ids at once. Only
+  // Admin/HOD get the buttons — plain users see the Master view read-only.
+  const canManageMasters = () => isAdmin();
+
+  function masterActionsHTML(r) {
+    if (!canManageMasters()) return '';
+    const editBtn = hasFeature('edit')
+      ? `<button class="at-action-btn at-btn-amber" title="Edit all ${r.ids.length} occurrence${r.ids.length === 1 ? '' : 's'}" onclick="window._atEditMaster(${r.idx})">
+           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+         </button>`
+      : '';
+    const delBtn = hasFeature('delete')
+      ? `<button class="at-action-btn at-btn-red" title="Delete all ${r.ids.length} occurrence${r.ids.length === 1 ? '' : 's'}" onclick="window._atDeleteMaster(${r.idx})">
+           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+         </button>`
+      : '';
+    return `<div style="display:flex;gap:2px">${editBtn}${delBtn}</div>`;
+  }
+
+  async function deleteMasterSeries(r) {
+    const n = r.ids.length;
+    const ok = await Utils.showConfirm(
+      `This will permanently remove "${r.task}" for ${r.doer} — all ${n} occurrence${n === 1 ? '' : 's'}, done ones included.`,
+      { title: 'Delete Checklist Task', confirmText: 'Delete', danger: true });
+    if (!ok) return;
+    try {
+      // Sequential, not Promise.all — same reason the bulk transfer is: a burst
+      // of parallel deletes on a big series is what trips the server up.
+      for (const id of r.ids) await Utils.apiFetch('/api/masters?id=' + encodeURIComponent(id), { method: 'DELETE' });
+      Utils.showToast(`Checklist task deleted (${n} occurrence${n === 1 ? '' : 's'})`);
+      await reload();
+    } catch (e) {
+      Utils.showToast(e.message, 'error');
+      await reload();
+    }
+  }
+
+  // Master rows folded per doer, in the same shape as the task groups so the
+  // expand/collapse controls and _expanded work for both views alike.
+  function masterGroups(rows) {
+    const map = new Map();
+    for (const r of rows) {
+      if (!map.has(r.doer)) map.set(r.doer, { doer: r.doer, rows: [] });
+      map.get(r.doer).rows.push(r);
+    }
+    return [...map.values()];
+  }
+
+  function masterGroupHTML(g, groupIdx, startSerial) {
+    const cap = (f) => f ? f.charAt(0).toUpperCase() + f.slice(1) : '—';
+    const open      = !!_expanded[g.doer];
+    const endSerial = startSerial + g.rows.length - 1;
+    const pendingCnt = g.rows.reduce((n, r) => n + (r.total - r.done), 0);
+    const overdueCnt = g.rows.filter(r => r.overdue).length;
+    const doneAll    = g.rows.filter(r => r.total > 0 && r.done === r.total).length;
+    const pills = [
+      doneAll    > 0 ? window.UI.pill(`${doneAll} all done`, { variant: 'success' })   : '',
+      pendingCnt > 0 ? window.UI.pill(`${pendingCnt} pending`, { variant: 'danger' })  : '',
+      overdueCnt > 0 ? window.UI.pill(`${overdueCnt} overdue`, { variant: 'warning' }) : '',
+    ].join('');
+
+    const tableHTML = open ? `
+      <div style="border-top:1px solid #f1f5f9;overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="background:#f8fafc">
+              <th class="at-th">#</th>
+              ${canManageMasters() ? '<th class="at-th">Action</th>' : ''}
+              <th class="at-th">Task</th>
+              <th class="at-th">Frequency</th>
+              <th class="at-th">Next Due Date</th>
+              <th class="at-th">Last Done</th>
+              <th class="at-th">Occurrences</th>
+              <th class="at-th">Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${g.rows.map((r, i) => `
+              <tr class="at-table-row">
+                <td class="at-td" style="font-size:11px;color:#94a3b8;font-family:monospace">${startSerial + i}</td>
+                ${canManageMasters() ? `<td class="at-td">${masterActionsHTML(r)}</td>` : ''}
+                <td class="at-td" style="max-width:320px;font-weight:500;color:#1e293b">${esc(r.task)}</td>
+                <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${esc(cap(r.frequency))}</td>
+                <td class="at-td" style="white-space:nowrap;font-size:12px;${r.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#1e293b;font-weight:600;'}">
+                  ${r.nextDue ? fmt(r.nextDue) + (r.overdue ? ' <span style="font-size:10px;font-weight:600;">(overdue)</span>' : '') : '<span style="color:#94a3b8;font-weight:400;">All done</span>'}
+                </td>
+                <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${r.lastDone ? fmt(r.lastDone) : '—'}</td>
+                <td class="at-td" style="white-space:nowrap;font-size:12px">
+                  ${window.UI.pill(`${r.done} done`, { variant: 'success' })} ${r.total - r.done > 0 ? window.UI.pill(`${r.total - r.done} pending`, { variant: 'danger' }) : ''} ${r.leave > 0 ? window.UI.pill(`${r.leave} on leave`, { variant: 'info' }) : ''}
+                </td>
+                <td class="at-td" style="color:#94a3b8;max-width:180px;font-size:12px">${esc(r.remarks || '—')}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>` : '';
+
+    return `
+      <li style="border-bottom:1px solid #f1f5f9">
+        <button class="at-group-btn" onclick="window._atToggleGroup('${esc(g.doer)}')"
+          style="width:100%;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;background:none;border:none;cursor:pointer;text-align:left;transition:background 0.15s"
+          onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='none'">
+          <span style="display:flex;align-items:center;gap:12px">
+            <span style="color:#94a3b8;transition:transform 0.2s;transform:rotate(${open ? 90 : 0}deg);display:inline-flex">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+            </span>
+            <span style="font-size:12px;font-family:monospace;color:#94a3b8;min-width:20px;text-align:right">${groupIdx + 1}.</span>
+            ${avatarHTML(g.doer)}
+            <span style="font-weight:500;color:#1e293b;font-size:14px">${esc(g.doer)}</span>
+            <span style="font-size:12px;color:#94a3b8">(${g.rows.length} master task${g.rows.length === 1 ? '' : 's'} · #${startSerial}–#${endSerial})</span>
+          </span>
+          <div style="display:flex;gap:6px;align-items:center">${pills}</div>
+        </button>
+        ${tableHTML}
+      </li>`;
+  }
+
+  function masterViewHTML(groups) {
+    if (!groups.length) {
       return `<div style="padding:56px;text-align:center">
         <div style="font-size:14px;font-weight:500;color:#475569">No checklist tasks match the filters</div>
         <div style="font-size:12px;color:#94a3b8;margin-top:4px">Try clearing search or the employee filter.</div>
       </div>`;
     }
-    const cap = (f) => f ? f.charAt(0).toUpperCase() + f.slice(1) : '—';
-    return `<div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead>
-          <tr style="background:#f8fafc">
-            <th class="at-th">#</th>
-            <th class="at-th">Task</th>
-            <th class="at-th">Doer</th>
-            <th class="at-th">Frequency</th>
-            <th class="at-th">Next Due Date</th>
-            <th class="at-th">Last Done</th>
-            <th class="at-th">Occurrences</th>
-            <th class="at-th">Remarks</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map((r, i) => `
-            <tr class="at-table-row">
-              <td class="at-td" style="font-size:11px;color:#94a3b8;font-family:monospace">${i + 1}</td>
-              <td class="at-td" style="max-width:320px;font-weight:500;color:#1e293b">${esc(r.task)}</td>
-              <td class="at-td" style="color:#475569;white-space:nowrap">${esc(r.doer)}</td>
-              <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${esc(cap(r.frequency))}</td>
-              <td class="at-td" style="white-space:nowrap;font-size:12px;${r.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#1e293b;font-weight:600;'}">
-                ${r.nextDue ? fmt(r.nextDue) + (r.overdue ? ' <span style="font-size:10px;font-weight:600;">(overdue)</span>' : '') : '<span style="color:#94a3b8;font-weight:400;">All done</span>'}
-              </td>
-              <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${r.lastDone ? fmt(r.lastDone) : '—'}</td>
-              <td class="at-td" style="white-space:nowrap;font-size:12px">
-                ${window.UI.pill(`${r.done} done`, { variant: 'success' })} ${r.total - r.done > 0 ? window.UI.pill(`${r.total - r.done} pending`, { variant: 'danger' }) : ''} ${r.leave > 0 ? window.UI.pill(`${r.leave} on leave`, { variant: 'info' }) : ''}
-              </td>
-              <td class="at-td" style="color:#94a3b8;max-width:180px;font-size:12px">${esc(r.remarks || '—')}</td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>`;
+    let serial = 1;
+    return `<ul style="list-style:none;margin:0;padding:0">
+      ${groups.map((g, i) => { const s = serial; serial += g.rows.length; return masterGroupHTML(g, i, s); }).join('')}
+    </ul>`;
   }
 
   /* ─── main content render ───────────────────────────────────────────────── */
@@ -623,13 +745,15 @@ window.Pages['all-tasks'] = (function () {
     /* employee filter (admin only) */
     const empFilter = admin
       ? `<select id="at-emp-filter" style="height:32px;padding:0 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px;background:#fff">
-           <option value="All">All Employees</option>
-           ${_users.map(u => `<option value="${esc(u.name)}"${_employeeFilter === u.name ? ' selected' : ''}>${esc(u.name)}</option>`).join('')}
+           <option value="All">${isHOD() ? 'All (My Team)' : 'All Employees'}</option>
+           ${filterableUsers().map(u => `<option value="${esc(u.name)}"${sameName(_employeeFilter, u.name) ? ' selected' : ''}>${esc(u.name)}</option>`).join('')}
          </select>`
       : '';
 
+    const masterMode = _tab === 'Checklist' && _statusTab === 'Master';
+
     /* clear filters btn */
-    const clearBtn = (_fromDate || _toDate || _employeeFilter !== 'All')
+    const clearBtn = ((!masterMode && (_fromDate || _toDate)) || _employeeFilter !== 'All')
       ? `<button id="at-clear-filters" style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:500;color:#64748b;background:#f1f5f9;border:none;cursor:pointer">
            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
            Clear
@@ -639,11 +763,11 @@ window.Pages['all-tasks'] = (function () {
     /* status tabs — the Checklist tab gets a fourth, Master: each recurring
        task once, with its frequency and next due date, instead of one row
        per dated occurrence. */
-    const masterMode = _tab === 'Checklist' && _statusTab === 'Master';
     const statusBtns = ['All', 'Pending', 'Completed', ...(_tab === 'Checklist' ? ['Master'] : [])].map(t =>
       `<button class="at-seg-btn${_statusTab === t ? ' at-seg-active' : ''}" data-stab="${esc(t)}">${esc(t)}</button>`
     ).join('');
     const masterRowsList = masterMode ? masterRows() : [];
+    const masterGroupsList = masterMode ? masterGroups(masterRowsList) : [];
 
     /* groups list */
     let serial = 1;
@@ -702,9 +826,10 @@ window.Pages['all-tasks'] = (function () {
           <div class="at-seg" id="at-tab-seg">${tabBtns}</div>
           <div style="width:1px;height:24px;background:#e2e8f0;margin:0 4px"></div>
           ${empFilter}
+          ${masterMode ? '' : `
           <input type="date" id="at-from-date" value="${_fromDate}" class="at-input" style="width:auto" />
           <span style="font-size:12px;color:#94a3b8">to</span>
-          <input type="date" id="at-to-date" value="${_toDate}" class="at-input" style="width:auto" />
+          <input type="date" id="at-to-date" value="${_toDate}" class="at-input" style="width:auto" />`}
           ${clearBtn}
           <div style="flex:1"></div>
           <div style="position:relative">
@@ -724,14 +849,14 @@ window.Pages['all-tasks'] = (function () {
               : `<b style="color:#1e293b">${visGroups.length}</b> doer${visGroups.length === 1 ? '' : 's'} ·
                  <b style="color:#1e293b">${totalTasks}</b> task${totalTasks === 1 ? '' : 's'}`}
           </div>
-          <div style="display:flex;gap:4px;${masterMode ? 'visibility:hidden;' : ''}">
+          <div style="display:flex;gap:4px">
             <button id="at-expand-all"   style="padding:4px 10px;border-radius:6px;font-size:12px;background:none;border:1px solid #e2e8f0;cursor:pointer;color:#475569">Expand all</button>
             <button id="at-collapse-all" style="padding:4px 10px;border-radius:6px;font-size:12px;background:none;border:1px solid #e2e8f0;cursor:pointer;color:#475569">Collapse all</button>
           </div>
         </div>
 
         <!-- Groups (or the Checklist master table) -->
-        <div class="at-card">${masterMode ? masterViewHTML(masterRowsList) : groupsHTML}</div>
+        <div class="at-card">${masterMode ? masterViewHTML(masterGroupsList) : groupsHTML}</div>
 
       </div>`;
 
@@ -796,7 +921,7 @@ window.Pages['all-tasks'] = (function () {
     }
 
     /* expand / collapse all */
-    const visGroups = getVisibleGroups();
+    const visGroups = (_tab === 'Checklist' && _statusTab === 'Master') ? masterGroups(masterRows()) : getVisibleGroups();
     document.getElementById('at-expand-all')?.addEventListener('click', () => {
       visGroups.forEach(g => { _expanded[g.doer] = true; });
       renderContent();
@@ -829,6 +954,15 @@ window.Pages['all-tasks'] = (function () {
   };
   window._atReopenTask = (id, type) => reopenTask(id, type);
   window._atDeleteTask = (id, type) => deleteTask(id, type);
+  window._atEditMaster = (idx) => {
+    const r = _masterRowsCache[idx];
+    if (!r || !canManageMasters()) return;
+    openChecklistEditModal({ id: r.anyId, description: r.task, doer: r.doer, frequency: r.frequency }, r.ids);
+  };
+  window._atDeleteMaster = (idx) => {
+    const r = _masterRowsCache[idx];
+    if (r && canManageMasters()) deleteMasterSeries(r);
+  };
   window._atEditTask = (id) => {
     const task = _grouped.flatMap(g => g.tasks).find(t => t.id === id);
     if (!task) return;
@@ -985,13 +1119,16 @@ window.Pages['all-tasks'] = (function () {
   }
 
   /* ─── Edit Checklist Task Modal ─────────────────────────────────────────── */
-  function openChecklistEditModal(task) {
+  function openChecklistEditModal(task, seriesIds) {
+    // From the Master view, seriesIds is every occurrence of this task for
+    // this doer; from the list it is just the one row.
+    const ids = (seriesIds && seriesIds.length) ? seriesIds : [task.id];
     const userOpts = _users.map(u =>
-      `<option value="${esc(u.id)}"${u.name === task.doer ? ' selected' : ''}>${esc(u.name)}</option>`
+      `<option value="${esc(u.id)}"${sameName(u.name, task.doer) ? ' selected' : ''}>${esc(u.name)}</option>`
     ).join('');
 
     const div = modalOverlay('at-checklist-edit-modal', `
-      ${modalHeader('Edit Checklist Task', "document.getElementById('at-checklist-edit-modal').remove()")}
+      ${modalHeader(ids.length > 1 ? `Edit Checklist Task (${ids.length} occurrences)` : 'Edit Checklist Task', "document.getElementById('at-checklist-edit-modal').remove()")}
       <div style="padding:20px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px">
         <div>
           <label class="at-label">Task *</label>
@@ -1033,12 +1170,14 @@ window.Pages['all-tasks'] = (function () {
       const btn = document.getElementById('atce-save');
       btn.disabled = true; btn.textContent = 'Saving…';
       try {
-        await Utils.apiFetch('/api/masters', {
-          method: 'PATCH',
-          body: JSON.stringify({ id: task.id, task: taskText, assignedTo, frequency }),
-        });
+        for (const id of ids) {
+          await Utils.apiFetch('/api/masters', {
+            method: 'PATCH',
+            body: JSON.stringify({ id, task: taskText, assignedTo, frequency }),
+          });
+        }
         div.remove();
-        Utils.showToast('Checklist task updated');
+        Utils.showToast(ids.length > 1 ? `Checklist task updated (${ids.length} occurrences)` : 'Checklist task updated');
         await reload();
       } catch (e) {
         errEl.textContent = e.message;
