@@ -213,6 +213,7 @@ window.Pages['hr-leave'] = (() => {
            display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;align-items:end;">
         ${H.select('hrl-b-year', 'Year', _year, H.yearList())}
         <div><button id="hrl-carry" class="btn-secondary btn-sm" style="width:100%;">Carry Forward from ${_year - 1}</button></div>
+        <div><button id="hrl-loadsheet" class="btn-secondary btn-sm" style="width:100%;">Load 2026 from Leave Sheet</button></div>
         <div><button id="hrl-bal-export" class="btn-secondary btn-sm" style="width:100%;">Export CSV</button></div>
       </div>
       <div style="font-size:12px;color:#94a3b8;margin-bottom:11px;">
@@ -313,6 +314,7 @@ window.Pages['hr-leave'] = (() => {
     on('hrl-export', 'click', exportRequests);
     on('hrl-bal-export', 'click', exportBalances);
     on('hrl-carry', 'click', carryForward);
+    on('hrl-loadsheet', 'click', loadFromSheet);
     on('hrl-hol-add', 'click', openHoliday);
     on('hrl-type-add', 'click', () => openType(null));
 
@@ -572,6 +574,28 @@ window.Pages['hr-leave'] = (() => {
         render();
       },
     });
+  }
+
+  /* The office leave sheet's figures (entitlement and days taken for CL / SL /
+     PL, 2026) ship with the app and are loaded once on deploy; this re-runs
+     that load, for after HR fixes an employee name that did not match. */
+  async function loadFromSheet() {
+    const ok = await Utils.showConfirm(
+      'This sets 2026 CL, SL and PL for every employee named on the office leave sheet to the sheet\'s figures '
+      + '(entitlement and days taken), overwriting any adjustment made here since. Employees whose name on the '
+      + 'sheet does not match the employee master are listed afterwards and left untouched.',
+      { title: 'Load 2026 from Leave Sheet', confirmText: 'Load' });
+    if (!ok) return;
+    try {
+      const r = await H.post('/api/hr/leave-balances/load-sheet', {});
+      const lines = [`Loaded ${r.applied.length} employee${r.applied.length === 1 ? '' : 's'} from the sheet.`];
+      if (r.unmatched?.length) lines.push(`\nNo employee record matched: ${r.unmatched.join(', ')}`);
+      if (r.ambiguous?.length) lines.push(`\nMore than one record matched: ${r.ambiguous.join(', ')}`);
+      await Utils.showConfirm(lines.join('\n'), { title: 'Leave Sheet Loaded', confirmText: 'Done', cancelText: 'Close' });
+      _balances = null;
+      await loadBalances();
+      render();
+    } catch (e) { H.fail(e); }
   }
 
   async function carryForward() {

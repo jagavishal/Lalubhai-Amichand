@@ -665,10 +665,12 @@ function mountHrms(app, ctx) {
   /* Every HR route runs this first: the host's own schema bootstrap (cached
      after its first call, exactly as the rest of server.js relies on) and then
      this module's reference data. Both are no-ops from the second request on. */
+  let _leaveSeedChecked = false;
   async function hrReady(req, res, next) {
     try {
       if (ctx.ensureSchema) await ctx.ensureSchema();
       await seedReferenceData();
+      if (!_leaveSeedChecked) { _leaveSeedChecked = true; await applyLeaveBalanceSeedOnce(); }
     } catch (e) {
       console.error('[hrms] bootstrap failed:', e.message);
     }
@@ -779,6 +781,69 @@ function mountHrms(app, ctx) {
   }
 
   const balanceOf = (b) => money(num(b.opening) + num(b.accrued) - num(b.used));
+
+  /* ── Leave balances from the office sheet ─────────────────────────────
+     hr-leave-balances-seed.js carries, per employee, the year's entitlement
+     and the days already taken for CL / SL / PL, copied from the leave sheet
+     HR keeps. The sheet spells names in full and in capitals ("JANHAVI VIJAY
+     GORAKH"); the employee master usually has fewer words ("Janhavi Gorakh"),
+     so a row is matched in three passes, each of which must be unambiguous:
+     the same words in any order, then the same first and last word, then
+     every word of the employee's name present in the sheet's. A sheet name
+     that matches nobody, or more than one person, is reported back rather
+     than guessed. Runs once on its own (flag in app_config) and again from
+     the Balances tab whenever HR asks — a re-run overwrites the three types
+     for the matched people with the sheet's figures. */
+  const _words = (n) => String(n || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+  async function applyLeaveBalanceSeed() {
+    const { YEAR, BALANCES } = require('./hr-leave-balances-seed.js');
+    const emps = await q(`SELECT id, name, status FROM hr_employees ORDER BY CASE WHEN status = 'Active' THEN 0 ELSE 1 END, id ASC`);
+    const indexed = emps.map((e) => ({ ...e, words: _words(e.name) })).filter((e) => e.words.length);
+    const unique = (list) => (list.length === 1 ? list[0] : null);
+    const findEmployee = (name) => {
+      const w = _words(name);
+      if (!w.length) return { emp: null, ambiguous: false };
+      const sorted = w.slice().sort().join(' ');
+      const passes = [
+        (e) => e.words.slice().sort().join(' ') === sorted,
+        (e) => e.words.length >= 2 && e.words[0] === w[0] && e.words[e.words.length - 1] === w[w.length - 1],
+        (e) => e.words.length >= 2 && e.words.every((x) => w.includes(x)),
+      ];
+      for (const pass of passes) {
+        const hits = indexed.filter(pass);
+        if (hits.length === 1) return { emp: hits[0], ambiguous: false };
+        if (hits.length > 1) return { emp: null, ambiguous: true, names: hits.map((h) => h.name) };
+      }
+      return { emp: null, ambiguous: false };
+    };
+    const applied = [], unmatched = [], ambiguous = [];
+    for (const row of BALANCES) {
+      const m = findEmployee(row.name);
+      if (!m.emp) { (m.ambiguous ? ambiguous : unmatched).push(row.name + (m.ambiguous ? ` (${m.names.join(' / ')})` : '')); continue; }
+      for (const [code, c] of Object.entries(row.cells)) {
+        await pool.query(
+          `INSERT INTO hr_leave_balances (employee_id, year, type_code, opening, accrued, used)
+           VALUES ($1,$2,$3,0,$4,$5)
+           ON CONFLICT (employee_id, year, type_code) DO UPDATE SET opening = 0, accrued = $6, used = $7`,
+          [m.emp.id, YEAR, code, money(c.accrued), money(c.used), money(c.accrued), money(c.used)],
+        );
+      }
+      applied.push(`${row.name} → ${m.emp.name} (${m.emp.id})`);
+    }
+    return { year: YEAR, applied, unmatched, ambiguous };
+  }
+  // First boot after this ships loads the sheet on its own; the flag keeps a
+  // later boot from silently undoing whatever HR adjusted since.
+  const LEAVE_SEED_FLAG = 'hr_leave_balance_seed_2026';
+  async function applyLeaveBalanceSeedOnce() {
+    const done = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [LEAVE_SEED_FLAG]).catch(() => []);
+    if (done.length) return;
+    const r = await applyLeaveBalanceSeed();
+    await setSetting(LEAVE_SEED_FLAG, JSON.stringify({ at: new Date().toISOString(), applied: r.applied.length, unmatched: r.unmatched, ambiguous: r.ambiguous }));
+    console.log('[hrms] leave balances loaded from sheet:', r.applied.length, 'matched;', r.unmatched.length, 'unmatched;', r.ambiguous.length, 'ambiguous');
+    if (r.unmatched.length) console.log('[hrms]   unmatched:', r.unmatched.join(', '));
+    if (r.ambiguous.length) console.log('[hrms]   ambiguous:', r.ambiguous.join(', '));
+  }
 
   /* The employee record behind a login.
      ---------------------------------------------------------------------
@@ -2116,6 +2181,16 @@ function mountHrms(app, ctx) {
           );
         }
         res.json({ success: true });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Re-load the office sheet's balances (see applyLeaveBalanceSeed) — after
+    // HR has corrected a name that did not match, typically.
+    app.post('/api/hr/leave-balances/load-sheet', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        const r = await applyLeaveBalanceSeed();
+        await setSetting(LEAVE_SEED_FLAG, JSON.stringify({ at: new Date().toISOString(), by: req.session?.user?.name || '', applied: r.applied.length, unmatched: r.unmatched, ambiguous: r.ambiguous }));
+        res.json({ success: true, ...r });
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
