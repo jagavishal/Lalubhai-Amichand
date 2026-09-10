@@ -4831,7 +4831,7 @@ const PO_PDF_DRIVE_FOLDER_ID = '1iFcj9bv3QmIuaNKQSIKrNy6_8FhGzn6e';
 const PR_PDF_DRIVE_FOLDER_ID = '1Nr33UmAqIUEC4KQmaAnZlFjhv57mVWi4';
 const GRN_PDF_DRIVE_FOLDER_ID = '11ELSLuEbVIqUeibZwmvPiRg-MOUVPJXQ';
 // PR creation also logs into "PR Form Responses" — the spreadsheet the store
-// team's own Google Form (filled by hand by Sagar/whoever raises the PR) has
+// team's own Google Form (filled by hand by Ashish Kumar/whoever raises the PR) has
 // always submitted into, tab "RM_1_res". NOT the "FMS (Stores)" spreadsheet's
 // "Monitoring" tab — that was this constant's first home and IS still a real,
 // separately-shared sheet, but confirmed (2026-08-08, by the user checking
@@ -6744,22 +6744,22 @@ const FMS_MONITORING_TAB = 'Monitoring';
 //  - S7 has "PR. No" at 90 and "Actual Time" at 91, i.e. the reverse of every
 //    other block's planned/actual/PR ordering.
 const FMS_PO_STEPS = [
-  { key: 'S1',  label: 'PR Generation',          owner: 'Sagar',                      planned: null, actual: 0,   prCol: 1 },
+  { key: 'S1',  label: 'PR Generation',          owner: 'Ashish Kumar',                   planned: null, actual: 0,   prCol: 1 },
   { key: 'S2',  label: 'Factory Manager Approval', owner: 'Khurshid Alam',            planned: 21,  actual: 22,  prCol: 23,  by: 24,  approval: 25, timeline: 27 },
   { key: 'S3',  label: 'Manager Approval',       owner: 'Kannu Sir',                  planned: 29,  actual: 30,  prCol: 31,  by: 32,  approval: 33, timeline: 35 },
-  { key: 'S4A', label: 'Quotations Giving',      owner: 'Sagar',                      planned: 37,  actual: 38,  prCol: 39,  by: 40,  timeline: 50 },
+  { key: 'S4A', label: 'Quotations Giving',      owner: 'Ashish Kumar',                   planned: 37,  actual: 38,  prCol: 39,  by: 40,  timeline: 50 },
   { key: 'S4B', label: 'Quotations Approval',    owner: 'Sajil Sir / Dhiren Sir',     planned: 52,  actual: 53,  prCol: null, by: 54, approval: 57, timeline: 59 },
-  { key: 'S5',  label: 'Create PO',              owner: 'Khurshid / Sagar / Ashok',   planned: 61,  actual: 62,  prCol: 63,  by: 64,  approval: 65, poNo: 66, timeline: 68, poStep: true },
+  { key: 'S5',  label: 'Create PO',              owner: 'Khurshid / Ashish / Ashok', planned: 61,  actual: 62,  prCol: 63,  by: 64,  approval: 65, poNo: 66, timeline: 68, poStep: true },
   // Not used in practice — the chain routinely completes past it with its
   // Actual Time left blank, so counting it would park every PR on a step
   // nobody is waiting for. Dropped from the report entirely; delete `ignored`
   // to bring it back.
   { key: 'S5B', label: 'PO Approval',            owner: 'Sajil Sir',                  planned: 70,  actual: 71,  prCol: 72,  by: 73,  approval: 74, poNo: 75, timeline: 77, poStep: true, ignored: true },
-  { key: 'S6',  label: 'Issue PO to Vendor',     owner: 'Khurshid / Sagar / Ashok',   planned: 79,  actual: 80,  prCol: 81,  by: 83,  approval: 84, poNo: 82, timeline: 87, poStep: true },
+  { key: 'S6',  label: 'Issue PO to Vendor',     owner: 'Khurshid / Ashish / Ashok', planned: 79,  actual: 80,  prCol: 81,  by: 83,  approval: 84, poNo: 82, timeline: 87, poStep: true },
   { key: 'S7',  label: 'Advance Payment',        owner: 'Sushil Sir',                 planned: 89,  actual: 91,  prCol: 90,  by: 93,  approval: 94, poNo: 92, timeline: 95 },
-  { key: 'S8A', label: 'Goods Challan Filling',  owner: 'Sagar',                      planned: 97,  actual: 98,  prCol: 99,  by: 101, poNo: 100, timeline: 105 },
+  { key: 'S8A', label: 'Goods Challan Filling',  owner: 'Ashish Kumar',                   planned: 97,  actual: 98,  prCol: 99,  by: 101, poNo: 100, timeline: 105 },
   { key: 'S8B', label: 'Goods Supervisor Form',  owner: 'Supervisors',                planned: 107, actual: 108, prCol: 109, by: 111, poNo: 110, timeline: 123 },
-  { key: 'S9',  label: 'Accounts Checklist',     owner: 'Sagar',                      planned: 125, actual: 126, prCol: 127, by: 129, poNo: 128, timeline: 143 },
+  { key: 'S9',  label: 'Accounts Checklist',     owner: 'Ashish Kumar',                   planned: 125, actual: 126, prCol: 127, by: 129, poNo: 128, timeline: 143 },
 ];
 
 // The steps the report actually reasons about. Everything downstream —
