@@ -6031,6 +6031,10 @@ const PO_FORMAT_CONFIG = {
     tabName: 'Service PO',
     partyLabel: 'VENDOR',
     hasShipTo: true,
+    // The one format that may be raised without a PR — see POST /api/po-creation.
+    // (Dropped by mistake in the layout revert of 11 Sep; a Service PO was
+    // then refused with "A PO cannot be raised without a PR".)
+    standalone: true,
     header: { poNo: 'J7', date: 'J6', department: 'J9', party: 'A13', shipTo: 'G13', deliverySchedule: 'A16', poValidity: 'C16', paymentTerms: 'G16', poMadeBy: 'J16' },
     items: { firstRow: 18, lastRow: 38, clearCols: ['A', 'J'], keyField: 'description', fields: { description: 'A', sacCode: 'C', size: 'D', uom: 'E', qty: 'F', unitPrice: 'G', gst: 'H' } },
     // Freight/Packing are meaningless for a service (their labels are blanked
