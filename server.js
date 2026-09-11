@@ -7848,7 +7848,9 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn'), async (req, r
       // Columns A:N (0-13) — the GRN tab's grid is 34 columns wide but the
       // template only uses the first 14; the row window comes from the tab
       // itself (see _exportSheetTabPdf — without it the pin is ignored).
-      const pdfBuffer = await _exportSheetTabPdf(GRN_CREATION_SHEET_ID, sourceSheetId, { c1: 0, c2: 14 });
+      // Landscape, as the store team asked ("GRN ka page setup landscape me
+      // karo"): fourteen columns read far better across the wide side.
+      const pdfBuffer = await _exportSheetTabPdf(GRN_CREATION_SHEET_ID, sourceSheetId, { c1: 0, c2: 14, portrait: false });
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `GR ${nextGrNo}.pdf`, GRN_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[grn-creation] PDF export failed:', e.message); }
 
