@@ -6012,31 +6012,36 @@ const PO_FORMAT_CONFIG = {
     approvalCell: 'H66',   // the H66:L69 signature merge above "Director/Authorized Signatory"
   },
   // Services, not goods — the one format with no PR upstream and no ITEM_CODES
-  // catalog behind it: every line is typed by hand. Since 8 Sep 2026 its tab
-  // is a straight copy of the PR sheet's "Purchase Requisition" template (the
-  // store team wanted the Service PO to look exactly like their PR): one
-  // header band on row 3/4, items on rows 7-20, TOTAL in L21, then the
-  // APPROVALS block. Only the wording changed (PO NO., PERSON WHO RAISED THE
-  // PO, DATE, SERVICE PURCHASE ORDER) and the two item-master lookups the PR
-  // has (department off the first item code, description off ITEM_CODE) are
-  // plain typed cells here. Column L holds a real per-row formula
-  // (=iferror(E*I,"")) typed into each row — clearCols stops at K for the
-  // same reason as the PR's own config. The previous layout is parked as the
-  // hidden "Service PO (old)" tab.
+  // catalog behind it: every line is typed by hand. Its tab was built by
+  // duplicating PurchaseOrder and reworking the item band: the ITEM CODE +
+  // VLOOKUP description/size columns are gone (a service has no catalog entry
+  // to look up), replaced by a free-text SERVICE DESCRIPTION merged across
+  // A:B with the SAC CODE beside it in C (the store team wanted the
+  // description first), then SIZE / UOM / QTY / UNIT PRICE / GST in D:H —
+  // the same D:H column set as PurchaseOrder (Sep 2026: the band used to be
+  // one B:G description + a lump-sum amount in I, which left the store team
+  // no way to state size/UOM/qty/rate on a service PO). Rows 39-58 of the
+  // original were deleted, so the whole totals/footer block sits 20 rows
+  // higher than PurchaseOrder's — hence the I39..I44 addresses below. Columns
+  // I (qty x unit price) and J (amount + tax) are ARRAYFORMULA spills anchored
+  // at I17/J17, so they must never be written to; keyField marks Description
+  // as the line's identity, standing in for itemCode everywhere the generic
+  // PO code expects one.
   'Service PO': {
     tabName: 'Service PO',
-    partyLabel: 'VENDOR NAME',
-    hasShipTo: false,
-    // The one format that may be raised without a PR — see POST /api/po-creation.
-    standalone: true,
-    header: { poNo: 'B4', requestedBy: 'C4', department: 'D4', party: 'E4', poMadeBy: 'F4', deliverySchedule: 'I4', paymentTerms: 'J4', date: 'L4' },
-    items: { firstRow: 7, lastRow: 20, clearCols: ['B', 'K'], keyField: 'description', fields: { sacCode: 'B', description: 'C', monthlyConsumption: 'D', qty: 'E', uom: 'F', stock: 'G', lastOrderedDate: 'H', unitPrice: 'I', gst: 'J' } },
-    summary: { fields: {}, totalCell: 'L21' },
-    // Beside the APPROVALS block (row 25, under the second "APPROVED?").
-    approvalCell: 'G25',
-    // Pinned to A:M and the template's 33 rows — the copied tab's grid is 32
-    // columns wide, and fitw=true would otherwise shrink the print to a sliver.
-    pdf: { c1: 0, c2: 13, r2: 33 },
+    partyLabel: 'VENDOR',
+    hasShipTo: true,
+    header: { poNo: 'J7', date: 'J6', department: 'J9', party: 'A13', shipTo: 'G13', deliverySchedule: 'A16', poValidity: 'C16', paymentTerms: 'G16', poMadeBy: 'J16' },
+    items: { firstRow: 18, lastRow: 38, clearCols: ['A', 'J'], keyField: 'description', fields: { description: 'A', sacCode: 'C', size: 'D', uom: 'E', qty: 'F', unitPrice: 'G', gst: 'H' } },
+    // Freight/Packing are meaningless for a service (their labels are blanked
+    // out on the tab) but their cells still feed the Total formula, so they
+    // stay configured and get zeroed on every submit — same
+    // never-let-the-last-PO's-numbers-bleed-through discipline as everywhere else.
+    summary: { fields: { freightCharges: 'I41', packingCharges: 'I42', discount: 'I43' }, totalCell: 'I44' },
+    // No testCertificateRequired: that's a goods-inspection concept, and its
+    // printed label was removed from this tab.
+    extra: { termsAndConditionsRows: ['A40', 'A41', 'A42', 'A43', 'A44'], comments: 'B46' },
+    approvalCell: 'H46',   // under "APPROVED BY" (H45), the H46:J47 merge
   },
 };
 
@@ -6345,7 +6350,7 @@ async function _exportSheetTabPdf(spreadsheetId, sourceSheetId, colRange) {
 // Form JSON with the approver's stamp and exported again). Caller holds the
 // 'po' sheet lock. `form` carries exactly what Form JSON stores.
 async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetIdByTitle, approvalStamp) {
-  const { date, prNo, requestedBy, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, summary, termsAndConditions, comments, testCertificateRequired } = form;
+  const { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, summary, termsAndConditions, comments, testCertificateRequired } = form;
   const cleanItems = Array.isArray(form.items) ? form.items : [];
   const tab = cfg.tabName;
   const sourceSheetId = sheetIdByTitle[tab];
@@ -6372,7 +6377,6 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
     // Service PO has no P.R. NO cell at all (services are raised as a PO
     // directly, never off a PR) — guard rather than building an "!undefined" range.
     if (cfg.header.prNo) put(cfg.header.prNo, prNo);
-    if (cfg.header.requestedBy) put(cfg.header.requestedBy, requestedBy);   // PR-style Service PO only
     put(cfg.header.department, department);
     put(cfg.header.party, party);
     if (cfg.hasShipTo) put(cfg.header.shipTo, shipTo);
@@ -6430,7 +6434,7 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
     // PO itself from being created (same resilience as the PR/PO PDF sync).
     let pdfLink = null;
     try {
-      const pdfBuffer = await _exportSheetTabPdf(PO_CREATION_SHEET_ID, sourceSheetId, cfg.pdf);
+      const pdfBuffer = await _exportSheetTabPdf(PO_CREATION_SHEET_ID, sourceSheetId);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${poNoFormatted} - ${tab}.pdf`, PO_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[po-creation] PDF export failed:', e.message); }
   return { totalAmount, pdfLink };
@@ -6463,7 +6467,7 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res
   try {
     const cfg = PO_FORMAT_CONFIG[req.body?.format];
     if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
-    const { date, prNo: prNoRaw, requestedBy, department: departmentRaw, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
+    const { date, prNo: prNoRaw, department: departmentRaw, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
     // One spelling on the sheet, the PO log and the app — see canonicalDept.
     const department = await canonicalDept(departmentRaw);
     if (!date || !party || !poMadeBy) return res.status(400).json({ error: 'Date, ' + cfg.partyLabel + ' and PO Made By are required' });
@@ -6511,7 +6515,7 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res
     const tab = cfg.tabName;
     if (sheetIdByTitle[tab] === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the PO sheet` });
     const { totalAmount, pdfLink } = await _fillPoTemplateAndExport(sheets, cfg,
-      { date, prNo, requestedBy, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary, termsAndConditions, comments, testCertificateRequired },
+      { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary, termsAndConditions, comments, testCertificateRequired },
       poNoFormatted, sheetIdByTitle, '');
 
     // 5) Log this PO so the ERP can list it (the sheet is still the database —
@@ -6538,7 +6542,7 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res
       // reparsed into a locale-formatted date — the PO List page's date-range
       // filter compares these as plain "YYYY-MM-DD" strings.
       poNoFormatted, tab, "'" + date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(), prNo || '',
-      JSON.stringify({ format: tab, date, prNo, requestedBy, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary, termsAndConditions, comments, testCertificateRequired }),
+      JSON.stringify({ format: tab, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary, termsAndConditions, comments, testCertificateRequired }),
       'Active',
     ]);
 
