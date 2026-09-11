@@ -118,6 +118,12 @@ window.Pages['grn-creation'] = (() => {
       const mapped = _mapPoItemToGrn(it, po.format);
       const noInput = row.querySelector('.grnc-item-no');
       if (noInput) noInput.value = mapped.itemNo;
+      // Description / size come with the PO line (looked up server-side from
+      // the item catalog) — the same two cells the typeahead fills on a pick.
+      const descCell = row.querySelector('.grnc-item-desc');
+      if (descCell) descCell.textContent = it.description || '—';
+      const sizeCell = row.querySelector('.grnc-item-size');
+      if (sizeCell) sizeCell.textContent = it.size || '—';
       const orderedCell = row.querySelector('.grnc-item-ordered');
       if (orderedCell) orderedCell.textContent = mapped.orderedQty || '—';
       // Received defaults to what was ordered — the user adjusts it down if

@@ -7647,11 +7647,22 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
     // Service POs are excluded outright (column B / r[1]): there's nothing
     // physical to receive against a service, so they'd only ever be noise in
     // this picker. They still appear in PO Creation's own PO List.
+    // A PO's item snapshot carries the code, qty, UOM and price but not the
+    // description or size — on the PO those are the sheet's own VLOOKUPs. The
+    // GRN page shows both beside each line ("GR me description nahi aa raha
+    // hai"), so look them up here from the same catalog its typeahead uses.
+    // Best-effort: a catalog read failure leaves the dashes, never the list.
+    const catalog = new Map((await _loadPoItemCatalog('PurchaseOrder').catch(() => []))
+      .map(c => [String(c.code || '').trim().toLowerCase(), c]));
     const list = poRows
       .filter(r => r[0] && r[1] !== 'Service PO' && !['Cancelled', 'Rejected'].includes(r[11] || 'Active') && !usedPoNos.has(_seqKey(r[0])))
       .map(r => {
         let items = [];
         try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
+        items = items.map(it => {
+          const c = catalog.get(String(it?.itemCode || it?.code || '').trim().toLowerCase());
+          return c ? { ...it, description: it.description || c.description || '', size: it.size || c.size || '' } : it;
+        });
         return { poNo: r[0] || '', format: r[1] || '', party: r[3] || '', department: r[4] || '', prNo: r[9] || '', vendorName: r[3] || '', items };
       })
       .reverse();
