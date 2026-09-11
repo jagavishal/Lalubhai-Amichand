@@ -6318,10 +6318,23 @@ async function _exportSheetTabPdf(spreadsheetId, sourceSheetId, colRange) {
   const client = await auth.getClient();
   const { token } = await client.getAccessToken();
   const rangeParams = colRange ? `&c1=${colRange.c1}&c2=${colRange.c2}` : '';
-  // Optional row window — the PI template tab is 80 rows tall but only ~69 of
-  // them are the invoice, and the trailing blanks otherwise spill a second,
-  // empty page into the PDF.
-  const rowParams = colRange && colRange.r2 != null ? `&r1=${colRange.r1 || 0}&r2=${colRange.r2}` : '';
+  // Row window. The PI template tab is 80 rows tall but only ~69 of them are
+  // the invoice, and the trailing blanks otherwise spill a second, empty page
+  // into the PDF. It is also NOT optional once columns are pinned: the export
+  // silently ignores c1/c2 unless r1/r2 come with them, and falls back to the
+  // whole grid — which is how the GRN (14 used columns on a 34-column grid)
+  // came out at half the page width and a seventh of its height ("page setup
+  // sahi nahi hua"). A caller that pins columns without rows gets the tab's
+  // full row count looked up here.
+  let r2 = colRange && colRange.r2 != null ? colRange.r2 : null;
+  if (colRange && r2 == null) {
+    try {
+      const { google } = require('googleapis');
+      const meta = await google.sheets({ version: 'v4', auth }).spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(sheetId,gridProperties(rowCount)))' });
+      r2 = meta.data.sheets.find(s => String(s.properties.sheetId) === String(sourceSheetId))?.properties.gridProperties.rowCount ?? 200;
+    } catch { r2 = 200; }
+  }
+  const rowParams = colRange ? `&r1=${colRange.r1 || 0}&r2=${r2}` : '';
   // Portrait unless the caller opts out. Nothing opts out today; the Proforma
   // Invoice used to, on the assumption its 14-column table could not fit an A4
   // portrait page. With scale=4 it does — see the note on its own export call.
@@ -7687,6 +7700,30 @@ app.get('/api/grn-creation/items', requireAuth, async (req, res) => {
 // POST /api/grn-creation — fills the live "GRN" template tab, exports it as a
 // PDF (saved to Drive), and logs it in "ERP GRN Log". This IS the database
 // write; nothing is stored locally.
+// Keeps the GRN workbook's item_code tab a plain copy of the PO sheet's
+// ITEM_CODES (A:G — the template's VLOOKUPs read columns 2-7 of it). It used
+// to be an IMPORTRANGE of the same range, which needs a person to click
+// "Allow access" and goes #REF! whenever that grant lapses — silently
+// blanking Description / Size on every GRN PDF. Rewritten only when the tab
+// is broken or its row count drifts from the catalog's, so the usual GRN
+// costs one small read. Caller holds the 'grn' sheet lock.
+async function _ensureGrnItemCatalog(sheets) {
+  const probe = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'item_code'!A:A`, valueRenderOption: 'FORMATTED_VALUE' });
+  const have = (probe.data.values || []).filter(r => String(r[0] ?? '').trim());
+  const broken = !have.length || /^#(REF|N\/A|ERROR|NAME)/i.test(String(have[0][0]));
+  const src = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'ITEM_CODES'!A1:G6000`, valueRenderOption: 'FORMATTED_VALUE' });
+  const rows = (src.data.values || []).filter(r => r.some(v => String(v ?? '').trim()));
+  if (!rows.length) throw new Error('ITEM_CODES read back empty — item_code left as is');
+  if (!broken && have.length === rows.length) return false;
+  await sheets.spreadsheets.values.clear({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'item_code'!A:G` });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: GRN_CREATION_SHEET_ID, range: `'item_code'!A1`, valueInputOption: 'RAW',
+    requestBody: { values: rows.map(r => Array.from({ length: 7 }, (_, i) => r[i] ?? '')) },
+  });
+  console.log('[grn-creation] item_code refreshed from ITEM_CODES:', rows.length, 'rows', broken ? '(was broken)' : '(row count changed)');
+  return true;
+}
+
 app.post('/api/grn-creation', requireAuth, sheetSerialised('grn'), async (req, res) => {
   try {
     const { date, madeBy, prNo, vendorName, poNo, billNo, billRecvDate, deptHead, items, cgst, sgst, roundOff, comments } = req.body;
@@ -7795,12 +7832,22 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn'), async (req, r
       totalAmount = totalsRes.data.valueRanges?.[1]?.values?.[0]?.[0] ?? null;
     } catch (e) { console.error('[grn-creation] total read-back failed:', e.message); }
 
+    // 3b) The template's Description / Size / Other Details columns are
+    // VLOOKUPs into the workbook's item_code tab, which was an IMPORTRANGE of
+    // the PO sheet's ITEM_CODES. That import showed #REF! (its access grant
+    // lapses whenever sharing changes), so GR 211 printed blank descriptions.
+    // The ERP now keeps item_code as a plain copy of the catalog, refreshed
+    // here when it is broken or its row count no longer matches.
+    try { await _ensureGrnItemCatalog(sheets); }
+    catch (e) { console.error('[grn-creation] item_code refresh failed:', e.message); }
+
     // 4) Export this fill as a PDF and save it to Drive. A PDF/Drive hiccup
     // must never block the GRN itself from being created.
     let pdfLink = null;
     try {
       // Columns A:N (0-13) — the GRN tab's grid is 34 columns wide but the
-      // template only uses the first 14; see _exportSheetTabPdf's comment.
+      // template only uses the first 14; the row window comes from the tab
+      // itself (see _exportSheetTabPdf — without it the pin is ignored).
       const pdfBuffer = await _exportSheetTabPdf(GRN_CREATION_SHEET_ID, sourceSheetId, { c1: 0, c2: 14 });
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `GR ${nextGrNo}.pdf`, GRN_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[grn-creation] PDF export failed:', e.message); }
