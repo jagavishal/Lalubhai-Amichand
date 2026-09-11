@@ -337,16 +337,20 @@ window.Pages['pr-creation'] = (() => {
   function _recomputeGrandTotal() {
     const el = document.getElementById('pcr-grand-total');
     if (!el) return;
-    let total = 0;
+    let total = 0, kgs = 0;
     document.querySelectorAll('#pcr-items-tbody .pcr-item-row').forEach(row => {
       const vals = {};
       row.querySelectorAll('.pcr-item-field').forEach(inp => { vals[inp.dataset.field] = inp.value; });
       if (_format === 'ITEM_CODE') { const base = _num(vals.qtyRequired) * _num(vals.lastUnitPrice); total += base + base * _num(vals.tax) / 100; }
       else if (_format === 'PACKING_STICKER') total += _num(vals.stickerQty) * _num(vals.rate);
       else if (_format === 'PACKING_BOX') total += _num(vals.boxQty) * _num(vals.boxRate) + _num(vals.plateQty) * _num(vals.plateRate);
-      else if (_format === 'ALU') total += _num(vals.rate); // sheet sums the Rate column directly, not qty×rate
+      else if (_format === 'ALU') { total += _num(vals.rate); kgs += _num(vals.qtyRequired); } // sheet sums the Rate column directly, not qty×rate
     });
-    el.textContent = '₹' + _fmtMoney(total);
+    // An Aluminium PR is ordered by weight — its lines rarely carry a rate —
+    // so the figure that matters is the total kgs, which the template now
+    // also sums under the Qty column ("Qty ke niche Sum bhi hona chahiye").
+    if (_format === 'ALU') el.textContent = kgs.toLocaleString('en-IN', { maximumFractionDigits: 3 }) + ' KGS' + (total > 0 ? ' · ₹' + _fmtMoney(total) : '');
+    else el.textContent = '₹' + _fmtMoney(total);
   }
 
   function _onFormInput(e) {
