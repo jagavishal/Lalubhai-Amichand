@@ -99,6 +99,41 @@ window.Utils = {
   // was creating the whole PR/PO/GRN half-filled ("automatic save"). Only a
   // real click on the submit button may submit; Enter in a textarea (new
   // line) and on a focused button (click) still work.
+  /* ── Arrow keys in an item grid ─────────────────────────────────────
+     ↑ / ↓ move to the same column in the row above / below, like a
+     spreadsheet ("up and down button kaam karna chahiye" — PR, PO, GRN).
+     ↓ on the last row presses the page's "+ Add Item" button (when it has
+     one) and lands in the new row. Selects keep their own arrow behaviour,
+     and an input with its typeahead list open is left alone so the arrows
+     do not jump rows while a code is being picked. */
+  bindGridArrows(tbody, addRowBtnId) {
+    if (!tbody || tbody.dataset.gridArrows) return;
+    tbody.dataset.gridArrows = '1';
+    tbody.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      const el = e.target;
+      if (!el || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA') return;
+      if (el.tagName !== 'INPUT') return;
+      const td = el.closest('td'), tr = el.closest('tr');
+      if (!td || !tr) return;
+      const dd = td.querySelector('[class$="-dd"]');
+      if (dd && dd.style.display && dd.style.display !== 'none') return;
+      const col = Array.prototype.indexOf.call(tr.children, td);
+      let target = e.key === 'ArrowUp' ? tr.previousElementSibling : tr.nextElementSibling;
+      if (!target && e.key === 'ArrowDown' && addRowBtnId) {
+        document.getElementById(addRowBtnId)?.click();
+        target = tr.nextElementSibling;
+      }
+      if (!target) return;
+      const cell = target.children[col];
+      const next = cell && cell.querySelector('input:not([type="hidden"]):not([disabled]), select, textarea');
+      if (!next) return;
+      e.preventDefault();
+      next.focus();
+      if (next.tagName === 'INPUT' && typeof next.select === 'function') { try { next.select(); } catch {} }
+    });
+  },
+
   guardEnterSubmit(form, onEnterInput) {
     if (!form) return;
     form.addEventListener('keydown', (e) => {

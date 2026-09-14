@@ -112,7 +112,8 @@
   --sidebar-text:          #e6edf6;
   --sidebar-text-muted:    #93a7c1;
   --sidebar-icon-muted:    #6d84a2;
-  --sidebar-section-label: #8ea6c6;
+  --sidebar-section-label: #b7c6dd;
+  --sidebar-group-label:   #8199bb;
   --sidebar-signout-muted: #7d94b4;
   /* The rail is always dark, so it can't reuse --color-primary (the base brand
      blue is near-invisible on navy). These are the rail's own brand tones:

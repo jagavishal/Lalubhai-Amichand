@@ -642,6 +642,7 @@ window.Pages['grn-creation'] = (() => {
     form.addEventListener('submit', _submit);
     form.addEventListener('input', _onFormInput);
     Utils.guardEnterSubmit(form);
+    Utils.bindGridArrows(document.getElementById('grnc-items-tbody'), 'grnc-add-item');
 
     if (!_mastersLoaded) _loadMasters();
     if (!_poListLoaded) _loadPoList();

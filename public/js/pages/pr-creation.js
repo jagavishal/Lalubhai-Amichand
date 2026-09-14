@@ -556,6 +556,7 @@ window.Pages['pr-creation'] = (() => {
     form.addEventListener('submit', _createSubmit);
     form.addEventListener('input', _onFormInput);
     Utils.guardEnterSubmit(form);
+    Utils.bindGridArrows(document.getElementById('pcr-items-tbody'), 'pcr-add-item');
     // Bound on every render (the form is rebuilt from scratch each time), so the
     // Department dropdown's "+ Add new department" option keeps working after a
     // format switch or a trip through the Summary tab.

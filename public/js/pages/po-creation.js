@@ -1060,6 +1060,7 @@ window.Pages['po-creation'] = (() => {
     form.addEventListener('submit', _submit);
     form.addEventListener('input', _onFormInput);
     Utils.guardEnterSubmit(form);
+    Utils.bindGridArrows(document.getElementById('poc-items-tbody'), 'poc-add-item');
 
     if (!_mastersLoaded) _loadMasters();
     // Manual formats never touch PRs, so don't pay for the pending-PR fetch

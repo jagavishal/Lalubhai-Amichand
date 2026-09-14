@@ -84,7 +84,14 @@ window.Sidebar = {
     const head  = document.querySelector(`#sidebar [data-section-head="${title}"]`);
     if (items) items.style.display = open ? 'flex' : 'none';
     if (arrow) arrow.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)';
-    if (head)  head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (head) {
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+      // Keep the open-section highlight in step (the hover handler restores
+      // whatever this is when the pointer leaves).
+      const rest = open ? 'rgba(255,255,255,.05)' : 'transparent';
+      head.style.background = rest;
+      head.setAttribute('onmouseout', `this.style.background='${rest}'`);
+    }
   },
 
   // Nav sections — the whole ERP grouped into the company's own five
@@ -376,7 +383,10 @@ window.Sidebar = {
           const html = this._buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions, featureFlags);
           if (!html.trim()) return '';
           const head = item.group && item.group !== lastGroup
-            ? `<div class="sb-label" style="padding:8px 8px 2px;font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--sidebar-section-label);opacity:0;transition:opacity .22s;">${item.group}</div>`
+            ? `<div class="sb-label" style="display:flex;align-items:center;gap:7px;padding:9px 8px 3px;opacity:0;transition:opacity .22s;">
+                 <span style="font-size:9px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--sidebar-group-label);white-space:nowrap;">${item.group}</span>
+                 <span style="flex:1;height:1px;background:rgba(255,255,255,.08);"></span>
+               </div>`
             : '';
           if (item.group) lastGroup = item.group;
           return head + html;
@@ -384,8 +394,11 @@ window.Sidebar = {
         .join('');
       if (!itemsHTML.trim()) return '';
       const open = this._openSections.has(sec.title);
+      // Section head: a readable label on the navy rail (it used to be a
+      // near-invisible #3d5878), a hairline above every section but the
+      // first, and a soft highlight when the section is open.
       return `
-        <div style="margin-bottom:6px;">
+        <div style="margin-bottom:4px;${sec !== this._sections[0] ? 'border-top:1px solid rgba(255,255,255,.07);margin-top:4px;padding-top:2px;' : ''}">
           <button
             class="sb-label"
             data-section-head="${sec.title}"
@@ -394,14 +407,16 @@ window.Sidebar = {
             title="${sec.title}"
             style="
               display:flex;align-items:center;justify-content:space-between;gap:6px;
-              width:100%;padding:10px 12px 3px;
-              background:transparent;border:none;cursor:pointer;font-family:inherit;
-              opacity:0;transition:opacity .22s;
+              width:calc(100% - 12px);margin:6px 6px 2px;padding:6px 8px;border-radius:7px;
+              background:${open ? 'rgba(255,255,255,.05)' : 'transparent'};border:none;cursor:pointer;font-family:inherit;
+              opacity:0;transition:opacity .22s,background .15s;
             "
+            onmouseover="this.style.background='rgba(255,255,255,.08)'"
+            onmouseout="this.style.background='${open ? 'rgba(255,255,255,.05)' : 'transparent'}'"
           >
-            <span style="font-size:9.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--sidebar-section-label);">${sec.title}</span>
+            <span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--sidebar-section-label);">${sec.title}</span>
             <span data-section-arrow="${sec.title}"
-                  style="display:flex;flex-shrink:0;color:var(--sidebar-section-label);transform:rotate(${open ? 90 : 0}deg);transition:transform .18s;">
+                  style="display:flex;flex-shrink:0;color:var(--sidebar-section-label);opacity:.8;transform:rotate(${open ? 90 : 0}deg);transition:transform .18s;">
               ${this._icons.chevron}
             </span>
           </button>
