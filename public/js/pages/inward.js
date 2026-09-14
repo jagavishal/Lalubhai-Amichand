@@ -25,6 +25,8 @@ window.Pages['inward'] = (() => {
   // this page's state — _loadMasters() only primes it from /api/ims/masters.
   let _sources = ['In/Out (Manual)', 'IN/OUT(HINDALCO)']; // overwritten from /api/ims/masters once loaded
   let _mastersLoaded = false;
+  // Vendor Master names, offered as suggestions in the form's Vendor field.
+  let _vendorNames = [];
   // The book this mount is locked to — set from render({category}) by ims.js.
   // 'Stores' is only the standalone-page fallback.
   let _category = 'Stores';
@@ -134,15 +136,10 @@ window.Pages['inward'] = (() => {
   // the whole thing behind a "already loaded" flag (as this used to) left the
   // Department dropdown permanently empty from the second render onward.
   function _fillMasterSelects() {
-    const sel = document.getElementById('inw-department');
-    if (sel) {
-      // Departments are the app-wide master list (same one Users, Daily Task
-      // and PR/PO Creation use), and the dropdown's last row adds to it — a
-      // store hand who finds their department missing mid-entry doesn't have to
-      // go find an Admin. Fill keeps whatever selection is already made.
-      Utils.fillDeptSelect(sel);
-      Utils.bindDeptSelect(sel);
-    }
+    // The Vendor field's suggestion list (see _formHtml) — refilled on every
+    // render so the names appear once the Vendor Master fetch lands.
+    const dl = document.getElementById('inw-vendor-list');
+    if (dl) dl.innerHTML = _vendorNames.map(v => '<option value="' + esc(v) + '"></option>').join('');
     const srcSel = document.getElementById('inw-source');
     if (srcSel) {
       const keep = srcSel.value;
@@ -156,9 +153,15 @@ window.Pages['inward'] = (() => {
   let _mastersPromise = null;
   function _loadMasters() {
     if (!_mastersPromise) {
-      _mastersPromise = Utils.apiFetch('/api/ims/masters').then(data => {
+      _mastersPromise = Promise.all([
+        Utils.apiFetch('/api/ims/masters'),
+        // Vendor Master, for the Vendor field's suggestions — best-effort,
+        // the field still takes any typed name if this read fails.
+        Utils.apiFetch('/api/clients').catch(() => []),
+      ]).then(([data, clients]) => {
         Utils.setDepartments((data && data.departments) || []);
         if (Array.isArray(data?.sources) && data.sources.length) _sources = data.sources;
+        _vendorNames = [...new Set((Array.isArray(clients) ? clients : []).map(c => String(c.name || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
         _mastersLoaded = true;
       }).catch(e => {
         _mastersPromise = null;
@@ -480,7 +483,7 @@ window.Pages['inward'] = (() => {
         + (_showSize() ? '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.size) + '</td>' : '')
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.quantity) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
-        + (_showDepartment() ? '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.department) + '</td>' : '')
+        + (_showDepartment() ? '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.vendor || r.department) + '</td>' : '')
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.source) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;color:#64748b;">' + esc(r.remarks) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
@@ -565,7 +568,7 @@ window.Pages['inward'] = (() => {
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
         + '<table style="width:100%;border-collapse:collapse;min-width:' + (_showSize() ? 1020 : 920) + 'px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['Date', 'Item Code', 'Description'].concat(_showSize() ? ['Size'] : []).concat(['Quantity', 'UOM']).concat(_showDepartment() ? ['Department'] : []).concat(['Source', 'Remarks', 'Actions']).map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + ['Date', 'Item Code', 'Description'].concat(_showSize() ? ['Size'] : []).concat(['Quantity', 'UOM']).concat(_showDepartment() ? ['Vendor'] : []).concat(['Source', 'Remarks', 'Actions']).map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
           + '<tbody id="inwl-body"><tr><td colspan="' + _colCount() + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
@@ -602,7 +605,11 @@ window.Pages['inward'] = (() => {
     return '<form id="inw-form" style="display:flex;flex-direction:column;gap:16px;">'
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
         + _textField('inw-date', 'Date', { type: 'date', value: _today() })
-        + (_showDepartment() ? _fieldWrap('Department', '<select id="inw-department" style="' + _inputStyle + '"><option value="">Select…</option></select>') : '')
+        // Vendor, not department ("IMS Inward form me Dept nahi, vendor ka
+        // naam aata"): stock comes IN from a supplier. Free text with the
+        // Vendor Master's names offered as suggestions, so a new supplier can
+        // still be typed on the spot.
+        + (_showDepartment() ? _fieldWrap('Vendor Name', '<input type="text" id="inw-vendor" list="inw-vendor-list" autocomplete="off" placeholder="Who the goods came from" style="' + _inputStyle + '" /><datalist id="inw-vendor-list">' + _vendorNames.map(v => '<option value="' + esc(v) + '"></option>').join('') + '</datalist>') : '')
         + (_category === 'Trading' ? _sourceFieldHtml() : '')
       + '</div>'
       + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">' + esc(_categoryLabel) + ' Items</div>'
@@ -619,8 +626,9 @@ window.Pages['inward'] = (() => {
   async function _submit(e) {
     e.preventDefault();
     const date = document.getElementById('inw-date').value;
-    const deptSel = document.getElementById('inw-department');
-    const department = deptSel ? deptSel.value : ''; // absent on the Trading book
+    const vendorInput = document.getElementById('inw-vendor');
+    const vendor = vendorInput ? vendorInput.value.trim() : ''; // absent on the Trading book
+    const department = ''; // Inward no longer records a department — see the Vendor field
     const remarks = document.getElementById('inw-remarks').value.trim();
     const sourceSel = document.getElementById('inw-source');
     const source = (_category === 'Trading' && sourceSel) ? sourceSel.value : '';
@@ -644,7 +652,7 @@ window.Pages['inward'] = (() => {
       try {
         await Utils.apiFetch('/api/ims/inward', {
           method: 'POST',
-          body: JSON.stringify({ date, itemCode: it.itemCode, description: it.description, size: it.size, uom: it.uom, quantity: it.quantity, department, remarks, category: _category, source }),
+          body: JSON.stringify({ date, itemCode: it.itemCode, description: it.description, size: it.size, uom: it.uom, quantity: it.quantity, department, vendor, remarks, category: _category, source }),
         });
         okCount++;
       } catch (err) {

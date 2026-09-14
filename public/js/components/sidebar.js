@@ -48,6 +48,8 @@ window.Sidebar = {
     hrreports:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="1"/><rect x="12" y="8" width="3" height="10" rx="1"/><rect x="17" y="5" width="3" height="13" rx="1"/></svg>',
     // Assets — a laptop, since electronics are most of the register.
     hrassets:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="10" rx="1.5"/><path d="M2 19h20"/><path d="M9 19v-1.5h6V19"/></svg>',
+    // Payment Tracker — a banknote with a rupee sign.
+    payments:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M9 9h6M9 12h6M12 12v3"/><circle cx="6" cy="12" r="1"/><circle cx="18" cy="12" r="1"/></svg>',
     // Section open/close arrow — drawn pointing right and rotated 90° when the
     // section is open, so one icon covers both states.
     chevron:      '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
@@ -105,13 +107,14 @@ window.Sidebar = {
       { route: 'help-ticket',   label: 'Help Ticket',    icon: 'helpticket' },
       { route: 'profile',       label: 'Profile',        icon: 'profile' },
     ]},
+    // The Export department is three desks ("Export ke andar bhi category
+    // hai"): Factory raises PRs/POs/GRNs and keeps the stock books, Marketing
+    // does the proforma and consignees, and Documentation does the customs
+    // paper set. `group` draws a small sub-heading before each run of items.
     { title: 'Export Department', items: [
-      { route: 'proforma-invoice', label: 'Proforma Invoice', icon: 'picreation' },
-      { route: 'consignee-master', label: 'Consignee Master', icon: 'consignee' },
-      { route: 'export-documentation', label: 'Export Documentation', icon: 'exportdocs' },
-      { route: 'pr-creation',    label: 'PR Creation',    icon: 'prcreation' },
-      { route: 'po-creation',    label: 'PO Creation',    icon: 'pocreation' },
-      { route: 'grn-creation',   label: 'GRN Creation',   icon: 'grncreation' },
+      { route: 'pr-creation',    label: 'PR Creation',    icon: 'prcreation',  group: 'Factory' },
+      { route: 'po-creation',    label: 'PO Creation',    icon: 'pocreation',  group: 'Factory' },
+      { route: 'grn-creation',   label: 'GRN Creation',   icon: 'grncreation', group: 'Factory' },
       // No entry for 'po-pending': it lives inside the FMS page's "Stores
       // Approval FMS Report" tab (see fms.js). The route still resolves on its
       // own so older links to #po-pending keep working.
@@ -120,12 +123,21 @@ window.Sidebar = {
       // (see IMS_BOOKS in ims.js; routes must match it exactly). The first
       // three books are the export unit's own stock; the Trading book belongs
       // to the Trading department below.
-      { route: 'ims-stores',      label: 'IMS Stores',      icon: 'ims' },
-      { route: 'ims-alu',         label: 'IMS Alu & SS',    icon: 'imsalu' },
-      { route: 'ims-accessories', label: 'IMS Accessories', icon: 'imsaccess' },
+      { route: 'ims-stores',      label: 'IMS Stores',      icon: 'ims',       group: 'Factory' },
+      { route: 'ims-alu',         label: 'IMS Alu & SS',    icon: 'imsalu',    group: 'Factory' },
+      { route: 'ims-accessories', label: 'IMS Accessories', icon: 'imsaccess', group: 'Factory' },
+      { route: 'proforma-invoice', label: 'Proforma Invoice', icon: 'picreation', group: 'Marketing' },
+      { route: 'consignee-master', label: 'Consignee Master', icon: 'consignee',  group: 'Marketing' },
+      { route: 'export-documentation', label: 'Export Documentation', icon: 'exportdocs', group: 'Export Documentation' },
     ]},
     { title: 'Trading Department', items: [
       { route: 'ims-trading',     label: 'IMS Trading',     icon: 'imstrading' },
+    ]},
+    // Retail — the shop-side books. Payment Tracker records every payment
+    // made; one above the configured limit waits for approval (see
+    // payment-tracker.js and /api/payment-tracker in server.js).
+    { title: 'Retail', items: [
+      { route: 'payment-tracker', label: 'Payment Tracker', icon: 'payments' },
     ]},
     { title: 'Admin Section', items: [
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
@@ -355,8 +367,20 @@ window.Sidebar = {
     if (!this._openSections) this._openSections = this._loadOpenSections(activeRoute);
 
     const sectionsHTML = this._sections.map(sec => {
+      // A `group` on an item opens a sub-heading (Factory / Marketing / …)
+      // before the first visible item that carries it; a group whose items
+      // are all hidden by permissions never shows its heading either.
+      let lastGroup = null;
       const itemsHTML = sec.items
-        .map(item => this._buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions, featureFlags))
+        .map(item => {
+          const html = this._buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions, featureFlags);
+          if (!html.trim()) return '';
+          const head = item.group && item.group !== lastGroup
+            ? `<div class="sb-label" style="padding:8px 8px 2px;font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--sidebar-section-label);opacity:0;transition:opacity .22s;">${item.group}</div>`
+            : '';
+          if (item.group) lastGroup = item.group;
+          return head + html;
+        })
         .join('');
       if (!itemsHTML.trim()) return '';
       const open = this._openSections.has(sec.title);

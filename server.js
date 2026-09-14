@@ -382,6 +382,10 @@ const SCHEMA = [
   // ledger must keep showing what was received/issued at the time. Blank for
   // Stores/ALU/Accessories, whose forms don't show the field.
   `ALTER TABLE ims_transactions ADD COLUMN IF NOT EXISTS size VARCHAR(64) NOT NULL DEFAULT ''`,
+  // Who the stock came in from — the Inward form asks for the vendor, not a
+  // department ("IMS Inward form me Dept nahi, vendor ka naam aata"). Outward
+  // keeps using department (where the stock went).
+  `ALTER TABLE ims_transactions ADD COLUMN IF NOT EXISTS vendor VARCHAR(255) NOT NULL DEFAULT ''`,
   // ── Departments master — the ONE list behind every Department dropdown in the
   // app (Users, Daily Task, IMS Inward/Outward, PR Creation, PO Creation). Each
   // of those used to carry its own hardcoded list, so the same shop floor was
@@ -3556,6 +3560,294 @@ app.patch('/api/urgent-payments', requireAuth, async (req, res) => {
 });
 
 // ── Announcements ─────────────────────────────────────────────────────────────
+/* ── Payment Tracker (Retail) ──────────────────────────────────────────────
+   "Payment Tracker: isme payment ki entry karenge, but ek amount se zyada ki
+   entry kare to Saloni maam ke paas mail jayega approval ke liye."
+
+   Every payment the retail side makes is logged here. An entry at or below
+   the configured limit is simply Recorded. One above it is saved as Pending
+   and mailed to the approvers (app_config 'payment_tracker_approvers',
+   Saloni Anchan by default) with Approve / Reject buttons that open
+   /pt-action — the same signed-link bridge the PR/PO approvals use — and it
+   can equally be decided on the page by an Admin/HOD or a named approver.
+   The person who entered it is copied on the request and told the outcome.
+   The limit itself (app_config 'payment_tracker_limit', ₹10,000 to start) is
+   edited on the page by an Admin. Same DB / JSON-store split as the urgent
+   payment module above. */
+const PT_TOKEN_NS = 'pt:';
+const DEFAULT_PAYMENT_TRACKER_LIMIT = 10000;
+const DEFAULT_PAYMENT_TRACKER_APPROVERS = ['Saloni Anchan'];
+const PAYMENT_TRACKER_MODES = ['Cash', 'UPI', 'NEFT / RTGS', 'Cheque', 'Card', 'Other'];
+
+let _ptTableReady = false;
+async function _ptEnsureTable() {
+  if (!USE_DB || _ptTableReady) return;
+  await pool.query(`CREATE TABLE IF NOT EXISTS payment_tracker (
+    id VARCHAR(16) PRIMARY KEY, entry_date DATE DEFAULT NULL, party VARCHAR(255) NOT NULL DEFAULT '',
+    amount DECIMAL(15,2) NOT NULL DEFAULT 0, payment_mode VARCHAR(32) DEFAULT '', reference_no VARCHAR(128) DEFAULT '',
+    purpose TEXT DEFAULT NULL, remarks TEXT DEFAULT NULL, entered_by VARCHAR(255) DEFAULT '', entered_by_id VARCHAR(16) DEFAULT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'Recorded', approval_limit DECIMAL(15,2) NOT NULL DEFAULT 0,
+    decided_by VARCHAR(255) DEFAULT '', decided_at DATETIME DEFAULT NULL, decision_note TEXT DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  _ptTableReady = true;
+}
+
+async function _ptSettings() {
+  const lim = await readAuthority('payment_tracker_limit', [DEFAULT_PAYMENT_TRACKER_LIMIT]);
+  const approvers = await readAuthority('payment_tracker_approvers', DEFAULT_PAYMENT_TRACKER_APPROVERS);
+  const limit = Number(lim[0]);
+  return { limit: Number.isFinite(limit) && limit >= 0 ? limit : DEFAULT_PAYMENT_TRACKER_LIMIT, approvers: approvers.map(String).filter(Boolean) };
+}
+
+// Approver names/emails → users (for the page's "may decide" check) and
+// mail addresses. Names match a user exactly, else by a unique first name.
+async function _ptApprovers() {
+  const { approvers } = await _ptSettings();
+  let users = [];
+  try { users = (await readStore()).users || []; } catch {}
+  const out = [];
+  for (const entry of approvers) {
+    const s = String(entry || '').trim();
+    if (!s) continue;
+    if (s.includes('@')) { out.push({ name: s, email: s, id: null }); continue; }
+    const want = s.replace(/\s+/g, ' ').toLowerCase();
+    let u = users.find(x => String(x.name || '').trim().toLowerCase() === want);
+    if (!u) { const first = want.split(' ')[0]; const like = first.length >= 3 ? users.filter(x => String(x.name || '').trim().toLowerCase().startsWith(first)) : []; if (like.length === 1) u = like[0]; }
+    if (u) out.push({ name: u.name, email: await notifyAddressFor(u.id, u.email), id: u.id });
+    else console.log('[payment-tracker] no user matches approver entry:', s);
+  }
+  return out;
+}
+
+const _ptIsApprover = (user, approvers) => {
+  if (!user) return false;
+  const email = String(user.email || '').toLowerCase();
+  return approvers.some(a => (a.id && a.id === user.id) || (email && String(a.email || '').toLowerCase() === email));
+};
+
+function ptOut(r) {
+  const d = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : (v ? String(v).slice(0, 10) : ''));
+  return {
+    id: r.id, entry_date: d(r.entry_date), party: r.party || '', amount: Number(r.amount || 0), payment_mode: r.payment_mode || '',
+    reference_no: r.reference_no || '', purpose: r.purpose || '', remarks: r.remarks || '', entered_by: r.entered_by || '',
+    entered_by_id: r.entered_by_id || null, status: r.status || 'Recorded', approval_limit: Number(r.approval_limit || 0),
+    decided_by: r.decided_by || '', decided_at: r.decided_at || null, decision_note: r.decision_note || '', created_at: r.created_at || null,
+  };
+}
+
+async function _ptGet(id) {
+  if (USE_DB) return (await q('SELECT * FROM payment_tracker WHERE id=$1', [id]))[0] || null;
+  return ((await readStore()).paymentTracker || []).find(r => r.id === id) || null;
+}
+
+async function _ptDecide(id, decision, decidedBy, note) {
+  const current = await _ptGet(id);
+  if (!current) throw Object.assign(new Error('Entry not found'), { status: 404 });
+  if (current.status !== 'Pending') throw Object.assign(new Error(`Already ${current.status}`), { status: 409 });
+  if (USE_DB) {
+    await pool.query('UPDATE payment_tracker SET status=$1, decided_by=$2, decided_at=NOW(), decision_note=$3 WHERE id=$4', [decision, decidedBy, note, id]);
+  } else {
+    const store = await readStore();
+    const r = (store.paymentTracker || []).find(x => x.id === id);
+    Object.assign(r, { status: decision, decided_by: decidedBy, decided_at: new Date().toISOString(), decision_note: note });
+    await writeStore(store);
+  }
+  const saved = ptOut(await _ptGet(id));
+  _ptMail({ row: saved, stage: 'decided' }).catch((e) => console.error('[payment-tracker] decision mail failed:', e.message));
+  return saved;
+}
+
+const ptActionUrl = (id, decision, email) => `${APP_ORIGIN}/pt-action?t=${encodeURIComponent(leaveTokenFor(PT_TOKEN_NS + id, decision, email))}`;
+const _ptRupees = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+// stage 'raised': to the approvers, each with their own Approve/Reject links,
+// the person who entered it in CC. stage 'decided': to that person, the
+// approvers in CC.
+async function _ptMail({ row, stage }) {
+  const mailer = getMailer();
+  if (!mailer) { console.log('[email] payment tracker mail skipped — SMTP not configured'); return; }
+  const approvers = await _ptApprovers();
+  let enteredBy = null;
+  try { enteredBy = ((await readStore()).users || []).find(u => u.id === row.entered_by_id) || null; } catch {}
+  const enteredEmail = enteredBy ? String(await notifyAddressFor(enteredBy.id, enteredBy.email) || '').trim() : '';
+  const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const fmtD = (d) => { if (!d) return ''; const [y, m, dd] = String(d).slice(0, 10).split('-'); return `${dd}/${m}/${y}`; };
+  const decided = stage === 'decided';
+  const approved = row.status === 'Approved';
+  const rows = [
+    ['Entry No.', row.id], ['Date', fmtD(row.entry_date)], ['Paid To', esc(row.party)], ['Amount', _ptRupees(row.amount)],
+    ['Approval Limit', _ptRupees(row.approval_limit)], ['Payment Mode', esc(row.payment_mode)], ['Reference', esc(row.reference_no)],
+    ['Purpose', esc(row.purpose).replace(/\n/g, '<br>')], ['Remarks', esc(row.remarks).replace(/\n/g, '<br>')], ['Entered By', esc(row.entered_by)],
+    ['Decision', decided ? `<b>${esc(row.status)}</b> by ${esc(row.decided_by)}` : ''], ['Decision Note', decided ? esc(row.decision_note).replace(/\n/g, '<br>') : ''],
+  ];
+  const from = `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`;
+  if (!decided) {
+    const targets = approvers.filter(a => a.email && a.email.includes('@'));
+    if (!targets.length) { console.log('[email] payment tracker request not sent — no approver address'); return; }
+    for (const a of targets) {
+      await mailer.sendMail({
+        from, to: a.email, cc: enteredEmail && enteredEmail !== a.email ? enteredEmail : undefined,
+        subject: `Payment approval needed: ${_ptRupees(row.amount)} to ${row.party} (${row.id})`,
+        html: _leaveMailHtml({
+          heading: 'Payment Above Limit — Approval Needed', colour: '#0150AA',
+          lead: `Hi <b>${esc(a.name)}</b>, <b>${esc(row.entered_by)}</b> has entered a payment of <b>${_ptRupees(row.amount)}</b> to <b>${esc(row.party)}</b> in the Retail Payment Tracker. It is above the approval limit of ${_ptRupees(row.approval_limit)}, so it waits for your decision.`,
+          rows, actions: _decisionButtons(ptActionUrl(row.id, 'Approved', a.email), ptActionUrl(row.id, 'Rejected', a.email)),
+          footer: 'Each button opens a page that asks you to confirm. The entry is also under Retail → Payment Tracker in the ERP.',
+        }),
+      });
+    }
+    console.log('[email] payment tracker request mail sent for', row.id, 'to', targets.map(a => a.email).join(', '));
+  } else {
+    if (!enteredEmail) { console.log('[email] payment tracker decision mail skipped — no address for', row.entered_by); return; }
+    const cc = approvers.map(a => a.email).filter(e => e && e.includes('@') && e !== enteredEmail);
+    await mailer.sendMail({
+      from, to: enteredEmail, cc: cc.length ? cc.join(', ') : undefined,
+      subject: `Payment ${row.status}: ${_ptRupees(row.amount)} to ${row.party} (${row.id})`,
+      html: _leaveMailHtml({
+        heading: `Payment ${row.status}`, colour: approved ? '#15803d' : '#b91c1c',
+        lead: `Your payment entry <b>${esc(row.id)}</b> of <b>${_ptRupees(row.amount)}</b> to <b>${esc(row.party)}</b> has been <b>${esc(row.status.toLowerCase())}</b> by <b>${esc(row.decided_by)}</b>.`,
+        rows, footer: approved ? 'The payment stands approved in the tracker.' : 'Speak to the approver before making this payment.',
+      }),
+    });
+    console.log('[email] payment tracker decision mail sent for', row.id, 'to', enteredEmail);
+  }
+}
+
+app.get('/api/payment-tracker', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema(); await _ptEnsureTable();
+    const user = req.session.user;
+    const admin = isAdminUser(user);
+    const [settings, approvers] = await Promise.all([_ptSettings(), _ptApprovers()]);
+    const canApprove = admin || _ptIsApprover(user, approvers);
+    let rows;
+    if (USE_DB) {
+      rows = (admin || canApprove)
+        ? await q('SELECT * FROM payment_tracker ORDER BY entry_date DESC, created_at DESC', [])
+        : await q('SELECT * FROM payment_tracker WHERE entered_by_id=$1 ORDER BY entry_date DESC, created_at DESC', [user.id]);
+    } else {
+      const store = await readStore();
+      rows = (store.paymentTracker || []).filter(r => admin || canApprove || r.entered_by_id === user.id)
+        .sort((a, b) => String(b.entry_date).localeCompare(String(a.entry_date)) || String(b.created_at).localeCompare(String(a.created_at)));
+    }
+    return res.json({ rows: rows.map(ptOut), limit: settings.limit, approvers: settings.approvers, modes: PAYMENT_TRACKER_MODES, canApprove, canEditSettings: admin });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/payment-tracker', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema(); await _ptEnsureTable();
+    const user = req.session.user;
+    const b = req.body || {};
+    const party = String(b.party || '').trim();
+    const amount = toAmount(b.amount);
+    if (!party) return res.status(400).json({ error: 'Paid To (party name) is required' });
+    if (amount === null || amount <= 0) return res.status(400).json({ error: 'A valid amount is required' });
+    const { limit } = await _ptSettings();
+    const row = {
+      entry_date: /^\d{4}-\d{2}-\d{2}$/.test(String(b.entry_date || '')) ? String(b.entry_date) : todayIST(),
+      party: party.slice(0, 255), amount,
+      payment_mode: (PAYMENT_TRACKER_MODES.includes(b.payment_mode) ? b.payment_mode : String(b.payment_mode || '').trim() || 'Cash').slice(0, 32),
+      reference_no: String(b.reference_no || '').trim().slice(0, 128),
+      purpose: String(b.purpose || '').trim(), remarks: String(b.remarks || '').trim(),
+      entered_by: user.name || user.email || '', entered_by_id: user.id,
+      status: amount > limit ? 'Pending' : 'Recorded', approval_limit: limit,
+    };
+    let id;
+    if (USE_DB) {
+      id = await withSeqId('payment_tracker', 'PT', 4, (nid) => pool.query(
+        `INSERT INTO payment_tracker (id,entry_date,party,amount,payment_mode,reference_no,purpose,remarks,entered_by,entered_by_id,status,approval_limit)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [nid, row.entry_date, row.party, row.amount, row.payment_mode, row.reference_no, row.purpose, row.remarks, row.entered_by, row.entered_by_id, row.status, row.approval_limit]));
+    } else {
+      const store = await readStore();
+      store.paymentTracker = store.paymentTracker || [];
+      let n = 0;
+      for (const r of store.paymentTracker) { const t = String(r.id || '').replace(/^PT/, ''); if (/^\d+$/.test(t)) n = Math.max(n, +t); }
+      id = 'PT' + String(n + 1).padStart(4, '0');
+      store.paymentTracker.push({ ...row, id, created_at: new Date().toISOString() });
+      await writeStore(store);
+    }
+    const saved = ptOut({ ...row, id, created_at: new Date() });
+    if (saved.status === 'Pending') _ptMail({ row: saved, stage: 'raised' }).catch((e) => console.error('[payment-tracker] request mail failed:', e.message));
+    return res.status(201).json(saved);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/payment-tracker', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema(); await _ptEnsureTable();
+    const user = req.session.user;
+    const approvers = await _ptApprovers();
+    if (!isAdminUser(user) && !_ptIsApprover(user, approvers)) return res.status(403).json({ error: 'Only an approver or Admin/HOD can decide a payment' });
+    const { id, status, note } = req.body || {};
+    const decision = /^approved$/i.test(status) ? 'Approved' : /^rejected$/i.test(status) ? 'Rejected' : null;
+    if (!id || !decision) return res.status(400).json({ error: 'id and a decision (Approved / Rejected) are required' });
+    return res.json(await _ptDecide(String(id), decision, user.name || user.email || '', String(note || '').trim()));
+  } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+});
+
+app.put('/api/payment-tracker/settings', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const limit = toAmount(b.limit);
+    if (limit === null || limit < 0) return res.status(400).json({ error: 'A valid limit is required' });
+    const approvers = Array.isArray(b.approvers) ? b.approvers.map(s => String(s || '').trim()).filter(Boolean) : String(b.approvers || '').split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+    if (!approvers.length) return res.status(400).json({ error: 'Name at least one approver' });
+    await writeAuthority('payment_tracker_limit', [limit]);
+    await writeAuthority('payment_tracker_approvers', approvers);
+    return res.json({ limit, approvers });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// The email buttons. GET shows the entry and asks for confirmation; POST
+// records the decision — the token names the entry, the decision and the
+// approver it was sent to, so a forwarded link still decides as that person.
+async function _ptForToken(token) {
+  const claim = readLeaveToken(token);
+  if (!claim || !String(claim.id).startsWith(PT_TOKEN_NS)) return { error: 'This link is not valid. Open Retail → Payment Tracker in the ERP instead.' };
+  const id = claim.id.slice(PT_TOKEN_NS.length);
+  await ensureSchema().catch(() => {}); await _ptEnsureTable();
+  const row = await _ptGet(id);
+  if (!row) return { error: `${id} is no longer in the tracker.` };
+  return { claim: { ...claim, id }, row: ptOut(row) };
+}
+const _ptRows = (r) => [['Entry No.', r.id], ['Paid To', r.party], ['Amount', _ptRupees(r.amount)], ['Payment Mode', r.payment_mode], ['Reference', r.reference_no], ['Purpose', r.purpose], ['Entered By', r.entered_by]];
+
+app.get('/pt-action', async (req, res) => {
+  try {
+    const { error, claim, row } = await _ptForToken(req.query.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    if (row.status !== 'Pending') return res.send(_leaveActionPage({ title: 'Already decided', tone: 'plain', lead: `${escHtml(row.id)} is already <b>${escHtml(row.status)}</b>${row.decided_by ? ' by ' + escHtml(row.decided_by) : ''}. Nothing more to do.`, rows: _ptRows(row) }));
+    const good = /^approved$/i.test(claim.decision);
+    const other = good ? 'Rejected' : 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? `Approve ${row.id}?` : `Reject ${row.id}?`, tone: good ? 'good' : 'bad',
+      lead: `You are about to mark the payment of <b>${_ptRupees(row.amount)}</b> to <b>${escHtml(row.party)}</b> as <b>${escHtml(claim.decision)}</b>.`,
+      rows: _ptRows(row),
+      form: `<form method="POST" action="/pt-action"><input type="hidden" name="t" value="${escHtml(String(req.query.t))}"><button type="submit">Yes, ${good ? 'approve' : 'reject'} it</button></form>`,
+      note: `Meant to do the opposite? <a href="/pt-action?t=${encodeURIComponent(leaveTokenFor(PT_TOKEN_NS + row.id, other, claim.email))}">Switch to ${other}</a>.`,
+    }));
+  } catch (e) { res.status(500).send(_leaveActionPage({ title: 'Something went wrong', tone: 'bad', lead: escHtml(e.message) })); }
+});
+
+app.post('/pt-action', async (req, res) => {
+  try {
+    const { error, claim, row } = await _ptForToken(req.body?.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    if (row.status !== 'Pending') return res.send(_leaveActionPage({ title: 'Already decided', tone: 'plain', lead: `${escHtml(row.id)} is already <b>${escHtml(row.status)}</b>.`, rows: _ptRows(row) }));
+    const decision = /^approved$/i.test(claim.decision) ? 'Approved' : 'Rejected';
+    let by = claim.email || 'Approver (by email)';
+    try { const u = ((await readStore()).users || []).find(x => String(x.email || '').toLowerCase() === String(claim.email || '').toLowerCase()); if (u?.name) by = u.name; } catch {}
+    const saved = await _ptDecide(row.id, decision, by, '');
+    res.send(_leaveActionPage({
+      title: decision, tone: decision === 'Approved' ? 'good' : 'bad',
+      lead: `<b>${escHtml(saved.id)}</b> has been marked <b>${escHtml(decision.toLowerCase())}</b>. ${escHtml(saved.entered_by)} has been emailed.`,
+      rows: _ptRows(saved), note: 'You can close this tab.',
+    }));
+  } catch (e) { res.status(e.status || 500).send(_leaveActionPage({ title: 'Could not record the decision', tone: 'bad', lead: escHtml(e.message) })); }
+});
+
 app.get('/api/announcements', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
@@ -7312,6 +7604,17 @@ async function _syncFmsPrDecisions(sheets, rows) {
   if (!(head.data.values?.[0] || []).some(c => String(c ?? '').trim())) data.push({ range: `'${PR_CREATION_LOG_TAB}'!M1:N1`, values: [PO_LOG_DECISION_HEADERS] });
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PR_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
   console.log('[pr-creation] FMS decisions copied to ERP PR Log:', rows.map(r => `${r.prNo}=${r.status}`).join(', '));
+  // The same mail the email-button decision sends, so the person who raised
+  // the PR hears that Sajil Sir has approved (or rejected) it whichever way
+  // he did it ("mail aana chahiye Sajil sir se PR approval pe"). Sent once:
+  // after this copy the row is no longer Active, so it never syncs again.
+  for (const r of rows) {
+    sendPrDecisionEmail({
+      prNumber: r.prNo, format: r.format, party: r.party, department: r.department, requestedBy: r.requestedBy,
+      totalAmount: String(r.total ?? '').replace(/[^0-9.-]/g, ''), pdfLink: r.pdfLink, createdBy: r.createdBy,
+      status: r.status, decidedBy: r.decidedBy,
+    }).catch((e) => console.error('[pr-creation] FMS decision mail failed for', r.prNo + ':', e.message));
+  }
 }
 
 // Row 4 of the live sheet holds PR175's Step 1 but Step 9's response for
@@ -11053,10 +11356,13 @@ async function _imsCreateTxn(direction, body, user) {
   // The Inward/Outward forms can post a department typed straight into the
   // "+ Add new department" box, so it is canonicalised here rather than trusted.
   const department = await canonicalDept(body.department);
+  // Inward records the vendor the goods came from (the form asks for that
+  // instead of a department); Outward posts nothing here and stores ''.
+  const vendor = String(body.vendor || '').trim().slice(0, 255);
   const id = await withSeqId('ims_transactions', direction, 6, (newId) => pool.query(
-    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, size, quantity, uom, department, remarks, status, created_by, source)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Active',$11,$12)`,
-    [newId, txnDate, direction, itemCode, body.description || '', size, quantity, body.uom || '', department, body.remarks || '', user, source]
+    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, size, quantity, uom, department, remarks, status, created_by, source, vendor)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Active',$11,$12,$13)`,
+    [newId, txnDate, direction, itemCode, body.description || '', size, quantity, body.uom || '', department, body.remarks || '', user, source, vendor]
   ));
   const delta = direction === 'IN' ? quantity : -quantity;
   // current_stock is a stored running balance that is never recomputed from the
@@ -11170,7 +11476,7 @@ function _imsTxnListQuery(direction, category, columns) {
   return { sql, params };
 }
 const IMS_TXN_LIST_COLUMNS = `t.id, t.txn_date AS date, t.item_code AS itemCode, t.item_name AS itemName,
-  t.size, t.quantity, t.uom, t.department, t.remarks, t.status, t.created_by AS createdBy, t.created_at AS createdAt, t.source`;
+  t.size, t.quantity, t.uom, t.department, t.vendor, t.remarks, t.status, t.created_by AS createdBy, t.created_at AS createdAt, t.source`;
 
 app.get('/api/ims/inward/list', requireAuth, async (req, res) => {
   try {
@@ -11487,17 +11793,19 @@ app.get('/api/approvals/pending-count', requireAuth, async (req, res) => {
   if (!isAdminUser(req.session?.user)) return res.json({ count:0 });
   try {
     if (USE_DB) {
-      const [revise, tasks, urgent] = await Promise.all([
+      const [revise, tasks, urgent, payments] = await Promise.all([
         q(`SELECT COUNT(*) AS cnt FROM delegations WHERE status='revise_requested'`),
         q(`SELECT COUNT(*) AS cnt FROM delegations WHERE approval='Approval Required' AND status='pending'`),
         q(`SELECT COUNT(*) AS cnt FROM urgent_payments WHERE status='pending'`).catch(() => []),
+        q(`SELECT COUNT(*) AS cnt FROM payment_tracker WHERE status='Pending'`).catch(() => []),
       ]);
-      return res.json({ count:Number(revise[0]?.cnt||0)+Number(tasks[0]?.cnt||0)+Number(urgent[0]?.cnt||0) });
+      return res.json({ count:Number(revise[0]?.cnt||0)+Number(tasks[0]?.cnt||0)+Number(urgent[0]?.cnt||0)+Number(payments[0]?.cnt||0) });
     }
     const store = await readStore();
     const dels = store.delegations||[];
     const count = dels.filter(d=>d.status==='revise_requested').length + dels.filter(d=>d.approval==='Approval Required'&&d.status==='pending').length
-      + (store.urgentPayments||[]).filter(r=>r.status==='pending').length;
+      + (store.urgentPayments||[]).filter(r=>r.status==='pending').length
+      + (store.paymentTracker||[]).filter(r=>r.status==='Pending').length;
     return res.json({ count });
   } catch { return res.json({ count:0 }); }
 });
@@ -11515,14 +11823,15 @@ app.patch('/api/profile', requireAuth, async (req, res) => {
     // meant any signed-in user could type the owner's address, sign back in and
     // hold every owner-only permission in the app. Changing a login address is
     // an admin action now (Users → Edit), which enforces the same reservation.
-    await pool.query(`UPDATE users SET name=COALESCE($1,name), phone=COALESCE($2,phone) WHERE id=$3`, [body.name??null,body.phone??null,id]);
+    // Name, phone and the notification address are no longer self-service
+    // ("Profile ko editable mat rakho", 14 Sep 2026): they are the office's
+    // record and change only from Users → Edit. Whatever the page sends for
+    // them is ignored here, so an old cached page cannot change them either.
+    // Only the photo and the password remain the person's own to change.
     if (body.picture!==undefined) {
       await pool.query('UPDATE users SET picture=$1 WHERE id=$2', [body.picture,id]);
       // Only on a real upload — clearing the photo shouldn't archive anything.
       if (body.picture) safeUploadUserPhotoToDrive(body.pictureOriginal || body.picture, { userId: id, userName: body.name || req.session.user.name || '' });
-    }
-    if (body.notificationEmail!==undefined) {
-      await pool.query(`INSERT INTO profile (user_id,notification_email) VALUES ($1,$2) ON CONFLICT (user_id) DO UPDATE SET notification_email=$3`, [id,body.notificationEmail||'',body.notificationEmail||'']);
     }
     if (body.newPassword) {
       const [user] = await q('SELECT password_hash FROM users WHERE id = $1', [id]);

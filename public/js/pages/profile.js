@@ -134,13 +134,17 @@ window.Pages.profile = {
           <div class="card p-4">
             <div class="mb-3">
               <h3 class="text-[15px] font-semibold text-slate-900">Personal Information</h3>
-              <p class="text-xs text-slate-500 mt-0.5">Public profile details</p>
+              <p class="text-xs text-slate-500 mt-0.5">As recorded by the office — ask an Admin (Users → Edit) for any change</p>
             </div>
+            <!-- Read-only since 14 Sep 2026 ("Profile ko editable mat rakho"):
+                 name, phone and the notification address are the office's
+                 record of the person, changed only from Users → Edit. The
+                 server ignores them on save too. Photo and password stay. -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-              ${this._fieldHtml('name',              'Full Name',           f.name,              'text',     '')}
-              ${this._fieldHtml('email',             'Email Address',       f.email,             'email',    'Login address — ask an admin to change this', '', true)}
-              ${this._fieldHtml('phone',             'Phone Number',        f.phone,             'text',     '')}
-              ${this._fieldHtml('notificationEmail', 'Notification Email',  f.notificationEmail, 'email',    'Real Gmail/Outlook for task notifications', 'yourrealemail@gmail.com')}
+              ${this._fieldHtml('name',              'Full Name',           f.name,              'text',     '', '', true)}
+              ${this._fieldHtml('email',             'Email Address',       f.email,             'email',    'Login address', '', true)}
+              ${this._fieldHtml('phone',             'Phone Number',        f.phone,             'text',     '', '', true)}
+              ${this._fieldHtml('notificationEmail', 'Notification Email',  f.notificationEmail, 'email',    'Where task notifications go', '', true)}
             </div>
           </div>
 

@@ -62,21 +62,25 @@ window.Pages.users = (() => {
     { cat: 'Basic', key: 'help-ticket',   label: 'Help Ticket' },
     { cat: 'Basic', key: 'profile',       label: 'Profile' },
 
-    { cat: 'Export Department', key: 'proforma-invoice', label: 'Proforma Invoice' },
-    { cat: 'Export Department', key: 'consignee-master', label: 'Consignee Master' },
-    { cat: 'Export Department', key: 'export-documentation', label: 'Export Documentation' },
-    { cat: 'Export Department', key: 'pr-creation',   label: 'PR Creation' },
-    { cat: 'Export Department', key: 'po-creation',   label: 'PO Creation' },
-    { cat: 'Export Department', key: 'grn-creation',  label: 'GRN Creation' },
+    // The Export department's three desks, in the sidebar's own order (see
+    // sidebar.js): Factory, Marketing, Documentation.
+    { cat: 'Export — Factory', key: 'pr-creation',   label: 'PR Creation' },
+    { cat: 'Export — Factory', key: 'po-creation',   label: 'PO Creation' },
+    { cat: 'Export — Factory', key: 'grn-creation',  label: 'GRN Creation' },
     // One key per IMS stock book; each covers that book's Inward/Outward/
     // Report tabs. The retired 'ims' key (and the older 'inward'/'outward'
     // ones) still grant access to all four — see sidebar.js's routeAliases —
     // so existing users keep working until they're re-permissioned here.
-    { cat: 'Export Department', key: 'ims-stores',      label: 'IMS Stores' },
-    { cat: 'Export Department', key: 'ims-alu',         label: 'IMS Alu & SS' },
-    { cat: 'Export Department', key: 'ims-accessories', label: 'IMS Accessories' },
+    { cat: 'Export — Factory', key: 'ims-stores',      label: 'IMS Stores' },
+    { cat: 'Export — Factory', key: 'ims-alu',         label: 'IMS Alu & SS' },
+    { cat: 'Export — Factory', key: 'ims-accessories', label: 'IMS Accessories' },
+    { cat: 'Export — Marketing', key: 'proforma-invoice', label: 'Proforma Invoice' },
+    { cat: 'Export — Marketing', key: 'consignee-master', label: 'Consignee Master' },
+    { cat: 'Export — Documentation', key: 'export-documentation', label: 'Export Documentation' },
 
     { cat: 'Trading Department', key: 'ims-trading',    label: 'IMS Trading' },
+
+    { cat: 'Retail', key: 'payment-tracker', label: 'Payment Tracker' },
 
     { cat: 'Admin Section', key: 'fms',          label: 'FMS Master' },
     { cat: 'Admin Section', key: 'mis',          label: 'MIS Report' },
