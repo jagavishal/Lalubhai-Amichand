@@ -6754,7 +6754,9 @@ const PR_FORMAT_CONFIG = {
     // Pinned to A:I — the tab's grid is 29 columns wide, template uses 9.
     // Stays portrait (narrow enough); the pinning alone is what stops the
     // print coming out at a third of the page width.
-    pdf: { c1: 0, c2: 9 },
+    // Landscape since 14 Sep ("PR ki print landscape me set kar dijiye") —
+    // the kgs table reads better across the wide side, like the other formats.
+    pdf: { portrait: false, c1: 0, c2: 9 },
   },
 };
 
