@@ -2836,8 +2836,8 @@ app.delete('/api/delegations', requireAuth, async (req, res) => {
    seed — written once on first read and never consulted again after that, the
    same way `departments` is seeded from FACTORY_DEPARTMENTS.
 
-   Leave, Accounts team: up to 2 days is decided inside the department, by the
-   Senior Accountant and above; 3 days or more needs Paresh Sir. Matched on the
+   Leave, Accounts team: up to 3 days is decided inside the department, by the
+   Senior Accountant and above; more than 3 days needs Paresh Sir. Matched on the
    applicant's department rather than their designation, because department is
    the field every employee record actually carries.
 
@@ -2849,7 +2849,7 @@ const DEFAULT_LEAVE_AUTHORITY = [
   {
     department: 'Accounts',        // matched case-insensitively, as a substring
     withinTeamApprover: 'Jayesh Udani',
-    escalateFromDays: 3,
+    escalateFromDays: 3,           // escalates strictly ABOVE this — 3 days stays in-team
     escalateTo: 'Paresh Sir',
   },
 ];
@@ -2950,10 +2950,14 @@ async function leaveAuthorityFor(department, days, applicantName) {
     }
   }
 
+  /* Strictly more than the threshold: management's rule is "more than 3
+     days needs Paresh Sir", so a 3-day request stays in-team and a 3.5-day
+     one (a half day on the end) escalates. The stored value is the last
+     in-team length, not the first escalated one. */
   const from = Number(tier.escalateFromDays) || 0;
-  const escalated = !!from && Number(days) >= from;
+  const escalated = !!from && Number(days) > from;
 
-  /* "3 days or more: Jayesh Udani AND Paresh Shah" — both signatures. The
+  /* "More than 3 days: Jayesh Udani AND Paresh Shah" — both signatures. The
      request goes to the within-team approver first; `then` names who it moves
      on to once they approve. The leave route stores that second stage on the
      row and forwards the request when the first approval lands. */
@@ -2966,7 +2970,7 @@ async function leaveAuthorityFor(department, days, applicantName) {
     return { ...second, escalated: true, thresholdDays: from, then: null };
   }
 
-  // "Up to 2 days: no Paresh approval required" — the within-team tier, and
+  // "Up to 3 days: no Paresh approval required" — the within-team tier, and
   // only as a fallback: an approver picked on the Users page outranks it.
   if (!tier.withinTeamApprover) return null;
   return { ...(await resolve(tier.withinTeamApprover)), escalated: false, thresholdDays: from, then: null };

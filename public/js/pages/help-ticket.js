@@ -376,11 +376,11 @@ window.Pages['help-ticket'] = (() => {
       <div style="height:1px;background:#f1f5f9;margin:18px 0 14px;"></div>
 
       <div style="font-size:12px;font-weight:700;color:#0f172a;margin:0 0 2px;">Leave escalation by department</div>
-      <div style="font-size:11.5px;color:#94a3b8;margin-bottom:8px;">A request of this many days or more must go to the named person, whatever approver the applicant has set. Shorter requests keep their usual approver, and fall back to the within-team name only when none is set. Department is matched loosely — “Accounts” catches “Accounts Dept.”</div>
+      <div style="font-size:11.5px;color:#94a3b8;margin-bottom:8px;">A request of more than this many days must go to the named person, whatever approver the applicant has set. Requests of this length or shorter keep their usual approver, and fall back to the within-team name only when none is set. Department is matched loosely — “Accounts” catches “Accounts Dept.”</div>
       <table style="width:100%;border-collapse:collapse;">
         <thead><tr>
           <th style="${AU_TH}">Department</th><th style="${AU_TH}">Within team</th>
-          <th style="${AU_TH}">Escalate from (days)</th><th style="${AU_TH}">Escalate to</th><th></th>
+          <th style="${AU_TH}">Escalate above (days)</th><th style="${AU_TH}">Escalate to</th><th></th>
         </tr></thead>
         <tbody>${(_authDraft.leave || []).map((r, i) => `<tr data-lv-row>
           ${cell('department', r.department)}

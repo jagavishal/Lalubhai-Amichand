@@ -276,7 +276,7 @@ const HR_SCHEMA = [
   // Who covers the work while they are away — picked on the Apply form, shown
   // wherever "on leave today" is shown, so nobody has to ask around.
   `ALTER TABLE leaves ADD COLUMN IF NOT EXISTS backup_name VARCHAR(255) DEFAULT ''`,
-  /* Two-signature approvals (Accounts, 3+ days: Jayesh AND Paresh). The row
+  /* Two-signature approvals (Accounts, over 3 days: Jayesh AND Paresh). The row
      goes to approver_* first; next_approver_* is who it moves on to when the
      first approval lands, and level1_by records who gave that first one.
      approver_mailto is the exact mailbox the request mail was sent to — the
@@ -1824,8 +1824,8 @@ function mountHrms(app, ctx) {
         }
 
         /* The department tier, per the written policy for Accounts:
-           up to 2 days needs no Paresh sign-off (the within-team approver or
-           the picked one handles it); 3 days or more MUST go to Paresh, over
+           up to 3 days needs no Paresh sign-off (the within-team approver or
+           the picked one handles it); more than 3 days MUST go to Paresh, over
            whoever is picked on the Users page — the whole point of the rule is
            that a long absence cannot be signed off inside the department.
            Jayesh Udani & above are exempt from the tier entirely and route as
@@ -2075,7 +2075,7 @@ function mountHrms(app, ctx) {
           }
         }
 
-        /* Two-signature rows (Accounts, 3+ days). A first approval does not
+        /* Two-signature rows (Accounts, over 3 days). A first approval does not
            book the days — it forwards the request to the second approver and
            mails them; the balance moves only on THEIR approval. A rejection at
            either level ends it there. When the person deciding IS the second
