@@ -1256,14 +1256,12 @@ window.Pages['client-master'] = (() => {
     // #cm-table innerHTML that re-render replaces, so re-binding it there would
     // stack duplicate listeners and fire multiple downloads per click.
     document.getElementById('cm-export-btn')?.addEventListener('click', _exportVendorsCSV);
-
-    _bindTableButtons();
-    if (_tab === 'payments') _bindPaymentTabEvents();
-    if (_tab === 'history')  _bindHistoryTabEvents();
-    _renderModal();
-  }
-
-  function _bindTableButtons() {
+    // Same story for the search box and status filter: they sit in the toolbar
+    // above #cm-table, so they survive the table re-render. Binding them inside
+    // _bindTableButtons doubled their listeners on every keystroke (2, 4, 8, ...),
+    // and each listener re-rendered the whole vendor table — typing a name and
+    // then backspacing it out (which widens the result set back to every vendor)
+    // froze the browser.
     document.getElementById('cm-search')?.addEventListener('input', e => {
       _q = e.target.value;
       document.getElementById('cm-table').innerHTML = _renderTable();
@@ -1274,6 +1272,16 @@ window.Pages['client-master'] = (() => {
       document.getElementById('cm-table').innerHTML = _renderTable();
       _bindTableButtons();
     });
+
+    _bindTableButtons();
+    if (_tab === 'payments') _bindPaymentTabEvents();
+    if (_tab === 'history')  _bindHistoryTabEvents();
+    _renderModal();
+  }
+
+  // Only binds what lives inside #cm-table (re-created on every search/filter
+  // change). Search + status filter are bound once in _render — see the note there.
+  function _bindTableButtons() {
     document.querySelectorAll('.js-edit').forEach(btn => {
       btn.addEventListener('click', () => {
         const c = _list.find(x => String(x.id) === String(btn.dataset.id));
