@@ -48,7 +48,18 @@ window.Pages['proforma-invoice'] = (() => {
   let _currencies = [];
   let _priceDefault = { priceType: 'CNF', currency: 'USD' };
   let _defaults = null;     // boilerplate from backend/lib/pi-format.js
-  let _maxItems = 30;
+  let _maxItems = 100;
+  // Usable CBM / payload per container size, for the running total under the
+  // item table (see CONTAINERS in backend/lib/pi-format.js).
+  let _containers = [];
+  let _containerKey = '20';
+  // The export team's own CBM / rate sheet, linked from the Add Price screen.
+  let _rateSheetUrl = '';
+  // The client's own product codes this buyer used on earlier PIs, keyed by
+  // our model number — fetched when a consignee is picked, so a line added
+  // after that starts with the code the buyer knows.
+  let _buyerCodes = {};
+  let _buyerCodesFor = '';
 
   // PI List (in-page tab) state — read-only history from the ERP PI Log tab.
   let _pilRows = [];
@@ -132,6 +143,14 @@ window.Pages['proforma-invoice'] = (() => {
   const esc = Utils.esc;
   function _num(v) { const n = parseFloat(v); return isNaN(n) ? 0 : n; }
   function _fmtUsd(n) { return (n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  // A rate always reads with at least two decimals ("2.50", never "2.5") and
+  // keeps up to four when the figure has them ("5.4405") — a per-piece rate is
+  // often set to the third place.
+  function _fmtRate(v) {
+    const n = parseFloat(String(v ?? '').replace(/,/g, ''));
+    if (!Number.isFinite(n)) return String(v ?? '');
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  }
 
   /* ── field helpers (styled like PO/GRN Creation, for a consistent look) ── */
   function _fieldWrap(label, innerHtml, extra) {
@@ -174,6 +193,9 @@ window.Pages['proforma-invoice'] = (() => {
       if (data.orderDefaults) _orderDefaults = data.orderDefaults;
       if (data.packingDefaults) _packingDefaults = data.packingDefaults;
       if (data.maxItems) _maxItems = data.maxItems;
+      if (Array.isArray(data.containers) && data.containers.length) _containers = data.containers;
+      if (data.rateSheetUrl) _rateSheetUrl = data.rateSheetUrl;
+      _fillContainerSelect();
       _mastersLoaded = true;
       const el = document.getElementById('pic-next-no');
       if (el) el.textContent = _piNoDisplay();
@@ -395,6 +417,9 @@ window.Pages['proforma-invoice'] = (() => {
     };
     input.addEventListener('input', showMatches);
     input.addEventListener('focus', showMatches);
+    // A name typed straight in (a buyer not on either list) still gets its
+    // earlier client codes looked up once the box is left.
+    input.addEventListener('change', () => _loadBuyerCodes(input.value.trim()));
     dd.addEventListener('mousedown', (e) => {
       const opt = e.target.closest('.pic-buyer-opt');
       if (!opt) return;
@@ -402,9 +427,43 @@ window.Pages['proforma-invoice'] = (() => {
       if (!c) return;
       input.value = c.name;
       if (!c.recent) _fillFromConsignee(c);
+      _loadBuyerCodes(c.name);
       dd.style.display = 'none';
     });
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
+  }
+
+  /* ── Client product codes ────────────────────────────────────────────────
+     The buyer's own code for each of our models, remembered from their
+     earlier PIs (the log is scanned server-side). Fetched when the consignee
+     is settled and applied to every line that has a model but no code yet —
+     and to each line picked after that. Typed-over codes are never touched. */
+  async function _loadBuyerCodes(buyerName) {
+    const name = String(buyerName || '').trim();
+    if (!name || name === _buyerCodesFor) return;
+    _buyerCodesFor = name;
+    _buyerCodes = {};
+    try {
+      const data = await Utils.apiFetch('/api/proforma-invoice/buyer-codes?buyer=' + encodeURIComponent(name));
+      if (_buyerCodesFor !== name) return;   // the buyer changed again meanwhile
+      _buyerCodes = (data && data.codes) || {};
+    } catch { return; }
+    document.querySelectorAll('#pic-items-tbody .pic-item-row').forEach(_applyBuyerCode);
+  }
+
+  function _sizeKey(s) {
+    return String(s || '').toLowerCase().replace(/inch(es)?|["'”″]+/g, '').replace(/[^a-z0-9.]+/g, '').replace(/\.0+$/, '');
+  }
+
+  function _applyBuyerCode(row) {
+    const codeEl = row.querySelector('[data-field="clientCode"]');
+    const modelEl = row.querySelector('[data-field="modelNo"]');
+    const sizeEl = row.querySelector('[data-field="size"]');
+    if (!codeEl || !modelEl || codeEl.value.trim()) return;
+    const model = modelEl.value.trim().toLowerCase();
+    if (!model) return;
+    const code = _buyerCodes[model + '|' + _sizeKey(sizeEl ? sizeEl.value : '')] || _buyerCodes[model] || '';
+    if (code) codeEl.value = code;
   }
 
   /* ── Model-No typeahead per row — same fixed-position dropdown pattern
@@ -417,26 +476,111 @@ window.Pages['proforma-invoice'] = (() => {
 
   // Boxes, CBM and Weight all fall out of Qty once a model is picked, so they
   // are computed rather than typed — but only for fields the user hasn't
-  // overridden by hand, since a part-box order is a real thing.
+  // overridden by hand, since a part-box order is a real thing. The per-box
+  // CBM and per-piece weight they are worked from are their own columns now
+  // (they used to hide on the row), so a figure the master has wrong can be
+  // corrected on the line and the totals follow.
   function _recomputeRow(row) {
     const get = (f) => row.querySelector('[data-field="' + f + '"]');
     const qty = _num(get('qty').value);
     const packing = _num(get('packing').value);
-    const cbmPerBox = _num(row.dataset.cbmPerBox);
-    const weightPerPc = _num(row.dataset.weightPerPc);
-    if (!qty) return;
-    const boxesEl = get('boxes'), cbmEl = get('cbm'), weightEl = get('weight');
-    let boxes = _num(boxesEl.value);
-    if (packing > 0 && boxesEl.dataset.touched !== '1') {
-      boxes = Math.round((qty / packing) * 1000) / 1000;
-      boxesEl.value = boxes;
+    const cbmPerBox = _num(get('cbmPerBox').value);
+    const weightPerPc = _num(get('weightPerPc').value);
+    if (qty) {
+      const boxesEl = get('boxes'), cbmEl = get('cbm'), weightEl = get('weight');
+      let boxes = _num(boxesEl.value);
+      if (packing > 0 && boxesEl.dataset.touched !== '1') {
+        boxes = Math.round((qty / packing) * 1000) / 1000;
+        boxesEl.value = boxes;
+      }
+      if (cbmPerBox > 0 && boxes > 0 && cbmEl.dataset.touched !== '1') {
+        cbmEl.value = (boxes * cbmPerBox).toFixed(4);
+      }
+      if (weightPerPc > 0 && weightEl.dataset.touched !== '1') {
+        weightEl.value = (qty * weightPerPc).toFixed(2);
+      }
     }
-    if (cbmPerBox > 0 && boxes > 0 && cbmEl.dataset.touched !== '1') {
-      cbmEl.value = (boxes * cbmPerBox).toFixed(4);
-    }
-    if (weightPerPc > 0 && weightEl.dataset.touched !== '1') {
-      weightEl.value = (qty * weightPerPc).toFixed(2);
-    }
+    _recomputeTotals(row.closest('tbody'));
+  }
+
+  /* ── Running totals under an item table ───────────────────────────────
+     Qty, boxes, CBM and weight across every line as they are typed, set
+     against the container being booked — the question the export team is
+     actually asking while they build the PI is "do more or fewer lines fit
+     in this box?". Shared by the PI create form and the Order Sheet form
+     (both tables carry the same data-field names). ─────────────────────── */
+  function _totalsBarHtml(id) {
+    return '<div id="' + id + '" style="display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;margin-top:10px;padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;font-size:12.5px;color:#475569;">'
+      + '<span style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;">Running total</span>'
+      + '<span><b class="pic-tot-qty" style="color:#0f172a;">0</b> pcs / sets</span>'
+      + '<span><b class="pic-tot-boxes" style="color:#0f172a;">0</b> boxes</span>'
+      + '<span><b class="pic-tot-cbm" style="color:#0f172a;">0.0000</b> CBM</span>'
+      + '<span><b class="pic-tot-weight" style="color:#0f172a;">0.00</b> kgs</span>'
+      + '<span style="display:inline-flex;align-items:center;gap:6px;margin-left:auto;">'
+        + '<span style="color:#94a3b8;">Container</span>'
+        + '<select class="pic-container" style="padding:4px 8px;border:1.5px solid #e2e8f0;border-radius:7px;font-size:12px;background:#fff;cursor:pointer;"></select>'
+      + '</span>'
+      + '<span class="pic-tot-fill" style="flex-basis:100%;"></span>'
+    + '</div>';
+  }
+
+  function _fillContainerSelect() {
+    document.querySelectorAll('.pic-container').forEach(sel => {
+      if (!_containers.length) return;
+      const keep = sel.value || _containerKey;
+      sel.innerHTML = _containers.map(c => '<option value="' + esc(c.key) + '">' + esc(c.label) + ' · ~' + esc(c.cbm) + ' CBM</option>').join('');
+      sel.value = _containers.some(c => c.key === keep) ? keep : _containers[0].key;
+      _containerKey = sel.value;
+    });
+    document.querySelectorAll('#pic-items-tbody, #os-items-tbody').forEach(tb => _recomputeTotals(tb));
+  }
+
+  function _recomputeTotals(tbody) {
+    if (!tbody) return;
+    const bar = tbody.closest('form')?.querySelector('#pic-totals, #os-totals');
+    if (!bar) return;
+    let qty = 0, boxes = 0, cbm = 0, weight = 0, lines = 0;
+    tbody.querySelectorAll('tr').forEach(row => {
+      const v = (f) => { const el = row.querySelector('[data-field="' + f + '"]'); return el ? _num(el.value) : 0; };
+      const q = v('qty');
+      if (!q) return;
+      lines++; qty += q; boxes += v('boxes'); cbm += v('cbm'); weight += v('weight');
+    });
+    const set = (cls, text) => { const el = bar.querySelector(cls); if (el) el.textContent = text; };
+    set('.pic-tot-qty', qty.toLocaleString('en-IN'));
+    set('.pic-tot-boxes', (Math.round(boxes * 1000) / 1000).toLocaleString('en-IN'));
+    set('.pic-tot-cbm', cbm.toFixed(4));
+    set('.pic-tot-weight', weight.toFixed(2));
+    const fill = bar.querySelector('.pic-tot-fill');
+    const sel = bar.querySelector('.pic-container');
+    const c = _containers.find(x => x.key === (sel && sel.value)) || null;
+    if (!fill) return;
+    if (!c || !lines) { fill.innerHTML = ''; return; }
+    const cbmPct = c.cbm ? (cbm / c.cbm) * 100 : 0;
+    const kgPct = c.kgs ? (weight / c.kgs) * 100 : 0;
+    const over = cbmPct > 100 || kgPct > 100;
+    const room = c.cbm - cbm;
+    const bar1 = (pct, label) => '<div style="display:flex;align-items:center;gap:8px;min-width:220px;flex:1;">'
+      + '<span style="width:78px;color:#94a3b8;">' + label + '</span>'
+      + '<span style="flex:1;height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;"><span style="display:block;height:100%;width:' + Math.min(100, pct).toFixed(1) + '%;background:' + (pct > 100 ? '#ef4444' : pct > 90 ? '#f59e0b' : '#22c55e') + ';"></span></span>'
+      + '<b style="width:44px;text-align:right;color:' + (pct > 100 ? '#dc2626' : '#0f172a') + ';">' + Math.round(pct) + '%</b>'
+      + '</div>';
+    fill.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:8px 24px;align-items:center;">'
+      + bar1(cbmPct, 'CBM')
+      + bar1(kgPct, 'Weight')
+      + '<span style="font-size:12px;color:' + (over ? '#dc2626' : '#475569') + ';">'
+        + (over
+          ? 'Over the ' + esc(c.label) + ' — ' + (cbmPct > 100 ? (cbm - c.cbm).toFixed(2) + ' CBM' : '') + (cbmPct > 100 && kgPct > 100 ? ' and ' : '') + (kgPct > 100 ? Math.round(weight - c.kgs).toLocaleString('en-IN') + ' kgs' : '') + ' too much'
+          : 'Room for about <b>' + room.toFixed(2) + ' CBM</b> more in a ' + esc(c.label))
+      + '</span>'
+    + '</div>';
+  }
+
+  function _bindTotalsBar(bar) {
+    if (!bar) return;
+    const sel = bar.querySelector('.pic-container');
+    if (sel) sel.addEventListener('change', () => { _containerKey = sel.value; _recomputeTotals(bar.closest('form').querySelector('#pic-items-tbody, #os-items-tbody')); });
+    _fillContainerSelect();
   }
 
   function _applyProduct(row, p) {
@@ -445,13 +589,17 @@ window.Pages['proforma-invoice'] = (() => {
     set('size', p.size);
     set('swg', p.swg);
     set('packing', p.perBoxPacking);
-    row.dataset.cbmPerBox = p.perBoxCbm || '';
-    row.dataset.weightPerPc = p.perPcsWeight || '';
+    // The master's own figures go in even over a typed value — picking a
+    // product IS choosing its specification. Anything typed after wins.
+    const put = (f, v) => { const el = row.querySelector('[data-field="' + f + '"]'); if (el) { el.value = v || ''; el.dataset.touched = ''; } };
+    put('cbmPerBox', p.perBoxCbm);
+    put('weightPerPc', p.perPcsWeight);
     row.querySelector('[data-field="imageUrl"]').value = p.imageUrl || '';
     const thumb = row.querySelector('.pic-item-thumb');
     thumb.innerHTML = p.imageUrl
       ? '<img src="' + esc(p.imageUrl) + '" alt="" onerror="this.remove()" style="max-width:44px;max-height:40px;object-fit:contain;border-radius:4px;" />'
       : '<span style="font-size:10px;color:#cbd5e1;">no photo</span>';
+    _applyBuyerCode(row);
     _recomputeRow(row);
   }
 
@@ -506,16 +654,22 @@ window.Pages['proforma-invoice'] = (() => {
      pricing is a separate, permission-gated step done later. The columns
      mirror the printed PI exactly, minus the two priced ones. ──────────── */
   const _ITEM_COLS = [
-    { field: 'modelNo', label: 'Model No.', width: 130, typeahead: true },
-    { field: 'itemName', label: 'Item Name', width: 180, typeahead: true },
+    { field: 'modelNo', label: 'Model No.', width: 120, typeahead: true },
+    { field: 'clientCode', label: 'Client Code', width: 96 },
+    { field: 'itemName', label: 'Item Name', width: 170, typeahead: true },
     { field: 'size', label: 'Size', width: 64 },
-    { field: 'swg', label: 'SWG', width: 60 },
-    { field: 'packing', label: 'Per Box Dozen Packing', width: 88, numeric: true },
-    { field: 'qty', label: 'Total Qty (Pcs/Set)', width: 92, numeric: true },
-    { field: 'boxes', label: 'Total Box', width: 78, numeric: true, derived: true },
-    { field: 'cbm', label: 'Total CBM', width: 84, numeric: true, derived: true },
-    { field: 'weight', label: 'Total Weight (Kgs)', width: 92, numeric: true, derived: true },
-    { field: 'remarks', label: 'Remarks', width: 110 },
+    { field: 'swg', label: 'SWG', width: 56 },
+    { field: 'packing', label: 'Per Box Dozen Packing', width: 84, numeric: true },
+    { field: 'qty', label: 'Total Qty (Pcs/Set)', width: 88, numeric: true },
+    { field: 'boxes', label: 'Total Box', width: 72, numeric: true, derived: true },
+    // The per-box and per-piece figures the two totals are multiplied from —
+    // from the master, but on the line and editable, so a wrong master figure
+    // is a one-cell fix here rather than a wrong PI.
+    { field: 'cbmPerBox', label: 'CBM / Box', width: 78, numeric: true, basis: true },
+    { field: 'cbm', label: 'Total CBM', width: 80, numeric: true, derived: true },
+    { field: 'weightPerPc', label: 'Weight / Pc (Kgs)', width: 82, numeric: true, basis: true },
+    { field: 'weight', label: 'Total Weight (Kgs)', width: 88, numeric: true, derived: true },
+    { field: 'remarks', label: 'Remarks', width: 100 },
   ];
   const _cellInput = 'width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;';
 
@@ -551,26 +705,32 @@ window.Pages['proforma-invoice'] = (() => {
         + '<tbody id="pic-items-tbody">' + _itemRowHtml() + '</tbody>'
       + '</table>'
     + '</div>'
-    + '<p style="font-size:11.5px;color:#94a3b8;margin:8px 2px 0;">Click into Model No. or Item Name to pick from the product list (type to narrow it down) — the name, size, SWG, packing and photo fill in from the product master; Total Box, CBM and Weight are then worked out from Qty. Type over any of them to override. The rate, its basis and its currency are added later by an authorized user.</p>';
+    + _totalsBarHtml('pic-totals')
+    + '<p style="font-size:11.5px;color:#94a3b8;margin:8px 2px 0;">Click into Model No. or Item Name to pick from the product list (type to narrow it down) — the name, size, SWG, packing, CBM per box, weight per piece and photo fill in from the product master; Total Box, CBM and Weight are then worked out from Qty. Type over any of them to override. Client Code is the buyer\'s own code for the line and fills in from their earlier PIs where one is known. The rate, its basis and its currency are added later by an authorized user.</p>';
   }
 
   function _bindItemRow(rowEl) {
     rowEl.querySelectorAll('.pic-item-code').forEach(_bindItemCodeInput);
 
-    // Qty (or a corrected packing) re-derives the three computed columns…
-    ['qty', 'packing'].forEach(f => {
+    // Qty (or a corrected packing, CBM per box or weight per piece)
+    // re-derives the three computed columns…
+    ['qty', 'packing', 'cbmPerBox', 'weightPerPc'].forEach(f => {
       rowEl.querySelector('[data-field="' + f + '"]').addEventListener('input', () => _recomputeRow(rowEl));
     });
-    // …until the user types in one of them, which pins it for good.
+    // …until the user types in one of them, which pins it for good. The
+    // running total still has to follow the typed figure.
     rowEl.querySelectorAll('.pic-derived').forEach(el => {
-      el.addEventListener('input', () => { el.dataset.touched = '1'; });
+      el.addEventListener('input', () => { el.dataset.touched = '1'; _recomputeTotals(rowEl.closest('tbody')); });
     });
+    // A model typed by hand (rather than picked) still gets the buyer's code.
+    rowEl.querySelector('[data-field="modelNo"]').addEventListener('change', () => _applyBuyerCode(rowEl));
 
     const removeBtn = rowEl.querySelector('.pic-item-remove');
     removeBtn.addEventListener('click', () => {
       const tbody = document.getElementById('pic-items-tbody');
       if (tbody.querySelectorAll('.pic-item-row').length <= 1) { Utils.showToast('At least one item row is required', 'warning'); return; }
       rowEl.remove();
+      _recomputeTotals(tbody);
     });
   }
 
@@ -695,6 +855,7 @@ window.Pages['proforma-invoice'] = (() => {
     _view = 'create';
     renderPage();
     _prefillForm(row.form || {});
+    _loadBuyerCodes((row.form || {}).buyerName);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -761,19 +922,20 @@ window.Pages['proforma-invoice'] = (() => {
             ? '<img src="' + esc(it.imageUrl) + '" alt="" onerror="this.remove()" style="max-width:44px;max-height:40px;object-fit:contain;border-radius:4px;" />'
             : '<span style="font-size:10px;color:#cbd5e1;">no photo</span>';
         }
-        // Back out the per-box CBM and per-piece weight the parent's own
-        // numbers imply, so changing Qty — far and away the commonest reason a
-        // buyer asks for a revision — still re-derives Box/CBM/Weight instead
-        // of leaving the old PI's figures behind.
+        // A parent raised before the per-box CBM and per-piece weight were
+        // stored with the line: back them out of its own totals, so changing
+        // Qty — far and away the commonest reason a buyer asks for a revision
+        // — still re-derives Box/CBM/Weight instead of leaving the old PI's
+        // figures behind.
         const qty = _num(it.qty), boxes = _num(it.boxes), cbm = _num(it.cbm), weight = _num(it.weight);
-        if (boxes > 0 && cbm > 0) row.dataset.cbmPerBox = String(cbm / boxes);
-        // The master's own figure when the parent stored it; the back-computed
-        // one otherwise.
-        if (it.weightPerPc) row.dataset.weightPerPc = String(it.weightPerPc);
-        else if (qty > 0 && weight > 0) row.dataset.weightPerPc = String(weight / qty);
+        const cbmEl = row.querySelector('[data-field="cbmPerBox"]');
+        if (cbmEl && !cbmEl.value && boxes > 0 && cbm > 0) cbmEl.value = String(Math.round((cbm / boxes) * 100000) / 100000);
+        const wEl = row.querySelector('[data-field="weightPerPc"]');
+        if (wEl && !wEl.value && qty > 0 && weight > 0) wEl.value = String(Math.round((weight / qty) * 1000) / 1000);
       }
       _bindItemRow(row);
     });
+    _recomputeTotals(tbody);
   }
 
   function _reviseBannerHtml() {
@@ -918,9 +1080,6 @@ window.Pages['proforma-invoice'] = (() => {
       // Not a visible column — it rides along from the product master so the
       // printed PI can show the photo.
       item.imageUrl = row.querySelector('[data-field="imageUrl"]').value.trim();
-      // Also invisible here: the master's per-piece weight, which the Order
-      // Sheet raised against this PI prints in its own column.
-      item.weightPerPc = row.dataset.weightPerPc || '';
       return item;
     }).filter(it => it.modelNo || it.itemName);
   }
@@ -1129,7 +1288,7 @@ window.Pages['proforma-invoice'] = (() => {
         // says which one rather than assuming US$ in its header.
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">'
           + (r.status === 'Priced'
-            ? esc(r.total) + ' <span style="color:#94a3b8;font-size:11px;">' + esc(_currencyLabel((r.form && r.form.currency) || _priceDefault.currency)) + '</span>'
+            ? (isNaN(parseFloat(r.total)) ? esc(r.total) : _fmtUsd(parseFloat(r.total))) + ' <span style="color:#94a3b8;font-size:11px;">' + esc(_currencyLabel((r.form && r.form.currency) || _priceDefault.currency)) + '</span>'
             : '<span style="color:#cbd5e1;">—</span>')
         + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
@@ -1285,14 +1444,52 @@ window.Pages['proforma-invoice'] = (() => {
     const modal = document.getElementById('pi-price-modal');
     if (!modal) return;
     let total = 0;
+    const kgEl = document.getElementById('pipm-rate-kg');
+    const rateKg = kgEl ? _num(kgEl.value) : 0;
     modal.querySelectorAll('.pipm-item-row').forEach(row => {
       const qty = _num(row.dataset.qty);
+      const weightPc = _num(row.dataset.weightPc);
       const rate = _num(row.querySelector('.pipm-rate').value);
       const amt = Math.round(qty * rate * 100) / 100;
       row.querySelector('.pipm-amount').textContent = _fmtUsd(amt);
       total += amt;
+      // The typed rate read back as a rate per kg — the check the pricer
+      // does in their head, done for them.
+      const perKg = row.querySelector('.pipm-perkg');
+      if (perKg) perKg.textContent = (rate > 0 && weightPc > 0) ? '= ' + _fmtRate(rate / weightPc) + ' /kg' : '';
+      // And the other way round: the rate per kg typed at the top, times
+      // this line's weight, offered as the rate to use.
+      const kg = row.querySelector('.pipm-kg');
+      if (kg) {
+        if (rateKg > 0 && weightPc > 0) {
+          const suggested = Math.round(rateKg * weightPc * 1000) / 1000;
+          kg.innerHTML = 'At ' + esc(_fmtRate(rateKg)) + '/kg: <a href="#" class="pipm-rate-use" data-rate="' + esc(suggested) + '" style="color:#b45309;font-weight:700;text-decoration:none;">' + esc(_fmtRate(suggested)) + '</a>';
+        } else {
+          kg.innerHTML = '';
+        }
+      }
     });
     document.getElementById('pipm-total').textContent = _fmtUsd(total);
+  }
+
+  // Every "use this rate" link on the Add Price screen — last price, sheet
+  // rate, rate-per-kg suggestion — lands in the row's own rate box the same
+  // way. Bound once on the modal, since the links are re-rendered as the
+  // lookups come back.
+  function _bindRateUseLinks(modal) {
+    // The container outlives the modal's markup (only innerHTML is redrawn
+    // per open), so bind it once or every open would stack another handler.
+    if (modal.dataset.rateUseBound) return;
+    modal.dataset.rateUseBound = '1';
+    modal.addEventListener('click', (e) => {
+      const a = e.target.closest('.pipm-rate-use');
+      if (!a) return;
+      e.preventDefault();
+      const input = a.closest('td').querySelector('.pipm-rate');
+      if (!input) return;
+      input.value = a.dataset.rate;
+      _priceRecompute();
+    });
   }
 
   function _closePriceModal() {
@@ -1362,37 +1559,63 @@ window.Pages['proforma-invoice'] = (() => {
             + _priceSelectHtml('pipm-currency', 'Currency', _currencies, currency)
           + '</div>'
           + '<div id="pipm-price-note" style="font-size:11.5px;color:#94a3b8;margin:-8px 2px 0;">The PI prints these: “' + esc(priceType + ' ' + _currencyLabel(currency)) + ' Per Pc” on the rate column, and the total and amount in words to match.</div>'
+          // The rate-per-kg working. Aluminium is priced by weight: the
+          // pricer settles a rate per kg, and each line's per-piece rate is
+          // that times the piece's weight. Typed once here, it is offered on
+          // every line (click to use, or apply to all), read back per line
+          // as an implied /kg beside any rate typed by hand, and saved with
+          // the PI for the record.
+          + '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:10px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;">'
+            + '<label style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#92400e;font-weight:700;white-space:nowrap;">Rate per kg'
+              + '<input type="text" inputmode="decimal" id="pipm-rate-kg" value="' + esc(form.ratePerKg || '') + '" placeholder="e.g. 9.75" style="width:90px;box-sizing:border-box;padding:6px 8px;border:1.5px solid #fde68a;border-radius:6px;font-size:12.5px;text-align:right;" />'
+            + '</label>'
+            + '<span style="font-size:11.5px;color:#92400e;flex:1;min-width:200px;">× weight per pc = the rate offered on each line below. Each typed rate also reads back as its /kg. Kept with the PI for your record.</span>'
+            + '<button type="button" id="pipm-apply-kg" style="padding:6px 12px;border-radius:7px;background:#fff;border:1.5px solid #f59e0b;color:#92400e;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Apply to all empty rates</button>'
+            + (_rateSheetUrl ? '<a href="' + esc(_rateSheetUrl) + '" target="_blank" rel="noopener" style="font-size:12px;color:var(--color-primary);font-weight:700;white-space:nowrap;">Open the CBM / rate sheet ↗</a>' : '')
+          + '</div>'
           + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-            + '<table style="width:100%;border-collapse:collapse;min-width:740px;">'
+            + '<table style="width:100%;border-collapse:collapse;min-width:900px;">'
               + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-                // Total Weight rides along for reference only — it is not
-                // printed on the PI (see printHiddenCols in pi-format.js), but
-                // it is what the rate is usually sanity-checked against.
+                // Weight per pc and Total Weight ride along for reference —
+                // neither is printed on the PI (see printHiddenCols in
+                // pi-format.js), but they are what the rate is worked from.
                 // The last two follow the dropdowns above, so this screen
                 // reads the same way the printed PI will.
-                + ['Photo', 'Model No.', 'Item Name', 'Size', 'Total Qty', 'Total Weight (Kgs)'].map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+                + ['Photo', 'Model No.', 'Client Code', 'Item Name', 'Size', 'Total Qty', 'Wt / Pc (Kgs)', 'Total Weight (Kgs)'].map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
                 + '<th id="pipm-rate-head" style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(priceType + ' ' + _currencyLabel(currency) + ' Per Pc') + '</th>'
                 + '<th id="pipm-amount-head" style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc('Amount (' + _currencyLabel(currency) + ')') + '</th>'
               + '</tr></thead>'
-              + '<tbody>' + items.map((it, i) => ''
-                + '<tr class="pipm-item-row" data-index="' + i + '" data-qty="' + esc(it.qty || 0) + '" style="border-bottom:1px solid #f1f5f9;">'
+              + '<tbody>' + items.map((it, i) => {
+                  const qty = _num(it.qty), weight = _num(it.weight);
+                  const weightPc = _num(it.weightPerPc) || (qty > 0 && weight > 0 ? Math.round((weight / qty) * 1000) / 1000 : 0);
+                  return ''
+                + '<tr class="pipm-item-row" data-index="' + i + '" data-qty="' + esc(it.qty || 0) + '" data-weight-pc="' + esc(weightPc || '') + '" style="border-bottom:1px solid #f1f5f9;">'
                   + '<td style="padding:6px 8px;">' + (it.imageUrl
                       ? '<img src="' + esc(it.imageUrl) + '" alt="" onerror="this.remove()" style="width:34px;height:34px;object-fit:contain;" />'
                       : '<span style="color:#cbd5e1;font-size:11px;">—</span>') + '</td>'
                   // itemCode/description are the pre-export-format field names —
                   // a Draft raised before the switch still has to be priceable.
                   + '<td style="padding:6px 8px;font-size:12.5px;">' + esc(it.modelNo || it.itemCode || '—') + '</td>'
+                  + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.clientCode || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.itemName || it.description || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.size || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;text-align:right;">' + esc(it.qty || '') + '</td>'
+                  + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;">' + (weightPc ? esc(weightPc) : '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;">' + esc(it.weight || '—') + '</td>'
                   + '<td style="padding:6px 8px;"><input type="text" inputmode="decimal" class="pipm-rate" value="' + esc(it.rate || '') + '" placeholder="0.000" style="width:110px;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" />'
-                    // Filled in by _loadLastPrices once the log has been
-                    // scanned — the last rate this buyer was quoted for this
-                    // item, click-to-use.
-                    + '<div class="pipm-last" style="font-size:10.5px;color:#94a3b8;margin-top:3px;max-width:150px;">Checking last price…</div></td>'
-                  + '<td class="pipm-amount" style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;">0.00</td>'
-                + '</tr>').join('')
+                    // Filled in by _loadLastPrices once the log and the CBM
+                    // sheet have been read: the last rate this buyer was
+                    // quoted for this item on an earlier PI, what the export
+                    // team's own sheet holds for the party, and the sheet's
+                    // cost / minimum where it has them — each click-to-use.
+                    + '<div class="pipm-last" style="font-size:10.5px;color:#94a3b8;margin-top:3px;max-width:190px;">Checking last price…</div>'
+                    + '<div class="pipm-sheet" style="font-size:10.5px;color:#94a3b8;margin-top:2px;max-width:190px;"></div>'
+                    + '<div class="pipm-kg" style="font-size:10.5px;color:#92400e;margin-top:2px;max-width:190px;"></div>'
+                  + '</td>'
+                  + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;"><span class="pipm-amount">0.00</span>'
+                    + '<div class="pipm-perkg" style="font-size:10.5px;color:#94a3b8;margin-top:3px;"></div></td>'
+                + '</tr>';
+                }).join('')
               + '</tbody>'
             + '</table>'
           + '</div>'
@@ -1428,12 +1651,32 @@ window.Pages['proforma-invoice'] = (() => {
       if (el) el.addEventListener('change', relabel);
     });
     document.getElementById('pipm-save').addEventListener('click', _submitPrice);
+    const kgEl = document.getElementById('pipm-rate-kg');
+    if (kgEl) kgEl.addEventListener('input', _priceRecompute);
+    const applyKg = document.getElementById('pipm-apply-kg');
+    if (applyKg) applyKg.addEventListener('click', () => {
+      const rateKg = _num(kgEl && kgEl.value);
+      if (!(rateKg > 0)) { Utils.showToast('Type the rate per kg first', 'warning'); kgEl && kgEl.focus(); return; }
+      let filled = 0;
+      modal.querySelectorAll('.pipm-item-row').forEach(rowEl => {
+        const input = rowEl.querySelector('.pipm-rate');
+        const weightPc = _num(rowEl.dataset.weightPc);
+        if (!input || input.value.trim() || !(weightPc > 0)) return;
+        input.value = String(Math.round(rateKg * weightPc * 1000) / 1000);
+        filled++;
+      });
+      _priceRecompute();
+      Utils.showToast(filled ? filled + ' rate' + (filled > 1 ? 's' : '') + ' filled from ' + _fmtRate(rateKg) + '/kg' : 'Every line already has a rate (or no weight per pc to work from)', filled ? 'success' : 'warning');
+    });
+    _bindRateUseLinks(modal);
     _priceRecompute();
     _loadLastPrices(row);
   }
 
   // The last price this buyer was quoted per item, off earlier priced PIs on
-  // the same log. Fetched after the modal paints — the rates screen must not
+  // the same log — and, beside it, what the export team's own CBM / rate
+  // sheet says for the line (the party's column there, plus the sheet's cost
+  // and minimum). Fetched after the modal paints — the rates screen must not
   // wait on a log scan — and dropped silently if the modal has moved on.
   async function _loadLastPrices(row) {
     let data = null;
@@ -1444,24 +1687,40 @@ window.Pages['proforma-invoice'] = (() => {
     const modal = document.getElementById('pi-price-modal');
     if (!modal) return;
     const lastPrices = (data && data.lastPrices) || [];
+    const sheetRates = (data && data.sheetRates) || [];
+    const use = (rate, title, color) => '<a href="#" class="pipm-rate-use" data-rate="' + esc(rate) + '" title="' + esc(title || '') + ' — click to use it" style="color:' + (color || 'var(--color-primary)') + ';font-weight:700;text-decoration:none;">' + esc(_fmtRate(rate)) + '</a>';
     modal.querySelectorAll('.pipm-item-row').forEach(rowEl => {
+      const i = parseInt(rowEl.dataset.index, 10);
       const holder = rowEl.querySelector('.pipm-last');
-      if (!holder) return;
-      const lp = lastPrices[parseInt(rowEl.dataset.index, 10)];
-      if (!lp) { holder.innerHTML = '<span style="color:#cbd5e1;">No earlier price for this buyer</span>'; return; }
-      holder.innerHTML = 'Last: <a href="#" class="pipm-last-use" data-rate="' + esc(lp.rate) + '"'
-        + ' title="Quoted on PI ' + esc(lp.piNo) + (lp.date ? ' (' + esc(lp.date) + ')' : '') + ' — click to use it"'
-        + ' style="color:var(--color-primary);font-weight:700;text-decoration:none;">'
-        + esc((lp.priceType ? lp.priceType + ' ' : '') + _currencyLabel(lp.currency) + ' ' + lp.rate) + '</a>'
-        + '<span style="color:#cbd5e1;"> · ' + esc(lp.piNo) + '</span>';
+      if (holder) {
+        const lp = lastPrices[i];
+        if (!lp) holder.innerHTML = '<span style="color:#cbd5e1;">No earlier PI price for this buyer</span>';
+        else {
+          holder.innerHTML = 'Last PI: ' + use(lp.rate, 'Quoted on PI ' + lp.piNo + (lp.date ? ' (' + lp.date + ')' : ''))
+            + ' <span style="color:#cbd5e1;">' + esc((lp.priceType ? lp.priceType + ' ' : '') + _currencyLabel(lp.currency)) + ' · ' + esc(lp.piNo) + '</span>';
+        }
+      }
+      const sheet = rowEl.querySelector('.pipm-sheet');
+      if (sheet) {
+        const sr = sheetRates[i];
+        if (!sr) sheet.innerHTML = '';
+        else if (!sr.found) sheet.innerHTML = '<span style="color:#cbd5e1;">Not on the CBM sheet</span>';
+        else {
+          const bits = [];
+          if (sr.partyRate != null) bits.push('Sheet · ' + esc(sr.party) + ': ' + use(sr.partyRate, 'Last rate for ' + sr.party + ' on the CBM sheet', '#15803d'));
+          else if (sr.party) bits.push('<span>Sheet · no rate for ' + esc(sr.party) + '</span>');
+          else bits.push('<span>Sheet · party column not found</span>');
+          if (sr.minRate != null) bits.push('min ' + use(sr.minRate, 'Minimum rate on the CBM sheet'));
+          if (sr.ratePerKg != null) bits.push('sheet ' + esc(_fmtRate(sr.ratePerKg)) + '/kg');
+          if (sr.cost != null) bits.push('cost ' + esc(_fmtRate(sr.cost)));
+          const others = (sr.others || []).filter(o => o.party !== sr.party);
+          if (others.length) {
+            bits.push('<span title="' + esc(others.map(o => o.party + ': ' + _fmtRate(o.rate)).join('\n')) + '" style="cursor:help;border-bottom:1px dotted #94a3b8;">' + others.length + ' other ' + (others.length === 1 ? 'party' : 'parties') + '</span>');
+          }
+          sheet.innerHTML = bits.join(' <span style="color:#cbd5e1;">·</span> ');
+        }
+      }
     });
-    modal.querySelectorAll('.pipm-last-use').forEach(a => a.addEventListener('click', (e) => {
-      e.preventDefault();
-      const input = a.closest('td').querySelector('.pipm-rate');
-      if (!input) return;
-      input.value = a.dataset.rate;
-      _priceRecompute();
-    }));
   }
 
   async function _submitPrice() {
@@ -1483,6 +1742,7 @@ window.Pages['proforma-invoice'] = (() => {
           items,
           priceType: document.getElementById('pipm-price-type').value,
           currency: document.getElementById('pipm-currency').value,
+          ratePerKg: (document.getElementById('pipm-rate-kg') || {}).value || '',
         }),
       });
       // The server closes the tracker's "Add Pricing" step as part of this
@@ -1616,7 +1876,12 @@ window.Pages['proforma-invoice'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + _osStatusPillHtml(r.status) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">' + (r.totalQty ? esc(r.totalQty) : '<span style="color:#cbd5e1;">—</span>') + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+          + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>')
+          // The same order as a workbook, built server-side from its stored
+          // lines — the factory and the loading team work it in Excel.
+          + (r.form ? ' <span style="color:#cbd5e1;">·</span> <a href="/api/order-sheet/xlsx?orderNo=' + encodeURIComponent(r.orderNo) + '" style="color:#15803d;font-weight:600;" title="Download this order as an Excel workbook">Excel</a>' : '')
+        + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           // Straight into a new Packing List with this order already ticked —
           // the common case is shipping one order, and the picker is still
@@ -1698,31 +1963,57 @@ window.Pages['proforma-invoice'] = (() => {
     return (qty > 0 && weight > 0) ? String(Math.round((weight / qty) * 1000) / 1000) : '';
   }
 
+  // A PI raised before the per-box CBM was stored with the line backs it out
+  // of Total CBM ÷ Total Box, same as the weight above.
+  function _osCbmPerBox(it) {
+    if (it.cbmPerBox) return it.cbmPerBox;
+    const boxes = _num(it.boxes), cbm = _num(it.cbm);
+    return (boxes > 0 && cbm > 0) ? String(Math.round((cbm / boxes) * 100000) / 100000) : '';
+  }
+
   function _osOrderItemsHtml(items) {
-    const head = ['#', 'Model No.', 'Item Name', 'Size', 'SWG', 'Per Box Dozen Packing', 'Total Qty (Pcs/Set)', 'Total Box', 'Total CBM', 'Total Weight (Kgs)', 'Weight Per Pc (Kgs)', 'Remarks'];
+    const head = ['#', 'Model No.', 'Client Code', 'Item Name', 'Size', 'SWG', 'Per Box Dozen Packing', 'Total Qty (Pcs/Set)', 'Total Box', 'CBM / Box', 'Total CBM', 'Weight Per Pc (Kgs)', 'Total Weight (Kgs)', 'Remarks'];
     // Identity columns are read-only — an order sheet confirms the PI's goods,
     // so changing what the item IS belongs on a PI revision, not here. The
-    // quantities stay editable for a part shipment or a corrected box count.
-    const editable = ['packing', 'qty', 'boxes', 'cbm', 'weight', 'weightPerPc', 'remarks'];
-    const valOf = (it, f) => f === 'weightPerPc' ? _osWeightPerPc(it) : (it[f] == null ? '' : it[f]);
+    // quantities stay editable for a part shipment or a corrected box count,
+    // and follow Qty the same way the PI form's do (see _recomputeRow).
+    const editable = ['packing', 'qty', 'boxes', 'cbmPerBox', 'cbm', 'weightPerPc', 'weight', 'remarks'];
+    const valOf = (it, f) => f === 'weightPerPc' ? _osWeightPerPc(it) : f === 'cbmPerBox' ? _osCbmPerBox(it) : (it[f] == null ? '' : it[f]);
     return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:1040px;">'
+      + '<table style="width:100%;border-collapse:collapse;min-width:1240px;">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
           + head.map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">' + esc(h) + '</th>').join('')
         + '</tr></thead>'
         + '<tbody id="os-items-tbody">'
           + items.map((it, i) => '<tr class="os-item-row" style="border-bottom:1px solid #f1f5f9;">'
             + '<td style="padding:6px 8px;font-size:12px;color:#94a3b8;">' + (i + 1) + '</td>'
-            + ['modelNo', 'itemName', 'size', 'swg'].map(f =>
+            + ['modelNo', 'clientCode', 'itemName', 'size', 'swg'].map(f =>
                 '<td style="padding:6px 8px;font-size:12.5px;">' + esc(it[f] || '')
                 + '<input type="hidden" data-field="' + f + '" value="' + esc(it[f] || '') + '" /></td>').join('')
             + editable.map(f =>
-                '<td style="padding:6px 8px;"><input type="text" data-field="' + f + '" value="' + esc(valOf(it, f)) + '" style="' + _cellInput + '" /></td>').join('')
+                '<td style="padding:6px 8px;"><input type="text" data-field="' + f + '" ' + (['boxes', 'cbm', 'weight'].includes(f) ? 'class="pic-derived" ' : '') + 'value="' + esc(valOf(it, f)) + '" style="' + _cellInput + '" /></td>').join('')
             + '<input type="hidden" data-field="imageUrl" value="' + esc(it.imageUrl || '') + '" />'
           + '</tr>').join('')
         + '</tbody>'
       + '</table>'
-    + '</div>';
+    + '</div>'
+    + _totalsBarHtml('os-totals');
+  }
+
+  function _osBindItems() {
+    const tbody = document.getElementById('os-items-tbody');
+    if (!tbody) return;
+    tbody.addEventListener('input', (e) => {
+      const input = e.target.closest('[data-field]');
+      const row = e.target.closest('.os-item-row');
+      if (!input || !row) return;
+      const f = input.dataset.field;
+      // A total typed by hand is pinned, as on the PI form; anything else
+      // re-derives the totals from Qty.
+      if (['boxes', 'cbm', 'weight'].includes(f)) { input.dataset.touched = '1'; _recomputeTotals(tbody); return; }
+      if (['qty', 'packing', 'cbmPerBox', 'weightPerPc'].includes(f)) _recomputeRow(row);
+    });
+    _bindTotalsBar(document.getElementById('os-totals'));
   }
 
   function _osFormHtml() {
@@ -2636,6 +2927,7 @@ window.Pages['proforma-invoice'] = (() => {
         const osForm = document.getElementById('os-form');
         osForm.addEventListener('submit', _osSubmit);
         _guardEnterSubmit(osForm);
+        _osBindItems();
       } else {
         _osBindListBar();
         _osLoad();
@@ -2687,6 +2979,7 @@ window.Pages['proforma-invoice'] = (() => {
     // _loadMasters() below does not run and these selects would stay empty.
     _applyShippingOptions();
     _bindAllItemRows();
+    _bindTotalsBar(document.getElementById('pic-totals'));
 
     document.getElementById('pic-add-item').addEventListener('click', () => {
       const tbody = document.getElementById('pic-items-tbody');

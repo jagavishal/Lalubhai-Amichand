@@ -2465,6 +2465,39 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
     }
   }
 
+  // Draft PIs, for anyone who can price them — see _piDraftRows(). Listed
+  // straight off the PI log so a tracker row without a planned date, or a
+  // pricer who is not the FMS step's configured doer, no longer hides them.
+  try {
+    const canPrice = isAdminUser(user) || await userCanUseFeature(user, 'proforma-invoice', 'set_price');
+    if (canPrice) {
+      const drafts = await _piDraftRows();
+      // Their own task on a personal view; on an admin's per-person view the
+      // person being looked at, so the table's doer filter keeps them.
+      const doer = (typeof doerFilter === 'string' && doerFilter) ? doerFilter : (user.name || '');
+      const piTasks = drafts.map(d => ({
+        id: 'PI-' + d.piNo,
+        type: 'PI',
+        piNo: d.piNo,
+        description: `Add price — PI ${d.piNo} · ${d.buyer}`,
+        doer,
+        client: d.buyer,
+        details: [
+          { header: 'Created by', value: d.createdBy },
+          { header: 'Lines', value: String(d.itemCount || '') },
+        ],
+        date: d.date, dueDate: d.date, createdAt: d.createdAt,
+        overdue: false, isLate: false,
+        status: 'pending',
+      }));
+      result.total += piTasks.length;
+      result.pending += piTasks.length;
+      result.pendingTasks = result.pendingTasks.concat(piTasks);
+    }
+  } catch (e) {
+    console.error('[proforma-invoice] dashboard merge failed:', e.message);
+  }
+
   return res.json(result);
 });
 
@@ -8269,6 +8302,8 @@ const PI_PDF_DRIVE_FOLDER_ID = '1i693XlvXIlS8Ep1p4NJhkxolTCNE47qs';
 // Column L (Amount) and the totals row are live sheet formulas: cleared
 // around, never written over.
 const PI_FMT = require('./backend/lib/pi-format.js');
+const PI_TEMPLATE = require('./backend/lib/pi-template.js');
+const PI_RATES = require('./backend/lib/pi-rates.js');
 const PI_NO_PREFIX = 'VTV';   // Vatva works — the real "VTV/052/25-26" series
 const PI_LOG_HEADER = ['PI No', 'Date', 'Buyer', 'Total C&F (US$)', 'PDF Link', 'Created By', 'Created At', 'Priced By', 'Priced At', 'Form JSON', 'Status'];
 
@@ -8363,11 +8398,13 @@ function _piAmountInWords(amount, labels) {
 }
 
 // `fy` scopes the "next number" lookup to one financial year (see _piSeqOf).
+// Also reports which layout version the template tab was last painted to, so
+// the caller can bring it up to date before filling it (see _ensurePiTemplate).
 async function _piSheetMeta(fy) {
   const auth = getGoogleAuth();
   const { google } = require('googleapis');
   const sheets = google.sheets({ version: 'v4', auth });
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: PI_CREATION_SHEET_ID });
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: PI_CREATION_SHEET_ID, fields: 'sheets(properties(title,sheetId),developerMetadata)' });
   const tpl = meta.data.sheets.find(s => s.properties.title === PI_TEMPLATE_TAB);
   let maxSeq = 0;
   try {
@@ -8376,7 +8413,27 @@ async function _piSheetMeta(fy) {
   } catch (e) {
     if (!/unable to parse range/i.test(e.message || '')) console.error('[proforma-invoice] log read for numbering failed:', e.message);
   }
-  return { nextSeq: maxSeq + 1, templateSheetId: tpl ? tpl.properties.sheetId : 0 };
+  return {
+    nextSeq: maxSeq + 1,
+    templateSheetId: tpl ? tpl.properties.sheetId : 0,
+    templateVersion: tpl ? PI_TEMPLATE.readTemplateVersion(tpl) : 0,
+  };
+}
+
+// The template tab is painted by backend/lib/pi-template.js, and used to be
+// painted only when someone remembered to run scripts/rebuild-pi-sheet.js
+// after a layout change — which is how the live PI kept printing "Regd
+// Address same as admin office", with no logo and a 30-row cap, long after
+// pi-format.js said otherwise. Now every fill first checks the version the
+// tab was painted to (stamped on it as developer metadata) against
+// PI_FMT.TEMPLATE_VERSION and repaints when they differ. Runs inside the
+// 'pi' sheet lock the callers already hold, so no fill can land mid-repaint.
+async function _ensurePiTemplate(sheets, meta) {
+  if (!meta || meta.templateSheetId == null) return;
+  if (meta.templateVersion === PI_FMT.TEMPLATE_VERSION) return;
+  console.log(`[proforma-invoice] template tab is on layout v${meta.templateVersion}, repainting to v${PI_FMT.TEMPLATE_VERSION}…`);
+  await PI_TEMPLATE.paintPiTemplate(sheets, PI_CREATION_SHEET_ID, meta.templateSheetId, PI_TEMPLATE_TAB, (m) => console.log('[proforma-invoice]' + m));
+  meta.templateVersion = PI_FMT.TEMPLATE_VERSION;
 }
 
 // Fills the (single, shared) template tab — used identically by create (rate
@@ -8425,7 +8482,54 @@ async function _appendPiFmsRow(sheets, entry) {
       ]],
     },
   });
+  await _ensureFmsPlannedFormula(sheets, T, row);
   return row;
+}
+
+// The "Add Pricing" step's PLANNED cell is a WORKDAY formula off the row's
+// timestamp that the tracker's owner drags down the sheet by hand. Rows the
+// drag never reached have no planned date, and the FMS only counts a row as
+// pending when PLANNED is filled — so the PI never showed on the pricer's
+// panel ("PI gets created and goes to draft, doesn't come to me"). Rows 8 and
+// 9 of the live tracker were exactly that.
+//
+// So: if the cell is empty, copy the formula from the nearest row above that
+// has one, re-pointed at this row. Nothing else is touched — a cell already
+// holding anything (a formula, a typed date, a note) is left as it is, and a
+// tracker with no such formula anywhere above stays as the team keeps it.
+// Never fatal: the PI and its row are already saved by this point.
+async function _ensureFmsPlannedFormula(sheets, T, row) {
+  const col = T.cols.pricingPlanned;
+  if (!col || row <= T.firstDataRow) return;
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: T.spreadsheetId,
+      range: `'${T.tab}'!${col}${T.firstDataRow}:${col}${row}`,
+      valueRenderOption: 'FORMULA',
+    });
+    const cells = res.data.values || [];
+    const own = String(cells[row - T.firstDataRow]?.[0] ?? '').trim();
+    if (own) return;
+    let srcRow = 0, srcFormula = '';
+    for (let r = row - 1; r >= T.firstDataRow; r--) {
+      const v = String(cells[r - T.firstDataRow]?.[0] ?? '').trim();
+      if (v.startsWith('=')) { srcRow = r; srcFormula = v; break; }
+    }
+    if (!srcRow) return;
+    // "A7" -> "A<row>" for every reference that pointed at the source row;
+    // absolute rows ("H$5", the step's WHEN cell) and whole-column ranges
+    // ("Holidays!A:A") carry no such reference and come through untouched.
+    const formula = srcFormula.replace(/(\$?[A-Z]{1,3})(\d+)\b/g, (m, c, r) => (Number(r) === srcRow ? c + row : m));
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: T.spreadsheetId,
+      range: `'${T.tab}'!${col}${row}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [[formula]] },
+    });
+    console.log(`[proforma-invoice] tracker row ${row} had no planned pricing date — copied the formula down from row ${srcRow}`);
+  } catch (e) {
+    console.error('[proforma-invoice] could not check the tracker planned-date cell:', e.message);
+  }
 }
 
 // Opens the order's row in the workbook's second flow, "Order to dispatch".
@@ -8681,7 +8785,7 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
 // formulas to settle, read back the computed Total, stamp the amount in words
 // (which can only be built once that Total exists), then export + upload the
 // PDF. Never lets a Drive/export hiccup block the actual data write.
-async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId, labels) {
+async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId, labels, itemCount) {
   await _sleep(2000);
   let totalAmount = null;
   try {
@@ -8705,8 +8809,13 @@ async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId, label
     // to 73.7% because the invoice is taller than a landscape page is deep, so
     // portrait's 68.3% is only ~7% smaller on the page — and it fills the sheet
     // rather than leaving a deep band of white below the signatures.
+    //
+    // Only up to a point, though: fit-to-page would squeeze a 60-line PI onto
+    // one sheet at a size nobody can read. Past onePageItemRows the export
+    // fits to WIDTH instead and runs on to as many pages as it needs.
+    const onePage = !(itemCount > PI_FMT.LAYOUT.onePageItemRows);
     const pdfBuffer = await _exportSheetTabPdf(PI_CREATION_SHEET_ID, templateSheetId, {
-      c1: 0, c2: PI_FMT.LAYOUT.colCount, r1: 0, r2: PI_FMT.LAYOUT.lastRow, portrait: true, scale: 4,
+      c1: 0, c2: PI_FMT.LAYOUT.colCount, r1: 0, r2: PI_FMT.LAYOUT.lastRow, portrait: true, ...(onePage ? { scale: 4 } : {}),
     });
     // "VTV/052/25-26" has slashes in it — a Drive filename must not.
     pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${piNoFormatted.replace(/\//g, '-')} - Proforma Invoice.pdf`, PI_PDF_DRIVE_FOLDER_ID);
@@ -9151,6 +9260,11 @@ app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
       shippingOptions: _piShippingOptions(consignees),
       maxItems: PI_FMT.LAYOUT.itemsLastRow - PI_FMT.LAYOUT.itemsFirstRow + 1,
       defaults: PI_FMT.DEFAULTS,
+      // For the running CBM / weight total under the item table.
+      containers: PI_FMT.CONTAINERS,
+      // The export team's own CBM / rate sheet, linked from the Add Price
+      // screen so the pricer can open it beside the rates.
+      rateSheetUrl: PI_FMT.RATE_SOURCE.url,
       // For the Add Price screen's two dropdowns.
       priceTypes: PI_FMT.PRICE_TYPES,
       currencies: Object.keys(PI_FMT.CURRENCIES),
@@ -9351,14 +9465,18 @@ function _piCleanItems(b) {
     .filter(it => it && (String(it.modelNo || '').trim() || String(it.itemName || '').trim()))
     .map(it => ({
       modelNo: String(it.modelNo || '').trim(),
+      // The buyer's own code for the line, printed beside ours.
+      clientCode: String(it.clientCode || '').trim(),
       itemName: String(it.itemName || '').trim(),
       size: String(it.size || '').trim(),
       swg: String(it.swg || '').trim(),
       packing: String(it.packing || '').trim(),
       qty: it.qty, boxes: it.boxes, cbm: it.cbm, weight: it.weight,
-      // Not printed on the PI — rides along from the product master so the
-      // Order Sheet's Weight Per Pc column starts from the exact figure
-      // rather than a back-computation.
+      // Not printed on the PI — the per-box CBM and per-piece weight the
+      // totals were worked out from. Shown on the form and the Add Price
+      // screen, and the Order Sheet's Weight Per Pc column starts from the
+      // exact figure rather than a back-computation.
+      cbmPerBox: it.cbmPerBox,
       weightPerPc: it.weightPerPc,
       remarks: String(it.remarks || '').trim(),
       // Comes from the product master via the form, so the PDF shows the
@@ -9421,13 +9539,15 @@ app.post('/api/proforma-invoice', requireAuth, sheetSerialised('pi'), async (req
     const sheets = google.sheets({ version: 'v4', auth });
 
     const fy = _piFyLabel(b.date);
-    const { nextSeq, templateSheetId } = await _piSheetMeta(fy);
+    const meta = await _piSheetMeta(fy);
+    await _ensurePiTemplate(sheets, meta);
+    const { nextSeq, templateSheetId } = meta;
     const piNoFormatted = _piNoFormat(nextSeq, fy);
 
     const form = _piFormFromBody(b, req.session.user, cleanItems);
 
     await _fillPiTemplate(sheets, { ...form, piNo: piNoFormatted }, templateSheetId);
-    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNoFormatted, templateSheetId, PI_FMT.priceLabels(form.priceType, form.currency));
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNoFormatted, templateSheetId, PI_FMT.priceLabels(form.priceType, form.currency), cleanItems.length);
 
     await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, PI_LOG_HEADER);
     await appendLogRow(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, [
@@ -9456,6 +9576,12 @@ app.post('/api/proforma-invoice', requireAuth, sheetSerialised('pi'), async (req
       fmsTracked = false;
       console.error('[proforma-invoice] Export Marketing FMS row failed:', e.message);
     }
+
+    // The people who price PIs hear about it straight away, rather than
+    // finding it on their panel whenever they next look.
+    _piPricingCache = null;
+    _notifyPiPricers({ piNo: piNoFormatted, buyerName: form.buyerName, createdBy: req.session.user.name || '', items: cleanItems, pdfLink })
+      .catch(e => console.error('[proforma-invoice] pricing notification failed:', e.message));
 
     return res.json({ success: true, piNumber: piNoFormatted, pdfLink, fmsTracked });
   } catch (e) { console.error('[proforma-invoice] create failed:', e.message); return res.status(500).json({ error: e.message }); }
@@ -9581,9 +9707,11 @@ app.post('/api/proforma-invoice/revise', requireAuth, sheetSerialised('pi'), asy
     form.revisionNo = nextRev;
     form.revisionNote = String(b.revisionNote || '').trim();
 
-    const { templateSheetId } = await _piSheetMeta(_piFyLabel(b.date));
+    const meta = await _piSheetMeta(_piFyLabel(b.date));
+    await _ensurePiTemplate(sheets, meta);
+    const { templateSheetId } = meta;
     await _fillPiTemplate(sheets, { ...form, piNo: newPiNo }, templateSheetId);
-    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, newPiNo, templateSheetId, PI_FMT.priceLabels(form.priceType, form.currency));
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, newPiNo, templateSheetId, PI_FMT.priceLabels(form.priceType, form.currency), cleanItems.length);
 
     await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, PI_LOG_HEADER);
     await appendLogRow(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, [
@@ -9598,6 +9726,11 @@ app.post('/api/proforma-invoice/revise', requireAuth, sheetSerialised('pi'), asy
     // Only after the revision is safely logged — a failure above must leave
     // the parent live rather than superseded by a PI that does not exist.
     await _setLogRowStatus(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo, 'K', 'Superseded');
+    _piPricingCache = null;
+    if (status !== 'Priced') {
+      _notifyPiPricers({ piNo: newPiNo, buyerName: form.buyerName, createdBy: req.session.user.name || '', items: cleanItems, pdfLink, revisedFrom: piNo })
+        .catch(e => console.error('[proforma-invoice] pricing notification failed:', e.message));
+    }
 
     // No new Export Marketing FMS row: the parent PI already opened one and
     // the export team follows the deal, not each revision of the paperwork.
@@ -9709,12 +9842,203 @@ app.get('/api/proforma-invoice/last-prices', requireAuth, async (req, res) => {
       if (!key) return null;
       return byKey.get(key) || byModel.get(key.split('|')[0]) || null;
     });
-    return res.json({ piNo, lastPrices });
+
+    // The export team's own CBM / rate sheet, beside the log's memory: what
+    // this party was last quoted there, and the sheet's cost / rate-per-kg /
+    // minimum working for the item. An unreachable sheet costs only this.
+    let sheetRates = [];
+    try {
+      sheetRates = await _piSheetRatesFor(targetForm.buyerName || target[2], Array.isArray(targetForm.items) ? targetForm.items : []);
+    } catch (e) {
+      console.error('[proforma-invoice] rate sheet read failed:', e.message);
+    }
+    return res.json({ piNo, lastPrices, sheetRates, rateSheetUrl: PI_FMT.RATE_SOURCE.url });
   } catch (e) {
-    if (/unable to parse range/i.test(e.message || '')) return res.json({ piNo: req.query.piNo, lastPrices: [] });
+    if (/unable to parse range/i.test(e.message || '')) return res.json({ piNo: req.query.piNo, lastPrices: [], sheetRates: [], rateSheetUrl: PI_FMT.RATE_SOURCE.url });
     return res.status(500).json({ error: e.message });
   }
 });
+
+// ── The export team's CBM / rate sheet ──────────────────────────────────────
+// Sheet1 of the "PI Export (Final)" workbook (see RATE_SOURCE in
+// backend/lib/pi-format.js); parsed and matched by backend/lib/pi-rates.js.
+// Read here and cached like the product catalog.
+let _piRateCache = null; // { at, items, parties }
+const PI_RATE_TTL_MS = 10 * 60 * 1000;
+
+async function _loadPiRateSheet() {
+  if (_piRateCache && (Date.now() - _piRateCache.at) < PI_RATE_TTL_MS) return _piRateCache;
+  const auth = getGoogleAuth();
+  if (!auth) return { items: [], parties: [] };
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const src = PI_FMT.RATE_SOURCE;
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: src.spreadsheetId,
+    range: `'${src.tab}'!${src.range}`,
+    valueRenderOption: 'FORMATTED_VALUE',
+  });
+  const parsed = PI_RATES.parseRateSheet(result.data.values || [], src);
+  _piRateCache = { at: Date.now(), items: parsed.items, parties: parsed.parties };
+  return _piRateCache;
+}
+
+// One entry per PI line, in the PI's own order — see sheetRatesFor().
+async function _piSheetRatesFor(buyerName, items) {
+  return PI_RATES.sheetRatesFor(await _loadPiRateSheet(), buyerName, items);
+}
+
+// GET /api/proforma-invoice/buyer-codes?buyer=... — the client's own product
+// codes this buyer has used on earlier PIs, keyed by our model number (+ size),
+// so a line picked on a new PI for the same buyer starts with the code they
+// know rather than a blank. Latest PI wins where a buyer changed a code.
+app.get('/api/proforma-invoice/buyer-codes', requireAuth, async (req, res) => {
+  try {
+    const buyer = String(req.query.buyer || '').trim();
+    if (!buyer) return res.json({ codes: {} });
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const want = _piConsigneeKey(buyer);
+    const codes = {};
+    for (const r of (result.data.values || [])) {
+      if (_piConsigneeKey(r[2]) !== want) continue;
+      let form = null;
+      try { form = r[9] ? JSON.parse(r[9]) : null; } catch {}
+      for (const it of (form && Array.isArray(form.items) ? form.items : [])) {
+        const code = String(it.clientCode || '').trim();
+        const model = String(it.modelNo || '').trim().toLowerCase();
+        if (!code || !model) continue;
+        codes[model + '|' + PI_RATES.sizeKey(it.size)] = code;
+        codes[model] = code;
+      }
+    }
+    return res.json({ codes });
+  } catch (e) {
+    if (/unable to parse range/i.test(e.message || '')) return res.json({ codes: {} });
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// ── PIs awaiting a price ────────────────────────────────────────────────────
+// The FMS tracker is one way a Draft PI reaches the pricer; it depends on the
+// tracker row having a planned date and on the pricer being that step's doer
+// in the FMS config, and both have failed quietly ("PI gets created and goes
+// to draft, doesn't come to me on my panel"). So the Dashboard also lists
+// every Draft PI directly, for anyone who can price, straight off the PI log.
+let _piPricingCache = null; // { at, rows }
+const PI_PRICING_TTL_MS = 60 * 1000;
+
+async function _piDraftRows() {
+  if (_piPricingCache && (Date.now() - _piPricingCache.at) < PI_PRICING_TTL_MS) return _piPricingCache.rows;
+  const auth = getGoogleAuth();
+  if (!auth) return [];
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  let values = [];
+  try {
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    values = result.data.values || [];
+  } catch (e) {
+    if (!/unable to parse range/i.test(e.message || '')) throw e;
+  }
+  const rows = values
+    .filter(r => String(r[0] || '').trim() && (r[10] || 'Draft') === 'Draft')
+    .map(r => {
+      let form = null;
+      try { form = r[9] ? JSON.parse(r[9]) : null; } catch {}
+      return {
+        piNo: String(r[0] || '').trim(), date: _sheetDateToIso(r[1]), buyer: r[2] || '',
+        createdBy: r[5] || '', createdAt: r[6] || '',
+        itemCount: form && Array.isArray(form.items) ? form.items.length : 0,
+      };
+    });
+  _piPricingCache = { at: Date.now(), rows };
+  return rows;
+}
+
+// Who is told when a PI needs pricing. app_config 'pi_pricing_notify' (a JSON
+// array or comma list of emails or login names) when it is set; otherwise
+// whoever has actually priced a PI on the log, plus the tracker's default
+// assignee — the people doing the job, without anyone having to configure it.
+async function _piPricerRecipients() {
+  const out = new Map();
+  const add = (u) => { const e = String(u?.email || '').trim().toLowerCase(); if (e && !out.has(e)) out.set(e, { name: u.name || '', email: e }); };
+  let configured = [];
+  try {
+    const rows = await q(`SELECT "value" FROM app_config WHERE "key" = 'pi_pricing_notify'`);
+    const raw = rows.length ? String(rows[0].value || '').trim() : '';
+    if (raw) {
+      try { const parsed = JSON.parse(raw); configured = Array.isArray(parsed) ? parsed : [raw]; }
+      catch { configured = raw.split(/[,;\n]+/); }
+    }
+  } catch {}
+  configured = configured.map(s => String(s || '').trim()).filter(Boolean);
+  if (configured.length) {
+    for (const entry of configured) {
+      if (entry.includes('@')) { add({ email: entry }); continue; }
+      const users = await q('SELECT id, name, email FROM users WHERE LOWER(name) = LOWER($1)', [entry]).catch(() => []);
+      users.forEach(add);
+    }
+    return [...out.values()];
+  }
+  const names = new Set([PI_FMT.FMS_TRACKER.defaultAssignee]);
+  try {
+    const auth = getGoogleAuth();
+    if (auth) {
+      const { google } = require('googleapis');
+      const sheets = google.sheets({ version: 'v4', auth });
+      const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!H2:H1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      for (const r of (result.data.values || [])) { const n = String(r[0] || '').trim(); if (n) names.add(n); }
+    }
+  } catch {}
+  for (const n of names) {
+    // "Vishal Jaga--Admin" is how the log spells a login name with its role
+    // suffixed; the users table has the bare name.
+    const bare = n.replace(/--.*$/, '').trim();
+    const exact = await q('SELECT id, name, email FROM users WHERE LOWER(name) = LOWER($1)', [bare]).catch(() => []);
+    if (exact.length) { exact.forEach(add); continue; }
+    const first = bare.split(/\s+/)[0];
+    if (first.length >= 4) {
+      const like = await q('SELECT id, name, email FROM users WHERE LOWER(name) LIKE LOWER($1)', [first + '%']).catch(() => []);
+      if (like.length === 1) add(like[0]);
+    }
+  }
+  return [...out.values()];
+}
+
+async function _notifyPiPricers({ piNo, buyerName, createdBy, items, pdfLink, revisedFrom }) {
+  const mailer = getMailer();
+  if (!mailer) return;
+  const recipients = await _piPricerRecipients();
+  if (!recipients.length) { console.log('[proforma-invoice] nobody to notify for pricing of', piNo); return; }
+  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const lines = (items || []).slice(0, 15).map(it =>
+    `<tr><td style="padding:4px 8px;border-bottom:1px solid #f1f5f9">${esc(it.modelNo)}</td><td style="padding:4px 8px;border-bottom:1px solid #f1f5f9">${esc(it.itemName)}</td><td style="padding:4px 8px;border-bottom:1px solid #f1f5f9">${esc(it.size)}</td><td style="padding:4px 8px;border-bottom:1px solid #f1f5f9;text-align:right">${esc(it.qty)}</td></tr>`).join('');
+  const more = (items || []).length > 15 ? `<p style="color:#64748b;font-size:12px">…and ${items.length - 15} more lines.</p>` : '';
+  const link = `${APP_ORIGIN}/#proforma-invoice`;
+  await mailer.sendMail({
+    from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+    to: recipients.map(r => r.email).join(', '),
+    subject: `PI ${piNo} is waiting for its price — ${buyerName}`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:560px;padding:24px;border:1px solid #e2e8f0;border-radius:8px">
+        <h2 style="color:#0f172a;margin:0 0 12px;font-size:17px">Proforma Invoice ${esc(piNo)} needs a price</h2>
+        <p style="color:#374151;margin:0 0 12px">${esc(createdBy || 'Someone')} ${revisedFrom ? 'issued this revision of ' + esc(revisedFrom) : 'created this PI'} for <b>${esc(buyerName)}</b>. It is on the PI List as a Draft until a rate is added.</p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin:12px 0">
+          <tr style="background:#f8fafc"><th style="padding:6px 8px;text-align:left">Model</th><th style="padding:6px 8px;text-align:left">Item</th><th style="padding:6px 8px;text-align:left">Size</th><th style="padding:6px 8px;text-align:right">Qty</th></tr>
+          ${lines}
+        </table>
+        ${more}
+        <p style="margin:16px 0"><a href="${link}" style="display:inline-block;padding:10px 18px;background:#1d4ed8;color:#fff;text-decoration:none;border-radius:6px;font-weight:700">Open the PI List to add the price</a></p>
+        ${pdfLink ? `<p style="font-size:12px;color:#64748b">Unpriced PDF: <a href="${esc(pdfLink)}">${esc(pdfLink)}</a></p>` : ''}
+        <p style="color:#94a3b8;font-size:12px;margin-top:24px">This is an automated notification from the ERP. Change who receives it under app_config "pi_pricing_notify".</p>
+      </div>`,
+  });
+  console.log('[proforma-invoice] pricing notification for', piNo, 'sent to', recipients.map(r => r.email).join(', '));
+}
 
 // Marks the Export Marketing FMS tracker's "Add Pricing" step done for one PI,
 // with the same next-step email the manual Mark-as-Done path sends. Returns
@@ -9804,21 +10128,29 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi'), async
     if (wantCurrency && !PI_FMT.CURRENCIES[wantCurrency]) {
       return res.status(400).json({ error: `Currency must be one of ${Object.keys(PI_FMT.CURRENCIES).join(', ')}` });
     }
+    // The pricer's own working figure — the rate per kg the per-piece rates
+    // were derived from. Not printed; kept with the PI "for my record", which
+    // is what the Add Price screen shows back the next time it is opened.
+    const ratePerKg = parseFloat(req.body?.ratePerKg);
     const pricedForm = {
       ...existingForm,
       items: mergedItems,
       priceType: wantType || existingForm.priceType || PI_FMT.PRICE_DEFAULT.priceType,
       currency: wantCurrency || existingForm.currency || PI_FMT.PRICE_DEFAULT.currency,
+      ratePerKg: ratePerKg > 0 ? ratePerKg : (existingForm.ratePerKg || ''),
     };
 
-    const { templateSheetId } = await _piSheetMeta(_piFyLabel(existingForm.date));
+    const meta = await _piSheetMeta(_piFyLabel(existingForm.date));
+    await _ensurePiTemplate(sheets, meta);
+    const { templateSheetId } = meta;
     await _fillPiTemplate(sheets, { ...pricedForm, piNo }, templateSheetId);
-    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNo, templateSheetId, PI_FMT.priceLabels(pricedForm.priceType, pricedForm.currency));
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNo, templateSheetId, PI_FMT.priceLabels(pricedForm.priceType, pricedForm.currency), mergedItems.length);
 
     await _updateLogRowCells(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo, {
       D: totalAmount ?? '', E: pdfLink || rowVals[4] || '', H: req.session.user.name || '', I: _timestampForSheet(),
       J: JSON.stringify(pricedForm), K: 'Priced',
     });
+    _piPricingCache = null;
 
     // Pricing the PI IS the export tracker's "Add Pricing" step, so close it
     // here rather than making the same person go back and tick it off. Never
@@ -9869,6 +10201,7 @@ app.delete('/api/proforma-invoice', requireAuth, requireSuperAdmin, async (req, 
 // scripts/build-order-sheet.js, and is logged to "ERP Order sheet Log" the
 // same way every PI is logged to "ERP PI Log".
 const OS_FMT = require('./backend/lib/order-sheet-format.js');
+const OS_XLSX = require('./backend/lib/order-sheet-xlsx.js');
 const ORDER_SHEET_TAB = 'Order sheet';
 const ORDER_LOG_TAB = 'ERP Order sheet Log';
 const ORDER_NO_PREFIX = 'VTV/ORD';   // "VTV/ORD/001/26-27" — the PI series with ORD in it
@@ -9910,11 +10243,13 @@ function _orderCleanItems(b) {
     .filter(it => it && (String(it.modelNo || '').trim() || String(it.itemName || '').trim()))
     .map(it => ({
       modelNo: String(it.modelNo || '').trim(),
+      clientCode: String(it.clientCode || '').trim(),
       itemName: String(it.itemName || '').trim(),
       size: String(it.size || '').trim(),
       swg: String(it.swg || '').trim(),
       packing: String(it.packing || '').trim(),
       qty: it.qty, boxes: it.boxes, cbm: it.cbm, weight: it.weight,
+      cbmPerBox: it.cbmPerBox,
       weightPerPc: it.weightPerPc,
       remarks: String(it.remarks || '').trim(),
       imageUrl: String(it.imageUrl || '').trim(),
@@ -10209,6 +10544,37 @@ app.post('/api/order-sheet', requireAuth, sheetSerialised('order'), async (req, 
     return res.json({ success: true, orderNo, pdfLink, piNo, fmsTracked });
   } catch (e) {
     console.error('[order-sheet] create failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/order-sheet/xlsx?orderNo=... — the same order as a real Excel
+// workbook, built from the order's stored form rather than exported from the
+// sheet tab (a Drive export of the workbook would carry every tab, log tabs
+// included, and the template tab only ever holds the most recent order).
+// The factory and the loading team work the order in Excel — re-sorting
+// lines, adding a column for what is packed — which a PDF cannot give them.
+app.get('/api/order-sheet/xlsx', requireAuth, async (req, res) => {
+  try {
+    const orderNo = String(req.query.orderNo || '').trim();
+    if (!orderNo) return res.status(400).json({ error: 'orderNo is required' });
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const row = (result.data.values || []).find(r => String(r[0] || '').trim() === orderNo);
+    if (!row) return res.status(404).json({ error: 'Order ' + orderNo + ' is not on the Order Sheet log' });
+    let form = null;
+    try { form = row[8] ? JSON.parse(row[8]) : null; } catch {}
+    if (!form) return res.status(400).json({ error: 'Order ' + orderNo + ' has no saved detail to build a workbook from' });
+
+    const buf = OS_XLSX.buildOrderSheetXlsx(orderNo, form);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${OS_XLSX.orderSheetXlsxName(orderNo)}"`);
+    return res.send(buf);
+  } catch (e) {
+    console.error('[order-sheet] xlsx export failed:', e.message);
     return res.status(500).json({ error: e.message });
   }
 });

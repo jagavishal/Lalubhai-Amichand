@@ -55,7 +55,9 @@ window.Pages.dashboard = (function () {
   }
 
   function typePillHTML(type) {
-    const variantMap = { Delegation: 'info', FMS: 'purple', Checklist: 'success' };
+    // PI: a Draft Proforma Invoice waiting for its price — listed for anyone
+    // who can price, straight off the PI log (see /api/dashboard).
+    const variantMap = { Delegation: 'info', FMS: 'purple', Checklist: 'success', PI: 'warning' };
     return window.UI.pill(type, { variant: variantMap[type] || 'neutral', size: 'sm' });
   }
 
@@ -938,6 +940,10 @@ window.Pages.dashboard = (function () {
       if (t.status === 'done') {
         actionHTML = `<span style="color:#059669;font-weight:600;font-size:11.5px;">✓ Completed</span>
           <button class="pill-act pill-deny" data-action="reopen" data-id="${t.id}">Reopen</button>`;
+      } else if (t.type === 'PI') {
+        // Done here IS pricing it: the button opens that PI's Add Price
+        // screen, and saving the price is what clears the task.
+        actionHTML = `<button class="pill-act pill-done" data-action="done" data-id="${t.id}">Add Price</button>`;
       } else {
         actionHTML = `<button class="pill-act pill-done" data-action="done" data-id="${t.id}">Done</button>`;
         if (t.type === 'Delegation') {
@@ -953,7 +959,7 @@ window.Pages.dashboard = (function () {
             ${urlLink}
           </div>
           ${t.type === 'Checklist' && t.department ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${t.department}</div>` : ''}
-          ${t.type === 'FMS' && Array.isArray(t.details) && t.details.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${t.details.map(d => `<span style="font-size:10px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:1px 6px;white-space:nowrap;"><b>${esc(d.header)}:</b> ${esc(d.value) || '—'}</span>`).join('')}</div>` : ''}
+          ${(t.type === 'FMS' || t.type === 'PI') && Array.isArray(t.details) && t.details.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${t.details.map(d => `<span style="font-size:10px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:1px 6px;white-space:nowrap;"><b>${esc(d.header)}:</b> ${esc(d.value) || '—'}</span>`).join('')}</div>` : ''}
           ${transferred}
         </td>
         <td style="${tdStyle}">
@@ -2012,6 +2018,17 @@ window.Pages.dashboard = (function () {
   /* ── actions ─────────────────────────────────────────────────────── */
   async function markDone(task, admin) {
     try {
+      if (task.type === 'PI') {
+        // The work is on the Proforma Invoice page: open that PI's Add Price
+        // screen and come back here once the price is saved. Anything that
+        // would strand the user there (already priced, no permission) is
+        // reported instead.
+        const pi = window.Pages?.['proforma-invoice'];
+        if (!pi?.openPriceFor) { Utils.showToast('The Proforma Invoice page is not loaded', 'error'); return; }
+        const result = await pi.openPriceFor(task.piNo, { returnTo: 'dashboard' });
+        if (!result.ok) Utils.showToast(result.reason || 'Could not open the Add Price screen', 'error');
+        return;
+      }
       if (task.type === 'Delegation') {
         await Utils.apiFetch('/api/delegations', {
           method: 'PATCH',
