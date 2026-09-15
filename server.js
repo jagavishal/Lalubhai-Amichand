@@ -1717,9 +1717,16 @@ async function sendPoDecisionEmail({ poNumber, format, party, department, totalA
 }
 
 /* ── PR approval — the same bridge as the PO one, for Purchase Requisitions.
-   Sent to the PR approver the moment a PR is created, with Approve / Reject
-   buttons that open /pr-action. Who approves is app_config 'pr_approver',
-   falling back to the PO approver. */
+   Sends the PR approver an "awaiting your approval" mail with Approve /
+   Reject buttons that open /pr-action. Who approves is app_config
+   'pr_approver', falling back to the PO approver.
+
+   NOT CALLED from PR creation any more (dropped 2026-09-15): the approver
+   (Sajil) is already notified straight off the Google Sheet the instant a
+   PR row lands there, so this mail was a duplicate of that — see the PR
+   creation route's step 7. Left defined, with prActionUrl/_decisionButtons,
+   in case the ERP-side approve/reject flow is wanted back; nothing calls it
+   right now. */
 const PR_TOKEN_NS = 'pr:';
 const prActionUrl = (prNo, decision, email) =>
   `${APP_ORIGIN}/pr-action?t=${encodeURIComponent(leaveTokenFor(PR_TOKEN_NS + prNo, decision, email))}`;
@@ -7447,11 +7454,12 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr'), async (req, res
       console.log('[pr-creation] PR Form Responses sync: row appended for', prNoFormatted, '| PDF link:', pdfLink ? 'yes' : 'none');
     } catch (e) { console.error('[pr-creation] PR Form Responses sync failed:', e.message); }
 
-    // 7) Tell the PR approver — fire-and-forget, same as the PO's own mail.
-    sendPrApprovalEmail({
-      prNumber: prNoFormatted, format: tab, party, department: departmentOut, requestedBy,
-      totalAmount, pdfLink, createdBy: sessUser?.name || '',
-    }).catch((e) => console.error('[pr-creation] approval mail failed:', e.message));
+    // 7) The PR approver (Sajil) is already notified directly off the Google
+    // Sheet the moment this row lands — a second, ERP-sent "awaiting your
+    // approval" mail duplicated that, so this no longer fires it (dropped
+    // 2026-09-15, see sendPrApprovalEmail's own comment). /pr-action and
+    // sendPrDecisionEmail are untouched — the decision-side mail to the
+    // requester still goes out same as before, if a decision link is reached.
 
     const resultPayload = { success: true, prNumber: prNoFormatted, totalAmount, department: departmentOut, pdfLink };
     _mastersCache.delete('pr'); // so the next masters fetch shows the advanced next-number
