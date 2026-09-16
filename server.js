@@ -2946,7 +2946,7 @@ async function userByName(name) {
    of the return value: an escalated tier is mandatory and overrides whoever the
    applicant has named, while an un-escalated one is only a fallback — "approval
    as per authority" means the authority already recorded on the user wins. */
-async function leaveAuthorityFor(department, days, applicantName) {
+async function leaveAuthorityFor(department, days, applicantIdentity) {
   const dept = String(department || '').trim().toLowerCase();
   if (!dept) return null;
   const matrix = await readAuthority('leave_authority', DEFAULT_LEAVE_AUTHORITY);
@@ -2965,16 +2965,33 @@ async function leaveAuthorityFor(department, days, applicantName) {
   const norm = (v) => String(v || '').replace(/\s+/g, ' ').trim().toLowerCase();
   const resolve = async (named) => {
     const who = await userByName(named);
-    return { name: who?.name || String(named), email: who?.email || '' };
-  };
-  const matches = async (named, applicant) => {
-    if (!named) return false;
-    if (norm(named) === applicant) return true;
-    const who = await userByName(named);
-    return !!(who && norm(who.name) === applicant);
+    if (!who?.email) {
+      console.error('[authority] leave matrix names', JSON.stringify(named),
+        who ? 'but that login has no email address' : 'which matches no single login — check Users for the exact spelling');
+    }
+    return { name: who?.name || String(named), email: who?.email || '', unresolved: !who?.email };
   };
 
-  const applicant = norm(applicantName);
+  /* The applicant may arrive as a plain name (older callers) or as
+     { name, email, userId }. A matrix row is matched on any of the three: the
+     employee master and the login row are typed by different people, and
+     "Jayesh Udani" against "JAYESH U. SUDANI" is exactly how the within-team
+     approver's own request stopped being recognised as his — and was routed
+     back to him. The login id and the email do not have spellings. */
+  const ident = (applicantIdentity && typeof applicantIdentity === 'object')
+    ? applicantIdentity : { name: applicantIdentity };
+  const applicant = norm(ident.name);
+  const applicantEmail = norm(ident.email);
+  const applicantId = String(ident.userId || '').trim();
+  const matches = async (named) => {
+    if (!named) return false;
+    if (applicant && norm(named) === applicant) return true;
+    const who = await userByName(named);
+    if (!who) return false;
+    if (applicantId && String(who.id) === applicantId) return true;
+    if (applicantEmail && norm(who.email) === applicantEmail) return true;
+    return !!(applicant && norm(who.name) === applicant);
+  };
 
   /* The written policy, line by line.
 
@@ -2982,13 +2999,18 @@ async function leaveAuthorityFor(department, days, applicantName) {
      requests go straight to the escalation authority, whatever the length,
      and that is mandatory (it beats a picked approver). The authority's own
      requests have nobody above them in this matrix, so no tier applies. */
-  if (applicant) {
-    if (await matches(tier.escalateTo, applicant)) return null;
-    if (await matches(tier.withinTeamApprover, applicant)) {
+  if (applicant || applicantEmail || applicantId) {
+    if (await matches(tier.escalateTo)) return null;
+    if (await matches(tier.withinTeamApprover)) {
       if (!tier.escalateTo) return null;
-      return { ...(await resolve(tier.escalateTo)), escalated: true, thresholdDays: 0, then: null };
+      return { ...(await resolve(tier.escalateTo)), escalated: true, thresholdDays: 0, then: null, authority: null };
     }
   }
+
+  /* Every tier carries the escalation authority as well, so the leave route
+     can still send a request there when the ordinary chain would otherwise
+     land it on the applicant's own desk. */
+  const authority = tier.escalateTo ? await resolve(tier.escalateTo) : null;
 
   /* Strictly more than the threshold: management's rule is "more than 3
      days needs Paresh Sir", so a 3-day request stays in-team and a 3.5-day
@@ -3003,17 +3025,17 @@ async function leaveAuthorityFor(department, days, applicantName) {
      row and forwards the request when the first approval lands. */
   if (escalated) {
     if (!tier.escalateTo) return null;
-    const second = await resolve(tier.escalateTo);
+    const second = authority;
     if (tier.withinTeamApprover) {
-      return { ...(await resolve(tier.withinTeamApprover)), escalated: true, thresholdDays: from, then: second };
+      return { ...(await resolve(tier.withinTeamApprover)), escalated: true, thresholdDays: from, then: second, authority };
     }
-    return { ...second, escalated: true, thresholdDays: from, then: null };
+    return { ...second, escalated: true, thresholdDays: from, then: null, authority };
   }
 
   // "Up to 3 days: no Paresh approval required" — the within-team tier, and
   // only as a fallback: an approver picked on the Users page outranks it.
   if (!tier.withinTeamApprover) return null;
-  return { ...(await resolve(tier.withinTeamApprover)), escalated: false, thresholdDays: from, then: null };
+  return { ...(await resolve(tier.withinTeamApprover)), escalated: false, thresholdDays: from, then: null, authority };
 }
 
 /* A rupee figure, or null when there isn't one. Not Number() on its own:

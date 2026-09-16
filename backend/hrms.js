@@ -1839,8 +1839,15 @@ function mountHrms(app, ctx) {
         const applicantDept = emp?.department
           || (employeeId ? '' : (req.session?.user?.department || ''));
         const applicantName = emp?.name || b.userName || (!employeeId ? user?.name : '') || '';
+        /* The applicant's own request: the login id and address alongside
+           the name, so the matrix recognises its own within-team approver
+           however the employee master happens to spell them. */
+        const selfLoginId = String(applicantLoginId || '').trim();
+        const applicantEmail = String(emp?.email
+          || (selfLoginId && selfLoginId === String(user?.id || '') ? user?.email : '') || '').trim();
         const tier = ctx.leaveAuthorityFor
-          ? await ctx.leaveAuthorityFor(applicantDept, days, applicantName).catch(() => null)
+          ? await ctx.leaveAuthorityFor(applicantDept, days, { name: applicantName, email: applicantEmail, userId: selfLoginId })
+              .catch((e) => { console.error('[hrms] leave authority lookup failed:', e.message); return null; })
           : null;
         let tierNote = null;
 
@@ -1896,6 +1903,43 @@ function mountHrms(app, ctx) {
             approverName = tier.name;
             approverEmail = tier.email;
           }
+        }
+
+        /* Nobody approves their own leave. The within-team approver's request
+           can land back on them through any of the fallbacks above — a picked
+           approver pointing at themselves, a reporting line, the tier itself —
+           whenever the matrix did not recognise them. Send it up to the
+           department's escalation authority when there is one; otherwise
+           leave it unaddressed and say so, rather than mail them the buttons
+           for their own request. */
+        {
+          const sameName = (a, c) => a && c && String(a).replace(/\s+/g, ' ').trim().toLowerCase()
+                                             === String(c).replace(/\s+/g, ' ').trim().toLowerCase();
+          const isSelf = (approverEmail && applicantEmail && sameName(approverEmail, applicantEmail))
+            || (!approverEmail && approverName && applicantName && sameName(approverName, applicantName));
+          if (isSelf) {
+            if (tier?.authority?.name) {
+              approverName = tier.authority.name;
+              approverEmail = tier.authority.email;
+              nextApproverName = ''; nextApproverEmail = '';
+              tierNote = applicantName + '\'s own request cannot come back to them for approval — it has been sent to ' + approverName + '.';
+            } else {
+              console.error('[hrms] leave request would be self-approved by', applicantName, '— no escalation authority for department', applicantDept || '(none)');
+              approverName = ''; approverEmail = '';
+              tierNote = 'Your own request cannot come to you for approval, and no one is set above you — ask HR to assign an approver.';
+            }
+          }
+        }
+
+        /* An approver with no address means no mail leaves the building: the
+           applicant sees it, and the log names the matrix entry to fix. */
+        if (approverName && !approverEmail) {
+          console.error('[hrms] leave request from', applicantName, 'addressed to', approverName, 'who has no email — Users / Authority matrix spelling?');
+          tierNote = (tierNote ? tierNote + ' ' : '')
+            + 'No email address was found for ' + approverName + ' — the request is saved, but tell HR to check that name under Users.';
+        }
+        if (nextApproverName && !nextApproverEmail) {
+          console.error('[hrms] leave level-2 approver', nextApproverName, 'has no email — Authority matrix spelling?');
         }
 
         /* The approver's own stand-in (Users → Substitute Approver, on the
