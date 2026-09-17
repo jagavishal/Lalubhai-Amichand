@@ -126,6 +126,19 @@ window.Pages['export-documentation'] = (() => {
   const money = (n) => n.toFixed(2);
   const wt = (n) => n.toFixed(3);
 
+  // Standard tare (empty container) weights, kg — carrier-published figures
+  // for a general-purpose dry container, same order of magnitude as the
+  // 3700 kg the team's own live LA-18 shipment used for its 40 FT box. Used
+  // only as a fallback when nobody has typed the real weighbridge tare yet.
+  const _STANDARD_TARE_KG = { '20': 2200, '40HC': 3900, '40': 3700 };
+  function _standardTareFor(sizeText) {
+    const s = String(sizeText || '').toUpperCase();
+    if (/40.*HC|HC.*40|HIGH\s*CUBE/.test(s)) return _STANDARD_TARE_KG['40HC'];
+    if (/40/.test(s)) return _STANDARD_TARE_KG['40'];
+    if (/20/.test(s)) return _STANDARD_TARE_KG['20'];
+    return 0;
+  }
+
   /* ── derived figures — the single place every document computes from ──── */
   function _calc() {
     let totalQty = 0, totalCf = 0, totalTaxable = 0, totalCartons = 0, totalNetWt = 0;
@@ -146,8 +159,20 @@ window.Pages['export-documentation'] = (() => {
     const fob = totalCf - freight;
     const fobInr = fob * exch;
     const grossWt = num(_form.totalGrossWt);
-    const vgm = grossWt + num(_form.containerTareWt);
-    return { items, totalQty, totalCf, totalTaxable, totalCartons, totalNetWt, freight, fob, fobInr, grossWt, vgm, exch };
+    // "VGM sheet — verified gross weight should be [cargo weight plus the]
+    // weight of the empty container." A blank/zero Tare field used to make
+    // the printed "Verified Gross Mass" equal the cargo weight alone, which
+    // is not what VGM means for customs/the shipping line — it has to
+    // include the container's own weight too. A typed tare (the real
+    // weighbridge figure) always wins; until one is entered, a standard
+    // weight for the selected container size fills in instead, so the
+    // figure is never short by the container's own ~2-4 tonnes.
+    const tareEntered = num(_form.containerTareWt);
+    const tareStd = _standardTareFor(_form.containerSize);
+    const tareUsed = tareEntered > 0 ? tareEntered : tareStd;
+    const tareIsStandard = !(tareEntered > 0) && tareStd > 0;
+    const vgm = grossWt + tareUsed;
+    return { items, totalQty, totalCf, totalTaxable, totalCartons, totalNetWt, freight, fob, fobInr, grossWt, vgm, tareUsed, tareIsStandard, exch };
   }
 
   /* ── number → words (US dollars style: "SEVENTY SIX THOUSAND …") ─────── */
@@ -442,8 +467,11 @@ window.Pages['export-documentation'] = (() => {
       + box('Taxable Value ₹', money(c.totalTaxable))
       + box('Net Wt (calc)', wt(c.totalNetWt) + ' KGS')
       + box('Gross Wt', wt(c.grossWt) + ' KGS')
-      + box('VGM (gross + tare)', wt(c.vgm) + ' KGS')
-    + '</div>';
+      + box('VGM (gross + tare)', wt(c.vgm) + ' KGS' + (c.tareIsStandard ? ' — est.' : ''))
+    + '</div>'
+    + (c.tareIsStandard
+        ? '<div style="font-size:11px;color:#b45309;margin-top:6px;">VGM is using a standard tare of ' + wt(c.tareUsed) + ' KGS for a "' + esc(_form.containerSize || '') + '" container — enter the actual weighbridge Tare Wt above once you have it.</div>'
+        : '');
   }
 
   /* ── form view ────────────────────────────────────────────────────────── */
@@ -516,7 +544,7 @@ window.Pages['export-documentation'] = (() => {
         + _fld('stuffingTimeTo', 'Stuffing End Time')
         + _fld('weighbridge', 'Weighbridge Name')
         + _fld('weighingMethod', 'Weighing Method')
-        + _fld('containerTareWt', 'Container Tare Wt (KGS)', { hint: 'VGM = Gross Wt + Tare. Leave 0 to print gross weight as VGM.' })
+        + _fld('containerTareWt', 'Container Tare Wt (KGS)', { hint: 'VGM = Gross Wt + Tare — the container\'s own weight has to be in the VGM. Leave blank and a standard weight for the Container Size below (20FT 2200 / 40FT 3700 / 40FT HC 3900) is used until you enter the real weighbridge tare.' })
         + _fld('weighingDate', 'Date of Weighing', { placeholder: '21.8.2026' })
         + _fld('weighingTime', 'Time of Weighing', { placeholder: '12.28' })
         + _fld('weighingSlipNo', 'Weighing Slip No.')
@@ -581,6 +609,9 @@ window.Pages['export-documentation'] = (() => {
 
     const docBtn = (id, key, label) =>
       '<button type="button" class="ed-doc-btn" data-id="' + esc(id) + '" data-doc="' + key + '" style="padding:5px 9px;border:1px solid #dbeafe;border-radius:7px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">' + esc(label) + '</button>';
+    // Excel, beside each of the two invoice buttons — see _EXCEL_DOCS.
+    const xlsxBtn = (id, kind, label) =>
+      '<button type="button" class="ed-xlsx-btn" data-id="' + esc(id) + '" data-doc="' + kind + '" style="padding:5px 9px;border:1px solid #bbf7d0;border-radius:7px;background:#f0fdf4;color:#15803d;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">⬇ ' + esc(label) + '</button>';
 
     const body = rows.length
       ? rows.map(r => {
@@ -595,7 +626,8 @@ window.Pages['export-documentation'] = (() => {
             + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;text-align:right;white-space:nowrap;">' + esc(totals.cf ?? '') + '</td>'
             + '<td style="padding:6px 10px;"><div style="display:flex;gap:5px;flex-wrap:wrap;">'
               + '<button type="button" class="ed-doc-btn" data-id="' + esc(r.id) + '" data-doc="all" style="padding:5px 10px;border:none;border-radius:7px;background:var(--color-primary);color:#fff;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">⬇ All Documents</button>'
-              + _DOCS.map(([k, l]) => docBtn(r.id, k, l)).join('')
+              + _DOCS.map(([k, l]) => docBtn(r.id, k, l)
+                  + (k === 'invoice' ? xlsxBtn(r.id, 'invoice', 'Excel') : k === 'custInvoice' ? xlsxBtn(r.id, 'custInvoice', 'Excel') : '')).join('')
               + _STATIC_DOCS.map(([href, l]) => '<a href="' + esc(href) + '" target="_blank" rel="noopener" style="padding:5px 9px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;color:#475569;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;text-decoration:none;">' + esc(l) + '</a>').join('')
               + (d._driveFolder ? '<a href="' + esc(d._driveFolder) + '" target="_blank" rel="noopener" style="padding:5px 9px;border:1px solid #bbf7d0;border-radius:7px;background:#f0fdf4;color:#15803d;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;text-decoration:none;">📁 Drive</a>' : '')
             + '</div></td>'
@@ -652,21 +684,48 @@ window.Pages['export-documentation'] = (() => {
     .sheet .nb { border: none !important; }
     .sheet table.xs th, .sheet table.xs td { font-size: 9.5px; padding: 2px 3px; line-height: 1.25; }
   `;
-  const _PRINT_CSS = _DOC_CSS + `
+  // The two invoices are self-contained documents (they carry the full
+  // exporter letterhead as an image) and print on their own A4 sheet as
+  // before. Every other document is meant for the company's own pre-printed
+  // letterhead stationery — "Invoice A4 mein aayega, baaki sab letterhead pe
+  // print honge" / "except for invoices, all documents should have space on
+  // top as we will print on our letterhead" — so those get a wide blank band
+  // at the top of the page instead of the normal margin, tall enough that
+  // the letterhead's own printed header never collides with this content.
+  const LETTERHEAD_TOP_MM = 45;
+  function _printCss(letterhead) {
+    const topMargin = letterhead ? LETTERHEAD_TOP_MM + 'mm' : '12mm';
+    return _DOC_CSS + `
     body { font-family: Arial, Helvetica, sans-serif; font-size: 11.5px; color: #000; margin: 0; padding: 24px; background:#fff; }
     .print-btn { position: fixed; top: 12px; right: 12px; padding: 9px 18px; background: #0150AA; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
     @media print { .print-btn { display: none; } body { padding: 0; } }
-    @page { size: A4; margin: 12mm; }
+    @page { size: A4; margin: ${topMargin} 12mm 12mm 12mm; }
   `;
+  }
 
-  function _openPrint(title, bodyHtml) {
+  function _openPrint(title, bodyHtml, opts) {
     const w = window.open('', '_blank');
     if (!w) { Utils.showToast('Popup blocked — allow popups for this site to open documents', 'error'); return; }
-    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' + _PRINT_CSS + '</style></head><body>'
+    const letterhead = !!(opts && opts.letterhead);
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' + _printCss(letterhead) + '</style></head><body>'
       + '<button class="print-btn" onclick="window.print()">Print / Save PDF</button>'
       + '<div class="sheet">' + bodyHtml + '</div>'
       + '</body></html>');
     w.document.close();
+  }
+
+  // Small company mark placed beside the heading of every letterhead
+  // document ("packing list mein logo nahi aa raha hai" / "need our logo in
+  // packing list") — everything else on these pages sits on pre-printed
+  // stationery, so this is the one brand element that still shows even in a
+  // digital copy (emailed, or opened before it's printed).
+  function _titleWithLogo(title, opts) {
+    opts = opts || {};
+    return '<table class="plain" style="width:100%;margin-bottom:6px;"><tr>'
+      + '<td style="width:52px;vertical-align:middle;"><img src="' + esc(window.location.origin + '/logo.png') + '" alt="' + esc(COMPANY.shortName) + '" style="width:46px;height:46px;object-fit:contain;display:block;"></td>'
+      + '<td class="title" style="' + (opts.small ? 'font-size:13px;' : '') + 'margin:0;">' + title + '</td>'
+      + '<td style="width:52px;"></td>'
+    + '</tr></table>';
   }
 
   const _lines = (s) => String(s || '').split('\n').map(l => l.trim()).filter(Boolean);
@@ -804,7 +863,7 @@ window.Pages['export-documentation'] = (() => {
       + '<td class="r">' + wt(it.netWt) + '</td>'
     + '</tr>').join('');
 
-    return '<div class="title">PACKING LIST</div>'
+    return _titleWithLogo('PACKING LIST')
       + '<table class="grid">'
       + '<tr>'
         + '<td style="width:55%;"><span class="sm">Shipper</span><br><span class="b">' + esc(COMPANY.name) + '</span><br>'
@@ -853,7 +912,7 @@ window.Pages['export-documentation'] = (() => {
   function _docAnnexure(d) {
     const c = _calcFrom(d);
     const row = (n, label, value) => '<tr><td style="width:26px;" class="c">' + n + '</td><td style="width:44%;">' + label + '</td><td>: &nbsp;' + value + '</td></tr>';
-    return '<div class="title">ANNEXURE</div>'
+    return _titleWithLogo('ANNEXURE')
       + '<div class="c b" style="margin-bottom:10px;">EXAMINATION REPORT FOR SELF-SEALED/CERTIFIED CONTAINER</div>'
       + '<div style="margin-bottom:6px;">Shipping Bill No. with Date: - _____________________________________</div>'
       + '<div style="margin-bottom:12px;">Examination of Factory Stuffing Permission F. No.: <span class="b">' + esc(d.fspNo) + '</span></div>'
@@ -887,7 +946,7 @@ window.Pages['export-documentation'] = (() => {
   function _docDbk(d) {
     const c = _calcFrom(d);
     const P = (t) => '<li style="margin-bottom:9px;text-align:justify;">' + t + '</li>';
-    return '<div class="title" style="font-size:13px;">DECLARATION TO BE FILLED IN CASE OF EXPORT OF GOODS UNDER<br>CLAIM FOR DRAWBACK</div>'
+    return _titleWithLogo('DECLARATION TO BE FILLED IN CASE OF EXPORT OF GOODS UNDER<br>CLAIM FOR DRAWBACK', { small: true })
       + '<table class="plain" style="width:100%;margin:10px 0;"><tr>'
         + '<td><span class="b">INVOICE NUMBER: ' + esc(d.invoiceNo) + ' DT.' + esc(d.invoiceDate) + '</span></td>'
       + '</tr><tr><td>SB No.: __________________________ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Date: __________________</td></tr></table>'
@@ -919,7 +978,7 @@ window.Pages['export-documentation'] = (() => {
   function _docVgm(d) {
     const c = _calcFrom(d);
     const row = (n, label, value, star) => '<tr><td class="c" style="width:34px;">' + n + (star === false ? '' : '*') + '</td><td style="width:46%;">' + label + '</td><td>' + value + '</td></tr>';
-    return '<div class="title" style="font-size:13.5px;">INFORMATION ABOUT VERIFIED GROSS MASS OF CONTAINER</div>'
+    return _titleWithLogo('INFORMATION ABOUT VERIFIED GROSS MASS OF CONTAINER', { small: true })
       + '<div class="r b" style="margin-bottom:8px;">DATE: ' + esc(d.weighingDate || d.invoiceDate) + '</div>'
       + '<table class="grid">'
       + '<tr class="b c"><td style="width:34px;">Sr. No</td><td>Details of Information</td><td>Particulars</td></tr>'
@@ -1093,21 +1152,24 @@ window.Pages['export-documentation'] = (() => {
     }).join('');
   }
 
+  // letterhead:true = printed on the company's own pre-printed stationery
+  // (blank top band, small logo by the heading); false = self-contained A4,
+  // full letterhead image included — the two invoices only.
   function _openDoc(docKey, rec) {
     let d = {};
     try { d = JSON.parse(rec.data || '{}'); } catch {}
     const invNo = d.invoiceNo || rec.invoice_no || '';
     const map = {
-      invoice:  ['Custom Invoice ' + invNo, _docInvoice],
-      packing:  ['Packing List ' + invNo, _docPacking],
-      annexure: ['Annexure ' + invNo, _docAnnexure],
-      dbk:      ['DBK Declaration ' + invNo, _docDbk],
-      vgm:      ['VGM ' + invNo, _docVgm],
-      custInvoice: ['Customer Invoice ' + invNo, _docCustInvoice],
+      invoice:  ['Custom Invoice ' + invNo, _docInvoice, false],
+      packing:  ['Packing List ' + invNo, _docPacking, true],
+      annexure: ['Annexure ' + invNo, _docAnnexure, true],
+      dbk:      ['DBK Declaration ' + invNo, _docDbk, true],
+      vgm:      ['VGM ' + invNo, _docVgm, true],
+      custInvoice: ['Customer Invoice ' + invNo, _docCustInvoice, false],
     };
-    const [title, fn] = map[docKey] || [];
+    const [title, fn, letterhead] = map[docKey] || [];
     if (!fn) return;
-    _openPrint(title, fn(d));
+    _openPrint(title, fn(d), { letterhead });
   }
 
   /* ── Download all — direct PDFs + Google Drive ────────────────────────────
@@ -1117,18 +1179,30 @@ window.Pages['export-documentation'] = (() => {
      it under Export Documents/<invoice no>/ on the company's Shared Drive.
      The two filed LUT PDFs download alongside and are copied into the same
      Drive folder by the server. */
+  // Self-hosted under public/vendor/ (see vendor/README.txt for versions/
+  // source) — these used to load from cdnjs, which is exactly what made
+  // "All Documents" and the Excel export unreliable on the office network
+  // ("download not working"): any firewall, proxy or CDN hiccup left the
+  // button spinning forever with nothing downloaded. Same-origin means the
+  // only way this now fails is the app server itself being unreachable, in
+  // which case nothing else works either. A hard 20s timeout still guards
+  // against a script tag that never fires load/error at all.
   function _loadScript(src) {
     return new Promise((resolve, reject) => {
       const s = document.createElement('script');
       s.src = src;
-      s.onload = resolve;
-      s.onerror = () => reject(new Error('Could not load ' + src + ' — check the internet connection'));
+      const t = setTimeout(() => reject(new Error('Timed out loading ' + src)), 20000);
+      s.onload = () => { clearTimeout(t); resolve(); };
+      s.onerror = () => { clearTimeout(t); reject(new Error('Could not load ' + src)); };
       document.head.appendChild(s);
     });
   }
   async function _ensurePdfLibs() {
-    if (!window.html2pdf) await _loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js');
-    if (!window.JSZip) await _loadScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+    if (!window.html2pdf) await _loadScript(window.location.origin + '/vendor/html2pdf.bundle.min.js');
+    if (!window.JSZip) await _loadScript(window.location.origin + '/vendor/jszip.min.js');
+  }
+  async function _ensureXlsxLib() {
+    if (!window.XLSX) await _loadScript(window.location.origin + '/vendor/xlsx.full.min.js');
   }
 
   // The set generated at save time (for Drive) is kept here so the download
@@ -1154,15 +1228,114 @@ window.Pages['export-documentation'] = (() => {
     setTimeout(() => URL.revokeObjectURL(a.href), 30000);
   }
 
+  // Third element mirrors _openDoc's map: true = letterhead stationery
+  // (bigger top margin in the generated PDF, matching the print version).
   const _DOC_SET = [
-    ['Custom Invoice', _docInvoice],
-    ['Packing List', _docPacking],
-    ['Annexure', _docAnnexure],
-    ['DBK Declaration', _docDbk],
-    ['VGM', _docVgm],
-    ['Customer Invoice', _docCustInvoice],
+    ['Custom Invoice', _docInvoice, false],
+    ['Packing List', _docPacking, true],
+    ['Annexure', _docAnnexure, true],
+    ['DBK Declaration', _docDbk, true],
+    ['VGM', _docVgm, true],
+    ['Customer Invoice', _docCustInvoice, false],
   ];
   const _safeInvName = (invNo) => String(invNo || '').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'shipment';
+
+  /* ── Excel — the invoice figures as a real spreadsheet, alongside the PDF
+     ("Invoice mujhe PDF ke saath Excel format mein bhi aana chahiye" /
+     "need excel sheet & pdf for invoices"). Only the two invoice documents
+     get one — Packing List/Annexure/DBK/VGM are fixed customs forms, not
+     figures anyone recalculates. SheetJS (self-hosted, see _ensureXlsxLib)
+     builds a real .xlsx; each function below returns the sheet as an
+     array-of-arrays, the same shape _docInvoice/_docCustInvoice print. ──── */
+  function _invoiceExcelAOA(d) {
+    const c = _calcFrom(d);
+    const rows = [
+      [COMPANY.name],
+      [COMPANY.addr1 + ', ' + COMPANY.addr2],
+      [],
+      ['Invoice No.', d.invoiceNo, '', 'Date', d.invoiceDate],
+      ["Exporter's Ref", d.exportersRef, '', "Buyer's Order No.", d.buyersOrderNo],
+      ['Consignee', d.consignee],
+      ['Buyer (if other than consignee)', d.buyer],
+      ['Terms of Delivery', d.deliveryTerms, '', 'Terms of Payment', d.paymentTerms],
+      ['LUT ARN No.', d.lutArnNo, '', 'LUT ARN Date', d.lutArnDate],
+      ['Total Gross Wt (KGS)', num(d.totalGrossWt), '', 'Total Net Wt (KGS)', Number(wt(c.totalNetWt))],
+      ['Vehicle No.', d.vehicleNo, '', 'Container No.', d.containerNo],
+      ['HSN Code', d.hsnCode, '', 'Exch. Rate', num(d.exchRate)],
+      [],
+      ['Marks and Numbers', 'Item', 'Scheme', 'Product Code', 'Size', 'Qty (PCS/SET)', 'UOM', 'Rate (US$)', d.deliveryTerms + ' (US$)', 'Taxable Value (Rs)', 'LUT'],
+      ...c.items.map((it) => [d.shippingMarks || '', it.invItem, it.scheme, it.productCode, it.size, num(it.qty), it.uom, num(it.rate), it.amount, it.taxable, 'LUT']),
+      ['', '', '', '', '', 'TOTAL', c.totalQty, '', '', c.totalCf, c.totalTaxable],
+      [],
+      [d.deliveryTerms + ' Value USD', c.totalCf],
+      ['Freight USD', c.freight],
+      ['FOB Value USD', c.fob],
+      ['FOB Value INR', c.fobInr],
+    ];
+    return rows;
+  }
+
+  function _custInvoiceExcelAOA(d) {
+    const c = _calcFrom(d);
+    const extras = _extraCharges(d);
+    const grand = c.totalCf + extras.reduce((s, e) => s + e.amount, 0);
+    const rows = [
+      [COMPANY.name],
+      ['CUSTOMER INVOICE'],
+      [],
+      ['Invoice No.', d.invoiceNo, '', 'Date', d.invoiceDate],
+      ['Consignee', d.consigneeName],
+      ['Buyer (if other than consignee)', d.buyer],
+      ["Customer Order Ref.", d.buyersOrderNo],
+      ['Terms of Delivery', d.deliveryTerms, '', 'Terms of Payment', d.paymentTerms],
+      ['Gross Weight (KGS)', num(d.totalGrossWt), '', 'Net Weight (KGS)', Number(wt(c.totalNetWt))],
+      ['Total Cartons', c.totalCartons],
+      [],
+      ['Container No.', 'Description of Goods (Item)', 'Carton No. From-To', 'P.O. No.', 'Size', 'SWG MM', 'Product Code', 'Barcode', 'Qty (PCS/SET)', 'Rate (USD) per PC/SET', 'Amount (' + d.deliveryTerms + ' US$)'],
+    ];
+    let curContainer = _containersOf(d)[0] || '';
+    _custLines(d, c).forEach((ln) => {
+      if (ln.type === 'container') { curContainer = ln.name; return; }
+      const it = ln.it;
+      rows.push([curContainer, it.itemName || it.invItem, _cartonRange(it), it.poNo, it.size, it.swgMm, it.productCode, it.barcode, num(it.qty), num(it.rate), it.amount]);
+    });
+    rows.push(['', '', '', '', '', '', '', '', '', 'TOTAL', c.totalCf]);
+    extras.forEach((e) => rows.push(['', '', '', '', '', '', '', '', '', e.label, e.amount]));
+    rows.push(['', '', '', '', '', '', '', '', '', 'GRAND TOTAL', grand]);
+    return rows;
+  }
+
+  const _EXCEL_DOCS = { invoice: ['Custom Invoice', _invoiceExcelAOA], custInvoice: ['Customer Invoice', _custInvoiceExcelAOA] };
+
+  // A workbook for one document, kept in memory as SheetJS's own object — the
+  // caller either writes it straight to a browser download (_downloadExcel)
+  // or pulls out the raw bytes to drop into the "All Documents" ZIP.
+  function _excelWorkbook(kind, d) {
+    const [name, fn] = _EXCEL_DOCS[kind];
+    const aoa = fn(d);
+    const ws = window.XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 22 }, { wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31));
+    return { name, wb };
+  }
+
+  async function _downloadExcel(kind, rec, btn) {
+    const label = btn ? btn.textContent : '';
+    try {
+      if (btn) btn.textContent = 'Preparing…';
+      await _ensureXlsxLib();
+      let d = {};
+      try { d = JSON.parse(rec.data || '{}'); } catch {}
+      const safeInv = _safeInvName(d.invoiceNo || rec.invoice_no);
+      const { name, wb } = _excelWorkbook(kind, d);
+      window.XLSX.writeFile(wb, name + ' ' + safeInv + '.xlsx');
+    } catch (e) {
+      Utils.showToast(e.message || 'Failed to build the Excel file', 'error');
+    } finally {
+      if (btn) btn.textContent = label;
+    }
+  }
 
   // Renders every generated document to a PDF data URI, off-screen (not
   // display:none — html2canvas needs layout).
@@ -1174,15 +1347,20 @@ window.Pages['export-documentation'] = (() => {
     try {
       const out = [];
       for (let i = 0; i < _DOC_SET.length; i++) {
-        const [name, fn] = _DOC_SET[i];
+        const [name, fn, letterhead] = _DOC_SET[i];
         if (onProgress) onProgress((i + 1) + '/' + _DOC_SET.length + ' ' + name + '…');
         holder.innerHTML = '<style>' + _DOC_CSS + '</style><div class="sheet" style="padding:10px;">' + fn(d) + '</div>';
         // The letterhead image must be painted before the canvas snapshot.
         await Promise.all([...holder.querySelectorAll('img')].map(img =>
           (img.complete ? Promise.resolve() : new Promise(r => { img.onload = img.onerror = r; }))));
+        // Same top-margin split as the print version: the 4 letterhead docs
+        // leave room for the company's pre-printed stationery, the 2
+        // invoices use a normal margin all round. html2pdf's margin array is
+        // [top, left, bottom, right].
+        const margin = letterhead ? [LETTERHEAD_TOP_MM, 8, 8, 8] : [8, 8, 8, 8];
         let dataUri = await window.html2pdf()
           .set({
-            margin: 8,
+            margin,
             jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
             // 1.5 renders in roughly half the pixels of 2 — visibly faster on
             // the office machines, still ~160dpi on an A4 print.
@@ -1265,6 +1443,7 @@ window.Pages['export-documentation'] = (() => {
     try {
       setBtn('Preparing…');
       await _ensurePdfLibs();
+      await _ensureXlsxLib();
       let pdfs;
       const cached = _pdfCache[rec.id];
       if (cached && cached.safeInv === safeInv) {
@@ -1273,6 +1452,13 @@ window.Pages['export-documentation'] = (() => {
         pdfs = await _generatePdfs(d, safeInv, setBtn);
         _pdfCache[rec.id] = { safeInv, pdfs };
       }
+      setBtn('Excel…');
+      // Both invoices as .xlsx too, in the same folder as their PDFs — see
+      // _excelWorkbook.
+      const xlsxFiles = Object.keys(_EXCEL_DOCS).map((kind) => {
+        const { name, wb } = _excelWorkbook(kind, d);
+        return { name: name + ' ' + safeInv + '.xlsx', bytes: window.XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) };
+      });
       setBtn('LUT PDFs…');
       const lut = [];
       for (const [href, name] of [['/export-lut-rfd11.pdf', 'LUT RFD-11.pdf'], ['/export-lut-ack.pdf', 'LUT Acknowledgement.pdf']]) {
@@ -1285,10 +1471,11 @@ window.Pages['export-documentation'] = (() => {
       const zip = new window.JSZip();
       const folder = zip.folder(safeInv);
       pdfs.forEach(p => folder.file(p.name, _dataUriToBlob(p.dataUri)));
+      xlsxFiles.forEach(f => folder.file(f.name, f.bytes));
       lut.forEach(f => folder.file(f.name, f.blob));
       const blob = await zip.generateAsync({ type: 'blob' });
       _downloadBlob(blob, 'Export Documents ' + safeInv + '.zip');
-      Utils.showToast('Downloaded — open the ZIP and the "' + safeInv + '" folder holds all ' + (pdfs.length + lut.length) + ' PDFs', 'success');
+      Utils.showToast('Downloaded — open the ZIP and the "' + safeInv + '" folder holds all ' + (pdfs.length + xlsxFiles.length + lut.length) + ' files', 'success');
 
       // If this shipment never made it to Drive (older record, or the save-time
       // upload failed), quietly file the freshly generated set there now.
@@ -1509,6 +1696,12 @@ window.Pages['export-documentation'] = (() => {
           if (!rec) return;
           if (docBtn.dataset.doc === 'all') _downloadAll(rec, docBtn);
           else _openDoc(docBtn.dataset.doc, rec);
+          return;
+        }
+        const xlsxBtn = e.target.closest('.ed-xlsx-btn');
+        if (xlsxBtn) {
+          const rec = _rows.find(r => r.id === xlsxBtn.dataset.id);
+          if (rec) _downloadExcel(xlsxBtn.dataset.doc, rec, xlsxBtn);
           return;
         }
         const editBtn = e.target.closest('.ed-edit-btn');
