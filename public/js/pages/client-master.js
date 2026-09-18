@@ -369,8 +369,8 @@ window.Pages['client-master'] = (() => {
       // S.No
       + '<td style="' + cellS + 'text-align:center;width:32px;color:#94a3b8;font-size:12px;font-weight:600;padding:5px 4px;">' + (i+1) + '</td>'
       // Txn Type - N / R / I
-      + '<td style="' + cellS + 'width:64px;padding:4px 5px;">'
-        + '<select class="pm-txn-inp" data-ri="' + i + '" style="width:100%;padding:6px 6px;border:1.5px solid #e9ecef;border-radius:7px;font-size:13px;font-weight:700;color:#1e293b;outline:none;background:#fff;cursor:pointer;">'
+      + '<td style="' + cellS + 'min-width:80px;padding:4px 5px;">'
+        + '<select class="pm-txn-inp" data-ri="' + i + '" style="width:100%;padding:6px 2px;border:1.5px solid #e9ecef;border-radius:7px;font-size:13px;font-weight:700;color:#1e293b;outline:none;background:#fff;cursor:pointer;text-align:center;">'
           + '<option value="N" ' + (txn==='N'?'selected':'') + '>N</option>'
           + '<option value="R" ' + (txn==='R'?'selected':'') + '>R</option>'
           + '<option value="I" ' + (txn==='I'?'selected':'') + '>I</option>'
@@ -460,7 +460,7 @@ window.Pages['client-master'] = (() => {
               + '<input type="checkbox" id="pm-chk-all" ' + (allChk ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;accent-color:var(--color-primary);" />'
             + '</th>'
             + '<th style="' + thS + 'text-align:center;width:32px;">#</th>'
-            + '<th style="' + thS + 'width:64px;">Txn</th>'
+            + '<th style="' + thS + 'min-width:80px;">Txn</th>'
             + '<th style="' + thS + 'min-width:180px;">Beneficiary Name</th>'
             + '<th style="' + thS + 'min-width:120px;">Amount</th>'
             + '<th style="' + thS + 'min-width:150px;">Narration / Ref No.</th>'

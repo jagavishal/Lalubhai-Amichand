@@ -2516,8 +2516,13 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
     const sessUser = req.session?.user;
     const userId = sessUser?.id;
     const userName = sessUser?.name || '';
-    const isAdmin = isAdminUser(sessUser);
     const isHOD = isHODUser(sessUser);
+    // `filter=revise_requested` / `filter=approval_required` used to run with NO
+    // scoping at all (any signed-in user got every matching row company-wide) —
+    // that's what let a task delegated to Shaikh show up for every HOD, not just
+    // his own. Those two filters now get the exact same true-Admin/HOD/self
+    // scoping as the default branch below, just ANDed with the status condition.
+    const isTrueAdmin = isTrueAdminUser(sessUser);
 
     if (!USE_DB) {
       const store = await readStore();
@@ -2531,27 +2536,35 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
       }));
       if (filter === 'revise_requested') rows = rows.filter(d => d.status === 'revise_requested');
       else if (filter === 'approval_required') rows = rows.filter(d => d.approval === 'Approval Required' && d.status === 'pending');
-      else if (myRevise === 'true') rows = rows.filter(d => (d.doerId === userId || d.doer === userName) && d.status === 'revise');
-      // HOD sees their department's team plus anything they personally own/delegated — not the whole company.
-      // Department is looked up fresh off store.users by id, not off the (possibly
-      // stale, up to 30-day-old) session — see the matching comment in /api/dashboard.
-      else if (isHOD) {
-        const myFreshDept = (store.users || []).find(u => u.id === userId)?.department || '';
-        const teamNames = new Set((store.users || []).filter(u => normDept(u.department) === normDept(myFreshDept)).map(u => (u.name || '').toLowerCase()));
-        rows = rows.filter(d => teamNames.has((d.doer || '').toLowerCase()) || d.doerId === userId || d.delegatedBy === userId);
+      if (myRevise === 'true') {
+        rows = rows.filter(d => (d.doerId === userId || d.doer === userName) && d.status === 'revise');
+      } else if (!isTrueAdmin) {
+        // HOD sees their department's team plus anything they personally own/delegated — not the whole company.
+        // Department is looked up fresh off store.users by id, not off the (possibly
+        // stale, up to 30-day-old) session — see the matching comment in /api/dashboard.
+        if (isHOD) {
+          const myFreshDept = (store.users || []).find(u => u.id === userId)?.department || '';
+          const teamNames = new Set((store.users || []).filter(u => normDept(u.department) === normDept(myFreshDept)).map(u => (u.name || '').toLowerCase()));
+          rows = rows.filter(d => teamNames.has((d.doer || '').toLowerCase()) || d.doerId === userId || d.delegatedBy === userId);
+        }
+        // Plain users only ever see tasks assigned to them or delegated by them — never the whole company's.
+        else rows = rows.filter(d => d.doerId === userId || (d.doer || '').toLowerCase() === userName.toLowerCase() || d.delegatedBy === userId);
       }
-      // Plain users only ever see tasks assigned to them or delegated by them — never the whole company's.
-      else if (!isAdmin) rows = rows.filter(d => d.doerId === userId || (d.doer || '').toLowerCase() === userName.toLowerCase() || d.delegatedBy === userId);
       return res.json(rows);
     }
 
-    let sqlWhere = '';
+    let statusWhere = '';
+    if (filter === 'revise_requested') statusWhere = `status='revise_requested'`;
+    else if (filter === 'approval_required') statusWhere = `approval='Approval Required' AND status='pending'`;
+
+    let sqlWhere = statusWhere ? `WHERE ${statusWhere}` : '';
     const params = [];
-    if (filter === 'revise_requested') { sqlWhere = `WHERE status='revise_requested'`; }
-    else if (filter === 'approval_required') { sqlWhere = `WHERE approval='Approval Required' AND status='pending'`; }
-    else if (myRevise === 'true') {
+    if (myRevise === 'true') {
       sqlWhere = `WHERE (doer_id=$1 OR doer=$2) AND status='revise'`;
       params.push(userId, userName);
+    } else if (isTrueAdmin) {
+      // Unscoped (beyond any status filter already applied above) — only a
+      // true company-wide Admin gets this.
     } else if (isHOD) {
       // Department subquery keys off the HOD's own id, never a cached session
       // string — see the /api/dashboard comment on why that matters.
@@ -2559,11 +2572,13 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
       // positional `?` with no dedup — each occurrence needs its OWN param,
       // even when the value repeats (unlike native Postgres, which can reuse
       // $1). Never reuse a placeholder number here.
-      sqlWhere = `WHERE doer_id IN (SELECT id FROM users WHERE LOWER(TRIM(department))=(SELECT LOWER(TRIM(department)) FROM users WHERE id=$1)) OR doer_id=$2 OR LOWER(doer)=LOWER($3) OR delegated_by=$4`;
+      sqlWhere = `WHERE (doer_id IN (SELECT id FROM users WHERE LOWER(TRIM(department))=(SELECT LOWER(TRIM(department)) FROM users WHERE id=$1)) OR doer_id=$2 OR LOWER(doer)=LOWER($3) OR delegated_by=$4)`;
       params.push(userId, userId, userName, userId);
-    } else if (!isAdmin) {
+      if (statusWhere) sqlWhere += ` AND ${statusWhere}`;
+    } else {
       sqlWhere = `WHERE (doer_id=$1 OR LOWER(doer)=LOWER($2) OR delegated_by=$3)`;
       params.push(userId, userName, userId);
+      if (statusWhere) sqlWhere += ` AND ${statusWhere}`;
     }
 
     const rows = await q(`SELECT id, description, doer_id AS "doerId", doer, delegated_by AS "delegatedBy", due_date AS "dueDate", client, status, type, priority, approval, url, remarks, transferred_by AS "transferredBy", transferred_from AS "transferredFrom", created_at AS "createdAt", completed_at AS "completedAt" FROM delegations ${sqlWhere} ORDER BY created_at DESC`, params);

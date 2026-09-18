@@ -2003,6 +2003,19 @@ function mountHrms(app, ctx) {
            String(b.backup_name || '').trim().slice(0, 255),
            nextApproverName, nextApproverEmail, substituteName, substituteEmail],
         ));
+        /* SL and EL are auto-approved on submission — management does not
+           want sick/earned leave held up for sign-off. The row still carries
+           the resolved approver (for the record and for anyone who later
+           needs to reverse it), but no approval mail goes out; applyLeaveDecision
+           books the balance and sends the applicant their decision mail
+           exactly as if someone had clicked Approve. */
+        if (code === 'SL' || code === 'EL') {
+          await applyLeaveDecision(id, 'Approved', 'Auto-approved').catch(
+            (e) => console.error('[hrms] SL/EL auto-approve failed:', e.message),
+          );
+          return res.json({ success: true, id, days, warning, notice: tierNote, approver: approverName, autoApproved: true });
+        }
+
         /* Tell the approver. Fire-and-forget on purpose: SMTP is somebody
            else's server and can be slow or down, and a leave request that is
            already safely stored must not fail — or make the applicant wait —
