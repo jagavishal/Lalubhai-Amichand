@@ -1878,14 +1878,29 @@ function mountHrms(app, ctx) {
           if (!approverName && emp?.reporting_to) {
             const ref = String(emp.reporting_to).trim();
             let mgr = (await q(
-              `SELECT name, email FROM hr_employees WHERE id = $1 LIMIT 1`,
+              `SELECT name, email, user_id FROM hr_employees WHERE id = $1 LIMIT 1`,
               [ref],
             ).catch(() => []))[0];
             if (!mgr) {
               mgr = pickByName(ref,
-                await q(`SELECT name, email FROM hr_employees`).catch(() => []));
+                await q(`SELECT name, email, user_id FROM hr_employees`).catch(() => []));
             }
-            if (mgr) { approverName = mgr.name || ''; approverEmail = mgr.email || ''; }
+            if (mgr) {
+              approverName = mgr.name || '';
+              // The Employee Master's own Email field is HR contact info (it can be
+              // a personal address entered at onboarding, and has ended up routing
+              // approval mail there) — it must never be trusted for where the mail
+              // goes. The Users login the employee record links to is the address
+              // of record; fall back to matching by name when there is no link,
+              // and only to the Employee Master's field as a last resort so a
+              // manager with no login at all still gets mailed somewhere.
+              let mgrLoginEmail = '';
+              const mgrLogin = mgr.user_id
+                ? (await q(`SELECT email FROM users WHERE id = $1 AND active = 1`, [mgr.user_id]).catch(() => []))[0]
+                : (await q(`SELECT email FROM users WHERE LOWER(name) = LOWER($1) AND active = 1 LIMIT 1`, [mgr.name || '']).catch(() => []))[0];
+              mgrLoginEmail = mgrLogin?.email || '';
+              approverEmail = mgrLoginEmail || mgr.email || '';
+            }
             // Most reporting lines end at a director or business manager who
             // has a login but no employee record — they draw no salary here.
             // Without this the request would fall through to plain 'HOD' and
