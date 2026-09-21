@@ -1064,6 +1064,25 @@ window.Pages['all-tasks'] = (function () {
   }
 
   /* ─── Checklist Modal ───────────────────────────────────────────────────── */
+  // Same 6 fields Dashboard's own "Add Checklist Task" modal sends to
+  // POST /api/masters (task, assignedTo, frequency, startDate, endDate,
+  // remarks) — this page was missing Due Date, End Date and Remarks
+  // entirely, and only offered 3 of the 6 frequencies ("all task page pe
+  // saare field nahi aa rahe, dashboard page pe jo field aa rahe hai vo
+  // aane chahiye same"). Due Date matters most: without it the server
+  // creates one bare, undated task instead of running
+  // generateChecklistDates() to lay out the whole recurring series.
+  const CHECKLIST_FREQ_OPTIONS = [
+    ['daily', 'Daily (365 tasks/year)'],
+    ['alternative_week', 'Alternative Week (26 tasks/year)'],
+    ['weekly', 'Weekly (52 tasks/year)'],
+    ['monthly', 'Monthly (12 tasks/year)'],
+    ['quarterly', 'Quarterly (4 tasks/year)'],
+    ['yearly', 'Yearly (1 task/year)'],
+  ];
+  const _checklistFreqOptsHtml = (selected) => CHECKLIST_FREQ_OPTIONS
+    .map(([v, l]) => `<option value="${v}"${v === selected ? ' selected' : ''}>${l}</option>`).join('');
+
   function openChecklistModal() {
     const userOpts = _users.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('');
     const div = modalOverlay('at-checklist-modal', `
@@ -1080,8 +1099,22 @@ window.Pages['all-tasks'] = (function () {
           </div>
           <div>
             <label class="at-label">Frequency</label>
-            <select id="atc-freq" class="at-input" style="width:100%"><option>Daily</option><option>Weekly</option><option>Monthly</option></select>
+            <select id="atc-freq" class="at-input" style="width:100%">${_checklistFreqOptsHtml('daily')}</select>
           </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <label class="at-label">Due Date *</label>
+            <input type="date" id="atc-start" class="at-input" style="width:100%" value="${esc(Utils.todayISO())}" />
+          </div>
+          <div>
+            <label class="at-label">End Date <span style="font-size:10px;color:#94a3b8;font-weight:400;text-transform:none;">(optional)</span></label>
+            <input type="date" id="atc-end" class="at-input" style="width:100%" />
+          </div>
+        </div>
+        <div>
+          <label class="at-label">Remarks</label>
+          <input type="text" id="atc-remarks" class="at-input" style="width:100%" placeholder="Any remarks..." />
         </div>
         <p id="atc-err" style="color:#ef4444;font-size:12px;margin:0"></p>
       </div>
@@ -1097,19 +1130,23 @@ window.Pages['all-tasks'] = (function () {
       const assignedId  = assignedSel.value;
       const assignedTo  = assignedId ? (_users.find(u => u.id === assignedId)?.name || '') : '';
       const frequency   = document.getElementById('atc-freq').value;
+      const startDate   = document.getElementById('atc-start').value || Utils.todayISO();
+      const endDate     = document.getElementById('atc-end').value || '';
+      const remarks     = document.getElementById('atc-remarks').value.trim();
       const errEl       = document.getElementById('atc-err');
 
       if (!task) { errEl.textContent = 'Task is required.'; return; }
+      if (!assignedTo) { errEl.textContent = 'Assigned To is required.'; return; }
 
       const btn = document.getElementById('atc-save');
       btn.disabled = true; btn.textContent = 'Saving…';
       try {
-        await Utils.apiFetch('/api/masters', {
+        const result = await Utils.apiFetch('/api/masters', {
           method: 'POST',
-          body: JSON.stringify({ task, assignedTo, frequency }),
+          body: JSON.stringify({ task, assignedTo, frequency, startDate, endDate: endDate || null, remarks }),
         });
         div.remove();
-        Utils.showToast('Checklist task added');
+        Utils.showToast(result?.count > 1 ? `${result.count} checklist tasks generated!` : 'Checklist task added');
         await reload();
       } catch (e) {
         errEl.textContent = e.message;

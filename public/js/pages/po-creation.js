@@ -146,12 +146,17 @@ window.Pages['po-creation'] = (() => {
   // stay editable for the ~1/3 of stickers the master has no code for), or
   // because price genuinely needs to move at PO time (a vendor's actual
   // quoted price at PO stage routinely differs from the PR's own estimate).
-  // Every other mapped field still locks, since it came straight from the
-  // approved PR.
+  // Quantity does too ("PO me PR no. dalte hi pure PR ke items aate hai...
+  // quantity editing ka option bhi nahi aa raha hai") — a
+  // single PR's items can be split across more than one vendor's PO, each
+  // getting less than the PR's own qty, or a vendor simply confirms a
+  // different quantity at PO time than the PR estimated. Item Code stays
+  // locked — that one is meant to track back to exactly what the PR
+  // approved; everything else the PR filled locks the same way as before.
   const PO_ONLY_ITEM_FIELDS = {
-    PurchaseOrder: ['hsnCode', 'unitPrice'],
-    'ENR PO': ['customerCodeRef', 'barcode', 'taxPercent', 'rate'],
-    'Diamond PO': ['boxRate', 'plateRate'],
+    PurchaseOrder: ['hsnCode', 'unitPrice', 'qty'],
+    'ENR PO': ['customerCodeRef', 'barcode', 'taxPercent', 'rate', 'stickerQty'],
+    'Diamond PO': ['boxRate', 'plateRate', 'boxQty', 'plateQty'],
   };
   const READONLY_FIELD_STYLE = 'background:#f8fafc;color:#64748b;cursor:not-allowed;';
 
@@ -286,8 +291,14 @@ window.Pages['po-creation'] = (() => {
         ? _pendingPrs.filter(p => String(p.prNo).toLowerCase().includes(q) || (p.party || '').toLowerCase().includes(q))
         : _pendingPrs).slice(0, 30);
       if (!matches.length) { dd.style.display = 'none'; return; }
+      // partiallyOrdered: this PR already has an earlier PO against it but
+      // isn't fully ordered yet — its items can be split across more than
+      // one vendor's PO, so it stays offered here too ("PO me PR no. dalte
+      // hi pure PR ke items aate hai... ek hi sath koi b party ka maal
+      // nahi aata"). Flagged so it doesn't look like an untouched PR.
       dd.innerHTML = matches.map(p => '<div class="poc-prno-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-pr="' + esc(p.prNo) + '" data-party="' + esc(p.party) + '" data-dept="' + esc(p.department) + '">'
-        + '<b>#' + esc(p.prNo) + '</b> — ' + esc(p.party) + (p.department ? ' <span style="color:#94a3b8;">(' + esc(p.department) + ')</span>' : '') + '</div>').join('');
+        + '<b>#' + esc(p.prNo) + '</b> — ' + esc(p.party) + (p.department ? ' <span style="color:#94a3b8;">(' + esc(p.department) + ')</span>' : '')
+        + (p.partiallyOrdered ? ' <span style="color:#b45309;font-weight:600;">· part ordered</span>' : '') + '</div>').join('');
       const rect = input.getBoundingClientRect();
       dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 260) + 'px';
       dd.style.display = 'block';

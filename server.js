@@ -7041,6 +7041,18 @@ app.delete('/api/po-creation', requireAuth, requireSuperAdmin, async (req, res) 
 // sheet's own ERP PR Log) that haven't been used on any PO yet, for the P.R.
 // NO field's suggestion dropdown. "Pending" = its PR No doesn't appear in the
 // PR No column POs have already logged against, and it isn't Cancelled.
+// Which PR item field(s) hold the required quantity, and the name that same
+// value takes once PR_ITEM_MAPPERS (po-creation.js) carries it onto a PO
+// item — mirrored here so the required-vs-ordered comparison below reads
+// the right field either side. PACKING_BOX items carry two independent
+// quantities (box/plate) that each have to be satisfied on their own.
+const PR_QTY_FIELDS_BY_TAB = {
+  'Purchase Requisition': [['qtyRequired', 'qty']],
+  'purchase_requisition(ALU)': [['qtyRequired', 'qty']],
+  'PURCHASE REQUISITION(PACKING_STICKER)': [['stickerQty', 'stickerQty']],
+  'PURCHASE REQUISITION(PACKING_BOX)': [['boxQty', 'boxQty'], ['plateQty', 'plateQty']],
+};
+
 app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
   try {
     const auth = getGoogleAuth();
@@ -7056,21 +7068,78 @@ app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
     }
 
-    let usedPrNos = new Set();
+    // A PR's items don't always become one PO — they can be split across
+    // more than one vendor's PO, each covering only part of what was
+    // requisitioned ("PO me PR no. dalte hi pure PR ke items aate hai...
+    // ek hi sath koi b party ka maal nahi aata"). The old rule dropped a PR
+    // off this picker the instant it had ANY PO against it at all, ordered
+    // in full or not — and a CANCELLED PO still counted as "used", so a PR
+    // whose only PO got cancelled could never be picked again (PR233's
+    // PO342 was cancelled and the store team had to raise a whole new
+    // PR236 with the same items just to get a working PO out of it).
+    // Instead, sum ordered qty per item across every non-cancelled/rejected
+    // PO raised against a PR, and only drop it once every item has met or
+    // exceeded its own required quantity.
+    let orderedByPr = new Map(); // normalized PR No -> Map(item code lower -> { qty, stickerQty, boxQty, plateQty })
     try {
-      const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!J2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
-      usedPrNos = new Set((poRes.data.values || []).map(r => _normalizePrNo(r[0])).filter(Boolean));
+      const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      for (const r of (poRes.data.values || [])) {
+        const prNo = _normalizePrNo(r[9]);
+        if (!prNo || ['Cancelled', 'Rejected'].includes(r[11] || 'Active')) continue;
+        let items = [];
+        try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
+        const perItem = orderedByPr.get(prNo) || new Map();
+        for (const it of items) {
+          const code = String(it?.itemCode || '').trim().toLowerCase();
+          if (!code) continue;
+          const acc = perItem.get(code) || {};
+          for (const field of ['qty', 'stickerQty', 'boxQty', 'plateQty']) {
+            if (it[field] === undefined || it[field] === '') continue;
+            const v = parseFloat(String(it[field]).replace(/,/g, '')) || 0;
+            acc[field] = (acc[field] || 0) + v;
+          }
+          perItem.set(code, acc);
+        }
+        orderedByPr.set(prNo, perItem);
+      }
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
     }
+    // No qty-field mapping known for this PR's own format, or no item
+    // snapshot to compare against — never hide a PR on a comparison that
+    // can't actually be made; a fully-ordered PR lingering a little too
+    // long is far better than one going quietly unreachable.
+    const isFullyOrdered = (prNo, prTabName, items) => {
+      const fields = PR_QTY_FIELDS_BY_TAB[prTabName];
+      if (!fields || !items.length) return false;
+      const ordered = orderedByPr.get(_normalizePrNo(prNo));
+      if (!ordered) return false;
+      return items.every((it) => {
+        const code = String(it?.itemCode || '').trim().toLowerCase();
+        if (!code) return true;
+        const acc = ordered.get(code) || {};
+        return fields.every(([prField, poField]) => {
+          const required = parseFloat(String(it[prField] ?? '0').replace(/,/g, '')) || 0;
+          if (!required) return true;
+          return (acc[poField] || 0) >= required;
+        });
+      });
+    };
 
     const pending = prRows
-      .filter(r => r[0] && (r[11] || 'Active') !== 'Cancelled' && !usedPrNos.has(_normalizePrNo(r[0])))
+      .filter(r => r[0] && (r[11] || 'Active') !== 'Cancelled')
       .map(r => {
         let items = [];
         try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
-        return { prNo: _normalizePrNo(r[0]), prTabName: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', requestedBy: r[4] || '', department: r[5] || '', items };
+        const prNo = _normalizePrNo(r[0]);
+        const prTabName = r[1] || '';
+        // Surfaced so the picker can tell staff this PR already has an
+        // earlier PO against it, rather than looking untouched.
+        const partiallyOrdered = orderedByPr.has(prNo);
+        return { prNo, prTabName, date: _sheetDateToIso(r[2]), party: r[3] || '', requestedBy: r[4] || '', department: r[5] || '', items, partiallyOrdered, _fullyOrdered: isFullyOrdered(prNo, prTabName, items) };
       })
+      .filter((pr) => !pr._fullyOrdered)
+      .map(({ _fullyOrdered, ...pr }) => pr)
       .reverse();
     return res.json(pending.slice(0, 200));
   } catch (e) { return res.status(500).json({ error: e.message }); }
