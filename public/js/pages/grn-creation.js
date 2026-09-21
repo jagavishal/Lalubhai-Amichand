@@ -149,8 +149,15 @@ window.Pages['grn-creation'] = (() => {
         ? _poList.filter(p => String(p.poNo).toLowerCase().includes(q) || (p.vendorName || '').toLowerCase().includes(q))
         : _poList).slice(0, 30);
       if (!matches.length) { dd.style.display = 'none'; return; }
+      // partiallyReceived: this PO already has an earlier bill's GRN against
+      // it but isn't fully received yet, so it's still offered here too
+      // ("PO343 ka product 2 bill me aaya... dusre bill ka GRN karte time
+      // PO343 nahi aa raha" — a PO used to drop off this list after its
+      // first GRN, whole PO received or not). Flagged so it doesn't look
+      // like an untouched PO when it's really a second/third bill.
       dd.innerHTML = matches.map(p => '<div class="grnc-pono-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-po="' + esc(p.poNo) + '">'
-        + '<b>#' + esc(p.poNo) + '</b> — ' + esc(p.vendorName) + (p.department ? ' <span style="color:#94a3b8;">(' + esc(p.department) + ')</span>' : '') + '</div>').join('');
+        + '<b>#' + esc(p.poNo) + '</b> — ' + esc(p.vendorName) + (p.department ? ' <span style="color:#94a3b8;">(' + esc(p.department) + ')</span>' : '')
+        + (p.partiallyReceived ? ' <span style="color:#b45309;font-weight:600;">· part received</span>' : '') + '</div>').join('');
       const rect = input.getBoundingClientRect();
       dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 260) + 'px';
       dd.style.display = 'block';

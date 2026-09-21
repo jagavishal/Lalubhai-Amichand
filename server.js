@@ -8041,13 +8041,51 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
     }
-    let usedPoNos = new Set();
+    // A PO does not always arrive in one truck — goods against the same PO
+    // can come in over more than one bill ("PO343 ka product 2 bill me aaya,
+    // ek Bill GRN hua, dusre bill ka GRN karte time PO343 nahi aa raha").
+    // The old rule dropped a PO from this picker the moment it had ANY GRN
+    // at all, so the second bill's GRN had nowhere to point. Instead, sum
+    // what's already been approved-received against each PO, item by item,
+    // across every (non-cancelled) GRN raised on it, and only drop a PO once
+    // every one of its items has that much or more.
+    let receivedByPo = new Map(); // normalized PO No -> Map(item code lower -> qty already received)
     try {
-      const grnRes = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!F2:F1000`, valueRenderOption: 'FORMATTED_VALUE' });
-      usedPoNos = new Set((grnRes.data.values || []).map(r => _seqKey(r[0])).filter(Boolean));
+      const grnRes = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:M1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      for (const r of (grnRes.data.values || [])) {
+        const poNo = _seqKey(r[5]);
+        if (!poNo || (r[12] || '') === 'Cancelled') continue; // a cancelled GRN never happened
+        let items = [];
+        try { items = JSON.parse(r[11] || 'null')?.items || []; } catch { items = []; }
+        const perItem = receivedByPo.get(poNo) || new Map();
+        for (const it of items) {
+          const code = String(it?.itemNo || '').trim().toLowerCase();
+          if (!code) continue;
+          // Approved is what actually landed in stock — a rejected quantity
+          // was sent back, so it doesn't count against what's still owed.
+          const qty = parseFloat(String(it.approvedQty ?? it.receivedQty ?? '0').replace(/,/g, '')) || 0;
+          perItem.set(code, (perItem.get(code) || 0) + qty);
+        }
+        receivedByPo.set(poNo, perItem);
+      }
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
     }
+    // No item snapshot to compare against, or nothing meaningful ordered on a
+    // line — never hide a PO on the strength of a comparison that can't
+    // actually be made; that direction of mistake is silent and much worse
+    // than a fully-received PO lingering in the list a little too long.
+    const isFullyReceived = (poNo, items) => {
+      if (!items.length) return false;
+      const received = receivedByPo.get(_seqKey(poNo));
+      if (!received) return false;
+      return items.every((it) => {
+        const code = String(it?.itemCode || it?.code || '').trim().toLowerCase();
+        const ordered = parseFloat(String(it.qty ?? '0').replace(/,/g, '')) || 0;
+        if (!code || !ordered) return true;
+        return (received.get(code) || 0) >= ordered;
+      });
+    };
     // Service POs are excluded outright (column B / r[1]): there's nothing
     // physical to receive against a service, so they'd only ever be noise in
     // this picker. They still appear in PO Creation's own PO List.
@@ -8059,7 +8097,7 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
     const catalog = new Map((await _loadPoItemCatalog('PurchaseOrder').catch(() => []))
       .map(c => [String(c.code || '').trim().toLowerCase(), c]));
     const list = poRows
-      .filter(r => r[0] && r[1] !== 'Service PO' && !['Cancelled', 'Rejected'].includes(r[11] || 'Active') && !usedPoNos.has(_seqKey(r[0])))
+      .filter(r => r[0] && r[1] !== 'Service PO' && !['Cancelled', 'Rejected'].includes(r[11] || 'Active'))
       .map(r => {
         let items = [];
         try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
@@ -8067,8 +8105,12 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
           const c = catalog.get(String(it?.itemCode || it?.code || '').trim().toLowerCase());
           return c ? { ...it, description: it.description || c.description || '', size: it.size || c.size || '' } : it;
         });
-        return { poNo: r[0] || '', format: r[1] || '', party: r[3] || '', department: r[4] || '', prNo: r[9] || '', vendorName: r[3] || '', items };
+        // Surfaced so the picker can tell staff this PO already has an
+        // earlier bill's GRN against it, rather than looking untouched.
+        const partiallyReceived = receivedByPo.has(_seqKey(r[0]));
+        return { poNo: r[0] || '', format: r[1] || '', party: r[3] || '', department: r[4] || '', prNo: r[9] || '', vendorName: r[3] || '', items, partiallyReceived };
       })
+      .filter((po) => !isFullyReceived(po.poNo, po.items))
       .reverse();
     return res.json(list.slice(0, 200));
   } catch (e) { return res.status(500).json({ error: e.message }); }
