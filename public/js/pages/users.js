@@ -732,13 +732,19 @@ window.Pages.users = (() => {
     const tableRows = rows.length === 0
       ? `<tr><td colspan="${_isAdmin ? 8 : 7}" class="table-td text-center text-slate-400 py-10">No users found</td></tr>`
       : groupedByDepartment(rows).map(([dept, list]) => departmentBandHtml(dept, list.length) + list.map(u => {
-          const isAdminOrHod = normalizeRoles(u.roles).some(r => r === 'Admin' || r === 'HOD');
+          // Admin keeps unconditional full access — HOD's is now maintained
+          // from this same Access screen, same as a plain User's ("HOD ka
+          // bhi access access page se hi maintain hoga"): the button shows,
+          // and whatever gets saved here is what the sidebar and the two
+          // page-gated API routes (Employee Master, Bulk Email) honour —
+          // see requireAdminOrPage in server.js.
+          const isAdminRole = normalizeRoles(u.roles).some(r => r === 'Admin');
           // Forcing someone out of every device is owner-only, same as the
           // destructive deletes elsewhere. The server enforces it regardless.
           const signOutBtn = Utils.isOwner()
             ? `<button data-action="signout" data-id="${esc(u.id)}" title="Sign this user out from all devices" class="pill bg-amber-50 text-amber-700 hover:bg-amber-100 cursor-pointer">Sign Out All</button>`
             : '';
-          const accessBtn = !isAdminOrHod
+          const accessBtn = !isAdminRole
             ? `<button data-action="access" data-id="${esc(u.id)}" class="pill bg-indigo-50 text-indigo-700 hover:bg-indigo-100 cursor-pointer">${_expandedUserId === u.id ? 'Close' : 'Access'}</button>`
             : '';
           const actionCells = _isAdmin ? `
@@ -855,9 +861,13 @@ window.Pages.users = (() => {
   function renderAccessTab() {
     const allPageKeys = ALL_PAGES.map(p => p.key);
 
-    const isAdminOrHod = u => {
+    // Admin is the only role still hard-wired to "always everything" here —
+    // HOD is governed by its own saved record now, same as a plain User
+    // ("HOD ka bhi access access page se hi maintain hoga"), so it uses the
+    // ordinary interactive checkboxes below instead of the fixed checkmark.
+    const isAdminRole = u => {
       const r = Array.isArray(u.roles) ? u.roles : String(u.roles||'').split(',').map(x=>x.trim());
-      return r.includes('Admin') || r.includes('HOD');
+      return r.includes('Admin');
     };
 
     // No permissions row saved yet (brand-new/never-touched user) means unrestricted
@@ -865,14 +875,14 @@ window.Pages.users = (() => {
     // or this grid shows every box unchecked while the user can actually see everything,
     // and toggling one box on top of that misleading state saves the wrong result.
     const hasAll = u => {
-      if (isAdminOrHod(u)) return true;
+      if (isAdminRole(u)) return true;
       const perm = u.permissions;
       if (!perm || !perm.pages) return true;
       return allPageKeys.every(k => perm.pages.includes(k));
     };
 
     const userHasPage = (u, pageKey) => {
-      if (isAdminOrHod(u)) return true;
+      if (isAdminRole(u)) return true;
       const perm = u.permissions;
       if (!perm || !perm.pages) return true;
       return perm.pages.includes(pageKey);
@@ -888,7 +898,7 @@ window.Pages.users = (() => {
     const thFirst = 'padding:10px 16px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;text-align:left;white-space:nowrap;position:sticky;left:0;top:0;z-index:3;background:#f8fafc;border-right:1px solid #e2e8f0;';
 
     const rows = sorted.map(u => {
-      const isHod    = isAdminOrHod(u);
+      const isFixedAdmin = isAdminRole(u);
       const allOn    = hasAll(u);
       const roleTags = (Array.isArray(u.roles) ? u.roles : String(u.roles||'').split(',')).map(r => r.trim()).filter(Boolean);
 
@@ -911,7 +921,7 @@ window.Pages.users = (() => {
       const pageCells = ALL_PAGES.map(p => {
         const checked = userHasPage(u, p.key);
         const tdStyle = `padding:10px 12px;border-bottom:1px solid #f1f5f9;text-align:center;${_isCatStart(p) ? _catEdge : ''}`;
-        if (isHod) {
+        if (isFixedAdmin) {
           return `<td style="${tdStyle}">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </td>`;
@@ -945,7 +955,7 @@ window.Pages.users = (() => {
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:16px 20px;border-bottom:1px solid #f1f5f9;">
           <div>
             <div style="font-size:15px;font-weight:700;color:#0f172a;">Page Access</div>
-            <div style="font-size:12px;color:#64748b;margin-top:2px;">Tick the pages each user can open. Admin / HOD always have full access. ${_users.length} users</div>
+            <div style="font-size:12px;color:#64748b;margin-top:2px;">Tick the pages each user can open. Admin always has full access; HOD is set per page here, same as any other user. ${_users.length} users</div>
           </div>
           <input id="acc-search" type="text" placeholder="Search user..." value="${esc(_searchAccess)}"
             style="padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;outline:none;width:200px;" />

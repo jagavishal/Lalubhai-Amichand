@@ -2251,8 +2251,25 @@ async function userCanUseFeature(user, page, feat) {
 function requireAdminOrPage(page) {
   return async (req, res, next) => {
     const user = req.session?.user;
-    if (isAdminUser(user)) return next();
+    // The owner is never restricted by anything saved here — same exception
+    // as the sidebar's own canAccess, and for the same reason: it must be
+    // able to fix a permissions mistake, including its own.
+    if (isSuperAdmin(user)) return next();
     const perms = await getUserPermissions(user?.id);
+    if (isAdminUser(user)) {
+      // Admin/HOD used to bypass this middleware outright regardless of
+      // what Users → Access had saved for them — the sidebar's own menu
+      // already honoured a saved record (see canAccess's own comment),
+      // this route just never agreed with it, so a page hidden from an
+      // HOD in the menu was still reachable by calling its API directly.
+      // No saved pages list at all still means unrestricted, same as
+      // before; this only takes effect once Access has actually been
+      // opened for that account ("HOD ka bhi access access page se hi
+      // maintain hoga").
+      if (!perms || !perms.pages) return next();
+      if (perms.pages.includes(page)) return next();
+      return res.status(403).json({ error: 'Forbidden' });
+    }
     if (perms && perms.pages && perms.pages.includes(page)) return next();
     res.status(403).json({ error: 'Forbidden' });
   };
