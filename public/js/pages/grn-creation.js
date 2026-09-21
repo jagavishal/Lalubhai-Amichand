@@ -12,8 +12,17 @@ window.Pages['grn-creation'] = (() => {
   let _mastersLoaded = false;
   let _vendors = [];
   let _nextGrNumber = null;
-  let _poListLoaded = false;
-  let _poList = []; // POs (from PO Creation's own ERP PO Log) not yet used on any GRN, for the PO No. suggestion dropdown
+  // When the PO list was last fetched. This page module lives for the whole
+  // SPA session, so a once-only load went stale the moment a PO was raised
+  // (or another bill's GRN changed what still needs receiving) after GRN
+  // Creation was first opened — "GRN me abhi bhi PO343 nahi aa raha hai"
+  // turned out to be exactly this on top of the real server-side fix: the
+  // browser tab's own copy of the list just hadn't been refetched since
+  // before that fix went live. Every visit and every focus of the PO No.
+  // field re-fetches once this is older than PO_LIST_MAX_AGE_MS.
+  let _poListAt = 0;
+  const PO_LIST_MAX_AGE_MS = 20000;
+  let _poList = []; // POs still needing a GRN (fully or partly), for the PO No. suggestion dropdown
 
   // GRN List (in-page tab) state — read-only history from the ERP GRN Log tab.
   let _grlRows = [];
@@ -70,13 +79,21 @@ window.Pages['grn-creation'] = (() => {
     }
   }
 
-  async function _loadPoList() {
-    try {
-      _poList = await Utils.apiFetch('/api/grn-creation/po-list') || [];
-      _poListLoaded = true;
-    } catch (e) {
-      Utils.showToast(e.message || 'Failed to load PO list', 'error');
-    }
+  let _poListInFlight = null;
+  function _loadPoList(force) {
+    if (_poListInFlight) return _poListInFlight;
+    if (!force && (Date.now() - _poListAt) < PO_LIST_MAX_AGE_MS) return Promise.resolve();
+    _poListInFlight = (async () => {
+      try {
+        _poList = await Utils.apiFetch('/api/grn-creation/po-list') || [];
+        _poListAt = Date.now();
+      } catch (e) {
+        Utils.showToast(e.message || 'Failed to load PO list', 'error');
+      } finally {
+        _poListInFlight = null;
+      }
+    })();
+    return _poListInFlight;
   }
 
   /* ── PO No. — free-text input (still fully editable/typeable) with a
@@ -163,7 +180,13 @@ window.Pages['grn-creation'] = (() => {
       dd.style.display = 'block';
     };
     input.addEventListener('input', showMatches);
-    input.addEventListener('focus', showMatches);
+    // Focus re-fetches a list older than PO_LIST_MAX_AGE_MS, then redraws
+    // the dropdown so a PO raised (or received against elsewhere) while this
+    // page sat open turns up too.
+    input.addEventListener('focus', () => {
+      showMatches();
+      _loadPoList().then(() => { if (document.activeElement === input) showMatches(); });
+    });
     dd.addEventListener('mousedown', (e) => {
       const opt = e.target.closest('.grnc-pono-opt');
       if (!opt) return;
@@ -652,7 +675,7 @@ window.Pages['grn-creation'] = (() => {
     Utils.bindGridArrows(document.getElementById('grnc-items-tbody'), 'grnc-add-item');
 
     if (!_mastersLoaded) _loadMasters();
-    if (!_poListLoaded) _loadPoList();
+    _loadPoList();
   }
 
   return {
