@@ -110,11 +110,16 @@ window.Pages.scheduler = (() => {
     const shown = items.slice(0, 3);
     const more = items.length - shown.length;
 
+    // min-width:0 on every flex step down to the truncated span: a flex/grid
+    // item's default min-width is auto (its content's natural width), so
+    // without this a long, unwrapped task title forces the whole row — and
+    // with it, the whole grid COLUMN this cell sits in — to grow to fit it,
+    // instead of the ellipsis actually taking effect.
     const itemHTML = shown.map(it => {
       const color = it.muted ? 'var(--text-muted)' : (it.kind === 'meeting' ? 'var(--color-purple-text)' : 'var(--color-warning-text)');
-      return `<div style="display:flex;align-items:center;gap:4px;overflow:hidden;">
+      return `<div style="display:flex;align-items:center;gap:4px;min-width:0;">
           <span style="width:5px;height:5px;border-radius:50%;flex-shrink:0;background:${ITEM_DOT[it.kind]};opacity:${it.muted ? '.4' : '1'};"></span>
-          <span style="font-size:10.5px;font-weight:500;color:${color};text-decoration:${it.done ? 'line-through' : 'none'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(it.label)}">${esc(it.label)}</span>
+          <span style="flex:1;min-width:0;font-size:10.5px;font-weight:500;color:${color};text-decoration:${it.done ? 'line-through' : 'none'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(it.label)}">${esc(it.label)}</span>
         </div>`;
     }).join('');
     const moreHTML = more > 0 ? `<div style="font-size:10px;font-weight:600;color:var(--text-muted);padding-left:9px;">+ ${more} more</div>` : '';
@@ -132,17 +137,18 @@ window.Pages.scheduler = (() => {
     return `
       <div class="sch-cell" data-date="${dateStr}"
         style="
-          min-height:96px;padding:6px 7px;cursor:pointer;
+          min-height:96px;min-width:0;padding:6px 7px;cursor:pointer;
           background:${isSelected ? 'var(--color-primary-light)' : 'var(--surface)'};
           border-right:1px solid var(--border-light);border-bottom:1px solid var(--border-light);
           opacity:${inMonth ? '1' : '0.4'};
           display:flex;flex-direction:column;gap:4px;transition:background .12s;
+          overflow:hidden;box-sizing:border-box;
         ">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
-          <span style="font-size:12.5px;font-weight:600;color:var(--text-primary);">${numHTML}</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;min-width:0;">
+          <span style="font-size:12.5px;font-weight:600;color:var(--text-primary);flex-shrink:0;">${numHTML}</span>
           ${tagHTML}
         </div>
-        <div style="display:flex;flex-direction:column;gap:3px;overflow:hidden;">${itemHTML}${moreHTML}</div>
+        <div style="display:flex;flex-direction:column;gap:3px;min-width:0;overflow:hidden;">${itemHTML}${moreHTML}</div>
       </div>`;
   }
 
@@ -150,9 +156,12 @@ window.Pages.scheduler = (() => {
     const days = _gridDays(_view);
     const header = DOW.map(d => `<div style="font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted);text-align:center;padding:4px 0 8px;">${d}</div>`).join('');
     const cells = days.map(_dayCellHTML).join('');
+    // grid-auto-columns / minmax(0,1fr) (not a bare 1fr) is what actually caps
+    // each column at its equal share — a bare `1fr` still lets a column grow
+    // past it to fit a grid item's content-based min-width.
     return `
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);">${header}</div>
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);border-top:1px solid var(--border-light);border-left:1px solid var(--border-light);border-radius:8px 8px 0 0;overflow:hidden;">${cells}</div>`;
+      <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));">${header}</div>
+      <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:1px solid var(--border-light);border-left:1px solid var(--border-light);border-radius:8px 8px 0 0;overflow:hidden;">${cells}</div>`;
   }
 
   /* ── Day panel ────────────────────────────────────────────────────── */
