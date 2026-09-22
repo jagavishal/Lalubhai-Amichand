@@ -406,8 +406,16 @@ const SCHEMA = [
   // and tasks are read straight off `delegations` (see GET /api/scheduler).
   // attendees is a plain comma-joined name list, the same shallow shape the
   // rest of the app stores a free-text people field in (e.g. delegations.doer).
-  `CREATE TABLE IF NOT EXISTS meetings (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, date DATE NOT NULL, start_time VARCHAR(8) DEFAULT '', end_time VARCHAR(8) DEFAULT '', attendees TEXT DEFAULT '', location VARCHAR(255) DEFAULT '', notes TEXT DEFAULT NULL, created_by VARCHAR(16) DEFAULT NULL, created_by_name VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-  `CREATE INDEX idx_meetings_date ON meetings (date)`,
+  //
+  // Named scheduler_meetings, not meetings: an EARLIER, unrelated Meetings
+  // page (removed in f144c4c) left a `meetings` table behind in production
+  // with its own different columns (meeting_date, etc — see the drop script
+  // at database/imports/meetings_drop_table.sql, never run). CREATE TABLE IF
+  // NOT EXISTS meetings silently no-op'd against that leftover table, so
+  // every query here failed with "Unknown column 'date'". A distinct name
+  // sidesteps the collision without touching that old table or its data.
+  `CREATE TABLE IF NOT EXISTS scheduler_meetings (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, date DATE NOT NULL, start_time VARCHAR(8) DEFAULT '', end_time VARCHAR(8) DEFAULT '', attendees TEXT DEFAULT '', location VARCHAR(255) DEFAULT '', notes TEXT DEFAULT NULL, created_by VARCHAR(16) DEFAULT NULL, created_by_name VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_scheduler_meetings_date ON scheduler_meetings (date)`,
 ];
 
 // ── HRMS ──────────────────────────────────────────────────────────────────────
@@ -5415,7 +5423,7 @@ app.get('/api/scheduler', requireAuth, async (req, res) => {
     tasks = [...tasks, ...checklistTasks];
 
     const meetingRows = await q(
-      `SELECT id, title, date, start_time AS "startTime", end_time AS "endTime", attendees, location, notes, created_by AS "createdBy", created_by_name AS "createdByName" FROM meetings WHERE date BETWEEN $1 AND $2 ORDER BY date ASC, start_time ASC`,
+      `SELECT id, title, date, start_time AS "startTime", end_time AS "endTime", attendees, location, notes, created_by AS "createdBy", created_by_name AS "createdByName" FROM scheduler_meetings WHERE date BETWEEN $1 AND $2 ORDER BY date ASC, start_time ASC`,
       [from, to]);
     // attendees is a plain comma-joined name list (see POST /api/meetings), so
     // "am I on this one" is an exact, case-insensitive name match — the same
@@ -5443,9 +5451,9 @@ app.post('/api/meetings', requireAuth, async (req, res) => {
     if (!date || !title) return res.status(400).json({ error: 'date and title required' });
     const me = req.session?.user;
     const attendees = Array.isArray(b.attendees) ? b.attendees.filter(Boolean).join(', ') : String(b.attendees || '').trim();
-    const id = await withSeqId('meetings', 'MTG', 4, (newId) =>
+    const id = await withSeqId('scheduler_meetings', 'MTG', 4, (newId) =>
       pool.query(
-        `INSERT INTO meetings (id, title, date, start_time, end_time, attendees, location, notes, created_by, created_by_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        `INSERT INTO scheduler_meetings (id, title, date, start_time, end_time, attendees, location, notes, created_by, created_by_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
         [newId, title, date, (b.startTime || '').trim(), (b.endTime || '').trim(), attendees, (b.location || '').trim(), (b.notes || '').trim() || null, me?.id || null, me?.name || '']));
     return res.status(201).json({ success: true, id });
   } catch (err) { return res.status(500).json({ error: err.message }); }
@@ -5458,11 +5466,11 @@ app.delete('/api/meetings', requireAuth, async (req, res) => {
     if (!id) return res.status(400).json({ error: 'id required' });
     const me = req.session?.user;
     if (!isAdminUser(me)) {
-      const rows = await q('SELECT created_by AS "createdBy" FROM meetings WHERE id = $1', [id]);
+      const rows = await q('SELECT created_by AS "createdBy" FROM scheduler_meetings WHERE id = $1', [id]);
       if (!rows.length) return res.status(404).json({ error: 'Not found' });
       if (rows[0].createdBy !== me?.id) return res.status(403).json({ error: 'Only the organizer or an Admin/HOD can cancel this meeting' });
     }
-    await pool.query('DELETE FROM meetings WHERE id = $1', [id]);
+    await pool.query('DELETE FROM scheduler_meetings WHERE id = $1', [id]);
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
