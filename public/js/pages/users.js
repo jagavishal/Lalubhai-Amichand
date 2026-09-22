@@ -54,6 +54,7 @@ window.Pages.users = (() => {
   const ALL_PAGES = [
     { cat: 'Basic', key: 'all-tasks',     label: 'All Tasks' },
     { cat: 'Basic', key: 'approvals',     label: 'Approvals' },
+    { cat: 'Basic', key: 'scheduler',     label: 'Scheduler' },
     // No 'leave-tracker' row: that page was retired in favour of HR Section →
     // Leave Management. A permission record still carrying the old key keeps
     // working — sidebar.js treats it as a grant for 'hr-leave' — but it is not

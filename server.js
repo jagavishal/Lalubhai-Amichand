@@ -402,6 +402,12 @@ const SCHEMA = [
   // its own table. The few lifted-out columns exist only for the list view.
   `CREATE TABLE IF NOT EXISTS export_shipments (id VARCHAR(16) PRIMARY KEY, invoice_no VARCHAR(64) NOT NULL, invoice_date VARCHAR(32) DEFAULT '', consignee_name VARCHAR(255) DEFAULT '', data LONGTEXT NOT NULL, created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_export_ship_inv ON export_shipments (invoice_no)`,
+  // ── Scheduler: meetings only — holidays already have their own table above
+  // and tasks are read straight off `delegations` (see GET /api/scheduler).
+  // attendees is a plain comma-joined name list, the same shallow shape the
+  // rest of the app stores a free-text people field in (e.g. delegations.doer).
+  `CREATE TABLE IF NOT EXISTS meetings (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, date DATE NOT NULL, start_time VARCHAR(8) DEFAULT '', end_time VARCHAR(8) DEFAULT '', attendees TEXT DEFAULT '', location VARCHAR(255) DEFAULT '', notes TEXT DEFAULT NULL, created_by VARCHAR(16) DEFAULT NULL, created_by_name VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_meetings_date ON meetings (date)`,
 ];
 
 // ── HRMS ──────────────────────────────────────────────────────────────────────
@@ -4972,7 +4978,7 @@ function parsePermissions(raw) {
 // Default page access for newly created (non-Admin/HOD) users — must match keys in
 // ALL_PAGES (public/js/pages/users.js). Everything else stays hidden until an Admin
 // grants it from the Access tab.
-const DEFAULT_USER_PAGES = ['all-tasks', 'approvals', 'announcements', 'help-ticket', 'mis', 'profile'];
+const DEFAULT_USER_PAGES = ['all-tasks', 'approvals', 'scheduler', 'announcements', 'help-ticket', 'mis', 'profile'];
 function defaultPermissionsFor(roles) {
   const list = Array.isArray(roles) ? roles : String(roles || '').split(',').map(r => r.trim());
   if (list.includes('Admin') || list.includes('HOD')) return null;
@@ -5284,6 +5290,113 @@ app.delete('/api/holidays', requireAuth, requireAdmin, async (req, res) => {
     await pool.query('DELETE FROM holidays WHERE id = $1', [id]);
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
+});
+
+// ── Scheduler ─────────────────────────────────────────────────────────────────
+// One combined read for the Scheduler calendar: week-offs + holidays (from the
+// same source the HRMS muster roll uses, see getWorkingDayContext), this
+// person's own due tasks (the exact visibility GET /api/delegations already
+// grants — Admin everything, HOD their department, everyone else their own —
+// just bounded to the visible date range instead of the whole table), and the
+// company's scheduled meetings. Three different backing sources, one call, so
+// a 42-cell month grid doesn't fire three requests every time it's opened.
+app.get('/api/scheduler', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const from = normDate(req.query.from);
+    const to = normDate(req.query.to);
+    if (!from || !to) return res.status(400).json({ error: 'from and to (YYYY-MM-DD) are required' });
+
+    const { weekOffs, holidays: holidayMap } = await getWorkingDayContext();
+    const holidays = [...holidayMap.entries()]
+      .filter(([date]) => date >= from && date <= to)
+      .map(([date, name]) => ({ date, name }))
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+
+    const sessUser = req.session?.user;
+    const userId = sessUser?.id;
+    const userName = sessUser?.name || '';
+    const isHOD = isHODUser(sessUser);
+    const isTrueAdmin = isTrueAdminUser(sessUser);
+
+    let tasks;
+    if (!USE_DB) {
+      const store = await readStore();
+      let rows = (store.delegations || [])
+        .filter(d => { const due = d.dueDate || d.due_date; return due && due >= from && due <= to; })
+        .map(d => ({ id: d.id, description: d.description, dueDate: d.dueDate || d.due_date, doerId: d.doerId, doer: d.doer, delegatedBy: d.delegatedBy, status: d.status, priority: d.priority || 'Low' }));
+      if (!isTrueAdmin) {
+        if (isHOD) {
+          const myFreshDept = (store.users || []).find(u => u.id === userId)?.department || '';
+          const teamNames = new Set((store.users || []).filter(u => normDept(u.department) === normDept(myFreshDept)).map(u => (u.name || '').toLowerCase()));
+          rows = rows.filter(d => teamNames.has((d.doer || '').toLowerCase()) || d.doerId === userId || d.delegatedBy === userId);
+        } else {
+          rows = rows.filter(d => d.doerId === userId || (d.doer || '').toLowerCase() === userName.toLowerCase() || d.delegatedBy === userId);
+        }
+      }
+      tasks = rows;
+    } else {
+      let sqlWhere = `WHERE due_date BETWEEN $1 AND $2`;
+      const params = [from, to];
+      if (isTrueAdmin) {
+        // Unscoped beyond the date range — only a true company-wide Admin.
+      } else if (isHOD) {
+        // See the matching comment on GET /api/delegations: each `?` needs its
+        // own param on the MySQL path, never a reused placeholder number.
+        sqlWhere += ` AND (doer_id IN (SELECT id FROM users WHERE LOWER(TRIM(department))=(SELECT LOWER(TRIM(department)) FROM users WHERE id=$3)) OR doer_id=$4 OR LOWER(doer)=LOWER($5) OR delegated_by=$6)`;
+        params.push(userId, userId, userName, userId);
+      } else {
+        sqlWhere += ` AND (doer_id=$3 OR LOWER(doer)=LOWER($4) OR delegated_by=$5)`;
+        params.push(userId, userName, userId);
+      }
+      const rows = await q(`SELECT id, description, due_date AS "dueDate", doer_id AS "doerId", doer, delegated_by AS "delegatedBy", status, priority FROM delegations ${sqlWhere} ORDER BY due_date ASC`, params);
+      tasks = rows.map(t => ({ ...t, dueDate: toDateStr(t.dueDate) }));
+    }
+
+    const meetingRows = await q(
+      `SELECT id, title, date, start_time AS "startTime", end_time AS "endTime", attendees, location, notes, created_by AS "createdBy", created_by_name AS "createdByName" FROM meetings WHERE date BETWEEN $1 AND $2 ORDER BY date ASC, start_time ASC`,
+      [from, to]);
+    const meetings = meetingRows.map(m => ({ ...m, date: toDateStr(m.date) }));
+
+    return res.json({ weekOffs: [...weekOffs], holidays, tasks, meetings });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// Scheduling a meeting is not admin-gated — anyone can put one on the shared
+// calendar, the same way anyone can raise a task. Cancelling one is restricted
+// below to the organizer (or an Admin/HOD) so one person's meeting can't be
+// pulled by somebody who merely sees it on the grid.
+app.post('/api/meetings', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const b = req.body || {};
+    const date = normDate(b.date);
+    const title = (b.title || '').trim();
+    if (!date || !title) return res.status(400).json({ error: 'date and title required' });
+    const me = req.session?.user;
+    const attendees = Array.isArray(b.attendees) ? b.attendees.filter(Boolean).join(', ') : String(b.attendees || '').trim();
+    const id = await withSeqId('meetings', 'MTG', 4, (newId) =>
+      pool.query(
+        `INSERT INTO meetings (id, title, date, start_time, end_time, attendees, location, notes, created_by, created_by_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [newId, title, date, (b.startTime || '').trim(), (b.endTime || '').trim(), attendees, (b.location || '').trim(), (b.notes || '').trim() || null, me?.id || null, me?.name || '']));
+    return res.status(201).json({ success: true, id });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/meetings', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: 'id required' });
+    const me = req.session?.user;
+    if (!isAdminUser(me)) {
+      const rows = await q('SELECT created_by AS "createdBy" FROM meetings WHERE id = $1', [id]);
+      if (!rows.length) return res.status(404).json({ error: 'Not found' });
+      if (rows[0].createdBy !== me?.id) return res.status(403).json({ error: 'Only the organizer or an Admin/HOD can cancel this meeting' });
+    }
+    await pool.query('DELETE FROM meetings WHERE id = $1', [id]);
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
 // ── Leaves ────────────────────────────────────────────────────────────────────
