@@ -3975,6 +3975,7 @@ const DEFAULT_RETAIL_EXPENSE_CATEGORIES = [
   'Bills & Utilities', 'Healthcare', 'Travel', 'Education', 'Gifts & Donations', 'Investments', 'Income', 'Other', 'House Keeping',
 ];
 const DEFAULT_RETAIL_EXPENSE_ITEMS = ['Office Supplies', 'Team Lunch', 'Internet Bill', 'Taxi Fare'];
+const DEFAULT_RETAIL_EXPENSE_BRANCHES = ['Satellite', 'Bopal'];
 
 const RETAIL_EXPENSE_UPLOAD_ROOT = pathMod.join(__dirname, 'uploads', 'retail-expenses');
 const RETAIL_EXPENSE_INVOICE_BYTES = 4 * 1024 * 1024;
@@ -3998,7 +3999,7 @@ async function _rdConfig() {
   const [categories, items, branches] = await Promise.all([
     readAuthority('retail_expense_categories', DEFAULT_RETAIL_EXPENSE_CATEGORIES),
     readAuthority('retail_expense_items', DEFAULT_RETAIL_EXPENSE_ITEMS),
-    readAuthority('retail_expense_branches', []),
+    readAuthority('retail_expense_branches', DEFAULT_RETAIL_EXPENSE_BRANCHES),
   ]);
   return { categories, items, branches, paymentTypes: RETAIL_EXPENSE_PAYMENT_TYPES };
 }
@@ -4009,7 +4010,7 @@ async function _rdAddConfig(type, value) {
   if (!key) throw Object.assign(new Error('Unknown list'), { status: 400 });
   const clean = String(value || '').trim();
   if (!clean) throw Object.assign(new Error('Enter a value'), { status: 400 });
-  const seed = type === 'category' ? DEFAULT_RETAIL_EXPENSE_CATEGORIES : type === 'item' ? DEFAULT_RETAIL_EXPENSE_ITEMS : [];
+  const seed = type === 'category' ? DEFAULT_RETAIL_EXPENSE_CATEGORIES : type === 'item' ? DEFAULT_RETAIL_EXPENSE_ITEMS : DEFAULT_RETAIL_EXPENSE_BRANCHES;
   const list = await readAuthority(key, seed);
   if (list.some((v) => String(v).toLowerCase() === clean.toLowerCase())) throw Object.assign(new Error('Already in the list'), { status: 409 });
   list.push(clean);

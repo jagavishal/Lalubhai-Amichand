@@ -26,8 +26,9 @@ rather than just abandoning.
 - No monthly email/WhatsApp report automation, and no shared dashboard
   password — access is the same page-permission model every other module
   uses.
-- Branch list starts empty; add the company's real branches from "Manage
-  Lists" (the original's seed list was generic placeholder city names).
+- Branch list is seeded with the two real branches — Satellite, Bopal
+  (`DEFAULT_RETAIL_EXPENSE_BRANCHES` in server.js) — not the original's
+  generic placeholder city names. Add more from "Manage Lists" if needed.
 
 ## The original Apps Script (for context)
 
