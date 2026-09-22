@@ -5292,16 +5292,39 @@ app.delete('/api/holidays', requireAuth, requireAdmin, async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
+// Which checklist occurrences (masters rows) this person has ever completed —
+// same scoping GET /api/checklist-completions itself uses (Admin/HOD see every
+// completion, everyone else only completions on their own name's occurrences).
+// A Set of master ids, since that's all a "done or not" check needs.
+async function completedMasterIds(sessUser) {
+  if (!USE_DB) return new Set();
+  try {
+    if (isAdminUser(sessUser)) {
+      const rows = await q('SELECT master_id AS "masterId" FROM checklist_completions');
+      return new Set(rows.map(r => r.masterId));
+    }
+    const rows = await q(
+      `SELECT cc.master_id AS "masterId" FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(TRIM(m.assigned_to)) = LOWER(TRIM($1))`,
+      [sessUser?.name || '']);
+    return new Set(rows.map(r => r.masterId));
+  } catch { return new Set(); }
+}
+
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 // One combined read for the Scheduler calendar: week-offs + holidays (from the
 // same source the HRMS muster roll uses, see getWorkingDayContext), this
-// person's own due tasks (the exact visibility GET /api/delegations already
-// grants — Admin everything, HOD their department, everyone else their own —
-// just bounded to the visible date range instead of the whole table), and
-// this person's own meetings (organized by them or naming them in attendees —
-// "sab user ko apna apna hi dikhe", not a company-wide board everyone reads).
-// Three different backing sources, one call, so a 42-cell month grid doesn't
-// fire three requests every time it's opened.
+// person's due tasks, this person's own meetings (organized by them or naming
+// them in attendees — "sab user ko apna apna hi dikhe", not a company-wide
+// board everyone reads), all bounded to the visible date range.
+//
+// "Due tasks" is two different tables, both merged in the exact shape All
+// Tasks already merges them in (see fetchData() in all-tasks.js): one-off
+// delegations (GET /api/delegations' own due_date column), AND recurring
+// checklist occurrences — each `masters` row IS one dated occurrence, its
+// `start_date` IS that occurrence's due date (see GET /api/masters' own
+// comment on this), and it's "done" once completedMasterIds() above says so.
+// Reading delegations alone was most of the calendar staying blank: the
+// day-to-day checklist is where most assigned tasks actually live.
 app.get('/api/scheduler', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
@@ -5354,6 +5377,42 @@ app.get('/api/scheduler', requireAuth, async (req, res) => {
       const rows = await q(`SELECT id, description, due_date AS "dueDate", doer_id AS "doerId", doer, delegated_by AS "delegatedBy", status, priority FROM delegations ${sqlWhere} ORDER BY due_date ASC`, params);
       tasks = rows.map(t => ({ ...t, dueDate: toDateStr(t.dueDate) }));
     }
+
+    let checklistTasks;
+    if (!USE_DB) {
+      const store = await readStore();
+      let rows = (store.masters || []).filter(m => m.startDate && m.startDate >= from && m.startDate <= to);
+      if (!isTrueAdmin) {
+        if (isHOD) {
+          const myFreshDept = (store.users || []).find(u => u.id === userId)?.department || '';
+          const teamNames = new Set((store.users || []).filter(u => normDept(u.department) === normDept(myFreshDept)).map(u => (u.name || '').toLowerCase()));
+          rows = rows.filter(m => teamNames.has((m.assignedTo || '').toLowerCase()));
+        } else {
+          rows = rows.filter(m => (m.assignedTo || '').toLowerCase() === userName.toLowerCase());
+        }
+      }
+      checklistTasks = rows.map(m => ({ id: m.id, description: m.task, dueDate: m.startDate, doerId: null, doer: m.assignedTo || '', delegatedBy: null, status: 'pending', priority: 'Low' }));
+    } else {
+      const rows = await q(`SELECT id, task, assigned_to AS "assignedTo", start_date AS "startDate" FROM masters WHERE start_date BETWEEN $1 AND $2`, [from, to]);
+      let scoped = rows;
+      if (!isTrueAdmin) {
+        if (isHOD) {
+          const teamRows = await q('SELECT LOWER(TRIM(name)) AS n FROM users WHERE LOWER(TRIM(department))=(SELECT LOWER(TRIM(department)) FROM users WHERE id=$1)', [userId]);
+          const teamNames = new Set(teamRows.map(r => r.n));
+          scoped = rows.filter(m => teamNames.has((m.assignedTo || '').trim().toLowerCase()));
+        } else {
+          scoped = rows.filter(m => (m.assignedTo || '').trim().toLowerCase() === userName.toLowerCase());
+        }
+      }
+      const [leaveCtx, doneIds] = await Promise.all([getLeaveDayContext(), completedMasterIds(sessUser)]);
+      checklistTasks = scoped.map(m => {
+        const dueDate = toDateStr(m.startDate);
+        const onLeave = leaveOn(leaveCtx, m.assignedTo, dueDate);
+        const status = doneIds.has(m.id) ? 'done' : (onLeave ? 'leave' : 'pending');
+        return { id: m.id, description: m.task, dueDate, doerId: null, doer: m.assignedTo || '', delegatedBy: null, status, priority: 'Low' };
+      });
+    }
+    tasks = [...tasks, ...checklistTasks];
 
     const meetingRows = await q(
       `SELECT id, title, date, start_time AS "startTime", end_time AS "endTime", attendees, location, notes, created_by AS "createdBy", created_by_name AS "createdByName" FROM meetings WHERE date BETWEEN $1 AND $2 ORDER BY date ASC, start_time ASC`,

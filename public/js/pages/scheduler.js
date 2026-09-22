@@ -102,18 +102,19 @@ window.Pages.scheduler = (() => {
     const off = !info.holiday && _isWeekOff(d);
 
     const items = [
-      ...info.meetings.map(m => ({ kind: 'meeting', label: m.title })),
-      ...info.tasks.map(t => ({ kind: 'task', label: t.description, done: t.status === 'done' })),
+      ...info.meetings.map(m => ({ kind: 'meeting', label: m.title, muted: false })),
+      // 'leave': the doer's approved leave covers this checklist occurrence —
+      // muted like done, but not struck through (it was never completed).
+      ...info.tasks.map(t => ({ kind: 'task', label: t.description, done: t.status === 'done', muted: t.status === 'done' || t.status === 'leave' })),
     ];
     const shown = items.slice(0, 3);
     const more = items.length - shown.length;
 
     const itemHTML = shown.map(it => {
-      const done = it.kind === 'task' && it.done;
-      const color = done ? 'var(--text-muted)' : (it.kind === 'meeting' ? 'var(--color-purple-text)' : 'var(--color-warning-text)');
+      const color = it.muted ? 'var(--text-muted)' : (it.kind === 'meeting' ? 'var(--color-purple-text)' : 'var(--color-warning-text)');
       return `<div style="display:flex;align-items:center;gap:4px;overflow:hidden;">
-          <span style="width:5px;height:5px;border-radius:50%;flex-shrink:0;background:${ITEM_DOT[it.kind]};opacity:${done ? '.4' : '1'};"></span>
-          <span style="font-size:10.5px;font-weight:500;color:${color};text-decoration:${done ? 'line-through' : 'none'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(it.label)}">${esc(it.label)}</span>
+          <span style="width:5px;height:5px;border-radius:50%;flex-shrink:0;background:${ITEM_DOT[it.kind]};opacity:${it.muted ? '.4' : '1'};"></span>
+          <span style="font-size:10.5px;font-weight:500;color:${color};text-decoration:${it.done ? 'line-through' : 'none'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(it.label)}">${esc(it.label)}</span>
         </div>`;
     }).join('');
     const moreHTML = more > 0 ? `<div style="font-size:10px;font-weight:600;color:var(--text-muted);padding-left:9px;">+ ${more} more</div>` : '';
@@ -168,14 +169,17 @@ window.Pages.scheduler = (() => {
       : '';
 
     const tasksHTML = info.tasks.length
-      ? info.tasks.map(t => `
+      ? info.tasks.map(t => {
+        const dotColor = t.status === 'done' ? 'var(--color-success)' : t.status === 'leave' ? 'var(--text-muted)' : 'var(--color-warning)';
+        return `
         <div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-radius:8px;background:var(--surface-alt);">
-          <div style="width:7px;height:7px;border-radius:50%;margin-top:4px;flex-shrink:0;background:${t.status === 'done' ? 'var(--color-success)' : 'var(--color-warning)'};"></div>
+          <div style="width:7px;height:7px;border-radius:50%;margin-top:4px;flex-shrink:0;background:${dotColor};"></div>
           <div style="min-width:0;flex:1;">
             <div style="font-size:12.5px;font-weight:600;color:var(--text-primary);text-decoration:${t.status === 'done' ? 'line-through' : 'none'};">${esc(t.description)}</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:1px;">${esc(t.doer || '')}${t.priority ? ' · ' + esc(t.priority) : ''}</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:1px;">${esc(t.doer || '')}${t.status === 'leave' ? ' · On Leave' : (t.priority ? ' · ' + esc(t.priority) : '')}</div>
           </div>
-        </div>`).join('')
+        </div>`;
+      }).join('')
       : `<div style="font-size:12px;color:var(--text-muted);padding:4px 2px;">No tasks due</div>`;
 
     // Timeline rail for meetings — an hour label column plus a relative box per
