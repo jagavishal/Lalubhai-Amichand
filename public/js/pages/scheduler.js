@@ -46,9 +46,9 @@ window.Pages.scheduler = (() => {
     let h12 = h % 12; if (h12 === 0) h12 = 12;
     return `${h12}:${String(m || 0).padStart(2, '0')} ${ap}`;
   }
-  function _fmtDayHeader(dateStr) {
-    const d = new Date(dateStr + 'T00:00:00');
-    return d.toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' });
+  function _fmtDayShort(dateStr) {
+    const [y, m, day] = dateStr.split('-');
+    return `${day}-${m}-${y}`;
   }
 
   function _isAdmin() {
@@ -87,7 +87,12 @@ window.Pages.scheduler = (() => {
     return (_data.weekOffs || []).includes(String(d.getDay()));
   }
 
-  /* ── Month grid ───────────────────────────────────────────────────── */
+  /* ── Month grid ──────────────────────────────────────────────────────
+     A flush, hairline-bordered table (not individually-boxed cards) — every
+     cell carries its own right/bottom border, and the wrapper's top/left
+     border closes the rectangle, so no index math is needed to skip the
+     outer edges. */
+  const ITEM_DOT = { task: 'var(--color-warning)', meeting: 'var(--color-purple)' };
   function _dayCellHTML(d) {
     const dateStr = _dateStr(d);
     const inMonth = d.getMonth() === _view.getMonth();
@@ -100,50 +105,53 @@ window.Pages.scheduler = (() => {
       ...info.meetings.map(m => ({ kind: 'meeting', label: m.title })),
       ...info.tasks.map(t => ({ kind: 'task', label: t.description, done: t.status === 'done' })),
     ];
-    const shown = items.slice(0, 2);
+    const shown = items.slice(0, 3);
     const more = items.length - shown.length;
 
-    const chipHTML = shown.map(it => {
-      if (it.kind === 'meeting') {
-        return `<div style="font-size:10.5px;padding:1px 5px;border-radius:4px;background:var(--color-purple-bg);color:var(--color-purple-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(it.label)}">${esc(it.label)}</div>`;
-      }
-      const done = it.done;
-      return `<div style="font-size:10.5px;padding:1px 5px;border-radius:4px;background:${done ? 'transparent' : 'var(--color-warning-bg)'};color:${done ? 'var(--text-muted)' : 'var(--color-warning-text)'};text-decoration:${done ? 'line-through' : 'none'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(it.label)}">${esc(it.label)}</div>`;
+    const itemHTML = shown.map(it => {
+      const done = it.kind === 'task' && it.done;
+      const color = done ? 'var(--text-muted)' : (it.kind === 'meeting' ? 'var(--color-purple-text)' : 'var(--color-warning-text)');
+      return `<div style="display:flex;align-items:center;gap:4px;overflow:hidden;">
+          <span style="width:5px;height:5px;border-radius:50%;flex-shrink:0;background:${ITEM_DOT[it.kind]};opacity:${done ? '.4' : '1'};"></span>
+          <span style="font-size:10.5px;font-weight:500;color:${color};text-decoration:${done ? 'line-through' : 'none'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(it.label)}">${esc(it.label)}</span>
+        </div>`;
     }).join('');
-    const moreHTML = more > 0 ? `<div style="font-size:10px;color:var(--text-muted);padding-left:1px;">+ ${more} more</div>` : '';
+    const moreHTML = more > 0 ? `<div style="font-size:10px;font-weight:600;color:var(--text-muted);padding-left:9px;">+ ${more} more</div>` : '';
 
     const tagHTML = info.holiday
-      ? `<span style="font-size:10px;font-weight:700;color:var(--color-danger);">${esc(info.holiday.name)}</span>`
+      ? `<span style="font-size:10px;font-weight:700;color:var(--color-danger);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:64px;" title="${esc(info.holiday.name)}">${esc(info.holiday.name)}</span>`
       : off
-      ? `<span style="font-size:10px;font-weight:700;color:var(--text-muted);">Off</span>`
+      ? `<span style="font-size:10px;font-weight:700;color:var(--color-danger);">Off</span>`
       : '';
+
+    const numHTML = (isSelected || isToday)
+      ? `<span style="display:inline-flex;align-items:center;justify-content:center;width:21px;height:21px;border-radius:50%;background:${isSelected ? 'var(--color-primary)' : 'transparent'};color:${isSelected ? 'var(--color-primary-text)' : 'var(--color-primary)'};border:${isSelected ? 'none' : '1.5px solid var(--color-primary)'};">${d.getDate()}</span>`
+      : d.getDate();
 
     return `
       <div class="sch-cell" data-date="${dateStr}"
         style="
-          min-height:88px;padding:6px 6px 5px;border-radius:8px;cursor:pointer;
+          min-height:96px;padding:6px 7px;cursor:pointer;
           background:${isSelected ? 'var(--color-primary-light)' : 'var(--surface)'};
-          border:1.5px solid ${isSelected ? 'var(--color-primary)' : 'var(--border-light)'};
-          opacity:${inMonth ? '1' : '0.45'};
-          display:flex;flex-direction:column;gap:3px;transition:border-color .12s,background .12s;
+          border-right:1px solid var(--border-light);border-bottom:1px solid var(--border-light);
+          opacity:${inMonth ? '1' : '0.4'};
+          display:flex;flex-direction:column;gap:4px;transition:background .12s;
         ">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
-          <span style="font-size:12.5px;font-weight:${isToday ? '800' : '600'};color:${isToday ? 'var(--color-primary)' : 'var(--text-primary)'};">
-            ${isToday ? `<span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--color-primary);color:var(--color-primary-text);">${d.getDate()}</span>` : d.getDate()}
-          </span>
+          <span style="font-size:12.5px;font-weight:600;color:var(--text-primary);">${numHTML}</span>
           ${tagHTML}
         </div>
-        <div style="display:flex;flex-direction:column;gap:2px;overflow:hidden;">${chipHTML}${moreHTML}</div>
+        <div style="display:flex;flex-direction:column;gap:3px;overflow:hidden;">${itemHTML}${moreHTML}</div>
       </div>`;
   }
 
   function _gridHTML() {
     const days = _gridDays(_view);
-    const header = DOW.map(d => `<div style="font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted);text-align:center;padding:4px 0;">${d}</div>`).join('');
+    const header = DOW.map(d => `<div style="font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted);text-align:center;padding:4px 0 8px;">${d}</div>`).join('');
     const cells = days.map(_dayCellHTML).join('');
     return `
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px 6px;">${header}</div>
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-top:4px;">${cells}</div>`;
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);">${header}</div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);border-top:1px solid var(--border-light);border-left:1px solid var(--border-light);border-radius:8px 8px 0 0;overflow:hidden;">${cells}</div>`;
   }
 
   /* ── Day panel ────────────────────────────────────────────────────── */
@@ -212,15 +220,15 @@ window.Pages.scheduler = (() => {
 
     return `
       <div style="display:flex;flex-direction:column;gap:14px;">
-        <div>
-          <div style="font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Day</div>
-          <div style="font-size:15px;font-weight:700;color:var(--text-primary);margin-top:2px;">${_fmtDayHeader(_selected)}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <div style="font-size:15px;font-weight:700;color:var(--text-primary);">
+            Day <span style="color:var(--text-muted);font-weight:500;">·</span> ${_fmtDayShort(_selected)}
+          </div>
+          <button id="sch-add-btn" title="Schedule a meeting on this day" style="width:26px;height:26px;border-radius:7px;border:none;background:var(--color-primary-light);color:var(--color-primary-strong);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
         </div>
         ${banner}
-        <button id="sch-add-btn" class="btn-primary" style="align-self:flex-start;display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;font-size:12.5px;font-weight:600;border:none;cursor:pointer;">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-          Schedule a Meeting
-        </button>
 
         <div>
           <div style="font-size:11px;font-weight:700;color:var(--text-secondary);margin-bottom:6px;">Tasks Due</div>
@@ -231,7 +239,7 @@ window.Pages.scheduler = (() => {
           <div style="font-size:11px;font-weight:700;color:var(--text-secondary);margin-bottom:6px;">Meetings</div>
           ${info.meetings.length ? '' : '<div style="font-size:12px;color:var(--text-muted);padding:4px 2px;">Nothing scheduled</div>'}
           ${inRange.length ? `
-            <div style="position:relative;height:280px;background:var(--surface);border:1px solid var(--border-light);border-radius:8px;overflow:hidden;">
+            <div style="position:relative;height:280px;border-top:1px solid var(--border-light);">
               ${railHTML}
               ${meetingBlocks}
             </div>` : ''}
@@ -263,24 +271,29 @@ window.Pages.scheduler = (() => {
     if (!el) return;
 
     el.innerHTML = `
-      <div style="max-width:1240px;margin:0 auto;padding:4px 0;">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
-          <div>
-            <h1 style="font-size:19px;font-weight:700;color:var(--text-primary);letter-spacing:-0.02em;margin:0;">Scheduler</h1>
-            <p style="font-size:12.5px;color:var(--text-secondary);margin:3px 0 0;">Holidays, your tasks and meetings, on one calendar</p>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;">
+      <div style="max-width:1280px;margin:0 auto;padding:4px 0;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
+          <h1 style="font-size:18px;font-weight:700;color:var(--text-primary);letter-spacing:-0.02em;margin:0;">Scheduler</h1>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
+          <div style="display:flex;align-items:center;gap:10px;">
             <button id="sch-today" class="btn-secondary" style="padding:7px 12px;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;">Today</button>
-            <div style="display:flex;align-items:center;gap:2px;">
-              <button id="sch-prev" class="btn-secondary" style="width:30px;height:30px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
-              <button id="sch-next" class="btn-secondary" style="width:30px;height:30px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+            <div style="display:flex;align-items:center;gap:2px;border:1.5px solid var(--border-base);border-radius:8px;padding:2px;">
+              <button id="sch-prev" style="width:26px;height:26px;border-radius:6px;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+              <button id="sch-next" style="width:26px;height:26px;border-radius:6px;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
             </div>
-            <div id="sch-month-label" style="font-size:15px;font-weight:700;color:var(--text-primary);min-width:140px;">${MONTH_NAMES[_view.getMonth()]} ${_view.getFullYear()}</div>
+            <div id="sch-month-label" style="font-size:16px;font-weight:700;color:var(--text-primary);min-width:150px;">${MONTH_NAMES[_view.getMonth()]} ${_view.getFullYear()}</div>
           </div>
+          <button id="sch-schedule-btn" class="btn-primary" style="display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:9px;font-size:13px;font-weight:600;border:none;cursor:pointer;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+            Schedule
+          </button>
         </div>
 
         <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">
-          <div id="sch-grid-wrap" style="flex:1 1 640px;min-width:0;background:var(--surface);border:1px solid var(--border-light);border-radius:12px;padding:12px;box-shadow:var(--shadow-xs);">
+          <div id="sch-grid-wrap" style="flex:1 1 640px;min-width:0;background:var(--surface);border:1px solid var(--border-light);border-radius:12px;padding:14px;box-shadow:var(--shadow-xs);">
             <div id="sch-grid">${_gridHTML()}</div>
           </div>
           <div id="sch-day-panel" style="flex:1 1 300px;max-width:340px;min-width:280px;background:var(--surface);border:1px solid var(--border-light);border-radius:12px;padding:16px;box-shadow:var(--shadow-xs);">
@@ -308,6 +321,7 @@ window.Pages.scheduler = (() => {
       });
     });
 
+    document.getElementById('sch-schedule-btn')?.addEventListener('click', () => _openMeetingModal(_selected));
     document.getElementById('sch-add-btn')?.addEventListener('click', () => _openMeetingModal(_selected));
     document.querySelectorAll('.sch-meeting-del').forEach(btn => {
       btn.addEventListener('click', (e) => { e.stopPropagation(); _deleteMeeting(btn.dataset.id); });
