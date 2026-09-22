@@ -3946,6 +3946,245 @@ app.post('/pt-action', async (req, res) => {
   } catch (e) { res.status(e.status || 500).send(_leaveActionPage({ title: 'Could not record the decision', tone: 'bad', lead: escHtml(e.message) })); }
 });
 
+/* ── Retail Dashboard (branch expense tracker) ─────────────────────────────
+   "same dashboard erp mai add kro retail head mai" — the branch expense
+   tracker that used to be a standalone Google Apps Script (see
+   docs/RETAIL_DASHBOARD.md for that script's shape) rebuilt as a page inside
+   the ERP, the same way HRMS was. Every branch expense is logged here —
+   date, branch, item, category, amount, how it was paid — and the dashboard
+   summarises them by month, branch, category and payment mode.
+
+   Simplifications versus the original script, on purpose:
+   - No separate "Cheque Information" sheet/matching logic. A cheque payment
+     just carries its cheque date/number/amount on the expense row itself —
+     the original's separate sheet only ever duplicated that.
+   - Month grouping comes from `entry_date` (YYYY-MM), not a second
+     hand-picked "MonthYear" field.
+   - No monthly email/WhatsApp report automation and no page password —
+     access is the same Users → Access permission ('retail-dashboard') every
+     other module uses, which is a stronger gate than a shared password
+     baked into the sheet ever was. Add mail automation later if wanted.
+   - Categories/items/branches are master lists in app_config, editable from
+     the page — same readAuthority/writeAuthority pattern as the payment
+     tracker's limit/approvers above. Branch list starts empty; add the real
+     branches from the page (the original's seed list was generic placeholder
+     city names, not this company's actual branches). */
+const RETAIL_EXPENSE_PAYMENT_TYPES = ['Cash', 'Credit Card', 'Debit Card', 'UPI', 'Bank Transfer', 'Cheque'];
+const DEFAULT_RETAIL_EXPENSE_CATEGORIES = [
+  'Office Expense', 'Stationery', 'Repair & Maintenance', 'Food & Dining', 'Transportation', 'Shopping', 'Entertainment',
+  'Bills & Utilities', 'Healthcare', 'Travel', 'Education', 'Gifts & Donations', 'Investments', 'Income', 'Other', 'House Keeping',
+];
+const DEFAULT_RETAIL_EXPENSE_ITEMS = ['Office Supplies', 'Team Lunch', 'Internet Bill', 'Taxi Fare'];
+
+const RETAIL_EXPENSE_UPLOAD_ROOT = pathMod.join(__dirname, 'uploads', 'retail-expenses');
+const RETAIL_EXPENSE_INVOICE_BYTES = 4 * 1024 * 1024;
+const RETAIL_EXPENSE_INVOICE_TYPES = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+
+let _rdTableReady = false;
+async function _rdEnsureTable() {
+  if (!USE_DB || _rdTableReady) return;
+  await pool.query(`CREATE TABLE IF NOT EXISTS retail_expenses (
+    id VARCHAR(16) PRIMARY KEY, entry_date DATE DEFAULT NULL, branch_name VARCHAR(100) DEFAULT '',
+    person_name VARCHAR(150) DEFAULT '', item_name VARCHAR(150) DEFAULT '', category VARCHAR(100) DEFAULT '',
+    amount DECIMAL(15,2) NOT NULL DEFAULT 0, payment_type VARCHAR(32) DEFAULT '',
+    cheque_date DATE DEFAULT NULL, cheque_no VARCHAR(64) DEFAULT '', cheque_amount DECIMAL(15,2) DEFAULT NULL,
+    invoice_file VARCHAR(255) DEFAULT '', invoice_name VARCHAR(255) DEFAULT '', note TEXT DEFAULT NULL,
+    created_by VARCHAR(255) DEFAULT '', created_by_id VARCHAR(16) DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  _rdTableReady = true;
+}
+
+async function _rdConfig() {
+  const [categories, items, branches] = await Promise.all([
+    readAuthority('retail_expense_categories', DEFAULT_RETAIL_EXPENSE_CATEGORIES),
+    readAuthority('retail_expense_items', DEFAULT_RETAIL_EXPENSE_ITEMS),
+    readAuthority('retail_expense_branches', []),
+  ]);
+  return { categories, items, branches, paymentTypes: RETAIL_EXPENSE_PAYMENT_TYPES };
+}
+
+const _rdConfigKey = { category: 'retail_expense_categories', item: 'retail_expense_items', branch: 'retail_expense_branches' };
+async function _rdAddConfig(type, value) {
+  const key = _rdConfigKey[type];
+  if (!key) throw Object.assign(new Error('Unknown list'), { status: 400 });
+  const clean = String(value || '').trim();
+  if (!clean) throw Object.assign(new Error('Enter a value'), { status: 400 });
+  const seed = type === 'category' ? DEFAULT_RETAIL_EXPENSE_CATEGORIES : type === 'item' ? DEFAULT_RETAIL_EXPENSE_ITEMS : [];
+  const list = await readAuthority(key, seed);
+  if (list.some((v) => String(v).toLowerCase() === clean.toLowerCase())) throw Object.assign(new Error('Already in the list'), { status: 409 });
+  list.push(clean);
+  await writeAuthority(key, list);
+  return list;
+}
+
+function rdOut(r) {
+  const d = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : (v ? String(v).slice(0, 10) : ''));
+  return {
+    id: r.id, entry_date: d(r.entry_date), branch_name: r.branch_name || '', person_name: r.person_name || '',
+    item_name: r.item_name || '', category: r.category || '', amount: Number(r.amount || 0), payment_type: r.payment_type || '',
+    cheque_date: d(r.cheque_date), cheque_no: r.cheque_no || '', cheque_amount: r.cheque_amount != null ? Number(r.cheque_amount) : null,
+    invoice_name: r.invoice_name || '', has_invoice: !!r.invoice_file, note: r.note || '',
+    created_by: r.created_by || '', created_at: r.created_at || null,
+  };
+}
+
+async function _rdAllRows() {
+  await _rdEnsureTable();
+  if (USE_DB) return q('SELECT * FROM retail_expenses ORDER BY entry_date DESC, created_at DESC', []);
+  return ((await readStore()).retailExpenses || []).slice().sort((a, b) => String(b.entry_date).localeCompare(String(a.entry_date)) || String(b.created_at).localeCompare(String(a.created_at)));
+}
+
+app.get('/api/retail-dashboard/config', requireAuth, requireAdminOrPage('retail-dashboard'), async (req, res) => {
+  try { await ensureSchema(); return res.json(await _rdConfig()); }
+  catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/retail-dashboard/config', requireAuth, requireAdminOrPage('retail-dashboard'), async (req, res) => {
+  try {
+    await ensureSchema();
+    const { type, value } = req.body || {};
+    const list = await _rdAddConfig(String(type || ''), value);
+    return res.status(201).json({ list });
+  } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+});
+
+app.get('/api/retail-dashboard/expenses', requireAuth, requireAdminOrPage('retail-dashboard'), async (req, res) => {
+  try {
+    await ensureSchema();
+    const { month, branch, category } = req.query || {};
+    let rows = (await _rdAllRows()).map(rdOut);
+    if (month) rows = rows.filter((r) => r.entry_date.slice(0, 7) === month);
+    if (branch) rows = rows.filter((r) => r.branch_name === branch);
+    if (category) rows = rows.filter((r) => r.category === category);
+    const total = rows.reduce((n, r) => n + r.amount, 0);
+    return res.json({ rows, total });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/retail-dashboard/expenses', requireAuth, requireAdminOrPage('retail-dashboard'), async (req, res) => {
+  try {
+    await ensureSchema(); await _rdEnsureTable();
+    const user = req.session.user;
+    const b = req.body || {};
+    const amount = toAmount(b.amount);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.entry_date || ''))) return res.status(400).json({ error: 'A valid date is required' });
+    if (!String(b.itemName || '').trim()) return res.status(400).json({ error: 'Item is required' });
+    if (!String(b.category || '').trim()) return res.status(400).json({ error: 'Category is required' });
+    if (amount === null || amount <= 0) return res.status(400).json({ error: 'A valid amount is required' });
+    if (!RETAIL_EXPENSE_PAYMENT_TYPES.includes(b.paymentType)) return res.status(400).json({ error: 'A valid payment type is required' });
+
+    let invoiceFile = '', invoiceName = '';
+    if (b.invoice && b.invoice.dataUrl) {
+      const name = String(b.invoice.name || 'invoice').replace(/[\\/]+/g, '_').slice(0, 120);
+      const parsed = _parseAnyDataUrl(b.invoice.dataUrl);
+      if (!parsed) return res.status(400).json({ error: `Could not read "${name}"` });
+      const ext = RETAIL_EXPENSE_INVOICE_TYPES[parsed.mimeType];
+      if (!ext) return res.status(400).json({ error: `"${name}": only PDF, JPG, PNG and WEBP files are accepted` });
+      if (parsed.buffer.length > RETAIL_EXPENSE_INVOICE_BYTES) return res.status(400).json({ error: `"${name}" is over 4 MB` });
+      invoiceName = name;
+      invoiceFile = `invoice.${ext}`;
+      req._rdInvoiceBuffer = parsed.buffer; // stashed until the id is minted below
+    }
+
+    const row = {
+      entry_date: b.entry_date, branch_name: String(b.branchName || '').trim().slice(0, 100),
+      person_name: String(b.personName || '').trim().slice(0, 150), item_name: String(b.itemName).trim().slice(0, 150),
+      category: String(b.category).trim().slice(0, 100), amount, payment_type: b.paymentType,
+      cheque_date: b.paymentType === 'Cheque' && /^\d{4}-\d{2}-\d{2}$/.test(String(b.chequeDate || '')) ? b.chequeDate : null,
+      cheque_no: b.paymentType === 'Cheque' ? String(b.chequeNo || '').trim().slice(0, 64) : '',
+      cheque_amount: b.paymentType === 'Cheque' ? toAmount(b.chequeAmount) : null,
+      invoice_file: invoiceFile, invoice_name: invoiceName, note: String(b.note || '').trim(),
+      created_by: user.name || user.email || '', created_by_id: user.id,
+    };
+    let id;
+    if (USE_DB) {
+      id = await withSeqId('retail_expenses', 'RE', 4, (nid) => pool.query(
+        `INSERT INTO retail_expenses (id,entry_date,branch_name,person_name,item_name,category,amount,payment_type,cheque_date,cheque_no,cheque_amount,invoice_file,invoice_name,note,created_by,created_by_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        [nid, row.entry_date, row.branch_name, row.person_name, row.item_name, row.category, row.amount, row.payment_type,
+          row.cheque_date, row.cheque_no, row.cheque_amount, row.invoice_file, row.invoice_name, row.note, row.created_by, row.created_by_id]));
+    } else {
+      const store = await readStore();
+      store.retailExpenses = store.retailExpenses || [];
+      let n = 0;
+      for (const r of store.retailExpenses) { const t = String(r.id || '').replace(/^RE/, ''); if (/^\d+$/.test(t)) n = Math.max(n, +t); }
+      id = 'RE' + String(n + 1).padStart(4, '0');
+      store.retailExpenses.push({ ...row, id, created_at: new Date().toISOString() });
+      await writeStore(store);
+    }
+    if (req._rdInvoiceBuffer) {
+      const dir = pathMod.join(RETAIL_EXPENSE_UPLOAD_ROOT, id);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(pathMod.join(dir, invoiceFile), req._rdInvoiceBuffer);
+    }
+    return res.status(201).json(rdOut({ ...row, id, created_at: new Date() }));
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/retail-dashboard/expenses/:id/invoice', requireAuth, requireAdminOrPage('retail-dashboard'), async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = String(req.params.id || '');
+    if (!/^RE\d+$/.test(id)) return res.status(400).json({ error: 'Bad request' });
+    let row;
+    if (USE_DB) row = (await q('SELECT * FROM retail_expenses WHERE id=$1', [id]))[0];
+    else row = ((await readStore()).retailExpenses || []).find((r) => r.id === id);
+    if (!row || !row.invoice_file) return res.status(404).json({ error: 'No invoice on this entry' });
+    const abs = pathMod.join(RETAIL_EXPENSE_UPLOAD_ROOT, id, pathMod.basename(row.invoice_file));
+    return res.download(abs, row.invoice_name || row.invoice_file, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: 'File is missing on the server' });
+    });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// Dashboard aggregates — reduced in JS over however many months are asked
+// for, the same read-the-whole-sheet-and-reduce approach the original script
+// used; retail's expense volume never gets close to where that would matter.
+app.get('/api/retail-dashboard/summary', requireAuth, requireAdminOrPage('retail-dashboard'), async (req, res) => {
+  try {
+    await ensureSchema();
+    const months = Math.min(24, Math.max(1, parseInt(req.query.months, 10) || 12));
+    const rows = (await _rdAllRows()).map(rdOut).filter((r) => r.entry_date);
+
+    const now = new Date();
+    const monthKeys = [];
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      monthKeys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    const inWindow = rows.filter((r) => monthKeys.includes(r.entry_date.slice(0, 7)));
+
+    const bucket = (list, keyFn) => {
+      const m = new Map();
+      for (const r of list) { const k = keyFn(r) || 'Unspecified'; m.set(k, (m.get(k) || 0) + r.amount); }
+      return [...m.entries()].map(([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total);
+    };
+
+    const monthly = monthKeys.map((k) => {
+      const list = rows.filter((r) => r.entry_date.slice(0, 7) === k);
+      return { month: k, total: list.reduce((n, r) => n + r.amount, 0), count: list.length };
+    });
+
+    const thisMonthKey = monthKeys[monthKeys.length - 1];
+    const lastMonthKey = monthKeys[monthKeys.length - 2] || '';
+    const thisMonth = monthly[monthly.length - 1] || { total: 0, count: 0 };
+    const lastMonth = monthly[monthly.length - 2] || { total: 0, count: 0 };
+    const byCategory = bucket(inWindow, (r) => r.category).slice(0, 8);
+    const byBranch = bucket(inWindow, (r) => r.branch_name).slice(0, 8);
+    const byPaymentType = bucket(inWindow, (r) => r.payment_type);
+
+    return res.json({
+      monthly, byCategory, byBranch, byPaymentType,
+      kpis: {
+        thisMonthTotal: thisMonth.total, thisMonthCount: thisMonth.count, thisMonthKey,
+        lastMonthTotal: lastMonth.total, lastMonthKey,
+        windowTotal: inWindow.reduce((n, r) => n + r.amount, 0), windowCount: inWindow.length,
+        topCategory: byCategory[0]?.name || '—', topBranch: byBranch[0]?.name || '—',
+      },
+    });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/announcements', requireAuth, async (req, res) => {
   try {
     await ensureSchema();

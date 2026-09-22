@@ -50,6 +50,8 @@ window.Sidebar = {
     hrassets:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="10" rx="1.5"/><path d="M2 19h20"/><path d="M9 19v-1.5h6V19"/></svg>',
     // Payment Tracker — a banknote with a rupee sign.
     payments:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M9 9h6M9 12h6M12 12v3"/><circle cx="6" cy="12" r="1"/><circle cx="18" cy="12" r="1"/></svg>',
+    // Retail Dashboard — a plain bar chart, now an in-app page.
+    retaildashboard: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="0.5"/><rect x="12" y="8" width="3" height="10" rx="0.5"/><rect x="17" y="5" width="3" height="13" rx="0.5"/></svg>',
     // Section open/close arrow — drawn pointing right and rotated 90° when the
     // section is open, so one icon covers both states.
     chevron:      '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
@@ -145,6 +147,10 @@ window.Sidebar = {
     // payment-tracker.js and /api/payment-tracker in server.js).
     { title: 'Retail', items: [
       { route: 'payment-tracker', label: 'Payment Tracker', icon: 'payments' },
+      // Was an external link to the Google Apps Script expense tracker;
+      // rebuilt as a native page (see retail-dashboard.js and
+      // /api/retail-dashboard/* in server.js) the same way HRMS was.
+      { route: 'retail-dashboard', label: 'Retail Dashboard', icon: 'retaildashboard' },
     ]},
     { title: 'Admin Section', items: [
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },

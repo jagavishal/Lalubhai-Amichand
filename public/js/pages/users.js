@@ -81,6 +81,7 @@ window.Pages.users = (() => {
     { cat: 'Trading Department', key: 'ims-trading',    label: 'IMS Trading' },
 
     { cat: 'Retail', key: 'payment-tracker', label: 'Payment Tracker' },
+    { cat: 'Retail', key: 'retail-dashboard', label: 'Retail Dashboard' },
 
     { cat: 'Admin Section', key: 'fms',          label: 'FMS Master' },
     { cat: 'Admin Section', key: 'mis',          label: 'MIS Report' },
