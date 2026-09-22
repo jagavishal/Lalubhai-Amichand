@@ -136,7 +136,15 @@ window.Pages['po-creation'] = (() => {
     'Purchase Requisition': it => ({ itemCode: it.itemCode || '', hsnCode: '', uom: it.uom || '', qty: it.qtyRequired || '', unitPrice: it.lastUnitPrice || '', gst: it.tax || '' }),
     'PURCHASE REQUISITION(PACKING_STICKER)': it => ({ itemCode: it.itemCode || '', customerCodeRef: '', barcode: '', stickerQty: it.stickerQty || '', rate: it.rate || '', taxPercent: '' }),
     'PURCHASE REQUISITION(PACKING_BOX)': it => ({ itemCode: it.itemCode || '', boxQty: it.boxQty || '', boxRate: it.boxRate || '', plateQty: it.plateQty || '', plateRate: it.plateRate || '' }),
-    'purchase_requisition(ALU)': it => ({ itemCode: it.itemCode || '', hsnCode: '', uom: it.uom || '', qty: it.qtyRequired || '', unitPrice: it.rate || '', gst: it.tax || '' }),
+    // ALU PRs are raised before a vendor has quoted anything, so the requester
+    // routinely leaves Rate as a literal "-" placeholder (confirmed on the live
+    // sheet — every ALU PR item logged has rate:"-"). Passed through as-is,
+    // that "-" landed in the PO's Unit Price input looking pre-filled/stuck —
+    // "PO section me quantity to change ho pa rahi he but rate ke option me
+    // editing nahi ho pa rahi he" (Aluminium Circle PO, via WhatsApp). Treat
+    // it the same as blank so the field starts empty, ready for the vendor's
+    // actual PO-time price.
+    'purchase_requisition(ALU)': it => ({ itemCode: it.itemCode || '', hsnCode: '', uom: it.uom || '', qty: it.qtyRequired || '', unitPrice: String(it.rate || '').trim() === '-' ? '' : (it.rate || ''), gst: it.tax || '' }),
   };
 
   // Item fields that stay editable once a PR has been applied to the form —

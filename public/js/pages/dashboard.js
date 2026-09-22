@@ -67,57 +67,6 @@ window.Pages.dashboard = (function () {
     return window.UI.pill(priority, { variant: priority === 'High' ? 'danger' : 'warning', size: 'sm' });
   }
 
-  /* ── performance computation ─────────────────────────────────────── */
-  function computePerf(delegations, users) {
-    const from = new Date(); from.setDate(from.getDate() - 30);
-    const stats = {};
-    (users || []).forEach(u => { stats[u.name] = { name: u.name, completed: 0, total: 0, pending: 0 }; });
-    (delegations || []).forEach(d => {
-      const date = new Date(d.createdAt || d.created_at);
-      if (date >= from && stats[d.doer]) {
-        stats[d.doer].total++;
-        if (d.status === 'done') stats[d.doer].completed++;
-        else stats[d.doer].pending++;
-      }
-    });
-    const arr = Object.values(stats).filter(s => s.total > 0);
-    arr.sort((a, b) => b.completed - a.completed);
-    return {
-      top5:       arr.slice(0, 5),
-      bottom5:    [...arr].sort((a, b) => b.pending   - a.pending).slice(0, 5),
-      mostActive: [...arr].sort((a, b) => b.total     - a.total  ).slice(0, 5),
-    };
-  }
-
-  function barListHTML(title, items, valueKey, tone, icon) {
-    const colors = {
-      emerald: { bar: 'linear-gradient(90deg,#34d399,#059669)', icon: 'linear-gradient(135deg,#34d399,#059669)', text: '#065f46' },
-      red:     { bar: 'linear-gradient(90deg,#f87171,#dc2626)', icon: 'linear-gradient(135deg,#f87171,#dc2626)', text: '#991b1b' },
-      blue:    { bar: 'linear-gradient(90deg,#0150AA,#3B8AE0)', icon: 'linear-gradient(135deg,#0A63C9,#013D82)', text: '#0150AA' },
-    };
-    const c = colors[tone] || colors.blue;
-    const max = Math.max(...items.map(i => i[valueKey] || 0), 1);
-    const rows = items.length === 0
-      ? '<div style="color:#94a3b8;font-size:12px;padding:1.5rem;text-align:center;">No data in this range</div>'
-      : items.map((i, idx) => `
-          <li style="display:flex;align-items:center;gap:10px;font-size:12px;margin-bottom:8px;">
-            <div style="width:20px;height:20px;border-radius:6px;background:#f1f5f9;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#64748b;flex-shrink:0;">${idx + 1}</div>
-            <div style="width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;color:#334155;" title="${i.name}">${i.name}</div>
-            <div style="flex:1;background:#e2e8f0;border-radius:9999px;height:8px;overflow:hidden;">
-              <div style="height:100%;border-radius:9999px;background:${c.bar};width:${Math.round((i[valueKey] / max) * 100)}%;transition:width .4s;"></div>
-            </div>
-            <div style="width:24px;text-align:right;font-weight:700;color:${c.text};font-variant-numeric:tabular-nums;">${i[valueKey]}</div>
-          </li>`).join('');
-    return `
-      <div class="card" style="padding:1rem;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
-          <div style="width:28px;height:28px;border-radius:8px;background:${c.icon};display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;">${icon}</div>
-          <h3 style="font-size:13px;font-weight:600;color:#1e293b;margin:0;">${title}</h3>
-        </div>
-        <ul style="margin:0;padding:0;list-style:none;">${rows}</ul>
-      </div>`;
-  }
-
   /* ── modal helpers ───────────────────────────────────────────────── */
   function showModal(id) { document.getElementById(id) && (document.getElementById(id).style.display = 'flex'); }
   function hideModal(id) { document.getElementById(id) && (document.getElementById(id).style.display = 'none'); }
@@ -310,8 +259,6 @@ window.Pages.dashboard = (function () {
     // HOD's picker only ever lists their own department's team, never the whole company.
     const teamUsers = hod ? (users || []).filter(u => normDept(u.department) === myDept && u.name !== me?.name) : [];
 
-    const perf = admin ? computePerf(_state.delegations, users) : null;
-
     const empOptionRow = u => {
       const dept = (u.department||'').length > 16 ? (u.department||'').slice(0,16)+'…' : (u.department||'');
       return `<div data-emp-val="${u.name}" data-emp-label="${u.name}${u.department ? ' · '+u.department : ''}" class="db-emp-opt" style="padding:8px 14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;">
@@ -340,7 +287,6 @@ window.Pages.dashboard = (function () {
           #db-stat-cards { display: flex !important; overflow-x: auto; gap: 10px; padding-bottom: 4px; scroll-snap-type: x mandatory; }
           #db-stat-cards .db-stat-card { min-width: 130px !important; flex-shrink: 0; scroll-snap-align: start; }
           #db-main-grid { grid-template-columns: 1fr !important; }
-          #db-perf-grid  { grid-template-columns: 1fr !important; }
           #db-stat-cards::-webkit-scrollbar { height: 3px; }
           #db-stat-cards::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 2px; }
         }
@@ -490,25 +436,6 @@ window.Pages.dashboard = (function () {
           </div>
         </div>
 
-        <!-- Performance — admin only -->
-        ${admin && perf ? `
-        <div class="card" style="padding:1.25rem;margin-bottom:20px;">
-          <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-bottom:1rem;">
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span style="font-size:1.1rem;">📋</span>
-              <div>
-                <h2 style="font-size:13.5px;font-weight:700;color:#0f172a;margin:0;">Performance &amp; Activity</h2>
-                <p style="font-size:11.5px;color:#64748b;margin:2px 0 0;">Team leaderboard</p>
-              </div>
-            </div>
-            <span style="background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;display:inline-flex;align-items:center;padding:2px 10px;font-size:10.5px;font-weight:600;border-radius:9999px;">Last 30 days</span>
-          </div>
-          <div id="db-perf-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;">
-            ${barListHTML('🏆 Top 5 Performers',   perf.top5,       'completed', 'emerald', '★')}
-            ${barListHTML('📉 Bottom 5 Performers', perf.bottom5,    'pending',   'red',     '!')}
-            ${barListHTML('⚡ Top 5 Most Active',   perf.mostActive, 'total',     'blue',    '⚡')}
-          </div>
-        </div>` : ''}
       </div>
 
       <!-- ── Add Delegate Modal ── -->
