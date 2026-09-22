@@ -5297,9 +5297,11 @@ app.delete('/api/holidays', requireAuth, requireAdmin, async (req, res) => {
 // same source the HRMS muster roll uses, see getWorkingDayContext), this
 // person's own due tasks (the exact visibility GET /api/delegations already
 // grants — Admin everything, HOD their department, everyone else their own —
-// just bounded to the visible date range instead of the whole table), and the
-// company's scheduled meetings. Three different backing sources, one call, so
-// a 42-cell month grid doesn't fire three requests every time it's opened.
+// just bounded to the visible date range instead of the whole table), and
+// this person's own meetings (organized by them or naming them in attendees —
+// "sab user ko apna apna hi dikhe", not a company-wide board everyone reads).
+// Three different backing sources, one call, so a 42-cell month grid doesn't
+// fire three requests every time it's opened.
 app.get('/api/scheduler', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
@@ -5356,16 +5358,23 @@ app.get('/api/scheduler', requireAuth, async (req, res) => {
     const meetingRows = await q(
       `SELECT id, title, date, start_time AS "startTime", end_time AS "endTime", attendees, location, notes, created_by AS "createdBy", created_by_name AS "createdByName" FROM meetings WHERE date BETWEEN $1 AND $2 ORDER BY date ASC, start_time ASC`,
       [from, to]);
-    const meetings = meetingRows.map(m => ({ ...m, date: toDateStr(m.date) }));
+    // attendees is a plain comma-joined name list (see POST /api/meetings), so
+    // "am I on this one" is an exact, case-insensitive name match — the same
+    // way delegations.doer is matched elsewhere in this file.
+    const myNameLower = userName.toLowerCase();
+    const mine = meetingRows.filter(m => m.createdBy === userId
+      || String(m.attendees || '').split(',').map(a => a.trim().toLowerCase()).includes(myNameLower));
+    const meetings = mine.map(m => ({ ...m, date: toDateStr(m.date) }));
 
     return res.json({ weekOffs: [...weekOffs], holidays, tasks, meetings });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-// Scheduling a meeting is not admin-gated — anyone can put one on the shared
-// calendar, the same way anyone can raise a task. Cancelling one is restricted
-// below to the organizer (or an Admin/HOD) so one person's meeting can't be
-// pulled by somebody who merely sees it on the grid.
+// Scheduling a meeting is not admin-gated — anyone can put one on their own
+// calendar, the same way anyone can raise a task. GET /api/scheduler only
+// ever hands it back to the organizer and the named attendees, never the
+// whole company. Cancelling one is restricted below to the organizer (or an
+// Admin/HOD) so one attendee can't pull a meeting somebody else called.
 app.post('/api/meetings', requireAuth, async (req, res) => {
   try {
     await ensureSchema();

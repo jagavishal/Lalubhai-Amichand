@@ -398,7 +398,7 @@ window.Pages.scheduler = (() => {
     document.body.insertAdjacentHTML('beforeend', window.UI.modal({
       id: 'sch-meeting-modal-overlay',
       title: 'Schedule a Meeting',
-      subtitle: 'Shown to everyone on the Scheduler calendar',
+      subtitle: 'Only you and whoever you invite will see this on their Scheduler',
       width: 480,
       closeButtonId: 'sch-close',
       hiddenByDefault: false,
