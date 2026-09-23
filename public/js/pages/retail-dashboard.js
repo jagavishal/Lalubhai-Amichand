@@ -45,16 +45,22 @@ window.Pages['retail-dashboard'] = (() => {
      hr-reports.js's monthChart/breakdown. ─────────────────────────────── */
   function monthChart(monthly) {
     const max = Math.max(1, ...monthly.map((m) => m.total));
+    // On a narrow phone, squeezing all 12 columns into the viewport shrinks
+    // each bar/label past the point of being readable — id="rd-month-scroll"
+    // gets a min-width in the mobile media query so it scrolls sideways
+    // instead, same as the desktop layout otherwise.
     return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;margin-bottom:14px;">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--color-primary);margin-bottom:12px;">Monthly Total</div>
-      <div style="display:grid;grid-template-columns:repeat(${monthly.length},1fr);gap:6px;align-items:end;height:150px;">
-        ${monthly.map((m) => `
-          <div style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;" title="${H.esc(monthLabel(m.month))}: ${rupees(m.total)} (${m.count} entries)">
-            <div style="background:var(--color-primary);border-radius:3px 3px 0 0;min-height:${m.total ? '3px' : '0'};height:${(m.total / max) * 100}%;"></div>
-          </div>`).join('')}
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(${monthly.length},1fr);gap:6px;margin-top:6px;">
-        ${monthly.map((m) => `<div style="text-align:center;font-size:9.5px;color:#94a3b8;font-weight:600;">${H.esc(monthLabel(m.month))}</div>`).join('')}
+      <div id="rd-month-scroll" style="overflow-x:auto;">
+        <div style="display:grid;grid-template-columns:repeat(${monthly.length},1fr);gap:6px;align-items:end;height:150px;">
+          ${monthly.map((m) => `
+            <div style="display:flex;flex-direction:column;justify-content:flex-end;height:100%;" title="${H.esc(monthLabel(m.month))}: ${rupees(m.total)} (${m.count} entries)">
+              <div style="background:var(--color-primary);border-radius:3px 3px 0 0;min-height:${m.total ? '3px' : '0'};height:${(m.total / max) * 100}%;"></div>
+            </div>`).join('')}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(${monthly.length},1fr);gap:6px;margin-top:6px;">
+          ${monthly.map((m) => `<div style="text-align:center;font-size:9.5px;color:#94a3b8;font-weight:600;">${H.esc(monthLabel(m.month))}</div>`).join('')}
+        </div>
       </div>
     </div>`;
   }
@@ -107,7 +113,7 @@ window.Pages['retail-dashboard'] = (() => {
     const rows = visibleRows();
     const all = _expenses?.rows || [];
     return `
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <div id="rd-filters" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <input type="month" id="rd-month" value="${H.esc(_filters.month)}" style="${H.CONTROL}width:auto;" />
         <select id="rd-branch" style="${H.CONTROL}width:auto;">
           <option value="">All branches</option>
@@ -118,7 +124,7 @@ window.Pages['retail-dashboard'] = (() => {
           ${(_config.categories || []).map((c) => `<option value="${H.esc(c)}" ${_filters.category === c ? 'selected' : ''}>${H.esc(c)}</option>`).join('')}
         </select>
         <input type="search" id="rd-search" placeholder="Search item, note, branch…" value="${H.esc(_search)}" style="${H.CONTROL}flex:1;min-width:200px;" />
-        <span style="font-size:12px;color:#94a3b8;white-space:nowrap;">${rows.length} of ${all.length} · ${rupees(_expenses.total)}</span>
+        <span id="rd-filter-count" style="font-size:12px;color:#94a3b8;white-space:nowrap;">${rows.length} of ${all.length} · ${rupees(_expenses.total)}</span>
         <button id="rd-csv" class="btn-secondary" style="font-size:12px;">Export CSV</button>
       </div>
       ${rows.length ? H.table(
@@ -272,7 +278,24 @@ window.Pages['retail-dashboard'] = (() => {
     const el = document.getElementById('main-content');
     if (!el || !_config || !_summary) return;
     el.innerHTML = `
-      <div class="animate-fade-in">
+      <style>
+        /* Phone view: the header's action buttons and each expense filter go
+           full-width and stack instead of wrapping mid-row, the month chart
+           scrolls sideways instead of squeezing 12 bars into the screen, and
+           the table keeps its own horizontal scroll (H.table already gives it
+           overflow:auto) rather than being fought over. */
+        @media (max-width: 767px) {
+          #rd-wrap h1 { font-size: 17px !important; }
+          #rd-wrap > div:first-child { flex-direction: column; align-items: stretch !important; }
+          #rd-wrap > div:first-child > div:last-child { width: 100%; }
+          #rd-wrap > div:first-child > div:last-child button { flex: 1; }
+          #rd-month-scroll > div { min-width: ${Math.max(360, (_summary?.monthly?.length || 12) * 34)}px; }
+          #rd-filters { flex-direction: column; align-items: stretch; }
+          #rd-filters input, #rd-filters select { width: 100% !important; }
+          #rd-filter-count { text-align: center; }
+        }
+      </style>
+      <div id="rd-wrap" class="animate-fade-in">
         ${H.header('Retail Dashboard', 'Branch expenses — logged, tracked and summarised',
           `<button id="rd-lists" class="btn-secondary btn-sm">Manage Lists</button>
            <button id="rd-new" class="btn-primary btn-sm">+ New Expense</button>`)}
