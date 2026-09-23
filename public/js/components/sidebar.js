@@ -53,6 +53,9 @@ window.Sidebar = {
     hrassets:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="10" rx="1.5"/><path d="M2 19h20"/><path d="M9 19v-1.5h6V19"/></svg>',
     // Retail Dashboard — a plain bar chart, now an in-app page.
     retaildashboard: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="0.5"/><rect x="12" y="8" width="3" height="10" rx="0.5"/><rect x="17" y="5" width="3" height="13" rx="0.5"/></svg>',
+    // New Expense — a plus in a circle, the sidebar's direct shortcut into
+    // Retail Dashboard's "+ New Expense" drawer.
+    newexpense:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>',
     // Section open/close arrow — drawn pointing right and rotated 90° when the
     // section is open, so one icon covers both states.
     chevron:      '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
@@ -146,6 +149,11 @@ window.Sidebar = {
     ]},
     // Retail — the shop-side books.
     { title: 'Retail', items: [
+      // Shortcut onto Retail Dashboard's own "+ New Expense" drawer (see
+      // retail-dashboard.js) — same page, same access, just one click
+      // instead of dashboard-then-button. canAccess() below aliases this
+      // route to the 'retail-dashboard' permission.
+      { route: 'retail-new-expense', label: 'New Expense', icon: 'newexpense' },
       // Was an external link to the Google Apps Script expense tracker;
       // rebuilt as a native page (see retail-dashboard.js and
       // /api/retail-dashboard/* in server.js) the same way HRMS was.
@@ -281,6 +289,8 @@ window.Sidebar = {
       ? [route, 'ims', 'inward', 'outward']
       : route === 'hr-leave'
       ? ['hr-leave', 'leave-tracker']
+      : route === 'retail-new-expense'
+      ? ['retail-new-expense', 'retail-dashboard']
       : [route];
     return routeAliases.some(r => permissions.pages.includes(r));
   },
@@ -304,6 +314,8 @@ window.Sidebar = {
       ? [item.route, 'ims', 'inward', 'outward']
       : item.route === 'hr-leave'
       ? ['hr-leave', 'leave-tracker']
+      : item.route === 'retail-new-expense'
+      ? ['retail-new-expense', 'retail-dashboard']
       : [item.route];
     if (!item.alwaysShow && permissions && permissions.pages && !routeAliases.some(r => permissions.pages.includes(r))) return '';
 

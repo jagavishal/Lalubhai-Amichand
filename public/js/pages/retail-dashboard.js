@@ -300,11 +300,26 @@ window.Pages['retail-dashboard'] = (() => {
   }
 
   return {
-    async render() {
+    // opts.openNew: mount the dashboard as usual, then immediately pop the
+    // New Expense drawer open on top of it — used by the sidebar's own
+    // "New Expense" entry so logging one doesn't require a stop on the
+    // dashboard tab first.
+    async render(opts = {}) {
       const el = document.getElementById('main-content');
       if (el) el.innerHTML = H.spinner('Opening the retail dashboard…');
-      try { await Promise.all([loadConfig(), loadSummary()]); render(); }
+      try {
+        await Promise.all([loadConfig(), loadSummary()]);
+        render();
+        if (opts.openNew) openNew();
+      }
       catch (e) { if (el) el.innerHTML = H.empty('Could not load the Retail Dashboard', e.message); }
     },
   };
 })();
+
+// A second, sidebar-only entry point onto the same page — "New Expense"
+// above "Retail Dashboard" in the Retail section (see sidebar.js) — so
+// logging an expense is one click instead of dashboard-then-button. Same
+// page, same permission (aliased to 'retail-dashboard' in Sidebar.canAccess),
+// just opens with the drawer already up.
+window.Pages['retail-new-expense'] = { render: () => window.Pages['retail-dashboard'].render({ openNew: true }) };
