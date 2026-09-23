@@ -284,7 +284,7 @@ window.Pages.scheduler = (() => {
     if (!el) return;
 
     el.innerHTML = `
-      <div style="max-width:1280px;margin:0 auto;padding:4px 0;">
+      <div style="padding:4px 0;">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
           <h1 style="font-size:18px;font-weight:700;color:var(--text-primary);letter-spacing:-0.02em;margin:0;">Scheduler</h1>
