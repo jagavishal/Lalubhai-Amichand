@@ -192,27 +192,27 @@ window.Pages['hr-leave'] = (() => {
 
   function balancesView() {
     if (!_balances) return H.spinner();
-    const types = _balances.types || [];
+    // "sirf 4 hi column chahiye PL,CL,SL,EL" — one column per PAID leave
+    // type (the data-driven equivalent of "PL/CL/SL/EL", robust to the
+    // master's type list changing) showing just the balance left, not the
+    // Entitled/Used/Left triple that used to make this table 15+ columns
+    // wide. LWP (unpaid) is dropped from this grid the same way it's
+    // singled out elsewhere (see the `unpaid` check in myBalanceStrip) —
+    // entitled/used are still one hover away via the cell's title.
+    const types = (_balances.types || []).filter((t) => H.num(t.paid));
     const rows = (_balances.rows || []).map((r) => [
       `<div style="font-weight:600;color:#0f172a;">${H.esc(r.name)}</div>
        <div style="font-size:10.5px;color:#94a3b8;">${H.esc(r.id)} · ${H.esc(r.department || '—')}</div>`,
-      ...types.flatMap((t) => {
+      ...types.map((t) => {
         const c = r.cells[t.code] || { accrued: 0, used: 0, balance: 0 };
+        const entitled = H.num(c.opening) + H.num(c.accrued);
         const low = c.balance <= 0;
-        return [
-          `<span style="color:#64748b;">${H.num(c.opening) + H.num(c.accrued)}</span>`,
-          `<span style="color:#b45309;">${H.num(c.used)}</span>`,
-          `<b style="color:${low ? '#b91c1c' : '#15803d'};">${H.num(c.balance)}</b>`,
-        ];
+        return `<b title="${entitled} entitled, ${H.num(c.used)} used" style="color:${low ? '#b91c1c' : '#15803d'};">${H.num(c.balance)}</b>`;
       }),
       `<button class="btn-ghost btn-xs hrl-editbal" data-id="${H.esc(r.id)}" data-name="${H.esc(r.name)}">Adjust</button>`,
     ]);
 
-    const cols = ['Employee', ...types.flatMap((t) => [
-      { label: `${t.code} Entitled`, align: 'right' },
-      { label: `${t.code} Used`, align: 'right' },
-      { label: `${t.code} Left`, align: 'right' },
-    ]), { label: '', nowrap: true }];
+    const cols = ['Employee', ...types.map((t) => ({ label: t.code, align: 'right' })), { label: '', nowrap: true }];
 
     return `
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
