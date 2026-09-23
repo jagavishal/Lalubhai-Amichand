@@ -7367,7 +7367,11 @@ const PR_ITEM_CATALOG_RANGE = {
   // PR template's own STICKER SIZE columns VLOOKUP into the printed PDF; the
   // item picker shows the same so the size is visible before the PDF exists.
   PACKING_STICKER: { tab: 'ITEM_CODE(PACKING_STICKER)', range: 'A2:I1082' },
-  PACKING_BOX: { tab: 'ITEM_CODE(PACKING_BOX)', range: 'A2:C989' },
+  // A:G, not A:C — the box master also carries L/W/H (E/F/G), which the PR
+  // template's own BOX SIZE columns VLOOKUP into the printed PDF ("Packing
+  // box mai Box size bhi aani chahiye"); the item picker shows the same so
+  // it's visible before the PDF exists, same reasoning as PACKING_STICKER.
+  PACKING_BOX: { tab: 'ITEM_CODE(PACKING_BOX)', range: 'A2:G989' },
   ALU: { tab: 'ITEM_CODE(ALU)', range: 'A2:C2103' },
 };
 
@@ -7395,6 +7399,9 @@ async function _loadPrItemCatalog(format) {
         // PO prints beside the item (see _loadPoItemCatalog's ENR merge).
         row.customerCodeRef = String(r[7] || '').trim();
         row.barcode = String(r[8] || '').trim();
+      }
+      if (format === 'PACKING_BOX') {
+        row.boxSize = [r[4], r[5], r[6]].map(v => String(v || '').trim()).filter(Boolean).join(' × ');
       }
       return row;
     });
@@ -8303,13 +8310,28 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
     // line — never hide a PO on the strength of a comparison that can't
     // actually be made; that direction of mistake is silent and much worse
     // than a fully-received PO lingering in the list a little too long.
-    const isFullyReceived = (poNo, items) => {
+    //
+    // Which item field holds the ordered qty depends on the PO's format
+    // ("PO mai item gyab ho rhe hai") — PurchaseOrder items carry qty, ENR PO
+    // carries stickerQty, Diamond PO carries boxQty (GRN's own
+    // _mapPoItemToGrn already treats boxQty alone as the receivable qty for
+    // Diamond PO — plateQty isn't separately received). The old code
+    // hardcoded `it.qty`, which is always undefined on ENR PO/Diamond PO
+    // items, so `!ordered` fired on every line and the whole PO vanished
+    // from this picker the moment ANY GRN existed against it, however partial.
+    const PO_QTY_FIELDS_BY_FORMAT = {
+      PurchaseOrder: ['qty'],
+      'ENR PO': ['stickerQty'],
+      'Diamond PO': ['boxQty'],
+    };
+    const isFullyReceived = (poNo, poFormat, items) => {
       if (!items.length) return false;
       const received = receivedByPo.get(_seqKey(poNo));
       if (!received) return false;
+      const qtyFields = PO_QTY_FIELDS_BY_FORMAT[poFormat] || ['qty'];
       return items.every((it) => {
         const code = String(it?.itemCode || it?.code || '').trim().toLowerCase();
-        const ordered = parseFloat(String(it.qty ?? '0').replace(/,/g, '')) || 0;
+        const ordered = qtyFields.reduce((sum, f) => sum + (parseFloat(String(it[f] ?? '0').replace(/,/g, '')) || 0), 0);
         if (!code || !ordered) return true;
         return (received.get(code) || 0) >= ordered;
       });
@@ -8338,7 +8360,7 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
         const partiallyReceived = receivedByPo.has(_seqKey(r[0]));
         return { poNo: r[0] || '', format: r[1] || '', party: r[3] || '', department: r[4] || '', prNo: r[9] || '', vendorName: r[3] || '', items, partiallyReceived };
       })
-      .filter((po) => !isFullyReceived(po.poNo, po.items))
+      .filter((po) => !isFullyReceived(po.poNo, po.format, po.items))
       .reverse();
     return res.json(list.slice(0, 200));
   } catch (e) { return res.status(500).json({ error: e.message }); }

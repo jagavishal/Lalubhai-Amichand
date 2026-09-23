@@ -541,7 +541,23 @@ window.Pages.dashboard = (function () {
               <label class="label">SELECT EMPLOYEE</label>
               <select id="chk-assigned" class="input">
                 <option value="">Select Employee</option>
-                ${(users || []).map(u => `<option value="${u.id}" data-email="${u.email}" data-name="${u.name}">${u.name}</option>`).join('')}
+                ${(() => {
+                  // "Sarvan,susil,jayash ka name checklist master mai 2-2 baar
+                  // aa rha hai" — /api/users returns every row including
+                  // inactive ones, and two rows can share a display name (see
+                  // allDoers' own dedupe above); this list never filtered or
+                  // deduped, so an inactive/duplicate account doubled the name.
+                  const seen = new Set();
+                  return (users || [])
+                    .filter(u => u.active !== false)
+                    .filter(u => {
+                      const key = String(u.name || '').trim().toLowerCase();
+                      if (!key || seen.has(key)) return false;
+                      seen.add(key);
+                      return true;
+                    })
+                    .map(u => `<option value="${u.id}" data-email="${u.email}" data-name="${u.name}">${u.name}</option>`).join('');
+                })()}
               </select>
             </div>
             <!-- Frequency -->

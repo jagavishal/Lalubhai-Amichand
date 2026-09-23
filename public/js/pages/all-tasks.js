@@ -1084,7 +1084,20 @@ window.Pages['all-tasks'] = (function () {
     .map(([v, l]) => `<option value="${v}"${v === selected ? ' selected' : ''}>${l}</option>`).join('');
 
   function openChecklistModal() {
-    const userOpts = _users.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('');
+    // "checklist master mai 2-2 baar aa rha hai" — /api/users?lite=1 returns
+    // every row including inactive ones, and two rows can share a display
+    // name; dedupe by name (keeping the first/active one) same as Dashboard's
+    // own Add Checklist Task modal.
+    const _seenChkNames = new Set();
+    const userOpts = _users
+      .filter(u => u.active !== false)
+      .filter(u => {
+        const key = String(u.name || '').trim().toLowerCase();
+        if (!key || _seenChkNames.has(key)) return false;
+        _seenChkNames.add(key);
+        return true;
+      })
+      .map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('');
     const div = modalOverlay('at-checklist-modal', `
       ${modalHeader('Add Checklist Task', "document.getElementById('at-checklist-modal').remove()")}
       <div style="padding:20px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px">

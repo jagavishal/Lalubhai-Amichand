@@ -112,9 +112,15 @@ window.Pages['hr-leave'] = (() => {
     }
     const types = _myBalances.types || [];
     return `<div style="margin-bottom:16px;">
+      <style>
+        /* Fixed 4-up grid ("Leave management ko 4 column mai kro") with a
+           mobile fallback — a rigid 4-up would be too cramped on a phone. */
+        .hrl-balance-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+        @media (max-width:640px) { .hrl-balance-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+      </style>
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
            color:var(--color-primary);margin-bottom:9px;">My Leave Balance — ${_myBalances.year}</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;">
+      <div class="hrl-balance-grid">
         ${types.map((t) => {
           const c = row.cells[t.code] || { opening: 0, accrued: 0, used: 0, balance: 0 };
           const entitled = H.num(c.opening) + H.num(c.accrued);

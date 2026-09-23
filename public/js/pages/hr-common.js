@@ -114,8 +114,13 @@ window.HR = (function () {
     </div>`;
   }
 
+  // position:sticky freezes the header row while the body scrolls, whether
+  // that's this wrapper's own overflow:auto (when maxHeight is set) or, when
+  // it isn't, the page underneath it ("header row ko frize kro") — background
+  // is already opaque so rows scrolling under it don't show through.
   const TH = 'padding:10px 12px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:700;'
-           + 'color:#64748b;text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;background:#f8fafc;';
+           + 'color:#64748b;text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;background:#f8fafc;'
+           + 'position:sticky;top:0;z-index:1;';
   const TD = 'padding:10px 12px;font-size:12.5px;color:#334155;border-bottom:1px solid #f1f5f9;';
 
   /* A table inside the app's standard card. `columns` may be plain strings or

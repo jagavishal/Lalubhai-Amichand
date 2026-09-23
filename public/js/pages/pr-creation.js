@@ -20,6 +20,12 @@ window.Pages['pr-creation'] = (() => {
     ITEM_CODE: [
       { key: 'requestedBy', label: 'Requested By' },
       { key: 'personWhoRaisedPr', label: 'Person Who Raised The PR' },
+      // Log-only ("PR mai order number bhi aana chahiye") — this template has
+      // no manual Order No cell of its own (see PR_FORMAT_CONFIG.ITEM_CODE in
+      // server.js), same as Packing Sticker/Packing Box already have; server
+      // already destructures+logs orderNo regardless of format, so this is a
+      // frontend-only addition.
+      { key: 'orderNo', label: 'Order No' },
       { key: 'estimatedDelDate', label: 'Estimated Del. Date', type: 'date' },
       { key: 'termsOfPayment', label: 'Terms Of Payment' },
       { key: 'dateRequested', label: 'Date Requested', type: 'date' },
@@ -38,21 +44,27 @@ window.Pages['pr-creation'] = (() => {
     ],
     ALU: [
       { key: 'requestedBy', label: 'Requested By' },
+      { key: 'orderNo', label: 'Order No' }, // log-only, see ITEM_CODE's note above
       { key: 'termsOfPayment', label: 'Terms Of Payment' },
       { key: 'estimatedDelDate', label: 'Estimated Delivery Date', type: 'date' },
       { key: 'dateRequested', label: 'Date Requested', type: 'date' },
     ],
   };
 
-  // Department: ITEM_CODE and ALU both show the manual dropdown below — the
-  // live template's own Department cell is still a formula on ITEM_CODE
-  // (derived from the first item's category, D4) and is NEVER written to
-  // (would destroy the formula), so this selection only ever feeds our own
-  // records (ERP PR Log + the FMS sync) instead, overriding what would
-  // otherwise be read back from that formula — see the department read-back
-  // in POST /api/pr-creation. PACKING_STICKER/PACKING_BOX have no department
-  // concept on their template at all.
-  const DEPARTMENT_MODE = { ITEM_CODE: 'manual', PACKING_STICKER: 'none', PACKING_BOX: 'none', ALU: 'manual' };
+  // Department: ITEM_CODE, PACKING_BOX and ALU all show the manual dropdown
+  // below — the live template's own Department cell is still a formula on
+  // ITEM_CODE (derived from the first item's category, D4) and is NEVER
+  // written to (would destroy the formula), so this selection only ever
+  // feeds our own records (ERP PR Log + the FMS sync) instead, overriding
+  // what would otherwise be read back from that formula — see the
+  // department read-back in POST /api/pr-creation. PACKING_BOX's template
+  // has no department cell either, so it's log-only the same way. Defaults
+  // to "Packing Dept." ("Packing box PR mai dept add kro and bydefult
+  // packing dept selcted aana chahiye") since every Packing Box PR is
+  // raised by that department in practice; staff can still switch it.
+  // PACKING_STICKER has no department concept requested — left alone.
+  const DEPARTMENT_MODE = { ITEM_CODE: 'manual', PACKING_STICKER: 'none', PACKING_BOX: 'manual', ALU: 'manual' };
+  const DEPARTMENT_DEFAULT = { PACKING_BOX: 'Packing Dept.' };
 
   // ALU's manual Department dropdown, and the PR Form tab's own Department
   // multi-select further down, are both built from the app-wide department
@@ -294,9 +306,10 @@ window.Pages['pr-creation'] = (() => {
           const matches = await res.json();
           const addNewHtml = '<div class="pcr-item-add-new" style="padding:8px 12px;font-size:12.5px;cursor:pointer;font-weight:700;color:var(--color-primary);'
             + (matches.length ? 'border-top:1px solid #e2e8f0;' : '') + '">+ Add' + (q ? ' "' + esc(q) + '"' : '') + ' as new item</div>';
-          dd.innerHTML = matches.map(m => '<div class="pcr-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.code) + '" data-desc="' + esc(m.description) + '" data-size="' + esc(m.size) + '" data-sticker="' + esc(m.stickerSize || '') + '">'
+          dd.innerHTML = matches.map(m => '<div class="pcr-item-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-code="' + esc(m.code) + '" data-desc="' + esc(m.description) + '" data-size="' + esc(m.size) + '" data-sticker="' + esc(m.stickerSize || '') + '" data-boxsize="' + esc(m.boxSize || '') + '">'
             + '<b>' + esc(m.code) + '</b> — ' + esc(m.description) + (m.size ? ' (' + esc(m.size) + ')' : '')
-            + (m.stickerSize ? ' <span style="color:#94a3b8;">· Sticker ' + esc(m.stickerSize) + '</span>' : '') + '</div>').join('') + addNewHtml;
+            + (m.stickerSize ? ' <span style="color:#94a3b8;">· Sticker ' + esc(m.stickerSize) + '</span>' : '')
+            + (m.boxSize ? ' <span style="color:#94a3b8;">· Box ' + esc(m.boxSize) + '</span>' : '') + '</div>').join('') + addNewHtml;
           const rect = input.getBoundingClientRect();
           dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 260) + 'px';
           dd.style.display = 'block';
@@ -318,6 +331,7 @@ window.Pages['pr-creation'] = (() => {
       previewDesc.textContent = opt.dataset.desc || '—';
       previewSize.textContent = opt.dataset.size || '—';
       _setSticker(row, opt.dataset.sticker);
+      _setBoxSize(row, opt.dataset.boxsize);
       dd.style.display = 'none';
     });
     window.addEventListener('scroll', (e) => { if (e.target !== dd) dd.style.display = 'none'; }, { capture: true, signal: window.Router.pageSignal() });
@@ -376,6 +390,15 @@ window.Pages['pr-creation'] = (() => {
     const cell = row && row.querySelector('.pcr-item-sticker');
     if (cell) cell.textContent = value || '—';
   }
+  // Box Size (L × W × H) — same read-only-lookup pattern as Sticker Size
+  // above, shown only on Packing Box ("Packing box mai Box size bhi aani
+  // chahiye"): it comes from the item master (cols E/F/G), the same source
+  // the sheet's BOX SIZE VLOOKUP prints into the PDF.
+  function _hasBoxSize() { return _format === 'PACKING_BOX'; }
+  function _setBoxSize(row, value) {
+    const cell = row && row.querySelector('.pcr-item-boxsize');
+    if (cell) cell.textContent = value || '—';
+  }
 
   function _itemRowHtml() {
     const fields = ITEM_FIELDS[_format];
@@ -392,6 +415,7 @@ window.Pages['pr-creation'] = (() => {
       + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="pcr-item-desc">—</td>'
       + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="pcr-item-size">—</td>'
       + (_hasStickerSize() ? '<td style="padding:6px;min-width:120px;font-size:12px;color:#64748b;white-space:nowrap;" class="pcr-item-sticker">—</td>' : '')
+      + (_hasBoxSize() ? '<td style="padding:6px;min-width:130px;font-size:12px;color:#64748b;white-space:nowrap;" class="pcr-item-boxsize">—</td>' : '')
       + fieldCells
       + computedCells
       + '<td style="padding:6px;text-align:center;"><button type="button" class="pcr-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
@@ -410,6 +434,7 @@ window.Pages['pr-creation'] = (() => {
           + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Description</th>'
           + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Size</th>'
           + (_hasStickerSize() ? '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">Sticker Size (L × W)</th>' : '')
+          + (_hasBoxSize() ? '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">Box Size (L × W × H)</th>' : '')
           + headCells
           + computedHeadCells
           + '<th></th>'
@@ -438,10 +463,11 @@ window.Pages['pr-creation'] = (() => {
   function _headerFieldsHtml() {
     const common = HEADER_FIELDS[_format].map(f => _textField('pcr-' + f.key, f.label, { type: f.type, value: f.key === 'dateRequested' ? _today() : '' })).join('');
     const deptMode = DEPARTMENT_MODE[_format];
+    const deptDefault = DEPARTMENT_DEFAULT[_format] || '';
     const dept = deptMode === 'manual'
       ? _fieldWrap('Department', ''
           + '<select id="pcr-department" style="' + _inputStyle + 'background:#fff;">'
-            + Utils.deptOptionsHtml('', { extra: PR_DEPARTMENT_EXTRAS }) + '</select>'
+            + Utils.deptOptionsHtml(deptDefault, { extra: PR_DEPARTMENT_EXTRAS }) + '</select>'
           + '<input type="text" id="pcr-department-other" placeholder="Enter department…" autocomplete="off" style="' + _inputStyle + 'margin-top:8px;display:none;" />')
       : '';
     return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
@@ -610,19 +636,19 @@ window.Pages['pr-creation'] = (() => {
     if (!body) return;
 
     if (!_sumLoaded) {
-      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_sumLoadError) {
-      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_sumLoadError) + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_sumLoadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     const rows = _sumFilteredRows();
     if (countEl) countEl.textContent = rows.length + ' of ' + _sumRows.length;
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_sumRows.length ? 'No PRs match these filters' : 'No PRs created yet') + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_sumRows.length ? 'No PRs match these filters' : 'No PRs created yet') + '</td></tr>';
       return;
     }
     body.innerHTML = rows.map(r => ''
@@ -632,6 +658,7 @@ window.Pages['pr-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.party) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.requestedBy) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.form?.orderNo || '') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.department) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
@@ -739,9 +766,9 @@ window.Pages['pr-creation'] = (() => {
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
         + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['PR No','Format','Date','Party','Requested By','Department','Total (INR)','PDF','Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + h + '</th>').join('')
+            + ['PR No','Format','Date','Party','Requested By','Order No','Department','Total (INR)','PDF','Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + h + '</th>').join('')
           + '</tr></thead>'
-          + '<tbody id="sum-body"><tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '<tbody id="sum-body"><tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
       + '</div>';
   }
