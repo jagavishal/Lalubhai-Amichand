@@ -14,8 +14,8 @@ rather than just abandoning.
 | | |
 |---|---|
 | `retail-dashboard` route in [public/js/components/sidebar.js](../public/js/components/sidebar.js) | Sidebar entry, Retail section. |
-| [public/js/pages/retail-dashboard.js](../public/js/pages/retail-dashboard.js) | Dashboard tab (KPIs, monthly chart, category/branch/payment-type breakdowns — no charting library, same flat-bars approach as `hr-reports.js`) and Expenses tab (filterable table, CSV export, "+ New Expense", "Manage Lists"). Built on the HR module's shared `window.HR` helpers (`hr-common.js`), same as `payment-tracker.js`. |
-| `server.js`, search `Retail Dashboard` | `retail_expenses` table (lazy-created like `payment_tracker`), `app_config`-backed category/item/branch lists, and `/api/retail-dashboard/*` routes, gated by `requireAdminOrPage('retail-dashboard')` — Admin/HOD always, anyone else only once granted the `retail-dashboard` page in Users → Access (see [public/js/pages/users.js](../public/js/pages/users.js)). |
+| [public/js/pages/retail-dashboard.js](../public/js/pages/retail-dashboard.js) | Dashboard tab (KPIs, monthly chart, category/branch/payment-type breakdowns — no charting library, same flat-bars approach as `hr-reports.js`) and Expenses tab (filterable table, CSV export, "+ New Expense", "Manage Lists"). Built on the HR module's shared `window.HR` helpers (`hr-common.js`). |
+| `server.js`, search `Retail Dashboard` | `retail_expenses` table (lazy-created), `app_config`-backed category/item/branch lists, and `/api/retail-dashboard/*` routes, gated by `requireAdminOrPage('retail-dashboard')` — Admin/HOD always, anyone else only once granted the `retail-dashboard` page in Users → Access (see [public/js/pages/users.js](../public/js/pages/users.js)). |
 | `uploads/retail-expenses/<id>/` | Invoice files (PDF/JPG/PNG/WEBP, 4 MB max), git-ignored like the other upload folders. |
 
 **Deliberately simplified versus the original script:**

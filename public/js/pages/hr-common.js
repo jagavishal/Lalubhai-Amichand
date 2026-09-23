@@ -203,7 +203,7 @@ window.HR = (function () {
      stale value from a previous open can never leak into the next one. ── */
 
   function openModal({ id, title, subtitle = '', bodyHTML = '', width = 560, confirmText = 'Save',
-                       cancelText = 'Cancel', onConfirm, onOpen, saving = false, hideConfirm = false }) {
+                       cancelText = 'Cancel', onConfirm, onOpen, saving = false, hideConfirm = false, variant = 'modal' }) {
     // A caller that forgets bodyHTML used to interpolate the literal string
     // "undefined" into the dialog, which is what a user then read. Default it,
     // and say so in the console so the mistake surfaces to whoever made it
@@ -212,7 +212,36 @@ window.HR = (function () {
       console.error('[HR] openModal("' + id + '") was given no bodyHTML — rendering an empty dialog.');
     }
     closeModal(id);
-    const html = `
+    // variant: 'drawer' slides the card in from the right edge as a full-height
+    // side panel instead of a centered dialog — same header/body/footer shape
+    // and the same ids, so callers (onOpen/onConfirm) don't need to change.
+    const isDrawer = variant === 'drawer';
+    const closeBtn = `<button id="${id}-x" aria-label="Close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;
+              color:#64748b;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>`;
+    const footer = `<div style="padding:15px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
+            <button id="${id}-cancel" class="btn-secondary">${esc(cancelText)}</button>
+            ${hideConfirm ? '' : `<button id="${id}-ok" class="btn-primary" ${saving ? 'disabled' : ''}>${esc(saving ? 'Saving…' : confirmText)}</button>`}
+          </div>`;
+    const html = isDrawer ? `
+      <div id="${id}" style="position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(2px);
+           z-index:9999;display:flex;align-items:stretch;justify-content:flex-end;">
+        <div id="${id}-box" style="background:#fff;box-shadow:-16px 0 44px rgba(0,0,0,.18);
+             width:100%;max-width:${width}px;height:100%;display:flex;flex-direction:column;
+             transform:translateX(100%);transition:transform .22s ease-out;">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:17px 22px;border-bottom:1px solid #f1f5f9;flex-shrink:0;">
+            <div>
+              <div style="font-size:15px;font-weight:700;color:#0f172a;">${esc(title)}</div>
+              ${subtitle ? `<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">${esc(subtitle)}</div>` : ''}
+            </div>
+            ${closeBtn}
+          </div>
+          <div style="padding:20px 22px;overflow-y:auto;flex:1;">${bodyHTML}</div>
+          ${footer}
+        </div>
+      </div>` : `
       <div id="${id}" style="position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(4px);
            z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow:auto;">
         <div id="${id}-box" style="background:#fff;border-radius:18px;box-shadow:0 22px 52px rgba(0,0,0,.16);
@@ -222,17 +251,10 @@ window.HR = (function () {
               <div style="font-size:15px;font-weight:700;color:#0f172a;">${esc(title)}</div>
               ${subtitle ? `<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">${esc(subtitle)}</div>` : ''}
             </div>
-            <button id="${id}-x" aria-label="Close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;
-              color:#64748b;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-                stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
+            ${closeBtn}
           </div>
           <div style="padding:20px 22px;">${bodyHTML}</div>
-          <div style="padding:15px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;">
-            <button id="${id}-cancel" class="btn-secondary">${esc(cancelText)}</button>
-            ${hideConfirm ? '' : `<button id="${id}-ok" class="btn-primary" ${saving ? 'disabled' : ''}>${esc(saving ? 'Saving…' : confirmText)}</button>`}
-          </div>
+          ${footer}
         </div>
       </div>`;
     document.body.insertAdjacentHTML('beforeend', html);
@@ -249,6 +271,10 @@ window.HR = (function () {
         try { await onConfirm(); }
         catch (e) { fail(e); if (btn) { btn.disabled = false; btn.textContent = confirmText; } }
       });
+    }
+    if (isDrawer) {
+      const box = document.getElementById(`${id}-box`);
+      requestAnimationFrame(() => { if (box) box.style.transform = 'translateX(0)'; });
     }
     if (onOpen) onOpen(root);
     return root;

@@ -10,7 +10,8 @@
    shared master lists, editable from "Manage Lists". Server side:
    /api/retail-dashboard/* in server.js. Uses the HR module's shared H
    helpers (hr-common.js) even though this isn't an HR page — same shapes,
-   no reason to duplicate them (see payment-tracker.js, which does the same).
+   no reason to duplicate them. "New Expense" opens as a right-side slide-in
+   panel (H.openModal's variant:'drawer') rather than a centered dialog.
    ===================================================================== */
 window.Pages = window.Pages || {};
 
@@ -145,7 +146,7 @@ window.Pages['retail-dashboard'] = (() => {
     const pts = _config.paymentTypes || [];
     H.openModal({
       id: 'rdn', title: 'New Expense', subtitle: branches.length ? '' : 'No branches set up yet — add one from "Manage Lists" first, or type it below just for this entry.',
-      width: 640, confirmText: 'Save expense',
+      width: 440, variant: 'drawer', confirmText: 'Save expense',
       bodyHTML: H.grid(
         H.field('rdn-date', 'Date', H.todayISO(), { type: 'date', required: true })
         + (branches.length
@@ -158,10 +159,10 @@ window.Pages['retail-dashboard'] = (() => {
             : H.field('rdn-item', 'Item', '', { required: true, placeholder: 'What was this for' }))
         + H.field('rdn-amount', 'Amount (₹)', '', { type: 'number', step: '0.01', required: true, placeholder: '0.00' })
         + H.select('rdn-payment', 'Payment Type', pts[0], pts, { required: true })
-        + `<div id="rdn-cheque-fields" style="display:none;grid-column:1/-1;grid-template-columns:repeat(3,1fr);gap:13px;">
+        + `<div id="rdn-cheque-fields" style="display:none;grid-column:1/-1;grid-template-columns:repeat(2,1fr);gap:13px;">
              ${H.field('rdn-cheque-date', 'Cheque Date', '', { type: 'date' })}
              ${H.field('rdn-cheque-no', 'Cheque No.', '')}
-             ${H.field('rdn-cheque-amount', 'Cheque Amount (₹)', '', { type: 'number', step: '0.01' })}
+             ${H.field('rdn-cheque-amount', 'Cheque Amount (₹)', '', { type: 'number', step: '0.01', span: 2 })}
            </div>`
         + `<div style="grid-column:1/-1;">
              <label style="${H.LABEL}">Invoice (optional)</label>
@@ -169,7 +170,7 @@ window.Pages['retail-dashboard'] = (() => {
              <div style="font-size:11px;color:#94a3b8;margin-top:4px;">PDF, JPG, PNG or WEBP — up to 4 MB.</div>
            </div>`
         + H.textarea('rdn-note', 'Note', '', { rows: 2, span: 2 }),
-        2,
+        1,
       ),
       onOpen: (root) => {
         const paymentSel = root.querySelector('#rdn-payment');
