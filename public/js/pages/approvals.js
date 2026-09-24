@@ -17,6 +17,10 @@ window.Pages.approvals = {
   _urgentPayments: [],
   _upBusy: '',
   _upShowAll: false,
+  // Task Approvals defaults to "requests where I'm the approver" (the
+  // delegator) — an Admin/HOD used to get every approval-required task
+  // company-wide unconditionally. Checking this re-fetches unscoped.
+  _taskShowAll: false,
   _upDecide: null,          // { id, status } while the decision modal is open
   _seenRevise: new Set(),
   _seenApprovals: new Set(),
@@ -67,9 +71,10 @@ window.Pages.approvals = {
 
   /* ── fetch data ────────────────────────────────────────── */
   async _fetchAdmin() {
+    const mine = this._taskShowAll ? '' : '&mine=true';
     const [r1, r2] = await Promise.all([
       fetch('/api/delegations?filter=revise_requested'),
-      fetch('/api/delegations?filter=approval_required'),
+      fetch('/api/delegations?filter=approval_required' + mine),
     ]);
     this._reviseRequests = r1.ok ? (await r1.json()) : [];
     this._taskApprovals  = r2.ok ? (await r2.json()) : [];
@@ -618,8 +623,17 @@ window.Pages.approvals = {
 
   _buildTaskApprovalsTable() {
     const items = this._taskApprovals;
+    const toggle = `<div class="flex items-center justify-between flex-wrap gap-2 px-4 py-2.5 border-b border-slate-100 bg-white">
+        <div class="text-[12px] text-slate-500">${items.length} request${items.length === 1 ? '' : 's'}${this._taskShowAll ? ' company-wide' : ' waiting on you'}</div>
+        <label class="flex items-center gap-2 text-[12px] text-slate-600 cursor-pointer">
+          <input type="checkbox" id="task-show-all" ${this._taskShowAll ? 'checked' : ''}> Show everyone's requests
+        </label>
+      </div>`;
     if (items.length === 0) {
-      return this._emptyState(this._taskIconSvg('w-8 h-8 text-primary-400'), 'No pending task approvals', 'Requests will appear here when submitted.');
+      const empty = this._emptyState(this._taskIconSvg('w-8 h-8 text-primary-400'),
+        this._taskShowAll ? 'No pending task approvals' : 'No task approvals waiting on you',
+        this._taskShowAll ? 'Requests will appear here when submitted.' : 'Tasks you delegated with approval required land here once marked done.');
+      return `<div class="card overflow-hidden">${toggle}${empty.replace('class="card p-14', 'class="p-14')}</div>`;
     }
     const rows = items.map((t, i) => {
       const unseen = !this._seenApprovals.has(t.id);
@@ -645,6 +659,7 @@ window.Pages.approvals = {
       </tr>`;
     }).join('');
     return `<div class="card overflow-hidden">
+      ${toggle}
       <table class="w-full text-sm">
         <thead class="bg-slate-50/80">
           <tr>
@@ -692,6 +707,11 @@ window.Pages.approvals = {
         const task = this._reviseRequests.find(t => String(t.id) === btn.dataset.id);
         if (task) this._denyRevise(task);
       });
+    });
+
+    content.querySelector('#task-show-all')?.addEventListener('change', async (e) => {
+      this._taskShowAll = !!e.target.checked;
+      await this._refresh();
     });
 
     // Task Approvals actions

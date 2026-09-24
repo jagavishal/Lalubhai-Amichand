@@ -2548,6 +2548,14 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
     const userId = sessUser?.id;
     const userName = sessUser?.name || '';
     const isHOD = isHODUser(sessUser);
+    // Task Approvals used to hand a true Admin every approval-required task
+    // company-wide by default — there's no separate "approver" on a
+    // delegation, the person who delegated it IS the approver, so an Admin
+    // saw everyone else's pending decisions mixed with their own ("admin ko
+    // bhi vahi req dikhe jiske vo approver hai"). mine=true scopes to
+    // delegated_by=me regardless of admin/HOD status; the Approvals page now
+    // sends it by default and drops it for an explicit "show all" toggle.
+    const mineOnly = filter === 'approval_required' && req.query.mine === 'true';
     // `filter=revise_requested` / `filter=approval_required` used to run with NO
     // scoping at all (any signed-in user got every matching row company-wide) —
     // that's what let a task delegated to Shaikh show up for every HOD, not just
@@ -2566,7 +2574,10 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
         transferredBy: d.transferredBy || null, transferredFrom: d.transferredFrom || null,
       }));
       if (filter === 'revise_requested') rows = rows.filter(d => d.status === 'revise_requested');
-      else if (filter === 'approval_required') rows = rows.filter(d => d.approval === 'Approval Required' && d.status === 'pending');
+      else if (filter === 'approval_required') {
+        rows = rows.filter(d => d.approval === 'Approval Required' && d.status === 'pending');
+        if (mineOnly) rows = rows.filter(d => d.delegatedBy === userId);
+      }
       if (myRevise === 'true') {
         rows = rows.filter(d => (d.doerId === userId || d.doer === userName) && d.status === 'revise');
       } else if (!isTrueAdmin) {
@@ -2593,6 +2604,10 @@ app.get('/api/delegations', requireAuth, async (req, res) => {
     if (myRevise === 'true') {
       sqlWhere = `WHERE (doer_id=$1 OR doer=$2) AND status='revise'`;
       params.push(userId, userName);
+    } else if (mineOnly) {
+      sqlWhere = `WHERE delegated_by=$1`;
+      params.push(userId);
+      if (statusWhere) sqlWhere += ` AND ${statusWhere}`;
     } else if (isTrueAdmin) {
       // Unscoped (beyond any status filter already applied above) — only a
       // true company-wide Admin gets this.
