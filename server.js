@@ -6604,7 +6604,21 @@ const PO_ITEM_CATALOG_RANGE = {
   // Through AJ, not AE: AJ is the sticker's "Product ID" — the customer's own
   // code for it, which the ENR PO prints as CUSTOMER CODE/REF. NO.
   'ENR PO': 'AC2:AJ6000',
-  'Diamond PO': 'Q2:S6000',
+  // NOT this tab's own Q:S — confirmed live those columns are a broken
+  // #REF! (Q1's header cell literally reads the TEXT "#REF!", nothing
+  // populated below it), so every Diamond PO item code looked up against
+  // them came back with no description/size ("Diamond PO create karte
+  // time item description and size show nahi ho rahi"). This isn't just
+  // this app's picker either — the live 'Diamond PO' template's own
+  // VLOOKUP formulas ALSO read 'ITEM_CODES'!Q:W for description/size AND
+  // box L/W/H, so the printed PDF is blank there too; fixing that needs
+  // either the live sheet's Q:W columns repopulated or its formulas
+  // repointed, neither of which this app writes to. What this DOES fix is
+  // the picker while creating the PO: read the current PAC-B-* catalog
+  // (code/description/size) from the PR spreadsheet's own
+  // 'ITEM_CODE(PACKING_BOX)' tab instead — same catalog, same 989 rows,
+  // just the one place it's actually kept up to date (see PR_ITEM_CATALOG_RANGE.PACKING_BOX).
+  'Diamond PO': { spreadsheetId: PR_SHEET_ID, tab: 'ITEM_CODE(PACKING_BOX)', range: 'A2:C989' },
 };
 
 let _poItemCatalogCache = {}; // format -> { at, rows: [{code,description,size}] }
@@ -6617,8 +6631,10 @@ async function _loadPoItemCatalog(format) {
   if (!auth) return [];
   const { google } = require('googleapis');
   const sheets = google.sheets({ version: 'v4', auth });
-  const range = `'ITEM_CODES'!${PO_ITEM_CATALOG_RANGE[format]}`;
-  const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range, valueRenderOption: 'FORMATTED_VALUE' });
+  const cfg = PO_ITEM_CATALOG_RANGE[format];
+  const spreadsheetId = typeof cfg === 'string' ? PO_CREATION_SHEET_ID : (cfg.spreadsheetId || PO_CREATION_SHEET_ID);
+  const range = typeof cfg === 'string' ? `'ITEM_CODES'!${cfg}` : `'${cfg.tab}'!${cfg.range}`;
+  const result = await sheets.spreadsheets.values.get({ spreadsheetId, range, valueRenderOption: 'FORMATTED_VALUE' });
   const rows = (result.data.values || [])
     .filter(r => r[0])
     .map(r => ({ code: r[0] || '', description: r[1] || '', size: r[2] || '' }));
@@ -6825,7 +6841,9 @@ app.get('/api/po-creation/masters', requireAuth, async (req, res) => {
 });
 
 // GET /api/po-creation/items?format=...&q=... — item-code typeahead, sourced
-// straight from ITEM_CODES (cached in memory a few minutes at a time).
+// from ITEM_CODES for PurchaseOrder/ENR PO and ITEM_CODE(PACKING_BOX) for
+// Diamond PO (see PO_ITEM_CATALOG_RANGE above), cached in memory a few
+// minutes at a time.
 app.get('/api/po-creation/items', requireAuth, async (req, res) => {
   try {
     const format = req.query.format;
