@@ -12920,7 +12920,7 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
       tasks: { totals: { total: 0, pending: 0, overdue: 0, done: 0, revise: 0 }, byAssignee: [], weekly: [] },
       meetings: { today: 0, next7Days: 0, upcoming: [] },
       payments: { pendingCount: 0, pendingAmount: 0, approvedMonthCount: 0, approvedMonthAmount: 0, rejectedMonthCount: 0, recent: [], monthly: [] },
-      leave: { onLeaveToday: [], upcoming: [], pendingRequests: 0 },
+      leave: { onLeaveToday: [], upcoming: [], pendingRequests: 0, pendingList: [] },
     };
     // Last 8 week buckets (Monday-start, oldest first) and last 6 months.
     const dow = new Date(today + 'T00:00:00Z').getUTCDay();
@@ -13015,8 +13015,14 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
       }));
       data.leave.onLeaveToday = all.filter(x => x.from <= today);
       data.leave.upcoming = all.filter(x => x.from > today);
-      const p = await q(`SELECT COUNT(*) AS c FROM leaves WHERE LOWER(status) LIKE 'pending%'`);
-      data.leave.pendingRequests = Number(p[0]?.c) || 0;
+      const pend = await q(`SELECT l.user_name AS "userName", e.name AS "empName", l.leave_type AS "leaveType", l.type, l.from_date AS "fromDate", l.to_date AS "toDate", l.created_at AS "createdAt"
+                              FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
+                             WHERE LOWER(l.status) LIKE 'pending%' ORDER BY l.created_at DESC`);
+      data.leave.pendingRequests = pend.length;
+      data.leave.pendingList = pend.slice(0, 6).map(r => ({
+        name: r.empName || r.userName || '—', type: r.leaveType || r.type || 'Leave',
+        from: toDateStr(r.fromDate), to: toDateStr(r.toDate),
+      }));
     } catch (e) { console.error('[company-overview] leave failed:', e.message); }
 
     _companyOverviewCache = { at: Date.now(), data };

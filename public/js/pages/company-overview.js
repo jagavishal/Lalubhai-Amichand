@@ -161,20 +161,6 @@ window.Pages['company-overview'] = (() => {
         <div class="ceo-srow ceo-srow-total"><span>Total</span><b>${t.total}</b></div></div></div>`);
   }
 
-  function _taskTrend(weekly) {
-    const has = weekly.some(w => w.assigned || w.completed);
-    const body = has ? legend([['var(--ceo-s1)', 'Assigned'], ['var(--ceo-s2)', 'Completed']]) + _columns({
-      labels: weekly.map(w => dayMon(w.weekStart)),
-      tipLabels: weekly.map(w => 'Week of ' + dayMon(w.weekStart)),
-      series: [
-        { name: 'Assigned', color: 'var(--ceo-s1)', values: weekly.map(w => w.assigned) },
-        { name: 'Completed', color: 'var(--ceo-s2)', values: weekly.map(w => w.completed) },
-      ],
-      fmt: (v) => String(Math.round(v)),
-    }) : empty('No admin-assigned tasks in the last 8 weeks.');
-    return card('Assigned vs completed', 'Tasks from admins, per week — last 8 weeks', '', body);
-  }
-
   function _team(t) {
     const pending = t.byAssignee.filter(r => r.pending > 0);
     const list = _showAllTeam ? pending : pending.slice(0, 8);
@@ -189,7 +175,7 @@ window.Pages['company-overview'] = (() => {
         </tr>`).join('')}</tbody></table></div>
       ${pending.length > 8 ? `<button class="ceo-more" id="ceo-team-more">${_showAllTeam ? 'Show less' : 'Show all ' + pending.length + ' employees'}</button>` : ''}`
       : empty('Nobody has a pending task from an admin right now.');
-    return card('Team tasks', 'Employees with pending tasks — sorted by overdue, then pending', link('#all-tasks', 'All Tasks'), body, 'ceo-span2');
+    return card('Team tasks', 'Employees with pending tasks — sorted by overdue, then pending', link('#all-tasks', 'All Tasks'), body);
   }
 
   function _meetings(m, today) {
@@ -211,8 +197,14 @@ window.Pages['company-overview'] = (() => {
       <div><b>${esc(x.name)}</b><small>${esc(when)}</small></div><span class="ceo-chip">${esc(x.type)}${x.halfDay ? ' · ½' : ''}</span></div>`;
     const today = l.onLeaveToday.length ? l.onLeaveToday.map(x => item(x, x.to && x.to !== x.from ? 'till ' + dayMon(x.to) : 'today')).join('') : empty('Nobody is on leave today.');
     const up = l.upcoming.length ? `<div class="ceo-subh">Coming up this week</div>` + l.upcoming.map(x => item(x, dayMon(x.from) + (x.to !== x.from ? ' – ' + dayMon(x.to) : ''))).join('') : '';
-    const right = l.pendingRequests ? `<a class="ceo-link ceo-link-warn" href="#hr-leave">${l.pendingRequests} pending →</a>` : link('#hr-leave', 'Leave');
-    return card('On leave today', l.onLeaveToday.length + ' out today', right, today + up);
+    return card('On leave today', l.onLeaveToday.length + ' out today', link('#hr-leave', 'Leave'), today + up);
+  }
+
+  function _leaveRequests(l) {
+    const item = (x) => `<div class="ceo-lrow"><span class="ceo-av">${esc(initials(x.name))}</span>
+      <div><b>${esc(x.name)}</b><small>${esc(dayMon(x.from))}${x.to !== x.from ? ' – ' + esc(dayMon(x.to)) : ''}</small></div><span class="ceo-chip">${esc(x.type)}</span></div>`;
+    const body = l.pendingList.length ? l.pendingList.map(item).join('') : empty('No leave requests waiting on a decision.');
+    return card('Leave requests', l.pendingRequests + ' waiting on a decision', link('#hr-leave', 'Leave'), body);
   }
 
   function _misChart() {
@@ -238,7 +230,7 @@ window.Pages['company-overview'] = (() => {
           </div>`;
         }).join('')}</div><p class="ceo-foot">Score = completed% − ½ × delayed%. ${link('#mis', 'Full MIS report')}</p>`;
     }
-    return card('Team performance (MIS)', 'Delegation tasks due in the period', toggle, body, 'ceo-span2');
+    return card('Team performance (MIS)', 'Delegation tasks due in the period', toggle, body);
   }
 
   function _payments(p) {
@@ -392,12 +384,13 @@ window.Pages['company-overview'] = (() => {
           ${_tile('leave', 'On leave today', d.leave.onLeaveToday.length, d.leave.pendingRequests + ' leave request' + (d.leave.pendingRequests === 1 ? '' : 's') + ' pending', 'accent', '#hr-leave')}
         </div>
         <div class="ceo-grid">
-          ${_taskStatus(t)}
-          ${_taskTrend(d.tasks.weekly)}
+          ${_leave(d.leave)}
+          ${_leaveRequests(d.leave)}
           ${_meetings(d.meetings, d.today)}
           ${_team(d.tasks)}
-          <div class="ceo-col">${_leave(d.leave)}${_paymentRequests(d.payments)}</div>
+          ${_taskStatus(t)}
           ${_misChart()}
+          ${_paymentRequests(d.payments)}
           ${_payments(d.payments)}
         </div>
         <div class="ceo-updated">Updated ${new Date(d.generatedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</div>`;
