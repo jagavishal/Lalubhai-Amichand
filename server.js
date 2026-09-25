@@ -6985,8 +6985,19 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
     // Always written, blank or stamped — see approvalCell in PO_FORMAT_CONFIG.
     if (cfg.approvalCell) put(cfg.approvalCell, approvalStamp || '');
 
+    // A "...Percent" summary field (Diamond PO's gstPercent, Diamond
+    // PO/ENR PO's discountPercent) lands on a percent-formatted cell whose
+    // own formula multiplies it straight into the total — exactly what
+    // typing a bare "5" into a percent cell in the Sheets UI itself would
+    // do, which Sheets reads as 500%, not 5%. Confirmed live on PO366:
+    // gstPercent 5 got written as raw 5, displayed "500%", and inflated
+    // GST from the correct ₹1,634 to ₹163,400 (32,680 × 5 instead of ×
+    // 0.05), taking the PO's Total from ~₹34,314 to ₹196,080. USER_ENTERED
+    // parses a written fraction (0.05) the same way typing "0.05" into that
+    // cell would — correctly, as 5% — so divide by 100 before writing.
     Object.entries(cfg.summary.fields).forEach(([field, a1]) => {
-      data.push({ range: `'${tab}'!${a1}`, values: [[parseFloat(summary?.[field]) || 0]] });
+      const raw = parseFloat(summary?.[field]) || 0;
+      data.push({ range: `'${tab}'!${a1}`, values: [[field.endsWith('Percent') ? raw / 100 : raw]] });
     });
 
     // Terms & Conditions / Comments / Test Certificate Required (Purchase-
