@@ -366,7 +366,11 @@ window.Pages.scheduler = (() => {
   async function _openMeetingModal(dateStr) {
     _closeMeetingModal();
     const users = await _loadUsers();
-    const userOptions = users.map(u => `<option value="${esc(u.name)}">${esc(u.name)}${u.department ? ' — ' + esc(u.department) : ''}</option>`).join('');
+    const userOptions = users.map((u, i) => `
+      <label style="display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:13px;color:var(--text-primary);cursor:pointer;">
+        <input type="checkbox" class="sch-attendee-cb" id="sch-attendee-${i}" value="${esc(u.name)}" style="width:15px;height:15px;flex-shrink:0;accent-color:var(--color-primary);" />
+        ${esc(u.name)}${u.department ? ` <span style="color:var(--text-muted);">— ${esc(u.department)}</span>` : ''}
+      </label>`).join('');
     const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--border-base);border-radius:8px;font-size:13px;color:var(--text-primary);background:var(--surface);outline:none;';
     const labelStyle = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:5px;';
 
@@ -392,8 +396,7 @@ window.Pages.scheduler = (() => {
         </div>
         <div>
           <label style="${labelStyle}">Attendees</label>
-          <select id="sch-attendees" multiple size="5" style="${inputStyle}">${userOptions}</select>
-          <div style="font-size:10.5px;color:var(--text-muted);margin-top:3px;">Ctrl/Cmd-click to select more than one</div>
+          <div id="sch-attendees" style="max-height:160px;overflow-y:auto;border:1.5px solid var(--border-base);border-radius:8px;padding:4px 8px;background:var(--surface);">${userOptions}</div>
         </div>
         <div>
           <label style="${labelStyle}">Location <span style="color:var(--text-muted);font-weight:400;text-transform:none;">(optional)</span></label>
@@ -428,7 +431,7 @@ window.Pages.scheduler = (() => {
       const title = document.getElementById('sch-title').value.trim();
       const date = document.getElementById('sch-date').value;
       if (!title || !date) { Utils.showToast('Title and date are required', 'error'); return; }
-      const attendees = [...document.getElementById('sch-attendees').selectedOptions].map(o => o.value);
+      const attendees = [...document.querySelectorAll('.sch-attendee-cb:checked')].map(cb => cb.value);
       const btn = document.getElementById('sch-save');
       btn.disabled = true; btn.textContent = 'Scheduling…';
       try {
