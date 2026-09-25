@@ -43,6 +43,7 @@ window.Pages['company-overview'] = (() => {
   let _mis = null;          // { rows, error }
   let _misPeriod = 'month'; // 'week' | 'month'
   let _showAllTeam = false;
+  let _leaveReq = null;     // { rows, error } — pending leave requests THIS admin approves
 
   function _isoOffset(iso, days) {
     const d = new Date(iso + 'T00:00:00Z');
@@ -62,7 +63,7 @@ window.Pages['company-overview'] = (() => {
     try { _data = await Utils.apiFetch('/api/company-overview'); }
     catch (e) { _error = e.message || 'Failed to load'; }
     _render();
-    if (_data) _loadMis();
+    if (_data) { _loadMis(); _loadLeaveRequests(); }
   }
   async function _loadMis() {
     _mis = null; _render();
@@ -71,6 +72,18 @@ window.Pages['company-overview'] = (() => {
       const res = await Utils.apiFetch('/api/mis?start=' + start + '&end=' + end + '&type=' + encodeURIComponent('Delegation MIS'));
       _mis = { rows: (res && res.rows) || [] };
     } catch (e) { _mis = { rows: [], error: e.message || 'Failed to load MIS' }; }
+    _render();
+  }
+  // "jo leave jis admin ko approve krni hai vo hi aani chahiye" — reuses the
+  // Approvals page's own forApprover=me scoping (backend/hrms.js), so this
+  // card only ever shows requests THIS logged-in admin (or their leave
+  // substitute) is actually the one to decide — never the whole company's.
+  async function _loadLeaveRequests() {
+    _leaveReq = null; _render();
+    try {
+      const rows = await Utils.apiFetch('/api/hr/leaves?forApprover=me&status=Pending');
+      _leaveReq = { rows: Array.isArray(rows) ? rows : [] };
+    } catch (e) { _leaveReq = { rows: [], error: e.message || 'Failed to load leave requests' }; }
     _render();
   }
 
@@ -182,12 +195,23 @@ window.Pages['company-overview'] = (() => {
     const byDay = {};
     for (const x of m.upcoming) (byDay[x.date] = byDay[x.date] || []).push(x);
     const days = Object.keys(byDay).sort();
+    const myName = (window.currentUser?.name || '').trim().toLowerCase();
+    const isUrl = (s) => /^https?:\/\//i.test(String(s || '').trim());
     const body = days.length ? `<div class="ceo-timeline">${days.map(d => `
         <div class="ceo-tday"><div class="ceo-tday-h">${d === today ? 'Today' : esc(new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }))}</div>
-        ${byDay[d].map(x => `<div class="ceo-tev">
-          <div class="ceo-tev-t">${esc(x.startTime || '—')}${x.endTime ? '<small>' + esc(x.endTime) + '</small>' : ''}</div>
-          <div class="ceo-tev-b"><b>${esc(x.title)}</b><small>${esc([x.organizer ? 'by ' + x.organizer : '', x.location].filter(Boolean).join(' · ') || '—')}</small></div>
-        </div>`).join('')}</div>`).join('')}</div>`
+        ${byDay[d].map(x => {
+          const attendees = String(x.attendees || '').split(',').map(s => s.trim());
+          const amInvited = attendees.some(a => a.toLowerCase() === myName);
+          const joinable = isUrl(x.location);
+          const actions = (joinable || amInvited) ? `<div class="ceo-tev-actions">
+              ${joinable ? `<a href="${esc(x.location)}" target="_blank" rel="noopener" class="ceo-mini-btn ceo-mini-btn-primary">Join</a>` : ''}
+              ${amInvited ? `<button type="button" class="ceo-mini-btn" data-decline-meeting="${esc(x.id)}">Can't attend</button>` : ''}
+            </div>` : '';
+          return `<div class="ceo-tev">
+            <div class="ceo-tev-t">${esc(x.startTime || '—')}${x.endTime ? '<small>' + esc(x.endTime) + '</small>' : ''}</div>
+            <div class="ceo-tev-b"><b>${esc(x.title)}</b><small>${esc([x.organizer ? 'by ' + x.organizer : '', !joinable ? x.location : ''].filter(Boolean).join(' · ') || '—')}</small>${actions}</div>
+          </div>`;
+        }).join('')}</div>`).join('')}</div>`
       : empty('No meetings scheduled in the next 7 days.');
     return card('Meetings', m.today + ' today · ' + m.next7Days + ' in the next 7 days', link('#scheduler', 'Scheduler'), body);
   }
@@ -200,11 +224,18 @@ window.Pages['company-overview'] = (() => {
     return card('On leave today', l.onLeaveToday.length + ' out today', link('#hr-leave', 'Leave'), today + up);
   }
 
-  function _leaveRequests(l) {
+  function _leaveRequests() {
     const item = (x) => `<div class="ceo-lrow"><span class="ceo-av">${esc(initials(x.name))}</span>
       <div><b>${esc(x.name)}</b><small>${esc(dayMon(x.from))}${x.to !== x.from ? ' – ' + esc(dayMon(x.to)) : ''}</small></div><span class="ceo-chip">${esc(x.type)}</span></div>`;
-    const body = l.pendingList.length ? l.pendingList.map(item).join('') : empty('No leave requests waiting on a decision.');
-    return card('Leave requests', l.pendingRequests + ' waiting on a decision', link('#hr-leave', 'Leave'), body);
+    let body, count = '';
+    if (!_leaveReq) body = empty('Loading…');
+    else if (_leaveReq.error) body = empty('Could not load: ' + _leaveReq.error);
+    else {
+      const rows = _leaveReq.rows.map(r => ({ name: r.employee_name || r.user_name || '—', type: r.leave_type || r.type || 'Leave', from: r.from_date, to: r.to_date }));
+      body = rows.length ? rows.map(item).join('') : empty('No leave requests waiting on your decision.');
+      count = rows.length + ' waiting on your decision';
+    }
+    return card('Leave requests', count, link('#hr-leave', 'Leave'), body);
   }
 
   function _misChart() {
@@ -337,6 +368,13 @@ window.Pages['company-overview'] = (() => {
     .ceo-tev { display:flex; gap:12px; padding:8px 10px; border-radius:10px; border-left:3px solid var(--ceo-s1); background:var(--ceo-hover); margin-bottom:6px; }
     .ceo-tev-t { width:52px; flex-shrink:0; font-size:12.5px; font-weight:700; color:var(--ceo-ink); font-variant-numeric:tabular-nums; }
     .ceo-tev-b { min-width:0; font-size:13px; } .ceo-tev-b b { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .ceo-tev-actions { display:flex; gap:6px; margin-top:6px; }
+    .ceo-mini-btn { display:inline-flex; align-items:center; border:1px solid var(--ceo-border); background:var(--ceo-surface); color:var(--ceo-ink2);
+      font-size:11.5px; font-weight:600; padding:3px 10px; border-radius:7px; cursor:pointer; text-decoration:none; }
+    .ceo-mini-btn:hover { background:var(--ceo-hover); }
+    .ceo-mini-btn-primary { background:var(--ceo-accent); border-color:var(--ceo-accent); color:#fff; }
+    .ceo-mini-btn-primary:hover { filter:brightness(1.08); background:var(--ceo-accent); }
+    .ceo-mini-btn[disabled] { opacity:.6; cursor:default; }
     .ceo-lrow { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--ceo-grid); font-size:13px; }
     .ceo-lrow:last-child { border-bottom:none; } .ceo-lrow > div { flex:1; min-width:0; }
     .ceo-chip { font-size:11.5px; font-weight:600; padding:2px 9px; border-radius:999px; background:var(--ceo-tone-bg); color:var(--ceo-accent); white-space:nowrap; }
@@ -385,7 +423,7 @@ window.Pages['company-overview'] = (() => {
         </div>
         <div class="ceo-grid">
           ${_leave(d.leave)}
-          ${_leaveRequests(d.leave)}
+          ${_leaveRequests()}
           ${_meetings(d.meetings, d.today)}
           ${_team(d.tasks)}
           ${_taskStatus(t)}
@@ -409,6 +447,18 @@ window.Pages['company-overview'] = (() => {
       if (_misPeriod === b.dataset.misPeriod) return;
       _misPeriod = b.dataset.misPeriod;
       _loadMis();
+    }));
+    root.querySelectorAll('[data-decline-meeting]').forEach(b => b.addEventListener('click', async () => {
+      const id = b.dataset.declineMeeting;
+      if (!(await Utils.showConfirm('You\'ll be taken off the attendee list for this meeting.', { title: 'Decline meeting', confirmText: 'Decline', danger: true }))) return;
+      b.disabled = true; b.textContent = '…';
+      try {
+        await Utils.apiFetch('/api/meetings/decline?id=' + encodeURIComponent(id), { method: 'PATCH' });
+        await _load();
+      } catch (e) {
+        Utils.showToast(e.message || 'Failed to decline', 'error');
+        b.disabled = false; b.textContent = "Can't attend";
+      }
     }));
 
     // One tooltip for every mark carrying data-tip; first line bold.

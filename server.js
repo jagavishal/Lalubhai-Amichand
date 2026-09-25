@@ -5203,6 +5203,29 @@ app.delete('/api/meetings', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
+
+// An attendee opting out ("na add krne ka option") — different from DELETE
+// above (which cancels the whole meeting for everyone and is organizer/
+// admin-only): this just drops the caller's own name from the plain
+// comma-joined attendees list, the same list POST /api/meetings writes.
+// Anyone can decline a meeting they're actually named on; declining is not
+// possible for one you aren't on (nothing to remove).
+app.patch('/api/meetings/decline', requireAuth, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = req.query.id;
+    if (!id) return res.status(400).json({ error: 'id required' });
+    const me = req.session?.user;
+    const rows = await q('SELECT attendees FROM scheduler_meetings WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    const myNameLower = String(me?.name || '').trim().toLowerCase();
+    const list = String(rows[0].attendees || '').split(',').map(s => s.trim()).filter(Boolean);
+    const kept = list.filter(n => n.toLowerCase() !== myNameLower);
+    if (kept.length === list.length) return res.status(400).json({ error: 'You are not listed as an attendee on this meeting' });
+    await pool.query('UPDATE scheduler_meetings SET attendees = $1 WHERE id = $2', [kept.join(', '), id]);
+    return res.json({ success: true });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
 // ── Leaves ────────────────────────────────────────────────────────────────────
 // Leave reasons are personal — illness, bereavement, family trouble. Admins and
 // HODs see everyone because approving is their job; everyone else sees their own
@@ -12920,7 +12943,7 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
       tasks: { totals: { total: 0, pending: 0, overdue: 0, done: 0, revise: 0 }, byAssignee: [], weekly: [] },
       meetings: { today: 0, next7Days: 0, upcoming: [] },
       payments: { pendingCount: 0, pendingAmount: 0, approvedMonthCount: 0, approvedMonthAmount: 0, rejectedMonthCount: 0, recent: [], monthly: [] },
-      leave: { onLeaveToday: [], upcoming: [], pendingRequests: 0, pendingList: [] },
+      leave: { onLeaveToday: [], upcoming: [], pendingRequests: 0 },
     };
     // Last 8 week buckets (Monday-start, oldest first) and last 6 months.
     const dow = new Date(today + 'T00:00:00Z').getUTCDay();
@@ -12974,7 +12997,7 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
 
     // 2) Meetings — every scheduled one company-wide, today through +6 days.
     try {
-      const rows = await q(`SELECT title, date, start_time AS "startTime", end_time AS "endTime", attendees, location, created_by_name AS "organizer"
+      const rows = await q(`SELECT id, title, date, start_time AS "startTime", end_time AS "endTime", attendees, location, created_by AS "createdBy", created_by_name AS "organizer"
                               FROM scheduler_meetings WHERE date BETWEEN $1 AND $2 ORDER BY date ASC, start_time ASC`, [today, weekEnd]);
       const list = rows.map(m => ({ ...m, date: toDateStr(m.date) }));
       data.meetings.today = list.filter(m => m.date === today).length;
@@ -13015,14 +13038,13 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
       }));
       data.leave.onLeaveToday = all.filter(x => x.from <= today);
       data.leave.upcoming = all.filter(x => x.from > today);
-      const pend = await q(`SELECT l.user_name AS "userName", e.name AS "empName", l.leave_type AS "leaveType", l.type, l.from_date AS "fromDate", l.to_date AS "toDate", l.created_at AS "createdAt"
-                              FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
-                             WHERE LOWER(l.status) LIKE 'pending%' ORDER BY l.created_at DESC`);
-      data.leave.pendingRequests = pend.length;
-      data.leave.pendingList = pend.slice(0, 6).map(r => ({
-        name: r.empName || r.userName || '—', type: r.leaveType || r.type || 'Leave',
-        from: toDateStr(r.fromDate), to: toDateStr(r.toDate),
-      }));
+      // Company-wide count for the KPI tile only — WHO has to act on each one
+      // is a per-request approver match (see GET /api/hr/leaves's own
+      // forApprover=me), which the "Leave requests" card fetches straight
+      // from that same endpoint client-side instead of duplicating the
+      // approver-matching logic here.
+      const pend = await q(`SELECT COUNT(*) AS c FROM leaves WHERE LOWER(status) LIKE 'pending%'`);
+      data.leave.pendingRequests = Number(pend[0]?.c) || 0;
     } catch (e) { console.error('[company-overview] leave failed:', e.message); }
 
     _companyOverviewCache = { at: Date.now(), data };
