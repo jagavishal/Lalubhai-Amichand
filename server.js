@@ -12917,11 +12917,21 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
     const weekEnd = _checklistPlusDays(today, 6);
     const data = {
       generatedAt: new Date().toISOString(), today,
-      tasks: { totals: { total: 0, pending: 0, overdue: 0, done: 0, revise: 0 }, byAssignee: [] },
+      tasks: { totals: { total: 0, pending: 0, overdue: 0, done: 0, revise: 0 }, byAssignee: [], weekly: [] },
       meetings: { today: 0, next7Days: 0, upcoming: [] },
-      payments: { pendingCount: 0, pendingAmount: 0, approvedMonthCount: 0, approvedMonthAmount: 0, rejectedMonthCount: 0, recent: [] },
-      leave: { onLeaveToday: [], pendingRequests: 0 },
+      payments: { pendingCount: 0, pendingAmount: 0, approvedMonthCount: 0, approvedMonthAmount: 0, rejectedMonthCount: 0, recent: [], monthly: [] },
+      leave: { onLeaveToday: [], upcoming: [], pendingRequests: 0 },
     };
+    // Last 8 week buckets (Monday-start, oldest first) and last 6 months.
+    const dow = new Date(today + 'T00:00:00Z').getUTCDay();
+    const thisMonday = _checklistPlusDays(today, -((dow + 6) % 7));
+    data.tasks.weekly = Array.from({ length: 8 }, (_, i) => ({ weekStart: _checklistPlusDays(thisMonday, -7 * (7 - i)), assigned: 0, completed: 0 }));
+    const weekOf = (d) => { if (!d) return null; for (let i = 7; i >= 0; i--) if (d >= data.tasks.weekly[i].weekStart) return i; return null; };
+    const [ty, tm] = today.split('-').map(Number);
+    data.payments.monthly = Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(Date.UTC(ty, tm - 1 - (5 - i), 1));
+      return { month: d.toISOString().slice(0, 7), approvedAmount: 0, approvedCount: 0 };
+    });
     if (!USE_DB) return res.json(data); // local dev (JSON mode) has none of these tables
 
     // 1) Tasks handed out by an Admin — delegations whose delegated_by is a
@@ -12931,7 +12941,7 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
       const adminIds = admins.filter(u => rolesOf(u).includes('Admin') || isSuperAdminEmail(u.email)).map(u => u.id);
       if (adminIds.length) {
         const ph = adminIds.map((_, i) => '$' + (i + 1)).join(',');
-        const rows = await q(`SELECT d.doer, d.status, d.due_date AS "dueDate", u.name AS "delegatedByName"
+        const rows = await q(`SELECT d.doer, d.status, d.due_date AS "dueDate", d.created_at AS "createdAt", d.completed_at AS "completedAt", u.name AS "delegatedByName"
                                 FROM delegations d LEFT JOIN users u ON u.id = d.delegated_by
                                WHERE d.delegated_by IN (${ph})`, adminIds);
         const byDoer = new Map();
@@ -12948,6 +12958,10 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
           }
           if (r.delegatedByName) e.givenBy.add(r.delegatedByName);
           byDoer.set(name, e);
+          const wa = weekOf(toDateStr(r.createdAt));
+          if (wa !== null) data.tasks.weekly[wa].assigned++;
+          const wc = r.status === 'done' ? weekOf(toDateStr(r.completedAt)) : null;
+          if (wc !== null) data.tasks.weekly[wc].completed++;
         }
         data.tasks.byAssignee = [...byDoer.values()]
           .map(e => ({ ...e, givenBy: [...e.givenBy] }))
@@ -12978,6 +12992,10 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
         if (r.status === 'pending') { data.payments.pendingCount++; data.payments.pendingAmount += amt; }
         else if (r.status === 'Approved' && decided >= monthStart) { data.payments.approvedMonthCount++; data.payments.approvedMonthAmount += amt; }
         else if (r.status === 'Rejected' && decided >= monthStart) data.payments.rejectedMonthCount++;
+        if (r.status === 'Approved') {
+          const m = data.payments.monthly.find(x => x.month === decided.slice(0, 7));
+          if (m) { m.approvedAmount += amt; m.approvedCount++; }
+        }
       }
       data.payments.recent = rows.slice(0, 6).map(r => ({ ...r, amount: Number(r.amount) || 0, requiredBy: toDateStr(r.requiredBy), createdAt: toDateStr(r.createdAt) }));
     } catch (e) { console.error('[company-overview] payments failed:', e.message); }
@@ -12987,13 +13005,16 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
     try {
       const rows = await q(`SELECT l.user_name AS "userName", e.name AS "empName", l.leave_type AS "leaveType", l.type, l.half_day AS "halfDay", l.from_date AS "fromDate", l.to_date AS "toDate"
                               FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
-                             WHERE LOWER(l.status) = 'approved' AND l.from_date <= $1 AND l.to_date >= $2`, [today, today]);
-      data.leave.onLeaveToday = rows.map(r => ({
+                             WHERE LOWER(l.status) = 'approved' AND l.from_date <= $1 AND l.to_date >= $2
+                             ORDER BY l.from_date ASC`, [weekEnd, today]);
+      const all = rows.map(r => ({
         name: r.empName || r.userName || '—',
         type: r.leaveType || r.type || 'Leave',
         halfDay: String(r.halfDay || 'full') !== 'full',
         from: toDateStr(r.fromDate), to: toDateStr(r.toDate),
       }));
+      data.leave.onLeaveToday = all.filter(x => x.from <= today);
+      data.leave.upcoming = all.filter(x => x.from > today);
       const p = await q(`SELECT COUNT(*) AS c FROM leaves WHERE LOWER(status) LIKE 'pending%'`);
       data.leave.pendingRequests = Number(p[0]?.c) || 0;
     } catch (e) { console.error('[company-overview] leave failed:', e.message); }
