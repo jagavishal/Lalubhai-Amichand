@@ -56,6 +56,9 @@ window.Sidebar = {
     // New Expense — a plus in a circle, the sidebar's direct shortcut into
     // Retail Dashboard's "+ New Expense" drawer.
     newexpense:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>',
+    // Company Overview — a briefcase, the plain "company/business" glyph,
+    // distinct from every module's own icon since this page sits above all of them.
+    companyoverview: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><path d="M2 13h20"/></svg>',
     // Section open/close arrow — drawn pointing right and rotated 90° when the
     // section is open, so one icon covers both states.
     chevron:      '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
@@ -160,6 +163,11 @@ window.Sidebar = {
       { route: 'retail-dashboard', label: 'Retail Dashboard', icon: 'retaildashboard' },
     ]},
     { title: 'Admin Section', items: [
+      // Cross-module rollup for the company's leadership — adminOnly, but
+      // grantable to a non-admin from Users → Access like Employee Master/
+      // Bulk Email, so a CEO login that isn't itself an Admin/HOD account
+      // can still be handed just this page.
+      { route: 'company-overview', label: 'Company Overview', icon: 'companyoverview', adminOnly: true },
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
       { route: 'fms',           label: 'FMS',          icon: 'fms',          flag: 'fms' },
       { route: 'mis',           label: 'MIS Report',   icon: 'mis' },

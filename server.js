@@ -12859,6 +12859,128 @@ app.get('/api/master', async (req, res) => {
   return res.send(html);
 });
 
+// ── Company Overview (CEO dashboard) ────────────────────────────────────────
+// Every other page in the app is scoped to its own module — nothing today
+// rolls PR/PO/GRN spend, export pipeline and HR headcount up into one place
+// a CEO can glance at. Read-only: this never writes anything, and a failure
+// on any one source degrades that card to zero rather than failing the page.
+let _companyOverviewCache = null; // { at, data }
+const COMPANY_OVERVIEW_TTL_MS = 5 * 60 * 1000;
+
+app.get('/api/company-overview', requireAuth, requireAdminOrPage('company-overview'), async (req, res) => {
+  try {
+    if (_companyOverviewCache && (Date.now() - _companyOverviewCache.at) < COMPANY_OVERVIEW_TTL_MS) {
+      return res.json(_companyOverviewCache.data);
+    }
+
+    const auth = getGoogleAuth();
+    const sheets = auth ? require('googleapis').google.sheets({ version: 'v4', auth }) : null;
+    const readLog = async (spreadsheetId, tab, range) => {
+      if (!sheets) return [];
+      try {
+        const r = await sheets.spreadsheets.values.get({ spreadsheetId, range: `'${tab}'!${range}`, valueRenderOption: 'FORMATTED_VALUE' });
+        return r.data.values || [];
+      } catch (e) {
+        if (/unable to parse range/i.test(e.message || '')) return [];
+        console.error(`[company-overview] read failed for ${tab}:`, e.message);
+        return [];
+      }
+    };
+    const money = (v) => parseFloat(String(v ?? '0').replace(/,/g, '')) || 0;
+    const thisMonth = new Date().toISOString().slice(0, 7); // YYYY-MM, IST drift doesn't matter at month granularity
+
+    const [prRows, poRows, grnRows, piRows] = await Promise.all([
+      readLog(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, 'A2:L1000'),
+      readLog(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, 'A2:L1000'),
+      readLog(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, 'A2:M1000'),
+      readLog(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, 'A2:K1000'),
+    ]);
+
+    // PR Log: A=PR No, C=Date, G=Total Amount (INR), L=Status. "Pending" is
+    // whatever isn't yet a final decision — same vocabulary /api/pr-creation
+    // and PR Summary already use (Cancelled/Approved/Rejected are final).
+    let prPendingCount = 0, prMonthCount = 0, prMonthValue = 0;
+    for (const r of prRows) {
+      if (!r[0]) continue;
+      const status = r[11] || 'Active';
+      if (!['Approved', 'Rejected', 'Cancelled'].includes(status)) prPendingCount++;
+      if (status !== 'Cancelled' && _sheetDateToIso(r[2]).slice(0, 7) === thisMonth) { prMonthCount++; prMonthValue += money(r[6]); }
+    }
+
+    // PO Log: A=PO No, C=Date, F=Total Amount (INR), L=Status.
+    let poPendingCount = 0, poMonthApprovedCount = 0, poMonthApprovedValue = 0, poAllApprovedCount = 0, poAllApprovedValue = 0;
+    for (const r of poRows) {
+      if (!r[0]) continue;
+      const status = r[11] || 'Active';
+      if (!['Approved', 'Rejected', 'Cancelled'].includes(status)) poPendingCount++;
+      if (status === 'Approved') {
+        poAllApprovedCount++; poAllApprovedValue += money(r[5]);
+        if (_sheetDateToIso(r[2]).slice(0, 7) === thisMonth) { poMonthApprovedCount++; poMonthApprovedValue += money(r[5]); }
+      }
+    }
+
+    // GRN Log: A=GR No, B=Date, H=Total Amount (INR), M=Status. No approval
+    // chain of its own (unlike PR/PO) — just a received-this-month tally.
+    let grnMonthCount = 0, grnMonthValue = 0;
+    for (const r of grnRows) {
+      if (!r[0] || r[12] === 'Cancelled') continue;
+      if (_sheetDateToIso(r[1]).slice(0, 7) === thisMonth) { grnMonthCount++; grnMonthValue += money(r[7]); }
+    }
+
+    // PI Log: A=PI No, D=Total C&F (US$), K=Status. Export order book in
+    // dollars, not rupees. Status is Draft/Priced/Superseded/Cancelled (no
+    // separate "dispatched/closed" state today) — Superseded means a later
+    // revision replaced this exact row (see /api/proforma-invoice/revise),
+    // so it's excluded the same as Cancelled; a Draft counts as open but
+    // contributes 0 value since Total C&F is blank until it's Priced.
+    let piOpenCount = 0, piOpenValueUsd = 0;
+    for (const r of piRows) {
+      if (!r[0] || ['Cancelled', 'Superseded'].includes(r[10])) continue;
+      piOpenCount++; piOpenValueUsd += money(r[3]);
+    }
+
+    // DB-backed figures — local dev has no DB (JSON mode), so these read 0
+    // there rather than throwing; production is where this page matters.
+    let taskPendingCount = 0, leavePendingCount = 0, urgentPendingCount = 0, urgentPendingValue = 0, headcountByDept = [], headcountTotal = 0;
+    if (USE_DB) {
+      try {
+        const rows = await q(`SELECT COUNT(*) AS c FROM delegations WHERE approval='Approval Required' AND status='pending'`);
+        taskPendingCount = Number(rows[0]?.c) || 0;
+      } catch (e) { console.error('[company-overview] task approvals query failed:', e.message); }
+      try {
+        const rows = await q(`SELECT COUNT(*) AS c FROM leaves WHERE LOWER(status)='pending'`);
+        leavePendingCount = Number(rows[0]?.c) || 0;
+      } catch (e) { console.error('[company-overview] leave query failed:', e.message); }
+      try {
+        const rows = await q(`SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS v FROM urgent_payments WHERE status='pending'`);
+        urgentPendingCount = Number(rows[0]?.c) || 0;
+        urgentPendingValue = Number(rows[0]?.v) || 0;
+      } catch (e) { console.error('[company-overview] urgent payments query failed:', e.message); }
+      try {
+        const rows = await q(`SELECT department, COUNT(*) AS c FROM hr_employees WHERE status='Active' GROUP BY department ORDER BY c DESC`);
+        headcountByDept = rows.map(r => ({ department: r.department || 'Unassigned', count: Number(r.c) || 0 }));
+        headcountTotal = headcountByDept.reduce((s, d) => s + d.count, 0);
+      } catch (e) { console.error('[company-overview] headcount query failed:', e.message); }
+    }
+
+    const data = {
+      generatedAt: new Date().toISOString(),
+      pendingApprovals: {
+        total: taskPendingCount + poPendingCount + prPendingCount + leavePendingCount + urgentPendingCount,
+        task: taskPendingCount, po: poPendingCount, pr: prPendingCount, leave: leavePendingCount, urgentPayment: urgentPendingCount,
+      },
+      poSpend: { thisMonthCount: poMonthApprovedCount, thisMonthValue: poMonthApprovedValue, allTimeCount: poAllApprovedCount, allTimeValue: poAllApprovedValue },
+      prRaised: { thisMonthCount: prMonthCount, thisMonthValue: prMonthValue },
+      grnReceived: { thisMonthCount: grnMonthCount, thisMonthValue: grnMonthValue },
+      exportPipeline: { openCount: piOpenCount, openValueUsd: piOpenValueUsd },
+      urgentPaymentsPendingValue: urgentPendingValue,
+      headcount: { total: headcountTotal, byDepartment: headcountByDept.slice(0, 8) },
+    };
+    _companyOverviewCache = { at: Date.now(), data };
+    return res.json(data);
+  } catch (e) { console.error('[company-overview] failed:', e.message); return res.status(500).json({ error: e.message }); }
+});
+
 // ── Catch-all SPA ─────────────────────────────────────────────────────────────
 // The shell references page scripts by a manually-bumped ?v=N — if this HTML
 // response itself gets cached (by the browser or a CDN/proxy in front of the
