@@ -78,7 +78,12 @@ window.Pages['po-creation'] = (() => {
   // values are never sent to the server).
   const ITEM_COMPUTED = {
     PurchaseOrder: [
-      { key: 'amount',        label: 'Amount (INR)',         compute: v => _num(v.qty) * _num(v.unitPrice) },
+      // editable: the store team often has only the line's total — an
+      // Aluminium Circle vendor quotes the amount, not a per-kg rate ("PO me
+      // abhi bhi amount edit nahi ho pa rahi he"). Typing it back-fills Unit
+      // Price = Amount ÷ Qty; the sheet itself only has Qty and Unit Price
+      // columns (its own Amount is a formula), so Unit Price is what's sent.
+      { key: 'amount',        label: 'Amount (INR)',         compute: v => _num(v.qty) * _num(v.unitPrice), editable: true },
       { key: 'amountWithTax', label: 'Amount w/ Tax (INR)',   compute: v => { const a = _num(v.qty) * _num(v.unitPrice); return a + a * _num(v.gst) / 100; } },
     ],
     'ENR PO': [
@@ -502,13 +507,35 @@ window.Pages['po-creation'] = (() => {
   }
 
   /* ── Live computed previews (Amount / Amount w/ Tax / Total, Grand Total) ─ */
-  function _recomputeRow(row) {
+  // `editing` is the Amount input the user is typing in, if any — it's left
+  // exactly as typed rather than rewritten from the value it just produced.
+  function _recomputeRow(row, editing) {
     const vals = {};
     row.querySelectorAll('.poc-item-field').forEach(inp => { vals[inp.dataset.field] = inp.value; });
     ITEM_COMPUTED[_format].forEach(c => {
       const cell = row.querySelector('.poc-item-computed[data-key="' + c.key + '"]');
       if (cell) cell.textContent = _fmtMoney(c.compute(vals));
+      const inp = row.querySelector('.poc-item-amount[data-key="' + c.key + '"]');
+      if (inp && inp !== editing) {
+        const v = c.compute(vals);
+        inp.value = v ? (Math.round(v * 100) / 100).toFixed(2) : '';
+      }
     });
+  }
+
+  // Amount typed → Unit Price = Amount ÷ Qty (6 decimals, so Qty × Unit Price
+  // lands back on the typed amount to the paisa). Needs a Qty first.
+  function _onAmountInput(inp) {
+    const row = inp.closest('.poc-item-row');
+    const qtyInp = row.querySelector('.poc-item-field[data-field="qty"]');
+    const priceInp = row.querySelector('.poc-item-field[data-field="unitPrice"]');
+    if (!qtyInp || !priceInp) return;
+    const amount = _num(inp.value);
+    const qty = _num(qtyInp.value);
+    inp.style.borderColor = (inp.value.trim() && !qty) ? '#f59e0b' : '#e2e8f0';
+    if (!qty || priceInp.readOnly) return;
+    priceInp.value = inp.value.trim() ? String(Math.round(amount / qty * 1e6) / 1e6) : '';
+    _recomputeRow(row, inp);
   }
 
   function _recomputeGrandTotal() {
@@ -551,11 +578,20 @@ window.Pages['po-creation'] = (() => {
   }
 
   function _onFormInput(e) {
+    if (e.target.matches('.poc-item-amount')) {
+      e.target.dataset.typed = e.target.value.trim() ? '1' : '';
+      _onAmountInput(e.target);
+    }
     if (e.target.matches('.poc-item-field')) {
       const row = e.target.closest('.poc-item-row');
-      if (row) _recomputeRow(row);
+      const amountInp = row && row.querySelector('.poc-item-amount');
+      // Typing Unit Price takes over from a typed Amount; changing Qty keeps a
+      // typed Amount fixed and re-derives the price from it instead.
+      if (amountInp && e.target.dataset.field === 'unitPrice') amountInp.dataset.typed = '';
+      if (amountInp && amountInp.dataset.typed && e.target.dataset.field === 'qty') _onAmountInput(amountInp);
+      else if (row) _recomputeRow(row);
     }
-    if (e.target.matches('.poc-item-field, .poc-summary-field')) _recomputeGrandTotal();
+    if (e.target.matches('.poc-item-field, .poc-summary-field, .poc-item-amount')) _recomputeGrandTotal();
   }
 
   /* ── Item rows ──────────────────────────────────────────────────────── */
@@ -584,7 +620,9 @@ window.Pages['po-creation'] = (() => {
     const fieldCells = fields.map(f => ''
       + '<td style="padding:6px;"><input type="text" inputmode="' + (f.numeric ? 'decimal' : 'text') + '" data-field="' + f.key + '" class="poc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
     ).join('');
-    const computedCells = computed.map(c => '<td class="poc-item-computed" data-key="' + c.key + '" style="padding:6px 10px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;">0.00</td>').join('');
+    const computedCells = computed.map(c => c.editable
+      ? '<td style="padding:6px;min-width:110px;"><input type="text" inputmode="decimal" class="poc-item-amount" data-key="' + c.key + '" placeholder="0.00" title="Type the line total — Unit Price is worked out from it (Amount ÷ Qty)" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" /></td>'
+      : '<td class="poc-item-computed" data-key="' + c.key + '" style="padding:6px 10px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;">0.00</td>').join('');
     return '<tr class="poc-item-row" style="border-bottom:1px solid #f1f5f9;">'
       + _itemKeyCellHtml()
       + fieldCells
