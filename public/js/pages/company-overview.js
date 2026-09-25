@@ -82,12 +82,15 @@ window.Pages['company-overview'] = (() => {
     if (!el) return;
 
     let body;
-    if (_loading && !_data) {
-      body = `<div style="padding:60px 0;text-align:center;color:#94a3b8;font-size:13px;">Loading…</div>`;
-    } else if (_error) {
+    if (_error) {
       body = `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px 16px;color:#b91c1c;font-size:12.5px;">
         Could not load: ${esc(_error)}. <button id="co-retry" style="border:none;background:transparent;color:#b91c1c;text-decoration:underline;cursor:pointer;font-weight:600;">Retry</button>
       </div>`;
+    } else if (!_data) {
+      // Covers both "haven't fetched yet" (render() called before _load())
+      // and "fetch in flight" — _data stays null either way, so there's
+      // nothing for the dashboard branch below to read yet.
+      body = `<div style="padding:60px 0;text-align:center;color:#94a3b8;font-size:13px;">Loading…</div>`;
     } else {
       const d = _data;
       const po = d.poSpend, pr = d.prRaised, grn = d.grnReceived, ep = d.exportPipeline;
