@@ -416,6 +416,10 @@ const SCHEMA = [
   // sidesteps the collision without touching that old table or its data.
   `CREATE TABLE IF NOT EXISTS scheduler_meetings (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, date DATE NOT NULL, start_time VARCHAR(8) DEFAULT '', end_time VARCHAR(8) DEFAULT '', attendees TEXT DEFAULT '', location VARCHAR(255) DEFAULT '', notes TEXT DEFAULT NULL, created_by VARCHAR(16) DEFAULT NULL, created_by_name VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_scheduler_meetings_date ON scheduler_meetings (date)`,
+  `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS client_id VARCHAR(16) DEFAULT NULL`,
+  `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS client_name VARCHAR(255) DEFAULT ''`,
+  `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS frequency VARCHAR(16) DEFAULT ''`,
+  `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS series_id VARCHAR(16) DEFAULT NULL`,
 ];
 
 // ── HRMS ──────────────────────────────────────────────────────────────────────
@@ -5170,6 +5174,14 @@ app.get('/api/scheduler', requireAuth, async (req, res) => {
 // ever hands it back to the organizer and the named attendees, never the
 // whole company. Cancelling one is restricted below to the organizer (or an
 // Admin/HOD) so one attendee can't pull a meeting somebody else called.
+// Frequency -> how many total occurrences to create and how to step the date.
+// Capped at a year's worth so "Weekly" from a stray click can't fill the table.
+const MEETING_RECUR_STEPS = {
+  daily: { count: 30, next: (d, i) => _checklistPlusDays(d, i) },
+  weekly: { count: 12, next: (d, i) => _checklistPlusDays(d, i * 7) },
+  monthly: { count: 12, next: (d, i) => _checklistPlusMonths(d, i) },
+};
+
 app.post('/api/meetings', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
@@ -5179,11 +5191,26 @@ app.post('/api/meetings', requireAuth, async (req, res) => {
     if (!date || !title) return res.status(400).json({ error: 'date and title required' });
     const me = req.session?.user;
     const attendees = Array.isArray(b.attendees) ? b.attendees.filter(Boolean).join(', ') : String(b.attendees || '').trim();
-    const id = await withSeqId('scheduler_meetings', 'MTG', 4, (newId) =>
-      pool.query(
-        `INSERT INTO scheduler_meetings (id, title, date, start_time, end_time, attendees, location, notes, created_by, created_by_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-        [newId, title, date, (b.startTime || '').trim(), (b.endTime || '').trim(), attendees, (b.location || '').trim(), (b.notes || '').trim() || null, me?.id || null, me?.name || '']));
-    return res.status(201).json({ success: true, id });
+    const clientId = (b.clientId || '').trim() || null;
+    const clientName = (b.clientName || '').trim();
+    const startTime = (b.startTime || '').trim();
+    const endTime = (b.endTime || '').trim();
+    const location = (b.location || '').trim();
+    const notes = (b.notes || '').trim() || null;
+    const freq = String(b.frequency || '').trim().toLowerCase();
+    const step = MEETING_RECUR_STEPS[freq];
+    const dates = step ? Array.from({ length: step.count }, (_, i) => step.next(date, i)) : [date];
+
+    let id = null, seriesId = null;
+    for (const d of dates) {
+      id = await withSeqId('scheduler_meetings', 'MTG', 4, (newId) => {
+        seriesId = seriesId || newId; // first occurrence's own id groups the series
+        return pool.query(
+          `INSERT INTO scheduler_meetings (id, title, date, start_time, end_time, attendees, location, notes, created_by, created_by_name, client_id, client_name, frequency, series_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          [newId, title, d, startTime, endTime, attendees, location, notes, me?.id || null, me?.name || '', clientId, clientName, step ? freq : '', seriesId]);
+      });
+    }
+    return res.status(201).json({ success: true, id, occurrences: dates.length });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 

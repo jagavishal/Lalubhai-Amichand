@@ -359,6 +359,28 @@ window.Pages.scheduler = (() => {
     return _users;
   }
 
+  let _clients = null;
+  async function _loadClients() {
+    if (_clients) return _clients;
+    try { _clients = await Utils.apiFetch('/api/clients') || []; }
+    catch { _clients = []; }
+    return _clients;
+  }
+
+  // "10:00" + "PM" -> "22:00". Returns '' on anything that doesn't parse as
+  // a 1-12 hour, 0-59 minute clock time (the Start Time field is free text,
+  // matching the reference design, so it needs real validation before use).
+  function _to24Hour(text, ampm) {
+    const m = String(text || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return '';
+    let h = parseInt(m[1], 10);
+    const min = parseInt(m[2], 10);
+    if (h < 1 || h > 12 || min > 59) return '';
+    if (ampm === 'AM') h = (h === 12) ? 0 : h;
+    else h = (h === 12) ? 12 : h + 12;
+    return String(h).padStart(2, '0') + ':' + m[2];
+  }
+
   function _closeMeetingModal() {
     document.getElementById('sch-meeting-modal-overlay')?.remove();
   }
@@ -429,18 +451,26 @@ window.Pages.scheduler = (() => {
 
   async function _openMeetingModal(dateStr) {
     _closeMeetingModal();
-    const users = await _loadUsers();
+    const [users, clients] = await Promise.all([_loadUsers(), _loadClients()]);
     const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--border-base);border-radius:8px;font-size:13px;color:var(--text-primary);background:var(--surface);outline:none;';
     const labelStyle = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:5px;';
     const DURATIONS = [['15', '15 min'], ['30', '30 min'], ['45', '45 min'], ['60', '1 hour'], ['90', '1.5 hours'], ['120', '2 hours'], ['', 'Custom']];
+    const FREQUENCIES = [['', 'Does not repeat'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']];
 
     const bodyHTML = `
       <div style="display:flex;flex-direction:column;gap:14px;">
-        <div>
-          <label style="${labelStyle}">Title <span style="color:var(--color-danger)">*</span></label>
-          <input id="sch-title" style="${inputStyle}" placeholder="e.g. Vendor review call" />
-        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label style="${labelStyle}">Title <span style="color:var(--color-danger)">*</span></label>
+            <input id="sch-title" style="${inputStyle}" placeholder="e.g. Vendor review call" />
+          </div>
+          <div>
+            <label style="${labelStyle}">Client</label>
+            <select id="sch-client" style="${inputStyle}background:var(--surface);">
+              <option value="">— None —</option>
+              ${clients.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
+            </select>
+          </div>
           <div>
             <label style="${labelStyle}">Date <span style="color:var(--color-danger)">*</span></label>
             <input id="sch-date" type="date" value="${dateStr}" style="${inputStyle}" />
@@ -450,33 +480,44 @@ window.Pages.scheduler = (() => {
             <select id="sch-duration" style="${inputStyle}background:var(--surface);">${DURATIONS.map(([v, l]) => `<option value="${v}"${v === '30' ? ' selected' : ''}>${l}</option>`).join('')}</select>
           </div>
           <div>
-            <label style="${labelStyle}">Start Time</label>
-            <input id="sch-start" type="time" style="${inputStyle}" />
+            <label style="${labelStyle}">Start Time <span style="color:var(--color-danger)">*</span></label>
+            <div style="display:flex;gap:6px;">
+              <input id="sch-start-text" type="text" autocomplete="off" placeholder="e.g. 10:00" style="${inputStyle}" />
+              <select id="sch-start-ampm" style="${inputStyle}width:76px;flex:0 0 76px;background:var(--surface);">
+                <option value="AM">AM</option>
+                <option value="PM">PM</option>
+              </select>
+            </div>
           </div>
           <div>
             <label style="${labelStyle}">End Time</label>
-            <input id="sch-end" type="time" style="${inputStyle}" />
+            <input id="sch-end" type="time" disabled style="${inputStyle}background:var(--bg-subtle,#f3f4f6);color:var(--text-muted);cursor:not-allowed;" />
           </div>
         </div>
         <div>
-          <label style="${labelStyle}">Attendees</label>
+          <label style="${labelStyle}">Frequency</label>
+          <select id="sch-frequency" style="${inputStyle}background:var(--surface);">${FREQUENCIES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
+        </div>
+        <div>
+          <label style="${labelStyle}">Attendees (Team)</label>
           <div id="sch-attendees-box" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:40px;box-sizing:border-box;padding:5px 8px;border:1.5px solid var(--border-base);border-radius:8px;background:var(--surface);cursor:text;">
             <input id="sch-attendees-input" type="text" autocomplete="off" placeholder="Select attendees…" style="flex:1;min-width:120px;border:none;outline:none;font-size:13px;background:transparent;color:var(--text-primary);" />
           </div>
           <div id="sch-attendees-dd" style="display:none;position:fixed;z-index:9999;background:var(--surface);border:1px solid var(--border-base);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:200px;overflow-y:auto;"></div>
         </div>
         <div>
-          <label style="${labelStyle}">Agenda <span style="color:var(--text-muted);font-weight:400;text-transform:none;">(optional)</span></label>
-          <textarea id="sch-notes" rows="3" placeholder="What's the meeting about?" style="${inputStyle}resize:none;font-family:inherit;"></textarea>
+          <label style="${labelStyle}">Agenda</label>
+          <textarea id="sch-notes" rows="3" placeholder="Optional — what's the meeting about?" style="${inputStyle}resize:none;font-family:inherit;"></textarea>
         </div>
         <div>
-          <label style="${labelStyle}">Location / Link <span style="color:var(--text-muted);font-weight:400;text-transform:none;">(optional)</span></label>
-          <input id="sch-location" style="${inputStyle}" placeholder="Meeting room, or a Zoom/Meet link" />
+          <label style="${labelStyle}">Meet Link</label>
+          <div style="font-size:10.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin:-2px 0 5px;">Leave blank for auto Google Meet, if configured</div>
+          <input id="sch-location" style="${inputStyle}" placeholder="https://meet.google.com/..." />
         </div>
       </div>`;
     const footerHTML = `
-      <button type="button" id="sch-cancel" class="btn-secondary">Cancel</button>
-      <button type="button" id="sch-save" class="btn-primary">Schedule Meeting</button>`;
+      <button type="button" id="sch-cancel" class="btn-secondary">Close</button>
+      <button type="button" id="sch-save" class="btn-primary">Save</button>`;
 
     document.body.insertAdjacentHTML('beforeend', window.UI.modal({
       id: 'sch-meeting-modal-overlay',
@@ -495,22 +536,26 @@ window.Pages.scheduler = (() => {
     document.getElementById('sch-title').focus();
     _bindAttendeesCombobox(users);
 
-    // Duration drives End Time off Start Time — the field a CEO actually
-    // thinks in ("30 min") rather than typing two clock times. Picking
-    // "Custom" just leaves End Time as whatever is already there, editable.
+    // Duration + the Start Time text/AM-PM pair drive the (read-only) End
+    // Time — the reference design shows End Time greyed out because it's
+    // computed, not typed.
     const recomputeEnd = () => {
       const mins = parseInt(document.getElementById('sch-duration').value, 10);
-      const start = document.getElementById('sch-start').value;
-      if (start && Number.isFinite(mins)) document.getElementById('sch-end').value = _addMinutes(start, mins);
+      const start = _to24Hour(document.getElementById('sch-start-text').value, document.getElementById('sch-start-ampm').value);
+      document.getElementById('sch-end').value = (start && Number.isFinite(mins)) ? _addMinutes(start, mins) : '';
     };
     document.getElementById('sch-duration').addEventListener('change', recomputeEnd);
-    document.getElementById('sch-start').addEventListener('change', recomputeEnd);
+    document.getElementById('sch-start-text').addEventListener('input', recomputeEnd);
+    document.getElementById('sch-start-ampm').addEventListener('change', recomputeEnd);
 
     document.getElementById('sch-save').addEventListener('click', async () => {
       const title = document.getElementById('sch-title').value.trim();
       const date = document.getElementById('sch-date').value;
+      const startTime = _to24Hour(document.getElementById('sch-start-text').value, document.getElementById('sch-start-ampm').value);
       if (!title || !date) { Utils.showToast('Title and date are required', 'error'); return; }
+      if (document.getElementById('sch-start-text').value.trim() && !startTime) { Utils.showToast('Start time should look like 10:00', 'error'); return; }
       const attendees = [...document.querySelectorAll('#sch-attendees-box .sch-chip')].map(c => c.dataset.name);
+      const clientSel = document.getElementById('sch-client');
       const btn = document.getElementById('sch-save');
       btn.disabled = true; btn.textContent = 'Scheduling…';
       try {
@@ -518,7 +563,10 @@ window.Pages.scheduler = (() => {
           method: 'POST',
           body: JSON.stringify({
             title, date,
-            startTime: document.getElementById('sch-start').value,
+            clientId: clientSel.value,
+            clientName: clientSel.value ? clientSel.options[clientSel.selectedIndex].textContent : '',
+            frequency: document.getElementById('sch-frequency').value,
+            startTime,
             endTime: document.getElementById('sch-end').value,
             attendees,
             location: document.getElementById('sch-location').value.trim(),
@@ -531,7 +579,7 @@ window.Pages.scheduler = (() => {
         await loadData();
         renderPage();
       } catch (e) {
-        btn.disabled = false; btn.textContent = 'Schedule Meeting';
+        btn.disabled = false; btn.textContent = 'Save';
         Utils.showToast(e.message || 'Failed to schedule meeting', 'error');
       }
     });
