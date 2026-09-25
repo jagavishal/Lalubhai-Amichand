@@ -80,8 +80,14 @@ window.Pages['company-overview'] = (() => {
   // substitute) is actually the one to decide — never the whole company's.
   async function _loadLeaveRequests() {
     _leaveReq = null; _render();
+    // The owner login (isSuperAdmin) is not literally named as anyone's
+    // approver, so forApprover=me would always come back empty for them —
+    // GET /api/hr/leaves already gives the owner everything unscoped when
+    // forApprover isn't passed at all, which is what "kuch bhi nahi aaya"
+    // was seeing. A plain Admin still gets forApprover=me's real scoping.
+    const url = window.currentUser?.isSuperAdmin ? '/api/hr/leaves?status=Pending' : '/api/hr/leaves?forApprover=me&status=Pending';
     try {
-      const rows = await Utils.apiFetch('/api/hr/leaves?forApprover=me&status=Pending');
+      const rows = await Utils.apiFetch(url);
       _leaveReq = { rows: Array.isArray(rows) ? rows : [] };
     } catch (e) { _leaveReq = { rows: [], error: e.message || 'Failed to load leave requests' }; }
     _render();
@@ -213,7 +219,83 @@ window.Pages['company-overview'] = (() => {
           </div>`;
         }).join('')}</div>`).join('')}</div>`
       : empty('No meetings scheduled in the next 7 days.');
-    return card('Meetings', m.today + ' today · ' + m.next7Days + ' in the next 7 days', link('#scheduler', 'Scheduler'), body);
+    const right = `<div style="display:flex;align-items:center;gap:10px;">
+        <button type="button" id="ceo-add-meeting" class="ceo-mini-btn ceo-mini-btn-primary">+ Add Meeting</button>
+        ${link('#scheduler', 'Scheduler')}
+      </div>`;
+    return card('Meetings', m.today + ' today · ' + m.next7Days + ' in the next 7 days', right, body);
+  }
+
+  /* ── Add Meeting modal — same fields/behavior as the Scheduler page's own
+     "Schedule a Meeting" modal (checkbox attendees, POST /api/meetings), so a
+     CEO doesn't have to leave the dashboard to put something on the calendar. */
+  let _meetingUsers = null;
+  async function _openAddMeetingModal() {
+    document.getElementById('ceo-meeting-modal-overlay')?.remove();
+    if (!_meetingUsers) { try { _meetingUsers = await Utils.apiFetch('/api/users?lite=1') || []; } catch { _meetingUsers = []; } }
+    const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--ceo-border);border-radius:8px;font-size:13px;color:var(--ceo-ink);background:var(--ceo-surface);outline:none;';
+    const labelStyle = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ceo-ink2);margin-bottom:5px;';
+    const userOptions = _meetingUsers.map((u, i) => `
+      <label style="display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:13px;color:var(--ceo-ink);cursor:pointer;">
+        <input type="checkbox" class="ceo-attendee-cb" id="ceo-attendee-${i}" value="${esc(u.name)}" style="width:15px;height:15px;flex-shrink:0;accent-color:var(--ceo-accent);" />
+        ${esc(u.name)}${u.department ? ` <span style="color:var(--ceo-muted);">— ${esc(u.department)}</span>` : ''}
+      </label>`).join('');
+    const bodyHTML = `<div class="ceo" style="max-width:none;padding:0;"><div style="display:flex;flex-direction:column;gap:14px;">
+        <div><label style="${labelStyle}">Title <span style="color:var(--ceo-crit);">*</span></label>
+          <input id="ceo-mtg-title" style="${inputStyle}" placeholder="e.g. Vendor review call" /></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+          <div><label style="${labelStyle}">Date <span style="color:var(--ceo-crit);">*</span></label>
+            <input id="ceo-mtg-date" type="date" value="${_data.today}" style="${inputStyle}" /></div>
+          <div><label style="${labelStyle}">Start Time</label><input id="ceo-mtg-start" type="time" style="${inputStyle}" /></div>
+          <div><label style="${labelStyle}">End Time</label><input id="ceo-mtg-end" type="time" style="${inputStyle}" /></div>
+        </div>
+        <div><label style="${labelStyle}">Attendees</label>
+          <div style="max-height:160px;overflow-y:auto;border:1.5px solid var(--ceo-border);border-radius:8px;padding:4px 8px;background:var(--ceo-surface);">${userOptions}</div></div>
+        <div><label style="${labelStyle}">Location <span style="color:var(--ceo-muted);font-weight:400;text-transform:none;">(optional)</span></label>
+          <input id="ceo-mtg-location" style="${inputStyle}" placeholder="Meeting room / link" /></div>
+        <div><label style="${labelStyle}">Notes <span style="color:var(--ceo-muted);font-weight:400;text-transform:none;">(optional)</span></label>
+          <textarea id="ceo-mtg-notes" rows="3" style="${inputStyle}resize:none;font-family:inherit;"></textarea></div>
+      </div></div>`;
+    const footerHTML = `<button type="button" id="ceo-mtg-cancel" class="btn-secondary">Cancel</button>
+      <button type="button" id="ceo-mtg-save" class="btn-primary">Schedule Meeting</button>`;
+    document.body.insertAdjacentHTML('beforeend', window.UI.modal({
+      id: 'ceo-meeting-modal-overlay', title: 'Schedule a Meeting',
+      subtitle: 'Only you and whoever you invite will see this on their Scheduler',
+      width: 480, closeButtonId: 'ceo-mtg-close', hiddenByDefault: false, bodyHTML, footerHTML,
+    }));
+    const overlay = document.getElementById('ceo-meeting-modal-overlay');
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.getElementById('ceo-mtg-close').addEventListener('click', close);
+    document.getElementById('ceo-mtg-cancel').addEventListener('click', close);
+    document.getElementById('ceo-mtg-title').focus();
+    document.getElementById('ceo-mtg-save').addEventListener('click', async () => {
+      const title = document.getElementById('ceo-mtg-title').value.trim();
+      const date = document.getElementById('ceo-mtg-date').value;
+      if (!title || !date) { Utils.showToast('Title and date are required', 'error'); return; }
+      const attendees = [...document.querySelectorAll('.ceo-attendee-cb:checked')].map(cb => cb.value);
+      const btn = document.getElementById('ceo-mtg-save');
+      btn.disabled = true; btn.textContent = 'Scheduling…';
+      try {
+        await Utils.apiFetch('/api/meetings', {
+          method: 'POST',
+          body: JSON.stringify({
+            title, date,
+            startTime: document.getElementById('ceo-mtg-start').value,
+            endTime: document.getElementById('ceo-mtg-end').value,
+            attendees,
+            location: document.getElementById('ceo-mtg-location').value.trim(),
+            notes: document.getElementById('ceo-mtg-notes').value.trim(),
+          }),
+        });
+        close();
+        Utils.showToast('Meeting scheduled', 'success');
+        await _load();
+      } catch (e) {
+        btn.disabled = false; btn.textContent = 'Schedule Meeting';
+        Utils.showToast(e.message || 'Failed to schedule meeting', 'error');
+      }
+    });
   }
 
   function _leave(l) {
@@ -227,13 +309,15 @@ window.Pages['company-overview'] = (() => {
   function _leaveRequests() {
     const item = (x) => `<div class="ceo-lrow"><span class="ceo-av">${esc(initials(x.name))}</span>
       <div><b>${esc(x.name)}</b><small>${esc(dayMon(x.from))}${x.to !== x.from ? ' – ' + esc(dayMon(x.to)) : ''}</small></div><span class="ceo-chip">${esc(x.type)}</span></div>`;
+    const mine = !window.currentUser?.isSuperAdmin;
+    const tail = mine ? 'waiting on your decision' : 'pending company-wide';
     let body, count = '';
     if (!_leaveReq) body = empty('Loading…');
     else if (_leaveReq.error) body = empty('Could not load: ' + _leaveReq.error);
     else {
       const rows = _leaveReq.rows.map(r => ({ name: r.employee_name || r.user_name || '—', type: r.leave_type || r.type || 'Leave', from: r.from_date, to: r.to_date }));
-      body = rows.length ? rows.map(item).join('') : empty('No leave requests waiting on your decision.');
-      count = rows.length + ' waiting on your decision';
+      body = rows.length ? rows.map(item).join('') : empty('No leave requests ' + tail + '.');
+      count = rows.length + ' ' + tail;
     }
     return card('Leave requests', count, link('#hr-leave', 'Leave'), body);
   }
@@ -441,6 +525,7 @@ window.Pages['company-overview'] = (() => {
 
     const root = el.querySelector('.ceo');
     document.getElementById('co-refresh')?.addEventListener('click', _load);
+    document.getElementById('ceo-add-meeting')?.addEventListener('click', _openAddMeetingModal);
     document.getElementById('co-retry')?.addEventListener('click', _load);
     document.getElementById('ceo-team-more')?.addEventListener('click', () => { _showAllTeam = !_showAllTeam; _render(); });
     root.querySelectorAll('[data-mis-period]').forEach(b => b.addEventListener('click', () => {
