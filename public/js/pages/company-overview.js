@@ -176,23 +176,20 @@ window.Pages['company-overview'] = (() => {
   }
 
   function _team(t) {
-    const list = _showAllTeam ? t.byAssignee : t.byAssignee.slice(0, 8);
+    const pending = t.byAssignee.filter(r => r.pending > 0);
+    const list = _showAllTeam ? pending : pending.slice(0, 8);
     const body = list.length ? `<div class="ceo-tablewrap"><table class="ceo-table">
-      <thead><tr><th>Employee</th><th class="r">Total</th><th class="r">Done</th><th class="r">Pending</th><th class="r">Overdue</th><th>Completion</th></tr></thead>
-      <tbody>${list.map(r => {
-        const pct = r.total ? Math.round(r.done / r.total * 100) : 0;
-        return `<tr>
-          <td><div class="ceo-person"><span class="ceo-av">${esc(initials(r.name))}</span><div><b>${esc(r.name)}</b><small>by ${esc(r.givenBy.join(', ') || '—')}</small></div></div></td>
-          <td class="r num">${r.total}</td>
-          <td class="r num">${r.done}</td>
-          <td class="r num">${r.pending ? r.pending : '<span class="ceo-dim">0</span>'}</td>
+      <thead><tr><th>Employee</th><th class="r">Pending</th><th class="r">Overdue</th><th class="r">Revise</th><th>Given By</th></tr></thead>
+      <tbody>${list.map(r => `<tr>
+          <td><div class="ceo-person"><span class="ceo-av">${esc(initials(r.name))}</span><b>${esc(r.name)}</b></div></td>
+          <td class="r num">${r.pending}</td>
           <td class="r num">${r.overdue ? `<span class="ceo-badge ceo-badge-crit">${r.overdue}</span>` : '<span class="ceo-dim">0</span>'}</td>
-          <td><div class="ceo-meter"${tipAttr([r.name, r.done + ' of ' + r.total + ' done (' + pct + '%)'])}><div style="width:${pct}%"></div></div><small class="ceo-meter-l">${pct}%</small></td>
-        </tr>`;
-      }).join('')}</tbody></table></div>
-      ${t.byAssignee.length > 8 ? `<button class="ceo-more" id="ceo-team-more">${_showAllTeam ? 'Show less' : 'Show all ' + t.byAssignee.length + ' employees'}</button>` : ''}`
-      : empty('No tasks have been assigned by an admin yet.');
-    return card('Team tasks', 'Who has what — sorted by overdue, then pending', link('#all-tasks', 'All Tasks'), body, 'ceo-span2');
+          <td class="r num">${r.revise ? `<span class="ceo-badge ceo-badge-warn">${r.revise}</span>` : '<span class="ceo-dim">0</span>'}</td>
+          <td><small>${esc(r.givenBy.join(', ') || '—')}</small></td>
+        </tr>`).join('')}</tbody></table></div>
+      ${pending.length > 8 ? `<button class="ceo-more" id="ceo-team-more">${_showAllTeam ? 'Show less' : 'Show all ' + pending.length + ' employees'}</button>` : ''}`
+      : empty('Nobody has a pending task from an admin right now.');
+    return card('Team tasks', 'Employees with pending tasks — sorted by overdue, then pending', link('#all-tasks', 'All Tasks'), body, 'ceo-span2');
   }
 
   function _meetings(m, today) {
