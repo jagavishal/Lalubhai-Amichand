@@ -363,16 +363,76 @@ window.Pages.scheduler = (() => {
     document.getElementById('sch-meeting-modal-overlay')?.remove();
   }
 
+  // Minutes to add to a "HH:MM" time for the Duration-driven End Time.
+  function _addMinutes(hhmm, mins) {
+    const [h, m] = String(hhmm || '').split(':').map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return '';
+    const total = (h * 60 + m + mins + 1440) % 1440;
+    return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+  }
+
+  // Attendees combobox: a chip box + type-to-filter dropdown, so picking more
+  // than one no longer needs Ctrl/Cmd-click or scrolling a checkbox list
+  // ("Attendees mai type krne ka option bhi aana chahiye"). Selection lives
+  // in the DOM (one .sch-chip per pick) rather than a JS array, so collecting
+  // it at submit time is just reading the chips, same discipline as the
+  // checkbox version it replaces.
+  function _bindAttendeesCombobox(users) {
+    const box = document.getElementById('sch-attendees-box');
+    const input = document.getElementById('sch-attendees-input');
+    const dd = document.getElementById('sch-attendees-dd');
+    const picked = () => new Set([...box.querySelectorAll('.sch-chip')].map(c => c.dataset.name.toLowerCase()));
+
+    const addChip = (name) => {
+      if (picked().has(name.toLowerCase())) return;
+      const chip = document.createElement('span');
+      chip.className = 'sch-chip';
+      chip.dataset.name = name;
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:var(--color-primary-light,#eef4fc);color:var(--color-primary);font-size:12px;font-weight:600;padding:3px 6px 3px 10px;border-radius:999px;';
+      chip.innerHTML = `${esc(name)}<button type="button" style="border:none;background:transparent;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:0 2px;">×</button>`;
+      chip.querySelector('button').addEventListener('click', () => chip.remove());
+      box.insertBefore(chip, input);
+    };
+
+    const showMatches = () => {
+      const q = input.value.trim().toLowerCase();
+      const already = picked();
+      const matches = users.filter(u => !already.has(u.name.toLowerCase())
+        && (!q || u.name.toLowerCase().includes(q) || (u.department || '').toLowerCase().includes(q)));
+      if (!matches.length) { dd.style.display = 'none'; return; }
+      dd.innerHTML = matches.map(u => `<div class="sch-attendee-opt" style="padding:7px 12px;font-size:13px;cursor:pointer;" data-name="${esc(u.name)}">
+          <b>${esc(u.name)}</b>${u.department ? ` <span style="color:var(--text-muted);">— ${esc(u.department)}</span>` : ''}
+        </div>`).join('');
+      const r = box.getBoundingClientRect();
+      dd.style.top = (r.bottom + 3) + 'px'; dd.style.left = r.left + 'px'; dd.style.width = r.width + 'px';
+      dd.style.display = 'block';
+    };
+
+    input.addEventListener('input', showMatches);
+    input.addEventListener('focus', showMatches);
+    box.addEventListener('click', (e) => { if (e.target === box) input.focus(); });
+    dd.addEventListener('mousedown', (e) => {
+      const opt = e.target.closest('.sch-attendee-opt');
+      if (!opt) return;
+      addChip(opt.dataset.name);
+      input.value = '';
+      input.focus();
+      showMatches();
+    });
+    // Backspace on an empty input pops the last chip — the usual chip-input
+    // affordance, so a misclick doesn't need a mouse trip to undo.
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Backspace' && !input.value) box.querySelector('.sch-chip:last-of-type')?.remove();
+    });
+    document.addEventListener('click', (e) => { if (!box.contains(e.target) && e.target !== dd) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
+  }
+
   async function _openMeetingModal(dateStr) {
     _closeMeetingModal();
     const users = await _loadUsers();
-    const userOptions = users.map((u, i) => `
-      <label style="display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:13px;color:var(--text-primary);cursor:pointer;">
-        <input type="checkbox" class="sch-attendee-cb" id="sch-attendee-${i}" value="${esc(u.name)}" style="width:15px;height:15px;flex-shrink:0;accent-color:var(--color-primary);" />
-        ${esc(u.name)}${u.department ? ` <span style="color:var(--text-muted);">— ${esc(u.department)}</span>` : ''}
-      </label>`).join('');
     const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--border-base);border-radius:8px;font-size:13px;color:var(--text-primary);background:var(--surface);outline:none;';
     const labelStyle = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:5px;';
+    const DURATIONS = [['15', '15 min'], ['30', '30 min'], ['45', '45 min'], ['60', '1 hour'], ['90', '1.5 hours'], ['120', '2 hours'], ['', 'Custom']];
 
     const bodyHTML = `
       <div style="display:flex;flex-direction:column;gap:14px;">
@@ -380,10 +440,14 @@ window.Pages.scheduler = (() => {
           <label style="${labelStyle}">Title <span style="color:var(--color-danger)">*</span></label>
           <input id="sch-title" style="${inputStyle}" placeholder="e.g. Vendor review call" />
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
           <div>
             <label style="${labelStyle}">Date <span style="color:var(--color-danger)">*</span></label>
             <input id="sch-date" type="date" value="${dateStr}" style="${inputStyle}" />
+          </div>
+          <div>
+            <label style="${labelStyle}">Duration</label>
+            <select id="sch-duration" style="${inputStyle}background:var(--surface);">${DURATIONS.map(([v, l]) => `<option value="${v}"${v === '30' ? ' selected' : ''}>${l}</option>`).join('')}</select>
           </div>
           <div>
             <label style="${labelStyle}">Start Time</label>
@@ -396,15 +460,18 @@ window.Pages.scheduler = (() => {
         </div>
         <div>
           <label style="${labelStyle}">Attendees</label>
-          <div id="sch-attendees" style="max-height:160px;overflow-y:auto;border:1.5px solid var(--border-base);border-radius:8px;padding:4px 8px;background:var(--surface);">${userOptions}</div>
+          <div id="sch-attendees-box" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:40px;box-sizing:border-box;padding:5px 8px;border:1.5px solid var(--border-base);border-radius:8px;background:var(--surface);cursor:text;">
+            <input id="sch-attendees-input" type="text" autocomplete="off" placeholder="Select attendees…" style="flex:1;min-width:120px;border:none;outline:none;font-size:13px;background:transparent;color:var(--text-primary);" />
+          </div>
+          <div id="sch-attendees-dd" style="display:none;position:fixed;z-index:9999;background:var(--surface);border:1px solid var(--border-base);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:200px;overflow-y:auto;"></div>
         </div>
         <div>
-          <label style="${labelStyle}">Location <span style="color:var(--text-muted);font-weight:400;text-transform:none;">(optional)</span></label>
-          <input id="sch-location" style="${inputStyle}" placeholder="Meeting room / link" />
+          <label style="${labelStyle}">Agenda <span style="color:var(--text-muted);font-weight:400;text-transform:none;">(optional)</span></label>
+          <textarea id="sch-notes" rows="3" placeholder="What's the meeting about?" style="${inputStyle}resize:none;font-family:inherit;"></textarea>
         </div>
         <div>
-          <label style="${labelStyle}">Notes <span style="color:var(--text-muted);font-weight:400;text-transform:none;">(optional)</span></label>
-          <textarea id="sch-notes" rows="3" style="${inputStyle}resize:none;font-family:inherit;"></textarea>
+          <label style="${labelStyle}">Location / Link <span style="color:var(--text-muted);font-weight:400;text-transform:none;">(optional)</span></label>
+          <input id="sch-location" style="${inputStyle}" placeholder="Meeting room, or a Zoom/Meet link" />
         </div>
       </div>`;
     const footerHTML = `
@@ -426,12 +493,24 @@ window.Pages.scheduler = (() => {
     document.getElementById('sch-close').addEventListener('click', _closeMeetingModal);
     document.getElementById('sch-cancel').addEventListener('click', _closeMeetingModal);
     document.getElementById('sch-title').focus();
+    _bindAttendeesCombobox(users);
+
+    // Duration drives End Time off Start Time — the field a CEO actually
+    // thinks in ("30 min") rather than typing two clock times. Picking
+    // "Custom" just leaves End Time as whatever is already there, editable.
+    const recomputeEnd = () => {
+      const mins = parseInt(document.getElementById('sch-duration').value, 10);
+      const start = document.getElementById('sch-start').value;
+      if (start && Number.isFinite(mins)) document.getElementById('sch-end').value = _addMinutes(start, mins);
+    };
+    document.getElementById('sch-duration').addEventListener('change', recomputeEnd);
+    document.getElementById('sch-start').addEventListener('change', recomputeEnd);
 
     document.getElementById('sch-save').addEventListener('click', async () => {
       const title = document.getElementById('sch-title').value.trim();
       const date = document.getElementById('sch-date').value;
       if (!title || !date) { Utils.showToast('Title and date are required', 'error'); return; }
-      const attendees = [...document.querySelectorAll('.sch-attendee-cb:checked')].map(cb => cb.value);
+      const attendees = [...document.querySelectorAll('#sch-attendees-box .sch-chip')].map(c => c.dataset.name);
       const btn = document.getElementById('sch-save');
       btn.disabled = true; btn.textContent = 'Scheduling…';
       try {

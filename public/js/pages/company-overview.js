@@ -80,14 +80,12 @@ window.Pages['company-overview'] = (() => {
   // substitute) is actually the one to decide — never the whole company's.
   async function _loadLeaveRequests() {
     _leaveReq = null; _render();
-    // The owner login (isSuperAdmin) is not literally named as anyone's
-    // approver, so forApprover=me would always come back empty for them —
-    // GET /api/hr/leaves already gives the owner everything unscoped when
-    // forApprover isn't passed at all, which is what "kuch bhi nahi aaya"
-    // was seeing. A plain Admin still gets forApprover=me's real scoping.
-    const url = window.currentUser?.isSuperAdmin ? '/api/hr/leaves?status=Pending' : '/api/hr/leaves?forApprover=me&status=Pending';
+    // "vohi leave aani chahiye jo mujhe approve krni hai" — always the
+    // logged-in admin's own approval queue (GET /api/hr/leaves's own
+    // forApprover=me, the same match the Approvals page already trusts),
+    // never a company-wide fallback.
     try {
-      const rows = await Utils.apiFetch(url);
+      const rows = await Utils.apiFetch('/api/hr/leaves?forApprover=me&status=Pending');
       _leaveReq = { rows: Array.isArray(rows) ? rows : [] };
     } catch (e) { _leaveReq = { rows: [], error: e.message || 'Failed to load leave requests' }; }
     _render();
@@ -202,20 +200,29 @@ window.Pages['company-overview'] = (() => {
     for (const x of m.upcoming) (byDay[x.date] = byDay[x.date] || []).push(x);
     const days = Object.keys(byDay).sort();
     const myName = (window.currentUser?.name || '').trim().toLowerCase();
-    const isUrl = (s) => /^https?:\/\//i.test(String(s || '').trim());
+    // Location is free text ("Zoom: https://...", "Board room", a bare link,
+    // trailing punctuation from a pasted sentence) — pull a link out of it
+    // wherever it sits instead of requiring the whole field to be one.
+    const findUrl = (s) => {
+      const str = String(s || '');
+      let m = str.match(/https?:\/\/[^\s,;'"]+/i);
+      if (m) return m[0].replace(/[.,;:)\]]+$/, '');
+      m = str.match(/\bwww\.[^\s,;'"]+/i);
+      return m ? 'https://' + m[0].replace(/[.,;:)\]]+$/, '') : null;
+    };
     const body = days.length ? `<div class="ceo-timeline">${days.map(d => `
         <div class="ceo-tday"><div class="ceo-tday-h">${d === today ? 'Today' : esc(new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }))}</div>
         ${byDay[d].map(x => {
           const attendees = String(x.attendees || '').split(',').map(s => s.trim());
           const amInvited = attendees.some(a => a.toLowerCase() === myName);
-          const joinable = isUrl(x.location);
-          const actions = (joinable || amInvited) ? `<div class="ceo-tev-actions">
-              ${joinable ? `<a href="${esc(x.location)}" target="_blank" rel="noopener" class="ceo-mini-btn ceo-mini-btn-primary">Join</a>` : ''}
+          const joinUrl = findUrl(x.location);
+          const actions = (joinUrl || amInvited) ? `<div class="ceo-tev-actions">
+              ${joinUrl ? `<a href="${esc(joinUrl)}" target="_blank" rel="noopener" class="ceo-mini-btn ceo-mini-btn-primary">Join</a>` : ''}
               ${amInvited ? `<button type="button" class="ceo-mini-btn" data-decline-meeting="${esc(x.id)}">Can't attend</button>` : ''}
             </div>` : '';
           return `<div class="ceo-tev">
             <div class="ceo-tev-t">${esc(x.startTime || '—')}${x.endTime ? '<small>' + esc(x.endTime) + '</small>' : ''}</div>
-            <div class="ceo-tev-b"><b>${esc(x.title)}</b><small>${esc([x.organizer ? 'by ' + x.organizer : '', !joinable ? x.location : ''].filter(Boolean).join(' · ') || '—')}</small>${actions}</div>
+            <div class="ceo-tev-b"><b>${esc(x.title)}</b><small>${esc([x.organizer ? 'by ' + x.organizer : '', !joinUrl ? x.location : ''].filter(Boolean).join(' · ') || '—')}</small>${actions}</div>
           </div>`;
         }).join('')}</div>`).join('')}</div>`
       : empty('No meetings scheduled in the next 7 days.');
@@ -230,31 +237,90 @@ window.Pages['company-overview'] = (() => {
      "Schedule a Meeting" modal (checkbox attendees, POST /api/meetings), so a
      CEO doesn't have to leave the dashboard to put something on the calendar. */
   let _meetingUsers = null;
+
+  function _addMinutes(hhmm, mins) {
+    const [h, m] = String(hhmm || '').split(':').map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return '';
+    const total = (h * 60 + m + mins + 1440) % 1440;
+    return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+  }
+
+  // Same chip-box + type-to-filter combobox as Scheduler's own Add Meeting
+  // modal ("Attendees mai type krne ka option bhi aana chahiye") — selection
+  // lives as .ceo-chip elements in the DOM, read straight off at submit time.
+  function _bindAttendeesCombobox(users) {
+    const box = document.getElementById('ceo-mtg-attendees-box');
+    const input = document.getElementById('ceo-mtg-attendees-input');
+    const dd = document.getElementById('ceo-mtg-attendees-dd');
+    const picked = () => new Set([...box.querySelectorAll('.ceo-chip')].map(c => c.dataset.name.toLowerCase()));
+
+    const addChip = (name) => {
+      if (picked().has(name.toLowerCase())) return;
+      const chip = document.createElement('span');
+      chip.className = 'ceo-chip';
+      chip.dataset.name = name;
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:var(--ceo-tone-bg);color:var(--ceo-accent);font-size:12px;font-weight:600;padding:3px 6px 3px 10px;border-radius:999px;';
+      chip.innerHTML = `${esc(name)}<button type="button" style="border:none;background:transparent;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:0 2px;">×</button>`;
+      chip.querySelector('button').addEventListener('click', () => chip.remove());
+      box.insertBefore(chip, input);
+    };
+
+    const showMatches = () => {
+      const q = input.value.trim().toLowerCase();
+      const already = picked();
+      const matches = users.filter(u => !already.has(u.name.toLowerCase())
+        && (!q || u.name.toLowerCase().includes(q) || (u.department || '').toLowerCase().includes(q)));
+      if (!matches.length) { dd.style.display = 'none'; return; }
+      dd.innerHTML = matches.map(u => `<div class="ceo-attendee-opt" style="padding:7px 12px;font-size:13px;cursor:pointer;" data-name="${esc(u.name)}">
+          <b>${esc(u.name)}</b>${u.department ? ` <span style="color:var(--ceo-muted);">— ${esc(u.department)}</span>` : ''}
+        </div>`).join('');
+      const r = box.getBoundingClientRect();
+      dd.style.top = (r.bottom + 3) + 'px'; dd.style.left = r.left + 'px'; dd.style.width = r.width + 'px';
+      dd.style.display = 'block';
+    };
+
+    input.addEventListener('input', showMatches);
+    input.addEventListener('focus', showMatches);
+    box.addEventListener('click', (e) => { if (e.target === box) input.focus(); });
+    dd.addEventListener('mousedown', (e) => {
+      const opt = e.target.closest('.ceo-attendee-opt');
+      if (!opt) return;
+      addChip(opt.dataset.name);
+      input.value = '';
+      input.focus();
+      showMatches();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Backspace' && !input.value) box.querySelector('.ceo-chip:last-of-type')?.remove();
+    });
+    document.addEventListener('click', (e) => { if (!box.contains(e.target) && e.target !== dd) dd.style.display = 'none'; });
+  }
+
   async function _openAddMeetingModal() {
     document.getElementById('ceo-meeting-modal-overlay')?.remove();
     if (!_meetingUsers) { try { _meetingUsers = await Utils.apiFetch('/api/users?lite=1') || []; } catch { _meetingUsers = []; } }
     const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--ceo-border);border-radius:8px;font-size:13px;color:var(--ceo-ink);background:var(--ceo-surface);outline:none;';
     const labelStyle = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ceo-ink2);margin-bottom:5px;';
-    const userOptions = _meetingUsers.map((u, i) => `
-      <label style="display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:13px;color:var(--ceo-ink);cursor:pointer;">
-        <input type="checkbox" class="ceo-attendee-cb" id="ceo-attendee-${i}" value="${esc(u.name)}" style="width:15px;height:15px;flex-shrink:0;accent-color:var(--ceo-accent);" />
-        ${esc(u.name)}${u.department ? ` <span style="color:var(--ceo-muted);">— ${esc(u.department)}</span>` : ''}
-      </label>`).join('');
+    const DURATIONS = [['15', '15 min'], ['30', '30 min'], ['45', '45 min'], ['60', '1 hour'], ['90', '1.5 hours'], ['120', '2 hours'], ['', 'Custom']];
     const bodyHTML = `<div class="ceo" style="max-width:none;padding:0;"><div style="display:flex;flex-direction:column;gap:14px;">
         <div><label style="${labelStyle}">Title <span style="color:var(--ceo-crit);">*</span></label>
           <input id="ceo-mtg-title" style="${inputStyle}" placeholder="e.g. Vendor review call" /></div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
           <div><label style="${labelStyle}">Date <span style="color:var(--ceo-crit);">*</span></label>
             <input id="ceo-mtg-date" type="date" value="${_data.today}" style="${inputStyle}" /></div>
+          <div><label style="${labelStyle}">Duration</label>
+            <select id="ceo-mtg-duration" style="${inputStyle}background:var(--ceo-surface);">${DURATIONS.map(([v, l]) => `<option value="${v}"${v === '30' ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
           <div><label style="${labelStyle}">Start Time</label><input id="ceo-mtg-start" type="time" style="${inputStyle}" /></div>
           <div><label style="${labelStyle}">End Time</label><input id="ceo-mtg-end" type="time" style="${inputStyle}" /></div>
         </div>
         <div><label style="${labelStyle}">Attendees</label>
-          <div style="max-height:160px;overflow-y:auto;border:1.5px solid var(--ceo-border);border-radius:8px;padding:4px 8px;background:var(--ceo-surface);">${userOptions}</div></div>
-        <div><label style="${labelStyle}">Location <span style="color:var(--ceo-muted);font-weight:400;text-transform:none;">(optional)</span></label>
-          <input id="ceo-mtg-location" style="${inputStyle}" placeholder="Meeting room / link" /></div>
-        <div><label style="${labelStyle}">Notes <span style="color:var(--ceo-muted);font-weight:400;text-transform:none;">(optional)</span></label>
-          <textarea id="ceo-mtg-notes" rows="3" style="${inputStyle}resize:none;font-family:inherit;"></textarea></div>
+          <div id="ceo-mtg-attendees-box" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:40px;box-sizing:border-box;padding:5px 8px;border:1.5px solid var(--ceo-border);border-radius:8px;background:var(--ceo-surface);cursor:text;">
+            <input id="ceo-mtg-attendees-input" type="text" autocomplete="off" placeholder="Select attendees…" style="flex:1;min-width:120px;border:none;outline:none;font-size:13px;background:transparent;color:var(--ceo-ink);" /></div>
+          <div id="ceo-mtg-attendees-dd" style="display:none;position:fixed;z-index:9999;background:var(--ceo-surface);border:1px solid var(--ceo-border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:200px;overflow-y:auto;"></div></div>
+        <div><label style="${labelStyle}">Agenda <span style="color:var(--ceo-muted);font-weight:400;text-transform:none;">(optional)</span></label>
+          <textarea id="ceo-mtg-notes" rows="3" placeholder="What's the meeting about?" style="${inputStyle}resize:none;font-family:inherit;"></textarea></div>
+        <div><label style="${labelStyle}">Location / Link <span style="color:var(--ceo-muted);font-weight:400;text-transform:none;">(optional)</span></label>
+          <input id="ceo-mtg-location" style="${inputStyle}" placeholder="Meeting room, or a Zoom/Meet link" /></div>
       </div></div>`;
     const footerHTML = `<button type="button" id="ceo-mtg-cancel" class="btn-secondary">Cancel</button>
       <button type="button" id="ceo-mtg-save" class="btn-primary">Schedule Meeting</button>`;
@@ -269,11 +335,19 @@ window.Pages['company-overview'] = (() => {
     document.getElementById('ceo-mtg-close').addEventListener('click', close);
     document.getElementById('ceo-mtg-cancel').addEventListener('click', close);
     document.getElementById('ceo-mtg-title').focus();
+    _bindAttendeesCombobox(_meetingUsers);
+    const recomputeEnd = () => {
+      const mins = parseInt(document.getElementById('ceo-mtg-duration').value, 10);
+      const start = document.getElementById('ceo-mtg-start').value;
+      if (start && Number.isFinite(mins)) document.getElementById('ceo-mtg-end').value = _addMinutes(start, mins);
+    };
+    document.getElementById('ceo-mtg-duration').addEventListener('change', recomputeEnd);
+    document.getElementById('ceo-mtg-start').addEventListener('change', recomputeEnd);
     document.getElementById('ceo-mtg-save').addEventListener('click', async () => {
       const title = document.getElementById('ceo-mtg-title').value.trim();
       const date = document.getElementById('ceo-mtg-date').value;
       if (!title || !date) { Utils.showToast('Title and date are required', 'error'); return; }
-      const attendees = [...document.querySelectorAll('.ceo-attendee-cb:checked')].map(cb => cb.value);
+      const attendees = [...document.querySelectorAll('#ceo-mtg-attendees-box .ceo-chip')].map(c => c.dataset.name);
       const btn = document.getElementById('ceo-mtg-save');
       btn.disabled = true; btn.textContent = 'Scheduling…';
       try {
@@ -309,15 +383,13 @@ window.Pages['company-overview'] = (() => {
   function _leaveRequests() {
     const item = (x) => `<div class="ceo-lrow"><span class="ceo-av">${esc(initials(x.name))}</span>
       <div><b>${esc(x.name)}</b><small>${esc(dayMon(x.from))}${x.to !== x.from ? ' – ' + esc(dayMon(x.to)) : ''}</small></div><span class="ceo-chip">${esc(x.type)}</span></div>`;
-    const mine = !window.currentUser?.isSuperAdmin;
-    const tail = mine ? 'waiting on your decision' : 'pending company-wide';
     let body, count = '';
     if (!_leaveReq) body = empty('Loading…');
     else if (_leaveReq.error) body = empty('Could not load: ' + _leaveReq.error);
     else {
       const rows = _leaveReq.rows.map(r => ({ name: r.employee_name || r.user_name || '—', type: r.leave_type || r.type || 'Leave', from: r.from_date, to: r.to_date }));
-      body = rows.length ? rows.map(item).join('') : empty('No leave requests ' + tail + '.');
-      count = rows.length + ' ' + tail;
+      body = rows.length ? rows.map(item).join('') : empty('No leave requests waiting on your decision.');
+      count = rows.length + ' waiting on your decision';
     }
     return card('Leave requests', count, link('#hr-leave', 'Leave'), body);
   }
