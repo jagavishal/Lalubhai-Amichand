@@ -6913,6 +6913,22 @@ async function _exportSheetTabPdf(spreadsheetId, sourceSheetId, colRange) {
 // and by the approval re-stamp (an approved PO is re-filled from its logged
 // Form JSON with the approver's stamp and exported again). Caller holds the
 // 'po' sheet lock. `form` carries exactly what Form JSON stores.
+// Every item field that ISN'T one of these feeds an arithmetic formula on
+// its row (e.g. Diamond PO's per-row Total, "=...H27*I27+J27*K27") — a
+// stray non-numeric value there (someone typing "-" for "not applicable"
+// instead of leaving Plate Qty/Rate blank) gets written as literal text and
+// breaks that formula with #VALUE!, since Sheets can't multiply text, even
+// "-" (confirmed live on PO359 — Diamond box-only line, plate cells held
+// text "-", Total showed #VALUE!). A genuinely blank cell is fine: Sheets
+// treats it as 0 in arithmetic, which is what blank was already achieving
+// for every OTHER blank cell on that same row.
+const PO_TEXT_ITEM_FIELDS = new Set(['itemCode', 'description', 'hsnCode', 'uom', 'customerCodeRef', 'barcode', 'sacCode', 'size']);
+const _cleanPoItemNum = (v) => {
+  if (v === undefined || v === null || v === '') return '';
+  const n = parseFloat(String(v).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : '';
+};
+
 async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetIdByTitle, approvalStamp) {
   const { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, summary, termsAndConditions, comments, testCertificateRequired } = form;
   const cleanItems = Array.isArray(form.items) ? form.items : [];
@@ -6969,7 +6985,10 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
     cleanItems.forEach((it, i) => {
       const row = cfg.items.firstRow + i;
       if (row > cfg.items.lastRow) return; // beyond the template's own capacity — drop silently
-      Object.entries(cfg.items.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
+      Object.entries(cfg.items.fields).forEach(([field, col]) => {
+        const raw = it[field];
+        put(`${col}${row}`, PO_TEXT_ITEM_FIELDS.has(field) ? raw : _cleanPoItemNum(raw));
+      });
     });
 
     if (data.length) {
