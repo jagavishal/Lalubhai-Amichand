@@ -12888,123 +12888,116 @@ app.get('/api/master', async (req, res) => {
   return res.send(html);
 });
 
-// ── Company Overview (CEO dashboard) ────────────────────────────────────────
-// Every other page in the app is scoped to its own module — nothing today
-// rolls PR/PO/GRN spend, export pipeline and HR headcount up into one place
-// a CEO can glance at. Read-only: this never writes anything, and a failure
-// on any one source degrades that card to zero rather than failing the page.
-let _companyOverviewCache = null; // { at, data }
-const COMPANY_OVERVIEW_TTL_MS = 5 * 60 * 1000;
+// ── CEO Dashboard (route kept as 'company-overview') ─────────────────────────
+// What the company's leadership asked to see in one place ("PO, PR CEO ke
+// liye jaruri nahi hai"): tasks the admins have handed out and where they
+// stand, meetings on the calendar, urgent-payment requests, who is on leave
+// today. The MIS chart is drawn client-side from GET /api/mis itself, so its
+// numbers can never drift from the MIS Report page. Read-only.
+//
+// True Admin (and the owner) only — not HOD: "this page only show while admin
+// login". isAdminUser() lumps HOD in with Admin, so this can't reuse
+// requireAdmin/requireAdminOrPage.
+function requireTrueAdmin(req, res, next) {
+  const u = req.session?.user;
+  if (!(isTrueAdminUser(u) || isSuperAdmin(u))) return res.status(403).json({ error: 'Forbidden' });
+  next();
+}
 
-app.get('/api/company-overview', requireAuth, requireAdminOrPage('company-overview'), async (req, res) => {
+let _companyOverviewCache = null; // { at, data }
+const COMPANY_OVERVIEW_TTL_MS = 2 * 60 * 1000;
+
+app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res) => {
   try {
     if (_companyOverviewCache && (Date.now() - _companyOverviewCache.at) < COMPANY_OVERVIEW_TTL_MS) {
       return res.json(_companyOverviewCache.data);
     }
-
-    const auth = getGoogleAuth();
-    const sheets = auth ? require('googleapis').google.sheets({ version: 'v4', auth }) : null;
-    const readLog = async (spreadsheetId, tab, range) => {
-      if (!sheets) return [];
-      try {
-        const r = await sheets.spreadsheets.values.get({ spreadsheetId, range: `'${tab}'!${range}`, valueRenderOption: 'FORMATTED_VALUE' });
-        return r.data.values || [];
-      } catch (e) {
-        if (/unable to parse range/i.test(e.message || '')) return [];
-        console.error(`[company-overview] read failed for ${tab}:`, e.message);
-        return [];
-      }
-    };
-    const money = (v) => parseFloat(String(v ?? '0').replace(/,/g, '')) || 0;
-    const thisMonth = new Date().toISOString().slice(0, 7); // YYYY-MM, IST drift doesn't matter at month granularity
-
-    const [prRows, poRows, grnRows, piRows] = await Promise.all([
-      readLog(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, 'A2:L1000'),
-      readLog(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, 'A2:L1000'),
-      readLog(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, 'A2:M1000'),
-      readLog(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, 'A2:K1000'),
-    ]);
-
-    // PR Log: A=PR No, C=Date, G=Total Amount (INR), L=Status. "Pending" is
-    // whatever isn't yet a final decision — same vocabulary /api/pr-creation
-    // and PR Summary already use (Cancelled/Approved/Rejected are final).
-    let prPendingCount = 0, prMonthCount = 0, prMonthValue = 0;
-    for (const r of prRows) {
-      if (!r[0]) continue;
-      const status = r[11] || 'Active';
-      if (!['Approved', 'Rejected', 'Cancelled'].includes(status)) prPendingCount++;
-      if (status !== 'Cancelled' && _sheetDateToIso(r[2]).slice(0, 7) === thisMonth) { prMonthCount++; prMonthValue += money(r[6]); }
-    }
-
-    // PO Log: A=PO No, C=Date, F=Total Amount (INR), L=Status.
-    let poPendingCount = 0, poMonthApprovedCount = 0, poMonthApprovedValue = 0, poAllApprovedCount = 0, poAllApprovedValue = 0;
-    for (const r of poRows) {
-      if (!r[0]) continue;
-      const status = r[11] || 'Active';
-      if (!['Approved', 'Rejected', 'Cancelled'].includes(status)) poPendingCount++;
-      if (status === 'Approved') {
-        poAllApprovedCount++; poAllApprovedValue += money(r[5]);
-        if (_sheetDateToIso(r[2]).slice(0, 7) === thisMonth) { poMonthApprovedCount++; poMonthApprovedValue += money(r[5]); }
-      }
-    }
-
-    // GRN Log: A=GR No, B=Date, H=Total Amount (INR), M=Status. No approval
-    // chain of its own (unlike PR/PO) — just a received-this-month tally.
-    let grnMonthCount = 0, grnMonthValue = 0;
-    for (const r of grnRows) {
-      if (!r[0] || r[12] === 'Cancelled') continue;
-      if (_sheetDateToIso(r[1]).slice(0, 7) === thisMonth) { grnMonthCount++; grnMonthValue += money(r[7]); }
-    }
-
-    // PI Log: A=PI No, D=Total C&F (US$), K=Status. Export order book in
-    // dollars, not rupees. Status is Draft/Priced/Superseded/Cancelled (no
-    // separate "dispatched/closed" state today) — Superseded means a later
-    // revision replaced this exact row (see /api/proforma-invoice/revise),
-    // so it's excluded the same as Cancelled; a Draft counts as open but
-    // contributes 0 value since Total C&F is blank until it's Priced.
-    let piOpenCount = 0, piOpenValueUsd = 0;
-    for (const r of piRows) {
-      if (!r[0] || ['Cancelled', 'Superseded'].includes(r[10])) continue;
-      piOpenCount++; piOpenValueUsd += money(r[3]);
-    }
-
-    // DB-backed figures — local dev has no DB (JSON mode), so these read 0
-    // there rather than throwing; production is where this page matters.
-    let taskPendingCount = 0, leavePendingCount = 0, urgentPendingCount = 0, urgentPendingValue = 0, headcountByDept = [], headcountTotal = 0;
-    if (USE_DB) {
-      try {
-        const rows = await q(`SELECT COUNT(*) AS c FROM delegations WHERE approval='Approval Required' AND status='pending'`);
-        taskPendingCount = Number(rows[0]?.c) || 0;
-      } catch (e) { console.error('[company-overview] task approvals query failed:', e.message); }
-      try {
-        const rows = await q(`SELECT COUNT(*) AS c FROM leaves WHERE LOWER(status)='pending'`);
-        leavePendingCount = Number(rows[0]?.c) || 0;
-      } catch (e) { console.error('[company-overview] leave query failed:', e.message); }
-      try {
-        const rows = await q(`SELECT COUNT(*) AS c, COALESCE(SUM(amount),0) AS v FROM urgent_payments WHERE status='pending'`);
-        urgentPendingCount = Number(rows[0]?.c) || 0;
-        urgentPendingValue = Number(rows[0]?.v) || 0;
-      } catch (e) { console.error('[company-overview] urgent payments query failed:', e.message); }
-      try {
-        const rows = await q(`SELECT department, COUNT(*) AS c FROM hr_employees WHERE status='Active' GROUP BY department ORDER BY c DESC`);
-        headcountByDept = rows.map(r => ({ department: r.department || 'Unassigned', count: Number(r.c) || 0 }));
-        headcountTotal = headcountByDept.reduce((s, d) => s + d.count, 0);
-      } catch (e) { console.error('[company-overview] headcount query failed:', e.message); }
-    }
-
+    const today = todayIST();
+    const monthStart = today.slice(0, 8) + '01';
+    const weekEnd = _checklistPlusDays(today, 6);
     const data = {
-      generatedAt: new Date().toISOString(),
-      pendingApprovals: {
-        total: taskPendingCount + poPendingCount + prPendingCount + leavePendingCount + urgentPendingCount,
-        task: taskPendingCount, po: poPendingCount, pr: prPendingCount, leave: leavePendingCount, urgentPayment: urgentPendingCount,
-      },
-      poSpend: { thisMonthCount: poMonthApprovedCount, thisMonthValue: poMonthApprovedValue, allTimeCount: poAllApprovedCount, allTimeValue: poAllApprovedValue },
-      prRaised: { thisMonthCount: prMonthCount, thisMonthValue: prMonthValue },
-      grnReceived: { thisMonthCount: grnMonthCount, thisMonthValue: grnMonthValue },
-      exportPipeline: { openCount: piOpenCount, openValueUsd: piOpenValueUsd },
-      urgentPaymentsPendingValue: urgentPendingValue,
-      headcount: { total: headcountTotal, byDepartment: headcountByDept.slice(0, 8) },
+      generatedAt: new Date().toISOString(), today,
+      tasks: { totals: { total: 0, pending: 0, overdue: 0, done: 0, revise: 0 }, byAssignee: [] },
+      meetings: { today: 0, next7Days: 0, upcoming: [] },
+      payments: { pendingCount: 0, pendingAmount: 0, approvedMonthCount: 0, approvedMonthAmount: 0, rejectedMonthCount: 0, recent: [] },
+      leave: { onLeaveToday: [], pendingRequests: 0 },
     };
+    if (!USE_DB) return res.json(data); // local dev (JSON mode) has none of these tables
+
+    // 1) Tasks handed out by an Admin — delegations whose delegated_by is a
+    // user holding the Admin role (or the owner's login). Grouped by assignee.
+    try {
+      const admins = await q(`SELECT id, email, roles FROM users`);
+      const adminIds = admins.filter(u => rolesOf(u).includes('Admin') || isSuperAdminEmail(u.email)).map(u => u.id);
+      if (adminIds.length) {
+        const ph = adminIds.map((_, i) => '$' + (i + 1)).join(',');
+        const rows = await q(`SELECT d.doer, d.status, d.due_date AS "dueDate", u.name AS "delegatedByName"
+                                FROM delegations d LEFT JOIN users u ON u.id = d.delegated_by
+                               WHERE d.delegated_by IN (${ph})`, adminIds);
+        const byDoer = new Map();
+        for (const r of rows) {
+          const name = String(r.doer || '').trim() || 'Unassigned';
+          const e = byDoer.get(name) || { name, total: 0, pending: 0, overdue: 0, done: 0, revise: 0, givenBy: new Set() };
+          const due = toDateStr(r.dueDate);
+          e.total++;
+          if (r.status === 'done') e.done++;
+          else {
+            if (r.status === 'revise' || r.status === 'revise_requested') e.revise++;
+            e.pending++;
+            if (due && due < today) e.overdue++;
+          }
+          if (r.delegatedByName) e.givenBy.add(r.delegatedByName);
+          byDoer.set(name, e);
+        }
+        data.tasks.byAssignee = [...byDoer.values()]
+          .map(e => ({ ...e, givenBy: [...e.givenBy] }))
+          .sort((a, b) => b.overdue - a.overdue || b.pending - a.pending || b.total - a.total);
+        for (const e of data.tasks.byAssignee) {
+          for (const k of ['total', 'pending', 'overdue', 'done', 'revise']) data.tasks.totals[k] += e[k];
+        }
+      }
+    } catch (e) { console.error('[company-overview] tasks failed:', e.message); }
+
+    // 2) Meetings — every scheduled one company-wide, today through +6 days.
+    try {
+      const rows = await q(`SELECT title, date, start_time AS "startTime", end_time AS "endTime", attendees, location, created_by_name AS "organizer"
+                              FROM scheduler_meetings WHERE date BETWEEN $1 AND $2 ORDER BY date ASC, start_time ASC`, [today, weekEnd]);
+      const list = rows.map(m => ({ ...m, date: toDateStr(m.date) }));
+      data.meetings.today = list.filter(m => m.date === today).length;
+      data.meetings.next7Days = list.length;
+      data.meetings.upcoming = list.slice(0, 8);
+    } catch (e) { console.error('[company-overview] meetings failed:', e.message); }
+
+    // 3) Urgent payment requests — what's waiting, what was decided this month.
+    try {
+      const rows = await q(`SELECT id, payee, amount, status, requested_by AS "requestedBy", department, required_by AS "requiredBy", created_at AS "createdAt", decided_at AS "decidedAt"
+                              FROM urgent_payments ORDER BY created_at DESC`);
+      for (const r of rows) {
+        const amt = Number(r.amount) || 0;
+        const decided = toDateStr(r.decidedAt) || '';
+        if (r.status === 'pending') { data.payments.pendingCount++; data.payments.pendingAmount += amt; }
+        else if (r.status === 'Approved' && decided >= monthStart) { data.payments.approvedMonthCount++; data.payments.approvedMonthAmount += amt; }
+        else if (r.status === 'Rejected' && decided >= monthStart) data.payments.rejectedMonthCount++;
+      }
+      data.payments.recent = rows.slice(0, 6).map(r => ({ ...r, amount: Number(r.amount) || 0, requiredBy: toDateStr(r.requiredBy), createdAt: toDateStr(r.createdAt) }));
+    } catch (e) { console.error('[company-overview] payments failed:', e.message); }
+
+    // 4) Leave — approved leave covering today (half days included, labelled),
+    // plus how many requests are still waiting on a decision.
+    try {
+      const rows = await q(`SELECT l.user_name AS "userName", e.name AS "empName", l.leave_type AS "leaveType", l.type, l.half_day AS "halfDay", l.from_date AS "fromDate", l.to_date AS "toDate"
+                              FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
+                             WHERE LOWER(l.status) = 'approved' AND l.from_date <= $1 AND l.to_date >= $2`, [today, today]);
+      data.leave.onLeaveToday = rows.map(r => ({
+        name: r.empName || r.userName || '—',
+        type: r.leaveType || r.type || 'Leave',
+        halfDay: String(r.halfDay || 'full') !== 'full',
+        from: toDateStr(r.fromDate), to: toDateStr(r.toDate),
+      }));
+      const p = await q(`SELECT COUNT(*) AS c FROM leaves WHERE LOWER(status) LIKE 'pending%'`);
+      data.leave.pendingRequests = Number(p[0]?.c) || 0;
+    } catch (e) { console.error('[company-overview] leave failed:', e.message); }
+
     _companyOverviewCache = { at: Date.now(), data };
     return res.json(data);
   } catch (e) { console.error('[company-overview] failed:', e.message); return res.status(500).json({ error: e.message }); }

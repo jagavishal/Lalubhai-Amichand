@@ -163,11 +163,10 @@ window.Sidebar = {
       { route: 'retail-dashboard', label: 'Retail Dashboard', icon: 'retaildashboard' },
     ]},
     { title: 'Admin Section', items: [
-      // Cross-module rollup for the company's leadership — adminOnly, but
-      // grantable to a non-admin from Users → Access like Employee Master/
-      // Bulk Email, so a CEO login that isn't itself an Admin/HOD account
-      // can still be handed just this page.
-      { route: 'company-overview', label: 'Company Overview', icon: 'companyoverview', adminOnly: true },
+      // CEO Dashboard — Admin role only ("this page only show while admin
+      // login"): trueAdminOnly hides it from HOD too, unlike adminOnly, and it
+      // is not grantable from Users → Access. The API gate is requireTrueAdmin.
+      { route: 'company-overview', label: 'CEO Dashboard', icon: 'companyoverview', adminOnly: true, trueAdminOnly: true },
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
       { route: 'fms',           label: 'FMS',          icon: 'fms',          flag: 'fms' },
       { route: 'mis',           label: 'MIS Report',   icon: 'mis' },
@@ -267,6 +266,15 @@ window.Sidebar = {
      The two exceptions are the sidebar's own, unchanged: the owner is never
      restricted, and an account with no saved permissions record still sees
      everything. */
+  // The Admin role itself (or the owner) — HOD does not count, unlike the
+  // isAdmin checks used for adminOnly.
+  _isTrueAdmin(u) {
+    if (!u) return false;
+    if (u.isSuperAdmin) return true;
+    const roles = Array.isArray(u.roles) ? u.roles : String(u.roles || '').split(',').map(r => r.trim());
+    return roles.includes('Admin');
+  },
+
   canAccess(route, user) {
     const u = user || window.currentUser;
     if (!u) return false;
@@ -283,6 +291,7 @@ window.Sidebar = {
       if (found) { item = found; break; }
     }
     if (!item) return true;
+    if (item.trueAdminOnly && !this._isTrueAdmin(u)) return false;
 
     const permissions = u.permissions || null;
     // An explicit page grant from Users → Access outranks adminOnly: HR staff
@@ -306,6 +315,7 @@ window.Sidebar = {
   _buildNavItem(item, isAdmin, pendingCount, activeRoute, permissions, featureFlags) {
     // Same grant-outranks-adminOnly rule as canAccess above — the menu and the
     // router must never disagree about who can open a page.
+    if (item.trueAdminOnly && !this._isTrueAdmin(window.currentUser)) return '';
     const grantedAdminPage = !!(permissions && permissions.pages && permissions.pages.includes(item.route));
     if (item.adminOnly && !isAdmin && !grantedAdminPage) return '';
     if (item.flag && !(featureFlags || {})[item.flag]) return '';
