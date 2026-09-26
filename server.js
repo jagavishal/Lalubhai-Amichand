@@ -8443,15 +8443,19 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
       if (!received) return false;
       const qtyFields = PO_QTY_FIELDS_BY_FORMAT[poFormat] || ['qty'];
       return items.every((it) => {
-        const code = String(it?.itemCode || it?.code || '').trim().toLowerCase();
+        // Service PO items have no item code at all — description is their
+        // identity (see the 'Service PO' PO_TEMPLATES entry's keyField), and
+        // that's what GRN's own item picker now stores as itemNo for them.
+        const code = String(it?.itemCode || it?.code || (poFormat === 'Service PO' ? it?.description : '') || '').trim().toLowerCase();
         const ordered = qtyFields.reduce((sum, f) => sum + (parseFloat(String(it[f] ?? '0').replace(/,/g, '')) || 0), 0);
         if (!code || !ordered) return true;
         return (received.get(code) || 0) >= ordered;
       });
     };
-    // Service POs are excluded outright (column B / r[1]): there's nothing
-    // physical to receive against a service, so they'd only ever be noise in
-    // this picker. They still appear in PO Creation's own PO List.
+    // Service POs used to be excluded outright here ("nothing physical to
+    // receive against a service") — but a service still needs a GRN to log
+    // what was actually delivered/received against the bill ("Service PO GRN
+    // mai nhi aa rhe hai"), so they're picked the same as any other PO now.
     // A PO's item snapshot carries the code, qty, UOM and price but not the
     // description or size — on the PO those are the sheet's own VLOOKUPs. The
     // GRN page shows both beside each line ("GR me description nahi aa raha
@@ -8460,7 +8464,7 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
     const catalog = new Map((await _loadPoItemCatalog('PurchaseOrder').catch(() => []))
       .map(c => [String(c.code || '').trim().toLowerCase(), c]));
     const list = poRows
-      .filter(r => r[0] && r[1] !== 'Service PO' && !['Cancelled', 'Rejected'].includes(r[11] || 'Active'))
+      .filter(r => r[0] && !['Cancelled', 'Rejected'].includes(r[11] || 'Active'))
       .map(r => {
         let items = [];
         try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }

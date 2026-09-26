@@ -114,6 +114,9 @@ window.Pages['grn-creation'] = (() => {
   function _mapPoItemToGrn(it, format) {
     if (format === 'ENR PO') return { itemNo: it.itemCode || '', orderedQty: it.stickerQty || '', uom: '', rate: it.rate || '' };
     if (format === 'Diamond PO') return { itemNo: it.itemCode || '', orderedQty: it.boxQty || '', uom: '', rate: it.boxRate || '' };
+    // Service PO items carry no item code — description is their identity
+    // (see the 'Service PO' PO_TEMPLATES entry's keyField on the server).
+    if (format === 'Service PO') return { itemNo: it.description || '', orderedQty: it.qty || '', uom: it.uom || '', rate: it.unitPrice || '' };
     return { itemNo: it.itemCode || '', orderedQty: it.qty || '', uom: it.uom || '', rate: it.unitPrice || '' };
   }
 
