@@ -190,6 +190,11 @@ window.Pages['po-creation'] = (() => {
   const PENDING_PRS_MAX_AGE_MS = 20000;
   let _pendingPrs = []; // PRs (from the PR Creation sheet) not yet used on any PO
   let _pendingPrToApply = null; // set when a PR selection also needs a format switch + re-render first
+  // PRs applied to the form so far ("PO mai multipal PR select kr sake") —
+  // one PO can now carry more than one PR's items, as long as every PR
+  // shares the same party/vendor (a PO still goes to exactly one vendor) and
+  // PO format. Each entry is the full pending-PR object from _pendingPrs.
+  let _appliedPrs = [];
 
   // PO List (in-page tab) state — read-only history from the ERP PO Log tab.
   let _polRows = [];
@@ -285,34 +290,60 @@ window.Pages['po-creation'] = (() => {
     return _pendingPrsInFlight;
   }
 
-  /* ── P.R. NO — free-text input (still fully editable/typeable) with a
-     suggestion dropdown of pending PRs (raised via PR Creation, not yet used
-     on any PO); picking one prefills Party/Department from that PR ──────── */
+  /* ── P.R. NO — chip box + suggestion dropdown of pending PRs (raised via PR
+     Creation, not yet used on any PO); picking one adds it as a chip and
+     carries its items onto the form. More than one PR can be picked onto the
+     same PO ("PO mai multipal PR select kr sake") as long as they share the
+     same party/vendor and PO format — a PO still goes to exactly one vendor,
+     so once the first PR is picked the dropdown only offers PRs matching it.
+     Removing a chip drops that PR's rows back out of the item table. ─────── */
   function _prNoField() {
     return _fieldWrap('P.R. NO', ''
-      + '<input type="text" id="poc-pr-no" autocomplete="off" placeholder="Pick a pending PR (required)" style="' + _inputStyle + '" />'
+      + '<div id="poc-prno-box" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:38px;box-sizing:border-box;padding:5px 8px;border:1.5px solid #e2e8f0;border-radius:8px;background:#fff;cursor:text;">'
+      + '<input type="text" id="poc-pr-no" autocomplete="off" placeholder="Pick pending PR(s) — required" style="flex:1;min-width:140px;border:none;outline:none;font-size:12.5px;background:transparent;color:#1e293b;" />'
+      + '</div>'
       + '<div id="poc-prno-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>');
   }
 
+  function _prNoChipHtml(pr) {
+    return '<span class="poc-prno-chip" data-pr="' + esc(pr.prNo) + '" style="display:inline-flex;align-items:center;gap:5px;background:#eef4fc;color:#2a78d6;font-size:12px;font-weight:600;padding:3px 6px 3px 10px;border-radius:999px;">'
+      + '#' + esc(pr.prNo) + '<button type="button" class="poc-prno-chip-x" style="border:none;background:transparent;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:0 2px;">×</button></span>';
+  }
+
   function _bindPrNoField() {
+    const box = document.getElementById('poc-prno-box');
     const input = document.getElementById('poc-pr-no');
     const dd = document.getElementById('poc-prno-dd');
-    if (!input || !dd) return;
+    if (!box || !input || !dd) return;
+    const picked = () => new Set(_appliedPrs.map(p => String(p.prNo).toLowerCase()));
+    // Once at least one PR is on the form, only its own party+PR-tab match —
+    // a second vendor's PR (or one that would switch the PO format) simply
+    // isn't offered, rather than letting a mismatched pick get rejected after
+    // the fact.
+    const eligible = () => {
+      const already = picked();
+      let list = _pendingPrs.filter(p => !already.has(String(p.prNo).toLowerCase()));
+      if (_appliedPrs.length) {
+        const first = _appliedPrs[0];
+        list = list.filter(p => p.party === first.party && p.prTabName === first.prTabName);
+      }
+      return list;
+    };
     const showMatches = () => {
       const q = input.value.trim().toLowerCase();
       const matches = (q
-        ? _pendingPrs.filter(p => String(p.prNo).toLowerCase().includes(q) || (p.party || '').toLowerCase().includes(q))
-        : _pendingPrs).slice(0, 30);
+        ? eligible().filter(p => String(p.prNo).toLowerCase().includes(q) || (p.party || '').toLowerCase().includes(q))
+        : eligible()).slice(0, 30);
       if (!matches.length) { dd.style.display = 'none'; return; }
       // partiallyOrdered: this PR already has an earlier PO against it but
       // isn't fully ordered yet — its items can be split across more than
       // one vendor's PO, so it stays offered here too ("PO me PR no. dalte
       // hi pure PR ke items aate hai... ek hi sath koi b party ka maal
       // nahi aata"). Flagged so it doesn't look like an untouched PR.
-      dd.innerHTML = matches.map(p => '<div class="poc-prno-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-pr="' + esc(p.prNo) + '" data-party="' + esc(p.party) + '" data-dept="' + esc(p.department) + '">'
+      dd.innerHTML = matches.map(p => '<div class="poc-prno-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-pr="' + esc(p.prNo) + '">'
         + '<b>#' + esc(p.prNo) + '</b> — ' + esc(p.party) + (p.department ? ' <span style="color:#94a3b8;">(' + esc(p.department) + ')</span>' : '')
         + (p.partiallyOrdered ? ' <span style="color:#b45309;font-weight:600;">· part ordered</span>' : '') + '</div>').join('');
-      const rect = input.getBoundingClientRect();
+      const rect = box.getBoundingClientRect();
       dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 260) + 'px';
       dd.style.display = 'block';
     };
@@ -323,14 +354,22 @@ window.Pages['po-creation'] = (() => {
       showMatches();
       _loadPendingPrs().then(() => { if (document.activeElement === input) showMatches(); });
     });
+    box.addEventListener('click', (e) => { if (e.target === box) input.focus(); });
     dd.addEventListener('mousedown', (e) => {
       const opt = e.target.closest('.poc-prno-opt');
       if (!opt) return;
       dd.style.display = 'none';
       const pr = _pendingPrs.find(p => String(p.prNo) === opt.dataset.pr);
-      if (pr) _applyPendingPr(pr); else input.value = opt.dataset.pr;
+      if (pr) { _applyPendingPr(pr); input.value = ''; showMatches(); }
     });
-    document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
+    box.addEventListener('click', (e) => {
+      const btn = e.target.closest('.poc-prno-chip-x');
+      if (!btn) return;
+      const prNo = btn.closest('.poc-prno-chip').dataset.pr;
+      const pr = _appliedPrs.find(p => String(p.prNo) === prNo);
+      if (pr) _removeAppliedPr(pr);
+    });
+    document.addEventListener('click', (e) => { if (!box.contains(e.target) && e.target !== dd) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
 
   /* ── Applying a picked pending PR — prefills Party/Department, carries the
@@ -340,13 +379,43 @@ window.Pages['po-creation'] = (() => {
      editable afterward, nothing gets locked. ──────────────────────────────── */
   function _applyPendingPr(pr) {
     const targetFormat = PR_TAB_TO_PO_FORMAT[pr.prTabName] || _format;
+    _appliedPrs.push(pr);
     if (targetFormat !== _format) {
       _format = targetFormat;
       _pendingPrToApply = pr;
-      renderPage(); // _fillPrIntoForm runs after the new format's DOM exists
+      renderPage(); // _fillPrIntoForm + chip redraw run after the new format's DOM exists
     } else {
       _fillPrIntoForm(pr);
+      _renderPrChip(pr);
     }
+  }
+
+  function _renderPrChip(pr) {
+    const input = document.getElementById('poc-pr-no');
+    if (input) input.insertAdjacentHTML('beforebegin', _prNoChipHtml(pr));
+  }
+
+  // Drops a picked PR back off the form: removes its chip, its rows from the
+  // item table, and — once no PR is left applied — unlocks Party/Department
+  // so the form goes back to being a fully manual PO.
+  function _removeAppliedPr(pr) {
+    _appliedPrs = _appliedPrs.filter(p => String(p.prNo) !== String(pr.prNo));
+    document.querySelector('.poc-prno-chip[data-pr="' + CSS.escape(String(pr.prNo)) + '"]')?.remove();
+    document.querySelectorAll('#poc-items-tbody .poc-item-row[data-pr-no="' + CSS.escape(String(pr.prNo)) + '"]').forEach(row => row.remove());
+    if (!_appliedPrs.length) {
+      const partyInput = document.getElementById('poc-party');
+      if (partyInput) { partyInput.readOnly = false; partyInput.style.cssText = _inputStyle; }
+      const deptSel = document.getElementById('poc-department');
+      if (deptSel) { deptSel.disabled = false; deptSel.style.cssText = _inputStyle; }
+      // No PR left, and its rows just came out — leave the table in the same
+      // one-blank-row state a fresh page load starts in, not empty.
+      const tbody = document.getElementById('poc-items-tbody');
+      if (tbody && !tbody.children.length) {
+        tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
+        _bindItemRow(tbody.lastElementChild);
+      }
+    }
+    _recomputeGrandTotal();
   }
 
   // Once a pending PR is actually applied, the Basic Detail + Item List
@@ -354,9 +423,11 @@ window.Pages['po-creation'] = (() => {
   // analog for (PO_ONLY_ITEM_FIELDS, plus everything outside Party/
   // Department/Items) stay editable. A manually-created PO (no PR ever
   // applied) is completely unaffected.
+  // Fills in one PR's Party/Department (idempotent — every applied PR shares
+  // them, see the eligible() filter above) and APPENDS its items to whatever
+  // is already on the table, tagging each new row with data-pr-no so
+  // _removeAppliedPr can pull exactly this PR's rows back out later.
   function _fillPrIntoForm(pr) {
-    const prInput = document.getElementById('poc-pr-no');
-    if (prInput) prInput.value = pr.prNo;
     const partyInput = document.getElementById('poc-party');
     if (partyInput && pr.party) { partyInput.value = pr.party; partyInput.readOnly = true; partyInput.style.cssText += READONLY_FIELD_STYLE; }
     const deptSel = document.getElementById('poc-department');
@@ -373,10 +444,14 @@ window.Pages['po-creation'] = (() => {
     const tbody = document.getElementById('poc-items-tbody');
     if (!mapper || !tbody || !Array.isArray(pr.items) || !pr.items.length) return;
     const poOnlyFields = PO_ONLY_ITEM_FIELDS[_format] || [];
-    tbody.innerHTML = '';
+    // The very first PR applied to an untouched, still-empty table replaces
+    // the one blank starter row rather than leaving it dangling above the
+    // PR's own items.
+    if (tbody.children.length === 1 && !tbody.children[0].querySelector('.poc-item-code')?.value) tbody.innerHTML = '';
     pr.items.forEach(it => {
       tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
       const row = tbody.lastElementChild;
+      row.dataset.prNo = pr.prNo;
       _bindItemRow(row);
       const mapped = mapper(it);
       const codeInput = row.querySelector('.poc-item-code');
@@ -994,8 +1069,6 @@ window.Pages['po-creation'] = (() => {
   async function _submit(e) {
     e.preventDefault();
     const date = document.getElementById('poc-date').value;
-    const prNoInput = document.getElementById('poc-pr-no'); // absent on manual formats
-    const prNo = prNoInput ? prNoInput.value.trim() : '';
     const department = document.getElementById('poc-department').value;
     const party = document.getElementById('poc-party').value.trim();
     const shipTo = SHIP_TO_FORMATS.includes(_format) ? document.getElementById('poc-ship-to').value : '';
@@ -1013,19 +1086,16 @@ window.Pages['po-creation'] = (() => {
     if (!date) { Utils.showToast('Date is required', 'error'); return; }
     // Every goods PO is raised against a PR — only a Service PO may be created
     // without one ("PO without PR nahi banna chahiye, sirf Service wala PO
-    // bane"). The number has to be one of the pending PRs the picker offers;
-    // a typed number that matches none is refused here, and the server checks
-    // the ERP PR Log again regardless.
-    let prNoOut = prNo;
-    if (!_isManual()) {
-      const key = prNo.replace(/^[A-Za-z\s]+/, '').replace(/^0+/, '');
-      const match = prNo && _pendingPrs.find(p => String(p.prNo).replace(/^[A-Za-z\s]+/, '').replace(/^0+/, '') === key);
-      if (!match) {
-        Utils.showToast(prNo ? prNo + ' is not a pending PR — pick one from the P.R. NO list' : 'A PO cannot be raised without a PR — pick a pending PR in P.R. NO (only a Service PO can be created without one)', 'error');
-        document.getElementById('poc-pr-no')?.focus();
-        return;
-      }
-      prNoOut = match.prNo;
+    // bane"). Chips only ever come from _appliedPrs (added via the dropdown,
+    // never free-typed), so there's nothing left to re-validate here beyond
+    // "at least one" — the server checks the ERP PR Log again regardless.
+    // More than one chip joins into one comma-separated PR No, same as a
+    // single pick ("PO mai multipal PR select kr sake").
+    let prNoOut = _appliedPrs.map(p => p.prNo).join(', ');
+    if (!_isManual() && !_appliedPrs.length) {
+      Utils.showToast('A PO cannot be raised without a PR — pick a pending PR in P.R. NO (only a Service PO can be created without one)', 'error');
+      document.getElementById('poc-pr-no')?.focus();
+      return;
     }
     if (!party) { Utils.showToast(PARTY_LABEL[_format] + ' is required', 'error'); return; }
     if (!poMadeBy) { Utils.showToast('PO Made By is required', 'error'); return; }
@@ -1039,6 +1109,7 @@ window.Pages['po-creation'] = (() => {
         body: JSON.stringify({ format: _format, date, prNo: prNoOut, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired }),
       });
       await _loadMasters();
+      _appliedPrs = [];
       renderPage();
       _showPoCreatedModal(result.poNumber, result.pdfLink);
     } catch (err) {
@@ -1085,7 +1156,7 @@ window.Pages['po-creation'] = (() => {
     + '</div>';
 
     document.querySelectorAll('.poc-format-tab').forEach(btn => {
-      btn.addEventListener('click', () => { _view = 'create'; _format = btn.dataset.format; renderPage(); });
+      btn.addEventListener('click', () => { _view = 'create'; _format = btn.dataset.format; _appliedPrs = []; renderPage(); });
     });
     const listTab = document.querySelector('.poc-list-tab');
     if (listTab) listTab.addEventListener('click', () => { _view = 'list'; renderPage(); });
@@ -1129,6 +1200,7 @@ window.Pages['po-creation'] = (() => {
       const pr = _pendingPrToApply;
       _pendingPrToApply = null;
       _fillPrIntoForm(pr);
+      _renderPrChip(pr);
     }
   }
 

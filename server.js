@@ -6745,6 +6745,14 @@ function _normalizePrNo(raw) {
   return isNaN(n) ? s : _padSeqNo('PR', n);
 }
 
+// A PO's "PR No" log cell can now hold more than one PR, comma-separated
+// ("PO mai multipal PR select kr sake") — every place that used to compare
+// it as one normalized value needs the same comparison against each of the
+// (possibly one) PR numbers it actually holds.
+function _prNosFromCell(raw) {
+  return String(raw ?? '').split(',').map(s => _normalizePrNo(s)).filter(Boolean);
+}
+
 // Same bare-vs-prefixed tolerance as _normalizePrNo, generalized to compare
 // any log's own No. column against a key from a request — strips any leading
 // letters and compares the numeric part, so "PO253" and "253" match the same
@@ -7138,13 +7146,23 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res
     // PR has to be on the ERP PR Log and neither cancelled nor rejected — the
     // page's picker enforces the same, this is the check that cannot be typed
     // around. The log's own spelling of the number is what gets written.
+    // More than one PR can now be raised onto the same PO ("PO mai multipal
+    // PR select kr sake"), comma-separated — each one is checked the same
+    // way, and since a PO still goes to exactly one vendor, every PR must
+    // resolve to the same party the PO itself is being raised against.
     let prNo = String(prNoRaw || '').trim();
     if (!cfg.standalone) {
       if (!prNo) return res.status(400).json({ error: 'A PO cannot be raised without a PR — pick a pending PR in the P.R. NO field. Only a Service PO can be created without one.' });
-      const pr = await _erpPrLogRow(prNo);
-      if (!pr) return res.status(400).json({ error: `${prNo} is not on the ERP PR Log — create the PR first, then raise the PO against it.` });
-      if (['Cancelled', 'Rejected'].includes(pr.status)) return res.status(400).json({ error: `${pr.prNo} is ${pr.status.toLowerCase()} — a PO cannot be raised against it.` });
-      prNo = pr.prNo;
+      const parts = prNo.split(',').map(s => s.trim()).filter(Boolean);
+      const canonical = [];
+      for (const part of parts) {
+        const pr = await _erpPrLogRow(part);
+        if (!pr) return res.status(400).json({ error: `${part} is not on the ERP PR Log — create the PR first, then raise the PO against it.` });
+        if (['Cancelled', 'Rejected'].includes(pr.status)) return res.status(400).json({ error: `${pr.prNo} is ${pr.status.toLowerCase()} — a PO cannot be raised against it.` });
+        if (pr.party && party && pr.party !== party) return res.status(400).json({ error: `${pr.prNo} was raised for ${pr.party}, not ${party} — a PO can only combine PRs for the same ${cfg.partyLabel.toLowerCase()}.` });
+        canonical.push(pr.prNo);
+      }
+      prNo = canonical.join(', ');
     }
     // A line "exists" if its identity column is filled — Item Code on the three
     // goods formats, Description on Service PO (which has no item codes at all).
@@ -7339,23 +7357,29 @@ app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
     try {
       const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
       for (const r of (poRes.data.values || [])) {
-        const prNo = _normalizePrNo(r[9]);
-        if (!prNo || ['Cancelled', 'Rejected'].includes(r[11] || 'Active')) continue;
+        const prNos = _prNosFromCell(r[9]);
+        if (!prNos.length || ['Cancelled', 'Rejected'].includes(r[11] || 'Active')) continue;
         let items = [];
         try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
-        const perItem = orderedByPr.get(prNo) || new Map();
-        for (const it of items) {
-          const code = String(it?.itemCode || '').trim().toLowerCase();
-          if (!code) continue;
-          const acc = perItem.get(code) || {};
-          for (const field of ['qty', 'stickerQty', 'boxQty', 'plateQty']) {
-            if (it[field] === undefined || it[field] === '') continue;
-            const v = parseFloat(String(it[field]).replace(/,/g, '')) || 0;
-            acc[field] = (acc[field] || 0) + v;
+        // A multi-PR PO's full item list counts toward EVERY PR it was raised
+        // against — isFullyOrdered below only ever checks a PR's own items,
+        // so an item that belongs to a different contributing PR is just
+        // extra/unused data in that PR's map entry, never a false match.
+        for (const prNo of prNos) {
+          const perItem = orderedByPr.get(prNo) || new Map();
+          for (const it of items) {
+            const code = String(it?.itemCode || '').trim().toLowerCase();
+            if (!code) continue;
+            const acc = perItem.get(code) || {};
+            for (const field of ['qty', 'stickerQty', 'boxQty', 'plateQty']) {
+              if (it[field] === undefined || it[field] === '') continue;
+              const v = parseFloat(String(it[field]).replace(/,/g, '')) || 0;
+              acc[field] = (acc[field] || 0) + v;
+            }
+            perItem.set(code, acc);
           }
-          perItem.set(code, acc);
+          orderedByPr.set(prNo, perItem);
         }
-        orderedByPr.set(prNo, perItem);
       }
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
@@ -8132,8 +8156,12 @@ async function _buildFmsPoPending() {
   const erpPoByPr = new Map();
   for (const r of erpPoRows) {
     if (!r[0] || ['Cancelled', 'Rejected'].includes(r[11] || 'Active')) continue;
-    const k = _normalizePrNo(r[9]);
-    if (k && !erpPoByPr.has(k)) erpPoByPr.set(k, { poNo: r[0], date: _sheetDateToIso(r[2]), party: r[3] || '', total: r[5] || '' });
+    // A multi-PR PO's row is indexed under every PR it covers ("PO mai
+    // multipal PR select kr sake"), so each of those PRs' own report row can
+    // still find it.
+    for (const k of _prNosFromCell(r[9])) {
+      if (!erpPoByPr.has(k)) erpPoByPr.set(k, { poNo: r[0], date: _sheetDateToIso(r[2]), party: r[3] || '', total: r[5] || '' });
+    }
   }
 
   const rows = dataRows.map(({ r, sheetRow }) => {
