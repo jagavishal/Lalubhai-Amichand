@@ -11,7 +11,7 @@
 --
 -- WHAT THIS FILE DOES
 --   STEP 1 (recommended) : backup snapshot of the Accessories book's stock, for undo.
---   STEP 2 (required)    : load the sheet's 226 Closing Stock values into a
+--   STEP 2 (required)    : load the sheet's 228 Closing Stock values into a
 --                          temporary table.
 --   STEP 3 (required)    : log one 'ADJ' ims_transactions row per item whose DB
 --                          stock differs from the sheet -- exactly what the app's
@@ -30,22 +30,20 @@
 -- this order -- STEP 3 must read current_stock BEFORE STEP 4 overwrites it.
 --
 -- NOTES / DATA QUALITY
---   - 234 sheet rows read, 226 carry a Closing Stock, 0 duplicates.
---   - 8 row(s) have a BLANK Closing Stock. Blank is not zero, so they
+--   - 234 sheet rows read, 228 carry a Closing Stock, 0 duplicates.
+--   - 6 row(s) have a BLANK Closing Stock. Blank is not zero, so they
 --     are NOT in the temp table and their DB stock is left untouched:
 --       ACC-12 (KEETLE PIPE NO.00 FOR 8")
 --       ACC-147 (D.COVER HANDLE)
---       ACC-187 (1/8MMX8MM-FLAT HEAD)
 --       ACC-196 (6.5MMX10MM-ROUND HEAD)
 --       ACC-210 (MODERN KETTLE HANDLE - 12'')
 --       ACC-211 (MODERN KETTLE HANDLE - 14'')
---       ACC-231 (MODERN KETTLE PIPE NO 3)
 --       ACC-232 (MODERN KETTLE PIPE NO 4)
---   - 77 of the 226 items close at exactly 0; 0 NEGATIVE.
---   - Sum of all Closing Stock values loaded = 1012881.4.
+--   - 77 of the 228 items close at exactly 0; 0 NEGATIVE.
+--   - Sum of all Closing Stock values loaded = 1047930.4.
 --   - The generator asserted Closing Stock == the sheet's last date column
 --     (2026-09-26) on every row, and cross-checked Available-% = Closing/Max
---     on 91 rows, so this really is that day's closing figure.
+--     on 92 rows, so this really is that day's closing figure.
 --   - Safe to re-run: STEP 3 only logs items that still differ, so a second run
 --     the same day logs nothing; STEP 4 re-asserts the same numbers; STEP 5 is
 --     guarded by NOT EXISTS.
@@ -172,8 +170,8 @@ INSERT INTO tmp_accessories_closing_20260926 (item_code, description, closing) V
   ('ACC-94', 'HANDLE NO.7 FOR 16-18"', 70.00),
   ('ACC-95', 'WIRE HANDLE KADI FOR 6-7-8-9', 6500.00),
   ('ACC-96', 'WIRE HANDLE PATRI FOR 6-9"', 34800.00),
-  ('ACC-97', 'FRONT MIJAGAR FOR 6-9"', 14980.00),
-  ('ACC-98', 'BACK MIJAGAR FOR 6-9"', 19270.00),
+  ('ACC-97', 'FRONT MIJAGAR FOR 6-9"', 4980.00),
+  ('ACC-98', 'BACK MIJAGAR FOR 6-9"', 9270.00),
   ('ACC-99', 'NAKUCHA NO.0 FOR 6-7-8-9"', 23650.00),
   ('ACC-100', 'HANDLE NO.1 FOR 10"', 720.00),
   ('ACC-101', 'HANDLE NO.2 FOR 12-18"', 595.00),
@@ -261,7 +259,8 @@ INSERT INTO tmp_accessories_closing_20260926 (item_code, description, closing) V
   ('ACC-184', '5MMX17MM-RH', 40000.00),
   ('ACC-185', '4MMX9MM-FLATE HEAD', 41600.00),
   ('ACC-186', '4MMX11MM-FLATE HEAD', 36800.00),
-  ('ACC-188', '1/8MMX24MM-ROUND HEAD', 38950.00),
+  ('ACC-187', '1/8MMX8MM-FLAT HEAD', 57700.00),
+  ('ACC-188', '1/8MMX24MM-ROUND HEAD', 35850.00),
   ('ACC-189', '1.8MMX21MM-ROUND HEAD', 19300.00),
   ('ACC-190', '3.8MMX9MM-FLATE HEAD', 128400.00),
   ('ACC-191', '3.8MMX7MM-FLATE HEAD', 10300.00),
@@ -301,6 +300,7 @@ INSERT INTO tmp_accessories_closing_20260926 (item_code, description, closing) V
   ('ACC-228', 'S. KETTLE HANDLE 16"', 39.00),
   ('ACC-229', 'MODERN KETTLE PIPE NO 1', 374.00),
   ('ACC-230', 'MODERN KETTLE PIPE NO 2', 206.00),
+  ('ACC-231', 'MODERN KETTLE PIPE NO 3', 449.00),
   ('ACC-233', 'MODERN KETTLE PIPE NO 5', 300.00),
   ('ACC-234', 'MODERN KETTLE PIPE NO 6', 227.00);
 
@@ -364,8 +364,8 @@ WHERE  NOT EXISTS (SELECT 1 FROM ims_items i WHERE i.item_code = t.item_code);
 -- ----------------------------------------------------------------------------
 -- STEP 6 -- verification.
 -- ----------------------------------------------------------------------------
--- Expect: accessories_items >= 226, sum_stock = 1012881.4 + stock of the
--- 8 blank-closing item(s) left untouched.
+-- Expect: accessories_items >= 228, sum_stock = 1047930.4 + stock of the
+-- 6 blank-closing item(s) left untouched.
 SELECT COUNT(*) AS accessories_items, ROUND(SUM(current_stock), 2) AS sum_stock
 FROM   ims_items WHERE category = 'Accessories';
 

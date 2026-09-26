@@ -66,6 +66,11 @@ window.Pages = window.Pages || {};
     let _search = ''; // still used by the Day-wise Stock toolbar (see below)
     let _lowStockOnly = false;
     let _negativeOnly = false;
+    // Stock-level color bucket to show ('' = all) — see _stockLevelColor.
+    // Client-side only: every row already carries currentStock + maxLevel, so
+    // there's no need to round-trip this through the server like the other
+    // filters below.
+    let _colorFilter = '';
     // Item List's own filters — separate from _search (which the Day-wise Stock
     // tab still uses) so item code and item name can be filtered independently
     // instead of one fuzzy combined box.
@@ -152,14 +157,15 @@ window.Pages = window.Pages || {};
       link.remove();
     }
     function _exportItemsCSV() {
-      if (!_rows.length) { Utils.showToast('No items to export', 'warning'); return; }
+      const items = _visibleItemRows();
+      if (!items.length) { Utils.showToast('No items to export', 'warning'); return; }
       const headers = ['Item Code', 'Category', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order Qty', 'Vendor Name'];
-      const rows = _rows.map(r => [r.itemCode, r.category || _book, r.description, r.size, r.uom, r.currentStock, r.moq, r.maxLevel, r.onOrderQty, r.vendorName]);
+      const rows = items.map(r => [r.itemCode, r.category || _book, r.description, r.size, r.uom, r.currentStock, r.moq, r.maxLevel, r.onOrderQty, r.vendorName]);
       // Same totals the on-screen table's last row shows (Current Stock and On
       // Order only — see _itemTotalsRowHtml).
-      rows.push(['Total (' + _rows.length + ' items)', '', '', '', '',
-        _rows.reduce((s, r) => s + _num(r.currentStock), 0), '', '',
-        _rows.reduce((s, r) => s + _num(r.onOrderQty), 0), '']);
+      rows.push(['Total (' + items.length + ' items)', '', '', '', '',
+        items.reduce((s, r) => s + _num(r.currentStock), 0), '', '',
+        items.reduce((s, r) => s + _num(r.onOrderQty), 0), '']);
       _downloadCSV('IMS_' + _bookSlug + '_Items_' + _todayStamp() + '.csv', headers, rows);
     }
     function _exportHistoryCSV() {
@@ -205,6 +211,21 @@ window.Pages = window.Pages || {};
         + items.map(([c, label]) => '<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:11px;height:11px;border-radius:3px;background:' + c + ';display:inline-block;"></span>' + esc(label) + '</span>').join('')
       + '</div>';
     }
+
+    // _colorFilter values map to the same hex codes _stockLevelColor returns,
+    // plus 'none' for rows with no color (Max Level not set — see that
+    // function's comment on why those are left uncolored rather than purple).
+    const _COLOR_FILTER_HEX = { red: '#ea9999', yellow: '#ffd966', green: '#b6d7a8', purple: '#b4a7d6' };
+    function _matchesColorFilter(r) {
+      if (!_colorFilter) return true;
+      const c = _stockLevelColor(r.currentStock, r.maxLevel);
+      return _colorFilter === 'none' ? !c : c === _COLOR_FILTER_HEX[_colorFilter];
+    }
+    // Item List rows after the color filter — the only filter applied
+    // client-side (everything else in the filter bar round-trips to the
+    // server); used by the table, its totals row, and CSV export alike so all
+    // three stay in agreement about what's "on screen".
+    function _visibleItemRows() { return _colorFilter ? _rows.filter(_matchesColorFilter) : _rows; }
 
     /* ── Helpers (styled like PO/GRN Creation, for a consistent look) ─────── */
     function _fieldWrap(label, innerHtml, extra) {
@@ -293,12 +314,13 @@ window.Pages = window.Pages || {};
         if (countEl) countEl.textContent = '';
         return;
       }
-      if (countEl) countEl.textContent = _rows.length + ' item' + (_rows.length === 1 ? '' : 's');
-      if (!_rows.length) {
-        body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">No items found</td></tr>';
+      const rows = _visibleItemRows();
+      if (countEl) countEl.textContent = rows.length + ' item' + (rows.length === 1 ? '' : 's') + (rows.length !== _rows.length ? ' (of ' + _rows.length + ')' : '');
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_rows.length ? 'No items match the color filter' : 'No items found') + '</td></tr>';
         return;
       }
-      body.innerHTML = _rows.map(r => {
+      body.innerHTML = rows.map(r => {
         const negative = _num(r.currentStock) < 0;
         const low = !negative && _num(r.currentStock) <= _num(r.moq);
         const stockColor = _stockLevelColor(r.currentStock, r.maxLevel);
@@ -320,21 +342,22 @@ window.Pages = window.Pages || {};
             + '<button type="button" class="ims-phys-btn" data-code="' + esc(r.itemCode) + '" style="border:none;background:transparent;color:#7c3aed;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Physical Stock</button>'
           + '</td>'
         + '</tr>';
-      }).join('') + _itemTotalsRowHtml();
+      }).join('') + _itemTotalsRowHtml(rows);
     }
 
     /* ── Totals row, pinned to the bottom of the Item List ────────────────────
        Only the two columns a sum actually means something for: Current Stock
        (the book's net position, negatives included) and On Order. MOQ and Max
        Level are per-item thresholds, so adding them up would be a number with
-       no meaning — those cells stay blank. Reflects whatever filters are
-       applied, since _rows only ever holds what the server returned for them. */
-    function _itemTotalsRowHtml() {
-      const stock = _rows.reduce((s, r) => s + _num(r.currentStock), 0);
-      const onOrder = _rows.reduce((s, r) => s + _num(r.onOrderQty), 0);
+       no meaning — those cells stay blank. Takes the same rows _renderTable
+       just painted (post color-filter), so the total always matches what's
+       on screen. */
+    function _itemTotalsRowHtml(rows) {
+      const stock = rows.reduce((s, r) => s + _num(r.currentStock), 0);
+      const onOrder = rows.reduce((s, r) => s + _num(r.onOrderQty), 0);
       const cell = 'padding:10px;font-size:12.5px;font-weight:700;color:#0f172a;background:#f8fafc;';
       return '<tr style="border-top:2px solid #e2e8f0;">'
-        + '<td colspan="4" style="' + cell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;">' + esc('Total · ' + _rows.length + ' item' + (_rows.length === 1 ? '' : 's')) + '</td>'
+        + '<td colspan="4" style="' + cell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;">' + esc('Total · ' + rows.length + ' item' + (rows.length === 1 ? '' : 's')) + '</td>'
         + '<td style="' + cell + 'text-align:right;' + (stock < 0 ? 'color:#c2410c;' : '') + '">' + esc(_fmtQty(stock)) + '</td>'
         + '<td style="' + cell + '"></td>'
         + '<td style="' + cell + '"></td>'
@@ -613,6 +636,12 @@ window.Pages = window.Pages || {};
         + '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#475569;cursor:pointer;">'
           + '<input type="checkbox" id="ims-negstock" ' + (_negativeOnly ? 'checked' : '') + ' /> Negative stock only'
         + '</label>'
+        + '<select id="ims-f-color" style="' + _inputStyle + 'width:auto;padding:7px 10px;">'
+          + ['', 'red', 'yellow', 'green', 'purple', 'none'].map(v => {
+              const opt = { '': 'All colors', red: '🟥 Red (≤33%)', yellow: '🟨 Yellow (34–66%)', green: '🟩 Green (67–100%)', purple: '🟪 Purple (>100%)', none: '⬜ No color (Max Level unset)' }[v];
+              return '<option value="' + v + '"' + (_colorFilter === v ? ' selected' : '') + '>' + esc(opt) + '</option>';
+            }).join('')
+        + '</select>'
         + '<button type="button" id="ims-f-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear Filters</button>'
         + '<button type="button" id="ims-add-btn" style="padding:8px 14px;border-radius:8px;background:var(--color-primary);border:none;color:var(--color-primary-text);font-size:12.5px;font-weight:700;cursor:pointer;">+ Add ' + esc(_bookName) + ' Item</button>'
         + '<button type="button" id="ims-export-btn" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">⬇ Download CSV</button>'
@@ -643,9 +672,11 @@ window.Pages = window.Pages || {};
       });
       document.getElementById('ims-lowstock').addEventListener('change', (e) => { _lowStockOnly = e.target.checked; _load(); });
       document.getElementById('ims-negstock').addEventListener('change', (e) => { _negativeOnly = e.target.checked; _load(); });
+      // Color filter is client-side (see _visibleItemRows) — no re-fetch needed.
+      document.getElementById('ims-f-color').addEventListener('change', (e) => { _colorFilter = e.target.value; _renderTable(); });
       document.getElementById('ims-f-clear').addEventListener('click', () => {
         // _book is deliberately untouched — it's the tab you're on, not a filter.
-        _fItemCode = ''; _fItemName = ''; _fMinStock = ''; _fMaxStock = ''; _lowStockOnly = false; _negativeOnly = false;
+        _fItemCode = ''; _fItemName = ''; _fMinStock = ''; _fMaxStock = ''; _lowStockOnly = false; _negativeOnly = false; _colorFilter = '';
         _renderReport(); // rebuilds the inputs themselves back to empty
         _load(); // filtering is server-side here (unlike Inward/Outward List), so clearing needs a real re-fetch
       });
