@@ -11866,6 +11866,12 @@ app.get('/api/ims/items', requireAuth, async (req, res) => {
       `SELECT item_code AS itemCode, description, size, uom, moq, max_level AS maxLevel, on_order_qty AS onOrderQty,
               vendor_name AS vendorName, current_stock AS currentStock, category
        FROM ims_items ${where} ORDER BY item_code ASC`, params);
+    // Plain ASCII ORDER BY puts "ALC-10" before "ALC-2" (string comparison,
+    // '1' < '2') — item codes need to read in the sequence a person expects
+    // ("ims mai item code seq mai aane chahiye"), so re-sort here with
+    // {numeric:true}, which compares embedded digit runs by value instead of
+    // character-by-character (ALC-2 < ALC-10, ACC-01 < ACC-15, etc.).
+    rows.sort((a, b) => String(a.itemCode).localeCompare(String(b.itemCode), undefined, { numeric: true, sensitivity: 'base' }));
     return res.json(rows);
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
