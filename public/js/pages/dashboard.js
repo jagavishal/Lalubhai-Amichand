@@ -54,11 +54,6 @@ window.Pages.dashboard = (function () {
     return window.UI.avatar(name || '', { size: 22 });
   }
 
-  function greetingWord() {
-    const h = new Date().getHours();
-    return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
-  }
-
   // Type breakdown for the "Total Tasks" tile ("61 del · 3 chk") — computed
   // client-side off the same pendingTasks list the table already has, so it
   // never needs its own round trip and always agrees with what's on screen.
@@ -353,29 +348,10 @@ window.Pages.dashboard = (function () {
         .pill-grant { background:var(--color-success-bg);color:var(--color-success-text); } .pill-grant:hover { background:var(--color-success-border); }
         .pill-deny  { background:var(--color-neutral-bg);color:var(--color-neutral-text); } .pill-deny:hover  { background:var(--border-base); }
         .pill-pending-wait { background:var(--color-warning-bg);color:var(--color-warning-text);display:inline-flex;align-items:center;padding:2px 8px;font-size:10.5px;font-weight:600;border-radius:9999px; }
-        /* Greeting banner */
-        #db-banner { background:linear-gradient(120deg, var(--color-primary) 0%, var(--color-primary-dark) 100%); border-radius:16px; padding:20px 24px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:20px; color:#fff; box-shadow:0 8px 20px var(--color-primary-ring); }
-        #db-banner-eyebrow { font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.75; margin:0 0 2px; }
-        #db-banner-name { font-size:21px; font-weight:800; margin:0; letter-spacing:-.01em; }
-        #db-btn-new-task { display:inline-flex; align-items:center; gap:6px; padding:10px 18px; border-radius:10px; font-size:13px; font-weight:700; background:#fff; color:var(--color-primary-dark); border:none; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.15); white-space:nowrap; }
-        #db-btn-new-task:hover { background:#f8fafc; }
-        @media (max-width:767px) { #db-banner { padding:16px 18px; } #db-banner-name { font-size:18px; } }
         @media (max-width:1200px) and (min-width:768px) { #db-stat-cards { grid-template-columns:repeat(3,1fr) !important; } }
       </style>
 
       <div id="db-wrap">
-        <!-- Greeting banner -->
-        <div id="db-banner">
-          <div>
-            <p id="db-banner-eyebrow">${esc(greetingWord())}</p>
-            <h1 id="db-banner-name">${esc((me?.name || 'there'))}</h1>
-          </div>
-          <button id="db-btn-new-task" type="button">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-            New Task
-          </button>
-        </div>
-
         <!-- Top bar: emp picker LEFT | buttons RIGHT -->
         <div id="db-topbar" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-bottom:20px;">
 
@@ -1689,8 +1665,6 @@ window.Pages.dashboard = (function () {
     }
     const btnDelegate = el.querySelector('#db-btn-delegate');
     if (btnDelegate) btnDelegate.addEventListener('click', () => { resetDelegateForm(); showModal('modal-delegate'); });
-    const btnNewTask = el.querySelector('#db-btn-new-task');
-    if (btnNewTask) btnNewTask.addEventListener('click', () => { resetDelegateForm(); showModal('modal-delegate'); });
     el.querySelector('#modal-delegate-close')?.addEventListener('click', () => hideModal('modal-delegate'));
     el.querySelector('#modal-delegate-cancel')?.addEventListener('click', () => hideModal('modal-delegate'));
     el.querySelector('#modal-delegate')?.addEventListener('click', () => hideModal('modal-delegate'));
