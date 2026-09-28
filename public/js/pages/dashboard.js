@@ -357,7 +357,6 @@ window.Pages.dashboard = (function () {
         #db-banner { background:linear-gradient(120deg, var(--color-primary) 0%, var(--color-primary-dark) 100%); border-radius:16px; padding:20px 24px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:20px; color:#fff; box-shadow:0 8px 20px var(--color-primary-ring); }
         #db-banner-eyebrow { font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.75; margin:0 0 2px; }
         #db-banner-name { font-size:21px; font-weight:800; margin:0; letter-spacing:-.01em; }
-        #db-banner-sub { font-size:12.5px; opacity:.85; margin:4px 0 0; }
         #db-btn-new-task { display:inline-flex; align-items:center; gap:6px; padding:10px 18px; border-radius:10px; font-size:13px; font-weight:700; background:#fff; color:var(--color-primary-dark); border:none; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.15); white-space:nowrap; }
         #db-btn-new-task:hover { background:#f8fafc; }
         @media (max-width:767px) { #db-banner { padding:16px 18px; } #db-banner-name { font-size:18px; } }
@@ -370,7 +369,6 @@ window.Pages.dashboard = (function () {
           <div>
             <p id="db-banner-eyebrow">${esc(greetingWord())}</p>
             <h1 id="db-banner-name">${esc((me?.name || 'there'))}</h1>
-            <p id="db-banner-sub">${esc(new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}${hod ? ' · HOD view' : admin ? ' · Admin view' : ''}</p>
           </div>
           <button id="db-btn-new-task" type="button">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
