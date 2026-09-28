@@ -13041,20 +13041,54 @@ app.get('/api/approvals/pending-count', requireAuth, async (req, res) => {
   // Via isAdminUser rather than re-reading roles here, so the owner gets the
   // badge too — the sidebar shows it, and a count of 0 would have told the
   // one account that can approve anything that there is nothing to approve.
-  if (!isAdminUser(req.session?.user)) return res.json({ count:0 });
+  const sessUser = req.session?.user;
+  if (!isAdminUser(sessUser)) return res.json({ count:0 });
+  // Revise Requests and Task Approvals must be counted with the exact same
+  // scoping GET /api/delegations applies for these two viewers, or the badge
+  // shows a company-wide number while the Approvals page — scoped to this
+  // person's own team/delegated tasks — renders empty ("showing however no
+  // approvals are pending"). Task Approvals in particular defaults to
+  // delegated_by=me for every role, admin included (see the `mineOnly`
+  // comment on that route) — an unscoped count here previously included
+  // every OTHER admin's approval-required tasks too.
+  const userId = sessUser?.id;
+  const userName = sessUser?.name || '';
+  const isHOD = isHODUser(sessUser);
+  const isTrueAdmin = isTrueAdminUser(sessUser);
   try {
     if (USE_DB) {
+      let reviseWhere = `status='revise_requested'`;
+      const reviseParams = [];
+      if (!isTrueAdmin) {
+        if (isHOD) {
+          reviseWhere += ` AND (doer_id IN (SELECT id FROM users WHERE LOWER(TRIM(department))=(SELECT LOWER(TRIM(department)) FROM users WHERE id=$1)) OR doer_id=$2 OR LOWER(doer)=LOWER($3) OR delegated_by=$4)`;
+          reviseParams.push(userId, userId, userName, userId);
+        } else {
+          reviseWhere += ` AND (doer_id=$1 OR LOWER(doer)=LOWER($2) OR delegated_by=$3)`;
+          reviseParams.push(userId, userName, userId);
+        }
+      }
       const [revise, tasks, urgent] = await Promise.all([
-        q(`SELECT COUNT(*) AS cnt FROM delegations WHERE status='revise_requested'`),
-        q(`SELECT COUNT(*) AS cnt FROM delegations WHERE approval='Approval Required' AND status='pending'`),
+        q(`SELECT COUNT(*) AS cnt FROM delegations WHERE ${reviseWhere}`, reviseParams),
+        q(`SELECT COUNT(*) AS cnt FROM delegations WHERE approval='Approval Required' AND status='pending' AND delegated_by=$1`, [userId]),
         q(`SELECT COUNT(*) AS cnt FROM urgent_payments WHERE status='pending'`).catch(() => []),
       ]);
       return res.json({ count:Number(revise[0]?.cnt||0)+Number(tasks[0]?.cnt||0)+Number(urgent[0]?.cnt||0) });
     }
     const store = await readStore();
     const dels = store.delegations||[];
-    const count = dels.filter(d=>d.status==='revise_requested').length + dels.filter(d=>d.approval==='Approval Required'&&d.status==='pending').length
-      + (store.urgentPayments||[]).filter(r=>r.status==='pending').length;
+    let reviseRows = dels.filter(d=>d.status==='revise_requested');
+    if (!isTrueAdmin) {
+      if (isHOD) {
+        const myFreshDept = (store.users || []).find(u => u.id === userId)?.department || '';
+        const teamNames = new Set((store.users || []).filter(u => normDept(u.department) === normDept(myFreshDept)).map(u => (u.name || '').toLowerCase()));
+        reviseRows = reviseRows.filter(d => teamNames.has((d.doer || '').toLowerCase()) || d.doerId === userId || d.delegatedBy === userId);
+      } else {
+        reviseRows = reviseRows.filter(d => d.doerId === userId || (d.doer || '').toLowerCase() === userName.toLowerCase() || d.delegatedBy === userId);
+      }
+    }
+    const taskCount = dels.filter(d=>d.approval==='Approval Required'&&d.status==='pending'&&d.delegatedBy===userId).length;
+    const count = reviseRows.length + taskCount + (store.urgentPayments||[]).filter(r=>r.status==='pending').length;
     return res.json({ count });
   } catch { return res.json({ count:0 }); }
 });
