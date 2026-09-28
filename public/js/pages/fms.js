@@ -17,7 +17,7 @@ window.FmsFileUpload = (function () {
   const esc = Utils.esc;
 
   function linkHTML(url) {
-    return `<a href="${esc(url)}" target="_blank" rel="noopener" style="color:#0150AA;font-weight:600;">✓ Uploaded — view file</a>`;
+    return `<a href="${esc(Utils.safeUrl(url))}" target="_blank" rel="noopener" style="color:#0150AA;font-weight:600;">✓ Uploaded — view file</a>`;
   }
 
   function fieldHTML(key, label, reqMark, value) {

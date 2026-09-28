@@ -5,12 +5,15 @@ window.Pages['client-master'] = (() => {
   const DIVISIONS = ['Export', 'Others', 'Trading', 'Wirerod', 'SSCD Ahd', 'Retail (Satelite)', 'Retail (Bopal)'];
 
   /* ── Permission helper ──────────────────────────────────────── */
-  function _hasFeature(feat) {
+  function _isAdmin() {
     const roles = window.currentUser?.roles || [];
-    const isAdmin = Array.isArray(roles)
+    return Array.isArray(roles)
       ? (roles.includes('Admin') || roles.includes('HOD'))
       : (String(roles).includes('Admin') || String(roles).includes('HOD'));
-    if (isAdmin) return true;
+  }
+
+  function _hasFeature(feat) {
+    if (_isAdmin()) return true;
     const perms = window.currentUser?.permissions;
     if (!perms || !perms.features) return true;
     const pageFeats = perms.features['client-master'];
@@ -1198,6 +1201,12 @@ window.Pages['client-master'] = (() => {
     const el = document.getElementById('main-content');
     if (!el) return;
 
+    // Payment Management/History call /api/payment-entries and
+    // /api/payment-history, which are Admin/HOD-only server-side — hide the
+    // tabs for everyone else instead of showing a tab that just 403s.
+    const showPayments = _isAdmin();
+    if (!showPayments && _tab !== 'vendors') _tab = 'vendors';
+
     let tabContent;
     if (_tab === 'vendors')       tabContent = _renderVendorTab();
     else if (_tab === 'payments') tabContent = _renderPaymentTab();
@@ -1222,8 +1231,8 @@ window.Pages['client-master'] = (() => {
 
         + '<div style="display:flex;gap:0;border-top:1px solid #f1f5f9;padding:0 10px;">'
           + _tabBtn('tab-vendors',  'Vendor List',        iconVendor,  _tab === 'vendors')
-          + _tabBtn('tab-payments', 'Payment Management', iconPayment, _tab === 'payments')
-          + _tabBtn('tab-history',  'Payment History',    iconHistory, _tab === 'history')
+          + (showPayments ? _tabBtn('tab-payments', 'Payment Management', iconPayment, _tab === 'payments') : '')
+          + (showPayments ? _tabBtn('tab-history',  'Payment History',    iconHistory, _tab === 'history') : '')
         + '</div>'
 
       + '</div>'
@@ -1235,8 +1244,8 @@ window.Pages['client-master'] = (() => {
     + '</div>';
 
     document.getElementById('tab-vendors') .addEventListener('click', () => { _tab = 'vendors';  _render(); });
-    document.getElementById('tab-payments').addEventListener('click', () => { _tab = 'payments'; _render(); });
-    document.getElementById('tab-history') .addEventListener('click', async () => {
+    document.getElementById('tab-payments')?.addEventListener('click', () => { _tab = 'payments'; _render(); });
+    document.getElementById('tab-history')?.addEventListener('click', async () => {
       _tab = 'history'; _phOpenBatch = null; _phBillsVendor = null;
       ['tab-vendors','tab-payments','tab-history'].forEach(id => {
         const b = document.getElementById(id); if (!b) return;
@@ -1302,10 +1311,12 @@ window.Pages['client-master'] = (() => {
       _form = _blankForm(); _list = [];
       const el = document.getElementById('main-content');
       if (el) el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;"><div style="text-align:center;"><div style="width:40px;height:40px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 14px;"></div><div style="font-size:13px;color:#94a3b8;font-weight:500;">Loading…</div></div></div>';
-      // Load vendor list + draft payment entries in parallel, then render once
+      // Load vendor list + draft payment entries in parallel, then render once.
+      // The payment-entries fetch is Admin/HOD-only server-side; skip it for
+      // everyone else rather than firing a request that will just 403.
       const [, draftRes] = await Promise.all([
         _load(true),
-        fetch('/api/payment-entries').then(r => r.ok ? r.json() : []).catch(() => []),
+        _isAdmin() ? fetch('/api/payment-entries').then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
       ]);
       _initRows(Array.isArray(draftRes) ? draftRes : []);
       _render();

@@ -382,6 +382,27 @@ function mountBulkMail(app, ctx) {
         const pdfs = all.filter((e) => isPdf(e.entryName));
         const sheets = all.filter((e) => isSheet(e.entryName));
         if (pdfs.length > 2000) return res.status(400).json({ error: 'ZIP holds more than 2000 PDFs — split it up' });
+        // A ZIP's central directory carries each entry's uncompressed size
+        // without decompressing anything, so a decompression-bomb archive
+        // (a small upload that expands to gigabytes) can be caught before
+        // getData() is ever called on it — that call fully decompresses an
+        // entry into memory, and the only cap before this was on the
+        // COUNT of PDFs, not the size any of them (or the sheets) actually
+        // decompress to. This is a single Node process, so exhausting its
+        // memory here takes down the whole ERP, not just this feature.
+        const ZIP_ENTRY_MAX = 200 * 1024 * 1024;       // 200MB — no legitimate PDF/Excel/CSV in this flow is near this
+        const ZIP_TOTAL_UNCOMPRESSED_MAX = 2 * 1024 * 1024 * 1024; // 2GB across the whole archive
+        let totalUncompressed = 0;
+        for (const e of [...pdfs, ...sheets]) {
+          const size = Number(e.header?.size) || 0;
+          if (size > ZIP_ENTRY_MAX) {
+            return res.status(400).json({ error: `${baseName(e.entryName)} is too large uncompressed (${Math.round(size / 1024 / 1024)}MB) — split it out of the ZIP` });
+          }
+          totalUncompressed += size;
+          if (totalUncompressed > ZIP_TOTAL_UNCOMPRESSED_MAX) {
+            return res.status(400).json({ error: 'This ZIP decompresses to more than 2GB total — split it into smaller archives' });
+          }
+        }
         // Sheets first, so the PDFs that follow match against a fresh master.
         for (const s of sheets) {
           try {
@@ -392,8 +413,15 @@ function mountBulkMail(app, ctx) {
         }
         const master = await loadMaster();
         for (const e of pdfs) {
-          const r = await addPdf(batchId, e.entryName, e.getData(), master);
-          out.pdfs += 1; if (r.duplicate) out.duplicates += 1;
+          // Isolated the same way the sheets loop above already is — a
+          // corrupted/truncated entry's getData() throwing used to abort the
+          // whole request, discarding the effect of every PDF (and sheet)
+          // already absorbed earlier in this same loop with only a generic
+          // 500 and no indication which entry was the problem.
+          try {
+            const r = await addPdf(batchId, e.entryName, e.getData(), master);
+            out.pdfs += 1; if (r.duplicate) out.duplicates += 1;
+          } catch (err) { out.skipped.push(`${baseName(e.entryName)}: ${err.message}`); }
         }
         if (sheets.length) await rematchBatch(batchId);
         if (!pdfs.length && !sheets.length) return res.status(400).json({ error: `${name} holds no PDF or Excel/CSV files` });
@@ -799,15 +827,25 @@ function mountBulkMail(app, ctx) {
   }
 
   app.post('/api/bulk-mail/send', ...guard, async (req, res) => {
+    // Checked-and-claimed synchronously, before any `await` — the old order
+    // checked `job?.running` only AFTER awaiting ensureSchema() and
+    // mailAccount(), so two near-simultaneous POSTs could both observe
+    // `job` as not-yet-running during that gap and both go on to start a
+    // job, the second silently overwriting `job` and orphaning the first
+    // (uncancellable, and if the two selections overlapped, double-sent).
+    // Node's event loop cannot interleave another request's handler between
+    // two synchronous statements with no `await` between them, so checking
+    // and immediately claiming the slot here is atomic.
+    if (job?.running) return res.status(409).json({ error: `A send is already running (${job.done}/${job.total}) — wait for it to finish or stop it` });
+    job = { running: true, claiming: true, done: 0, total: 0 };
     try {
       await ensureSchema();
       // The account is fixed when the job starts, so a toggle flipped
       // mid-send changes the next job, never this one.
       const acct = await mailAccount(req);
-      if (!acct.user || !acct.pass) return res.status(500).json({ error: 'Email is not configured (SMTP_USER / SMTP_PASS missing)' });
-      if (job?.running) return res.status(409).json({ error: `A send is already running (${job.done}/${job.total}) — wait for it to finish or stop it` });
+      if (!acct.user || !acct.pass) { job = null; return res.status(500).json({ error: 'Email is not configured (SMTP_USER / SMTP_PASS missing)' }); }
       const ids = Array.isArray(req.body?.ids) ? [...new Set(req.body.ids.map(String))].slice(0, 5000) : [];
-      if (!ids.length) return res.status(400).json({ error: 'No files selected' });
+      if (!ids.length) { job = null; return res.status(400).json({ error: 'No files selected' }); }
       const batchId = String(req.body?.batchId || ids[0].replace(/-\d+$/, ''));
       job = {
         id: 'J' + Date.now().toString(36), batchId, ids, running: true, cancel: false, cancelled: false,
@@ -817,7 +855,7 @@ function mountBulkMail(app, ctx) {
       // Not awaited — the job outlives this request on purpose.
       runJob(job, String(req.body?.subject || DEF_SUBJECT), String(req.body?.body || DEF_BODY), acct);
       res.json({ ok: true, job: jobView() });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) { job = null; res.status(500).json({ error: e.message }); }
   });
 
   app.get('/api/bulk-mail/send/status', ...guard, (req, res) => res.json(jobView()));

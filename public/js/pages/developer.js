@@ -85,7 +85,7 @@ window.Pages.developer = {
               ${showPass ? eyeIconHide() : eyeIconShow()}
             </button>
           </div>
-          ${errorMsg ? `<p style="color:#ef4444;font-size:12.5px;margin:-8px 0 12px;">${errorMsg}</p>` : ''}
+          ${errorMsg ? `<p style="color:#ef4444;font-size:12.5px;margin:-8px 0 12px;">${Utils.esc(errorMsg)}</p>` : ''}
           <button type="submit" id="dev-login-btn" ${loading || !password ? 'disabled' : ''} style="
             width:100%;padding:12px;border-radius:10px;border:none;
             background:${loading || !password ? '#cbd5e1' : '#3b82f6'};
@@ -208,7 +208,7 @@ window.Pages.developer = {
                     ">
                       <div style="text-align:left;flex:1;min-width:0;">
                         <div style="font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                          ${b.label || 'Backup'}
+                          ${Utils.esc(b.label) || 'Backup'}
                         </div>
                         <div style="font-size:10px;color:#94a3b8;margin-top:2px;">
                           ${date.toLocaleString('en-IN')} &middot; ${daysLeft}d left
@@ -238,7 +238,7 @@ window.Pages.developer = {
             ` : '')}
           </div>
 
-          ${errorMsg ? `<p style="color:#ef4444;font-size:13px;margin-top:12px;">${errorMsg}</p>` : ''}
+          ${errorMsg ? `<p style="color:#ef4444;font-size:13px;margin-top:12px;">${Utils.esc(errorMsg)}</p>` : ''}
 
           <button id="dev-logout-btn" style="
             margin-top:20px;background:none;border:none;
@@ -390,7 +390,7 @@ window.Pages.developer = {
             </div>
             <h2 style="font-size:16px;font-weight:700;color:#0f172a;margin:0 0 8px;">Restore Backup?</h2>
             <p style="font-size:13px;color:#64748b;margin:0 0 6px;line-height:1.5;">
-              <strong>${confirmRestore.label || 'Backup'}</strong>
+              <strong>${Utils.esc(confirmRestore.label) || 'Backup'}</strong>
             </p>
             <p style="font-size:12px;color:#94a3b8;margin:0 0 24px;">
               ${new Date(confirmRestore.created_at).toLocaleString('en-IN')}

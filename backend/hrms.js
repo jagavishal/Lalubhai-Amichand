@@ -863,13 +863,28 @@ function mountHrms(app, ctx) {
      from the users table — the session copy does not carry it). */
   async function selfEmployee(user) {
     if (!user) return null;
-    const rows = await q(
-      `SELECT * FROM hr_employees
-        WHERE user_id = $1 OR (email <> '' AND LOWER(email) = LOWER($2)) OR LOWER(TRIM(name)) = LOWER(TRIM($3))
-        ORDER BY CASE WHEN user_id = $4 THEN 0 ELSE 1 END LIMIT 1`,
-      [user.id || '', user.email || '', user.name || '', user.id || ''],
+    // user_id / email are a strong, unique identity link — set by an admin,
+    // never guessed — so a match on either is trusted immediately even if
+    // some other row happens to share this person's name.
+    const strong = await q(
+      `SELECT * FROM hr_employees WHERE user_id = $1 OR (email <> '' AND LOWER(email) = LOWER($2)) LIMIT 1`,
+      [user.id || '', user.email || ''],
     ).catch(() => []);
-    if (rows[0]) return rows[0];
+    if (strong[0]) return strong[0];
+    // Below this point every match is by name/phone alone, which is not a
+    // unique identifier — two employees can share a display name (common
+    // enough that pickByName() above treats it as a hard rule: "two Jayeshes
+    // means no answer, not the wrong one"). This used to LIMIT 1 with no
+    // ordering beyond the strong check above, so an exact-name collision
+    // could hand back an ARBITRARY one of the two rows — including someone
+    // else's salary/bank details/PAN/payslips. Same rule applied here: more
+    // than one candidate resolves to nothing, not a guess.
+    const exact = await q(
+      `SELECT * FROM hr_employees WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))`,
+      [user.name || ''],
+    ).catch(() => []);
+    if (exact.length === 1) return exact[0];
+    if (exact.length > 1) return null;
     const nameKey = (n) => String(n || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean).sort().join(' ');
     const phoneKey = (p) => String(p || '').replace(/\D/g, '').slice(-10);
     const wantName = nameKey(user.name);
@@ -877,8 +892,9 @@ function mountHrms(app, ctx) {
     const wantPhone = phoneKey(user.phone || login?.phone);
     if (!wantName && wantPhone.length < 10) return null;
     const all = await q(`SELECT * FROM hr_employees ORDER BY CASE WHEN status = 'Active' THEN 0 ELSE 1 END, id ASC`).catch(() => []);
-    return all.find((e) => (wantName && nameKey(e.name) === wantName)
-      || (wantPhone.length === 10 && phoneKey(e.phone) === wantPhone)) || null;
+    const matches = all.filter((e) => (wantName && nameKey(e.name) === wantName)
+      || (wantPhone.length === 10 && phoneKey(e.phone) === wantPhone));
+    return matches.length === 1 ? matches[0] : null;
   }
 
   async function bumpUsed(employeeId, year, code, delta) {
@@ -936,15 +952,27 @@ function mountHrms(app, ctx) {
     const nowApproved = /^approved$/i.test(String(status || ''));
     let balanceAfter = null;
 
+    // The read above and the balance/status writes below used to be two
+    // separate steps with nothing tying them together. A request can
+    // legitimately be decided by more than one person (named approver,
+    // substitute, level-2 approver) — two near-simultaneous decisions would
+    // both read the same starting status and both call bumpUsed, so the
+    // balance moved twice even though the row only ends up in one final
+    // status. Making this UPDATE conditional on the status just read means
+    // only the first of two racing calls can affect a row; the loser sees
+    // rowCount 0 and skips bumpUsed entirely instead of double-counting.
+    const guard = await pool.query(
+      `UPDATE leaves SET status = $1, decided_at = NOW(), decided_by = $2 WHERE id = $3 AND status = $4`,
+      [status, decidedBy || '', leaveId, lv.status],
+    );
+    if (!guard.rowCount) return { alreadyDecided: true };
+
     if (lv.employee_id && code !== 'LWP' && days) {
       if (!wasApproved && nowApproved) await bumpUsed(lv.employee_id, year, code, days);
       if (wasApproved && !nowApproved) await bumpUsed(lv.employee_id, year, code, -days);
       balanceAfter = balanceOf(await ensureBalance(lv.employee_id, year, code));
+      await pool.query(`UPDATE leaves SET balance_after = $1 WHERE id = $2`, [balanceAfter, leaveId]);
     }
-    await pool.query(
-      `UPDATE leaves SET status = $1, decided_at = NOW(), decided_by = $2, balance_after = $3 WHERE id = $4`,
-      [status, decidedBy || '', balanceAfter, leaveId],
-    );
 
     /* Tell the applicant what was decided. Fire-and-forget for the same reason
        as the request mail: the decision is already recorded, and a slow or
@@ -1291,16 +1319,29 @@ function mountHrms(app, ctx) {
     // leave history and attendance. Marking someone Inactive is the normal
     // way to retire a record; this removes it and its dependants outright.
     app.delete('/api/hr/employees', requireAuth, requireSuperAdmin, hrReady, async (req, res) => {
+      const id = String(req.query.id || '').trim();
+      if (!id) return res.status(400).json({ error: 'Employee id is required' });
+      // One transaction, and a real failure is no longer swallowed: the old
+      // per-table .catch(()=>{}) hid genuine errors (a lock, an FK issue),
+      // so the final `hr_employees` delete could still run and succeed after
+      // some child tables silently failed to clear — an unrecoverable,
+      // partially-deleted employee (salary/leave/attendance history gone,
+      // master row or vice versa still there). Owner-only and destructive
+      // either way; it should at least be all-or-nothing.
+      const c = await pool.connect();
       try {
-        const id = String(req.query.id || '').trim();
-        if (!id) return res.status(400).json({ error: 'Employee id is required' });
+        await c.query('BEGIN');
         for (const t of ['hr_salary_structure', 'hr_leave_balances', 'hr_attendance',
                          'hr_onboarding', 'hr_exits', 'hr_documents', 'hr_payslips']) {
-          await pool.query(`DELETE FROM ${t} WHERE employee_id = $1`, [id]).catch(() => {});
+          await c.query(`DELETE FROM ${t} WHERE employee_id = $1`, [id]);
         }
-        await pool.query(`DELETE FROM hr_employees WHERE id = $1`, [id]);
+        await c.query(`DELETE FROM hr_employees WHERE id = $1`, [id]);
+        await c.query('COMMIT');
         res.json({ success: true });
-      } catch (e) { res.status(500).json({ error: e.message }); }
+      } catch (e) {
+        await c.query('ROLLBACK').catch(() => {});
+        res.status(500).json({ error: e.message });
+      } finally { c.release(); }
     });
 
     /* ── Salary structure ─────────────────────────────────────────── */
@@ -1326,6 +1367,13 @@ function mountHrms(app, ctx) {
         if (!effective)  return res.status(400).json({ error: 'Effective from date is required' });
         const id = rowId('SS');
         const cols = [...EARNINGS, ...DEDUCTIONS].map((c) => c.key);
+        // money() only rounds — it does not reject a negative figure, so a
+        // negative earning/deduction used to flow straight into payroll
+        // computation and could print a negative/nonsensical net salary on
+        // a frozen payslip with no server-side sanity check at all.
+        for (const c of cols) {
+          if (money(b[c]) < 0) return res.status(400).json({ error: `${c} cannot be negative` });
+        }
         await pool.query(
           `INSERT INTO hr_salary_structure (id, employee_id, effective_from, ${cols.join(', ')}, remarks, created_by)
            VALUES ($1,$2,$3, ${cols.map((_, i) => '$' + (i + 4)).join(', ')}, $${cols.length + 4}, $${cols.length + 5})`,
@@ -1779,7 +1827,14 @@ function mountHrms(app, ctx) {
         const code = String(b.leave_type || b.leaveType || 'CL').toUpperCase();
         const halfDay = ['full', 'first', 'second'].includes(b.half_day) ? b.half_day : 'full';
         const days = num(b.total_days) || await leaveDayCount(from, to, halfDay, emp?.branch);
-        if (!days) return res.status(400).json({ error: 'This request works out to zero leave days' });
+        // A client-sent total_days is trusted as-is below (it drives bumpUsed,
+        // which GREATEST(0, used ± days)'s the balance) — num() does not clamp
+        // sign, so a negative value used to pass this check (0 is the only
+        // falsy number) and then *increase* the visible balance instead of
+        // consuming it once SL/EL auto-approved it. Reject non-positive and
+        // implausibly large values outright instead of only "falsy".
+        if (!(days > 0)) return res.status(400).json({ error: 'This request works out to zero leave days' });
+        if (days > 365) return res.status(400).json({ error: 'A single leave request cannot exceed 365 days' });
 
         // Warn, but do not block: a genuine emergency should not be stopped by
         // an exhausted balance — payroll turns the excess into loss of pay.
@@ -2196,6 +2251,7 @@ function mountHrms(app, ctx) {
 
         const decision = await applyLeaveDecision(id, status, req.session?.user?.name || '');
         if (!decision) return res.status(404).json({ error: 'Leave request not found' });
+        if (decision.alreadyDecided) return res.status(409).json({ error: 'This request was just decided by someone else' });
         if (b.comments != null) {
           await pool.query(`UPDATE leaves SET approver_comments = $1 WHERE id = $2`, [b.comments, id]);
         }
@@ -2528,20 +2584,14 @@ function mountHrms(app, ctx) {
           return res.status(409).json({ error: `${MONTHS[month - 1]} ${year} is already finalised. Reopen it first to regenerate.` });
         }
         const runId = existing ? existing.id : `RUN-${year}-${pad(month, 2)}`;
-        if (!existing) {
-          await pool.query(
-            `INSERT INTO hr_payroll_runs (id, month, year, status, generated_by) VALUES ($1,$2,$3,'draft',$4)`,
-            [runId, month, year, req.session?.user?.name || ''],
-          );
-        } else {
-          await pool.query(`UPDATE hr_payroll_runs SET generated_at = NOW(), generated_by = $1 WHERE id = $2`,
-            [req.session?.user?.name || '', runId]);
-        }
 
-        // A regenerate is a clean rebuild: rows for people no longer in the
-        // month (a wrong joining date fixed, say) must not survive as ghosts.
-        await pool.query(`DELETE FROM hr_payslips WHERE run_id = $1`, [runId]);
-
+        // Computed BEFORE the transaction opens (it's pure reads) so a bad
+        // employee record can't fail mid-transaction; what follows is now
+        // BEGIN/COMMIT/ROLLBACK — the old delete-then-insert-loop was plain
+        // sequential pool.query() calls, so a crash or a single bad row
+        // partway through left the run with its old payslips gone and only
+        // some of the new ones written, with nothing flagging the run as
+        // incomplete (and nothing stopping it from being finalised as-is).
         const settings = await getSettings();
         const { results } = await computeMonth(month, year, settings);
         const cols = ['id', 'run_id', 'employee_id', 'employee_name', 'designation', 'department', 'branch',
@@ -2550,15 +2600,36 @@ function mountHrms(app, ctx) {
           'month_days', 'present_days', 'leave_days', 'lop_days', 'paid_days',
           'leave_deduction', 'net_salary', 'bank_name', 'account_no', 'note'];
 
-        let i = 0;
-        for (const r of results) {
-          const id = `SAL-${year}-${pad(month, 2)}-${pad(++i, 3)}`;
-          const row = { id, run_id: runId, ...r.row };
-          await pool.query(
-            `INSERT INTO hr_payslips (${cols.join(', ')}) VALUES (${cols.map((_, n) => '$' + (n + 1)).join(', ')})`,
-            cols.map((c) => row[c] ?? ''),
-          );
-        }
+        const c = await pool.connect();
+        try {
+          await c.query('BEGIN');
+          if (!existing) {
+            await c.query(
+              `INSERT INTO hr_payroll_runs (id, month, year, status, generated_by) VALUES ($1,$2,$3,'draft',$4)`,
+              [runId, month, year, req.session?.user?.name || ''],
+            );
+          } else {
+            await c.query(`UPDATE hr_payroll_runs SET generated_at = NOW(), generated_by = $1 WHERE id = $2`,
+              [req.session?.user?.name || '', runId]);
+          }
+          // A regenerate is a clean rebuild: rows for people no longer in the
+          // month (a wrong joining date fixed, say) must not survive as ghosts.
+          await c.query(`DELETE FROM hr_payslips WHERE run_id = $1`, [runId]);
+          let i = 0;
+          for (const r of results) {
+            const id = `SAL-${year}-${pad(month, 2)}-${pad(++i, 3)}`;
+            const row = { id, run_id: runId, ...r.row };
+            await c.query(
+              `INSERT INTO hr_payslips (${cols.join(', ')}) VALUES (${cols.map((_, n) => '$' + (n + 1)).join(', ')})`,
+              cols.map((c2) => row[c2] ?? ''),
+            );
+          }
+          await c.query('COMMIT');
+        } catch (e) {
+          await c.query('ROLLBACK').catch(() => {});
+          throw e;
+        } finally { c.release(); }
+
         const totals = results.reduce((t, r) => ({
           gross: t.gross + r.row.total_gross, net: t.net + r.row.net_salary,
         }), { gross: 0, net: 0 });

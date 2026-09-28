@@ -365,7 +365,7 @@ window.Pages.profile = {
         <!-- Documents and the shortcuts share the last line. -->
         <div class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-slate-100">
           ${(hr.documents || []).map((d) => (d.url
-            ? `<a href="${esc(d.url)}" target="_blank" rel="noopener" class="pill pill-neutral pill-sm no-underline">${esc(d.doc_type)}</a>`
+            ? `<a href="${esc(Utils.safeUrl(d.url))}" target="_blank" rel="noopener" class="pill pill-neutral pill-sm no-underline">${esc(d.doc_type)}</a>`
             : `<span class="pill pill-neutral pill-sm">${esc(d.doc_type)}</span>`)).join('')}
           <span class="flex-1"></span>
           <button class="btn-secondary btn-sm" data-profile-go="hr-leave">Apply for Leave</button>

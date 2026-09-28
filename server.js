@@ -1052,7 +1052,7 @@ async function syncUsers_gs() {
     const exists = meta.data.sheets.some(s=>s.properties.title==='Users');
     if (!exists) await sheets.spreadsheets.batchUpdate({ spreadsheetId:SPREADSHEET_ID, requestBody:{requests:[{addSheet:{properties:{title:'Users'}}}]} });
     await sheets.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:'Users!A1', valueInputOption:'RAW', requestBody:{values:[['ID','Name','Email','Phone','Department','Branch','Roles','Active','Created At']]} });
-    await sheets.spreadsheets.values.clear({ spreadsheetId:SPREADSHEET_ID, range:'Users!A2:Z10000' });
+    await sheets.spreadsheets.values.clear({ spreadsheetId:SPREADSHEET_ID, range:'Users!A2:Z' });
     if (values.length>0) await sheets.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:'Users!A2', valueInputOption:'RAW', requestBody:{values} });
   } catch (err) { console.error('[Sheets] Users sync failed:', err.message); }
 }
@@ -1403,8 +1403,15 @@ async function notifyAddressFor(userId, fallbackEmail) {
    the page the link opens. */
 const APP_ORIGIN = (process.env.APP_ORIGIN || 'https://laltdoffice.com').replace(/\/+$/, '');
 
+// 60 days — generous (an approval mailed just before a long leave/holiday
+// must still work when opened afterwards) but bounded: without this, a
+// forwarded/archived/breached approval mailbox could finalize a real
+// approve/reject indefinitely, with no way to invalidate the link short of
+// the request already being decided.
+const LEAVE_TOKEN_MAX_AGE_MS = 60 * 24 * 60 * 60 * 1000;
+
 function leaveTokenFor(id, decision, email) {
-  const body = [String(id), String(decision), String(email || '').trim().toLowerCase()].join('|');
+  const body = [String(id), String(decision), String(email || '').trim().toLowerCase(), String(Date.now())].join('|');
   const sig = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url').slice(0, 32);
   return Buffer.from(body, 'utf8').toString('base64url') + '.' + sig;
 }
@@ -1414,13 +1421,18 @@ function readLeaveToken(token) {
   if (!raw || !sig) return null;
   let body;
   try { body = Buffer.from(raw, 'base64url').toString('utf8'); } catch { return null; }
-  const [id, decision, email] = body.split('|');
+  const [id, decision, email, ts] = body.split('|');
   if (!id || !decision) return null;
   const want = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url').slice(0, 32);
   // Constant-time, so a wrong signature cannot be narrowed down a byte at a
   // time by timing the replies.
   const a = Buffer.from(sig), b = Buffer.from(want);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  // Tokens minted before this field existed have no `ts` — grandfathered in
+  // with no expiry rather than instantly invalidating every already-mailed,
+  // still-pending approval link the moment this deploys. Every token minted
+  // from now on carries one and is checked.
+  if (ts && Date.now() - Number(ts) > LEAVE_TOKEN_MAX_AGE_MS) return null;
   return { id, decision, email };
 }
 
@@ -2160,6 +2172,20 @@ function normDept(d) {
   return (d || '').trim().toLowerCase();
 }
 
+// Whether `user` may cancel/resend-approval on a procurement/IMS row they
+// did not necessarily create. Admin/HOD always can; otherwise only the row's
+// own department (when the row tracks one) or its own creator. These routes
+// used to check nothing beyond requireAuth — any signed-in user could cancel
+// any other department's PO/PR/GRN/IMS entry via its guessable sequential
+// number.
+function canManageDeptRow(user, department, createdBy) {
+  if (isAdminUser(user)) return true;
+  const uname = (user?.name || '').trim().toLowerCase();
+  if (createdBy && uname && String(createdBy).trim().toLowerCase() === uname) return true;
+  if (department && normDept(department) === normDept(user?.department)) return true;
+  return false;
+}
+
 /* ── Write-side scoping ───────────────────────────────────────────────────────
    GET /api/delegations and GET /api/masters carefully scope what each role can
    SEE — Admin everything, HOD their department, everyone else their own. The
@@ -2309,6 +2335,12 @@ function timingSafeEq(a, b) {
 function checkSecret(req) {
   const want = process.env.DEVELOPER_SECRET || '';
   if (!want) return false;
+  // Throttled here, once, so every route that calls checkSecret() is covered —
+  // previously only GET /api/developer/access called rateAllow() itself, so an
+  // attacker who simply never hit that one route (going straight at reset/
+  // restore/export/reset-users instead) faced no throttling on guessing this
+  // secret at all.
+  if (!rateAllow('dev-secret:' + (req.ip || ''), 10, 15 * 60 * 1000)) return false;
   return timingSafeEq(req.get('x-developer-secret') || '', want);
 }
 
@@ -2316,15 +2348,24 @@ function checkSecret(req) {
 app.post('/api/auth/login', async (req, res) => {
   try {
     let { email, password, name } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'email and password required' });
+    if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ error: 'email and password required' });
+    }
     email = email.trim();
     name = (name || '').trim();
 
-    // Counted per IP+email and cleared the moment a login succeeds, so only
-    // runs of FAILURES accumulate — a person typing their own password wrong
-    // twice never notices this exists.
-    const rlKey = 'login:' + (req.ip || '') + ':' + email.toLowerCase();
-    if (!rateAllow(rlKey, 10, 15 * 60 * 1000)) {
+    // Three buckets, not one: the old single (IP,email) bucket was defeated
+    // either way — rotate the IP to keep hammering one account, or rotate the
+    // email from one IP to spray many accounts. Per-IP and per-email buckets
+    // (both wider) close each of those. All three clear together on success,
+    // so a person typing their own password wrong twice never notices this.
+    const rlKeyPair = 'login:' + (req.ip || '') + ':' + email.toLowerCase();
+    const rlKeyIp = 'login-ip:' + (req.ip || '');
+    const rlKeyEmail = 'login-email:' + email.toLowerCase();
+    const pairOk = rateAllow(rlKeyPair, 10, 15 * 60 * 1000);
+    const ipOk = rateAllow(rlKeyIp, 40, 15 * 60 * 1000);
+    const emailOk = rateAllow(rlKeyEmail, 20, 15 * 60 * 1000);
+    if (!pairOk || !ipOk || !emailOk) {
       return res.status(429).json({ error: 'Too many failed sign-in attempts. Please try again in 15 minutes.' });
     }
 
@@ -2366,22 +2407,27 @@ app.post('/api/auth/login', async (req, res) => {
     }
     if (!matches.length) return res.status(401).json({ error: 'Invalid credentials' });
 
+    // Check the password against every candidate BEFORE revealing that the
+    // email is shared — the old order returned 409 "multiple accounts" for
+    // ANY password (even wrong) submitted against a shared email, which is a
+    // free enumeration oracle. Now the 409 only fires once the caller has
+    // already proven they hold a valid password for one of the accounts.
+    const passwordOk = async (u) => u.password_hash
+      ? await bcrypt.compare(password, u.password_hash)
+      : timingSafeEq(password, DEFAULT_PASSWORD);
+    const viable = [];
+    for (const u of matches) { if (await passwordOk(u)) viable.push(u); }
+    if (!viable.length) return res.status(401).json({ error: 'Invalid credentials' });
+
     let user = null;
-    if (matches.length === 1) {
-      user = matches[0];
+    if (viable.length === 1) {
+      user = viable[0];
     } else if (!name) {
       return res.status(409).json({ error: 'Multiple accounts use this email. Please also enter your name.', needsName: true });
     } else {
-      const named = matches.filter(u => (u.name||'').trim().toLowerCase() === name.toLowerCase());
+      const named = viable.filter(u => (u.name||'').trim().toLowerCase() === name.toLowerCase());
       if (named.length !== 1) return res.status(401).json({ error: 'Invalid credentials' });
       user = named[0];
-    }
-
-    if (!user.password_hash) {
-      if (password !== DEFAULT_PASSWORD) return res.status(401).json({ error: 'Invalid credentials' });
-    } else {
-      const valid = await bcrypt.compare(password, user.password_hash);
-      if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     const roles = Array.isArray(user.roles)
@@ -2390,21 +2436,38 @@ app.post('/api/auth/login', async (req, res) => {
       ? user.roles.split(',').map(r => r.trim()).filter(Boolean)
       : ['User'];
 
-    rateClear(rlKey);
-    req.session.user = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone || '',
-      department: user.department || '',
-      roles,
+    rateClear(rlKeyPair); rateClear(rlKeyIp); rateClear(rlKeyEmail);
+
+    const finish = () => {
+      req.session.user = {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone || '',
+        department: user.department || '',
+        roles,
+        // Nudges the frontend to send them to Profile → Change Password
+        // instead of the dashboard. DEFAULT_PASSWORD is a single fixed
+        // string in source, shared by every account that has never set its
+        // own password — this at least surfaces the account should move off
+        // it, rather than letting it sit on the default indefinitely.
+        mustChangePassword: !user.password_hash,
+      };
+      // Include permissions here too, not just in /api/auth/session: login.js sets
+      // window.currentUser straight from this response and renders the sidebar off
+      // it, so without permissions a restricted user sees the FULL menu until a
+      // hard reload (which re-bootstraps via /api/auth/session). parsePermissions
+      // handles the raw JSON-string (DB) / object (store) / null cases alike.
+      return res.json({ user: clientUser(req.session.user, { picture: user.picture || null, permissions: parsePermissions(user.permissions) }) });
     };
-    // Include permissions here too, not just in /api/auth/session: login.js sets
-    // window.currentUser straight from this response and renders the sidebar off
-    // it, so without permissions a restricted user sees the FULL menu until a
-    // hard reload (which re-bootstraps via /api/auth/session). parsePermissions
-    // handles the raw JSON-string (DB) / object (store) / null cases alike.
-    return res.json({ user: clientUser(req.session.user, { picture: user.picture || null, permissions: parsePermissions(user.permissions) }) });
+    // Regenerate the session id on login rather than reusing whatever session
+    // (if any) the browser already had — otherwise a pre-authentication
+    // session id an attacker got onto the victim's browser (session fixation)
+    // simply gains `user` on it and stays valid post-login.
+    return req.session.regenerate((err) => {
+      if (err) { console.error('[auth/login] session regenerate failed:', err.message); return finish(); }
+      return finish();
+    });
   } catch (err) {
     console.error('[auth/login]', err.message);
     return res.status(500).json({ error: err.message });
@@ -2465,21 +2528,30 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
     }
   } else if (hod) {
     const doer = req.query.doer || '';
+    // Look up the HOD's OWN department fresh off store.users (keyed by the stable
+    // id) rather than trusting req.session.user.department — the session is a
+    // snapshot from login time (sessions live up to 30 days), so if a department
+    // was assigned/renamed after that login, the cached string silently no
+    // longer matches anyone, including the HOD's own department, and "All (My
+    // Team)" resolves to an empty team instead of erroring.
+    const myFreshDept = (store.users || []).find(u => u.id === user.id)?.department ?? user.department;
     if (doer === 'All') {
-      // Look up the HOD's OWN department fresh off store.users (keyed by the stable
-      // id) rather than trusting req.session.user.department — the session is a
-      // snapshot from login time (sessions live up to 30 days), so if a department
-      // was assigned/renamed after that login, the cached string silently no
-      // longer matches anyone, including the HOD's own department, and "All (My
-      // Team)" resolves to an empty team instead of erroring.
-      const myFreshDept = (store.users || []).find(u => u.id === user.id)?.department ?? user.department;
       fmsTeamSet = new Set((store.users || []).filter(u => normDept(u.department) === normDept(myFreshDept)).map(u => (u.name || '').trim().toLowerCase()));
       doerFilter = fmsTeamSet;
     } else if (doer) {
-      doerFilter = doer;
+      // A single named teammate must actually BE a teammate — "Never the
+      // whole company" (see above) was only enforced for the 'All' branch;
+      // this one accepted any name in the users table, letting an HOD pull
+      // another department's tasks/FMS items by asking for them by name.
       const target = (store.users || []).find(u => (u.name || '').trim().toLowerCase() === doer.trim().toLowerCase());
-      fmsUserId = target ? target.id : null;
-      fmsUserName = doer;
+      const targetInDept = target && normDept(target.department) === normDept(myFreshDept);
+      if (targetInDept) {
+        doerFilter = doer;
+        fmsUserId = target.id;
+        fmsUserName = doer;
+      }
+      // else: not a teammate — silently falls through to the personal default
+      // set above, same as an HOD who passed no ?doer at all.
     }
     // else: falls through to the personal default set above.
   }
@@ -2731,18 +2803,28 @@ async function insertDelegation({ description, doerId, doerName, delegatedBy, du
 app.post('/api/delegations', requireAuth, async (req, res) => {
   try {
     const body = req.body;
+    // Forced server-side rather than trusted from body.delegatedBy: this
+    // field drives who is mailed on completion, the Approvals "mine"
+    // scoping, and (via canWriteDelegation) write access to the row —
+    // trusting the client let any user attribute a task to an arbitrary
+    // OTHER user, silently handing that uninvolved person edit rights and
+    // completion-notification mail for a task they had no part in.
+    const sessDelegatedBy = req.session.user.id;
     let doerIsAdmin = false;
+    let doerName = '';
     if (!USE_DB) {
       const store = await readStore();
       const doerUser = (store.users||[]).find(u=>u.id===body.doerId);
       const doerRoles = doerUser?.roles||[];
       doerIsAdmin = Array.isArray(doerRoles) ? doerRoles.includes('Admin')||doerRoles.includes('HOD') : String(doerRoles).includes('Admin')||String(doerRoles).includes('HOD');
+      doerName = doerUser?.name || '';
     } else {
       try {
         await ensureSchema();
-        const { rows } = await pool.query('SELECT roles FROM users WHERE id = $1', [body.doerId]);
+        const { rows } = await pool.query('SELECT name, roles FROM users WHERE id = $1', [body.doerId]);
         const dr = rows[0]?.roles||'';
         doerIsAdmin = dr.includes('Admin')||dr.includes('HOD');
+        doerName = rows[0]?.name || '';
       } catch { doerIsAdmin = false; }
     }
     const resolvedApproval = (doerIsAdmin && body.approval==='Approval Required') ? 'Approved' : (body.approval||'No Approval');
@@ -2751,7 +2833,7 @@ app.post('/api/delegations', requireAuth, async (req, res) => {
     const workCtx = await getWorkingDayContext();
     if (!Array.isArray(body.bulk)) {
       const due = normDate(body.dueDate) || body.dueDate;
-      const nwReason = nonWorkingReason(due, workCtx);
+      const nwReason = nonWorkingReason(due, workCtx, doerName);
       if (nwReason) return res.status(400).json({ error: `Due date ${due} is ${nwReason} — tasks cannot be delegated on week-offs or holidays. Please pick a working day.` });
     }
 
@@ -2762,7 +2844,7 @@ app.post('/api/delegations', requireAuth, async (req, res) => {
       const doerName = doerUser?.name||body.doerName||body.doer||'';
       const lastNum = delegations.reduce((max,d)=>{ const n=parseInt((d.id||'').replace(/[^0-9]/g,''))||0; return n>max?n:max; },0);
       const id = 'DEL'+(lastNum+1).toString().padStart(3,'0');
-      const newDel = { id, description:body.description, doerId:body.doerId, doer:doerName, delegatedBy:body.delegatedBy, dueDate:normDate(body.dueDate)||body.dueDate, client:body.client||'', status:'pending', type:'delegation', priority:body.priority||'Low', approval:resolvedApproval, url:body.url||'', remarks:body.remarks||'', createdAt:new Date().toISOString() };
+      const newDel = { id, description:body.description, doerId:body.doerId, doer:doerName, delegatedBy:sessDelegatedBy, dueDate:normDate(body.dueDate)||body.dueDate, client:body.client||'', status:'pending', type:'delegation', priority:body.priority||'Low', approval:resolvedApproval, url:body.url||'', remarks:body.remarks||'', createdAt:new Date().toISOString() };
       delegations.push(newDel);
       store.delegations = delegations;
       await writeStore(store);
@@ -2780,11 +2862,11 @@ app.post('/api/delegations', requireAuth, async (req, res) => {
         const dueDate = normDate(row.due_date||row.dueDate);
         const desc = (row.description||'').trim();
         if (!email||!dueDate||!desc) { errors.push(`Row ${i+1}: missing fields`); continue; }
-        const nwReason = nonWorkingReason(dueDate, workCtx);
-        if (nwReason) { errors.push(`Row ${i+1}: due date ${dueDate} is ${nwReason} — pick a working day`); continue; }
         const users = await q('SELECT id, name FROM users WHERE LOWER(email) = $1', [email]);
         if (!users.length) { errors.push(`Row ${i+1}: no user ${email}`); continue; }
-        await insertDelegation({ description:desc, doerId:users[0].id, doerName:users[0].name, delegatedBy:body.delegatedBy, dueDate, priority:row.priority, approval:resolvedApproval, url:row.url, remarks:row.remarks });
+        const nwReason = nonWorkingReason(dueDate, workCtx, users[0].name);
+        if (nwReason) { errors.push(`Row ${i+1}: due date ${dueDate} is ${nwReason} — pick a working day`); continue; }
+        await insertDelegation({ description:desc, doerId:users[0].id, doerName:users[0].name, delegatedBy:sessDelegatedBy, dueDate, priority:row.priority, approval:resolvedApproval, url:row.url, remarks:row.remarks });
         inserted++;
       }
       return res.status(201).json({ success:true, inserted, errors });
@@ -2793,7 +2875,7 @@ app.post('/api/delegations', requireAuth, async (req, res) => {
     if (!body.description||!body.doerId||!body.dueDate) return res.status(400).json({ error:'description, doerId, dueDate required' });
     const users = await q('SELECT * FROM users WHERE id = $1', [body.doerId]);
     if (!users.length) return res.status(400).json({ error:'Selected doer no longer exists — please refresh and pick them again' });
-    const row = await insertDelegation({ description:body.description, doerId:body.doerId, doerName:users[0]?.name, delegatedBy:body.delegatedBy, dueDate:normDate(body.dueDate)||body.dueDate, client:body.client, priority:body.priority, approval:resolvedApproval, url:body.url, remarks:body.remarks });
+    const row = await insertDelegation({ description:body.description, doerId:body.doerId, doerName:users[0]?.name, delegatedBy:sessDelegatedBy, dueDate:normDate(body.dueDate)||body.dueDate, client:body.client, priority:body.priority, approval:resolvedApproval, url:body.url, remarks:body.remarks });
     sendDelegationEmail({ toEmail:users[0]?.email, toName:users[0]?.name, description:body.description, dueDate:normDate(body.dueDate)||body.dueDate, priority:body.priority||'Low', delegatedByName:req.session?.user?.name, url:body.url, remarks:body.remarks });
     return res.status(201).json(row);
   } catch (err) { console.error(err); return res.status(500).json({ error:err.message }); }
@@ -3281,6 +3363,13 @@ app.patch('/api/help-tickets', requireAuth, async (req, res) => {
     await ensureSchema();
     const { id, status, transferred_to } = req.body;
     if (!id) return res.status(400).json({ error: 'id required' });
+    // Deciding/transferring a ticket is an admin/HOD action only — the UI
+    // already hides these controls from everyone else, but that is cosmetic
+    // on its own, so it is re-checked here the same way the GET route scopes
+    // visibility above.
+    const user = req.session.user;
+    const isAdmin = (user.roles||[]).includes('Admin') || (user.roles||[]).includes('HOD');
+    if (!isAdmin) return res.status(403).json({ error: 'Only Admin/HOD can decide or transfer a ticket' });
     if (transferred_to !== undefined) {
       /* transferred_to holds a name, not an id — it predates this change and the
          Transfer dropdown posts the name it shows. Left as it is rather than
@@ -3668,8 +3757,17 @@ app.patch('/api/urgent-payments', requireAuth, async (req, res) => {
       current = (await q('SELECT * FROM urgent_payments WHERE id=$1', [id]))[0];
       if (!current) return res.status(404).json({ error: 'Request not found' });
       if (current.status !== 'pending') return res.status(409).json({ error: `Already ${current.status}` });
-      await pool.query('UPDATE urgent_payments SET status=$1, decided_by=$2, decided_at=NOW(), decision_note=$3 WHERE id=$4',
+      // The status check above and this UPDATE used to be two separate
+      // steps with nothing tying them together — two admins deciding the
+      // same request within the same read window could both pass the check
+      // and both write, so whichever UPDATE ran last silently won (a
+      // Rejected could overwrite an already-mailed Approved, or vice versa).
+      // Making the UPDATE itself conditional on status still being 'pending'
+      // closes that window: only the first of the two can ever affect a row.
+      const upd = await pool.query(
+        `UPDATE urgent_payments SET status=$1, decided_by=$2, decided_at=NOW(), decision_note=$3 WHERE id=$4 AND status='pending'`,
         [decision, decidedBy, decisionNote, id]);
+      if (!upd.rowCount) return res.status(409).json({ error: 'This request was just decided by someone else' });
       current = (await q('SELECT * FROM urgent_payments WHERE id=$1', [id]))[0];
     } else {
       const store = await readStore();
@@ -3963,6 +4061,10 @@ app.delete('/api/announcements', requireAuth, async (req, res) => {
     await ensureSchema();
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: 'id required' });
+    const user = req.session.user;
+    const roles = user.roles || [];
+    const isAdmin = roles.includes('Admin') || roles.includes('HOD');
+    if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
     await pool.query('DELETE FROM announcements WHERE id=$1', [id]);
     return res.json({ success: true });
   } catch (e) { return res.status(500).json({ error: e.message }); }
@@ -3974,10 +4076,19 @@ app.get('/vendor-form', (req, res) => {
 });
 
 app.post('/api/vendor-public', async (req, res) => {
+  // The only public, unauthenticated, state-mutating endpoint in the app —
+  // it had no throttle at all, so an anonymous script could flood
+  // vendor_submissions at machine speed. Same rateAllow() pattern as login.
+  if (!rateAllow('vendor-public:' + (req.ip || ''), 10, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Too many submissions from this connection. Please try again later.' });
+  }
   try {
     await ensureSchema();
     const { business_name, contact_person, phone, email, gst_no, address, products, notes } = req.body;
     if (!business_name) return res.status(400).json({ error: 'Business name required' });
+    if (typeof business_name !== 'string' || business_name.length > 200) {
+      return res.status(400).json({ error: 'Business name is invalid' });
+    }
     const id = 'VS' + Date.now().toString(36).toUpperCase();
     await pool.query(
       'INSERT INTO vendor_submissions (id,business_name,contact_person,phone,email,gst_no,address,products,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
@@ -4176,10 +4287,12 @@ function generateChecklistDates(startDate, endDate, freq) {
 async function getWorkingDayContext() {
   const weekOffs = new Set(['0']);
   const holidays = new Map(); // 'YYYY-MM-DD' → holiday name
+  const branchByName = new Map(); // lowercased user name → branch
   if (!USE_DB) {
     const store = await readStore();
     for (const h of store.holidays || []) { if (h.date) holidays.set(h.date, h.name || 'Holiday'); }
-    return { weekOffs, holidays };
+    for (const u of store.users || []) { if (u.name) branchByName.set(String(u.name).trim().toLowerCase(), u.branch || ''); }
+    return { weekOffs, holidays, branchByName };
   }
   try {
     const rows = await q(`SELECT "value" FROM app_config WHERE "key" = 'hr_week_off'`);
@@ -4192,13 +4305,31 @@ async function getWorkingDayContext() {
     const hols = await q('SELECT date, name FROM holidays');
     for (const h of hols) holidays.set(toDateStr(h.date), h.name || 'Holiday');
   } catch {}
-  return { weekOffs, holidays };
+  try {
+    const users = await q('SELECT name, branch FROM users');
+    for (const u of users) { if (u.name) branchByName.set(String(u.name).trim().toLowerCase(), u.branch || ''); }
+  } catch {}
+  return { weekOffs, holidays, branchByName };
 }
-function nonWorkingReason(dateStr, ctx) {
+// The Mumbai office alone closes on the 2nd and 4th Saturday of every month
+// (Factory Ahmedabad and Stores work a normal Saturday) — not expressible as a
+// weekday in hr_week_off, so it is checked separately against the assignee's branch.
+const MUMBAI_BRANCH = 'Head Office Mumbai';
+function isSecondOrFourthSaturday(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  if (d.getUTCDay() !== 6) return false;
+  const nth = Math.ceil(d.getUTCDate() / 7);
+  return nth === 2 || nth === 4;
+}
+function nonWorkingReason(dateStr, ctx, assignedTo) {
   if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
   if (ctx.holidays.has(dateStr)) return `a holiday (${ctx.holidays.get(dateStr)})`;
   const dow = new Date(dateStr + 'T00:00:00Z').getUTCDay();
   if (ctx.weekOffs.has(String(dow))) return 'a week-off';
+  if (assignedTo && ctx.branchByName && isSecondOrFourthSaturday(dateStr)) {
+    const branch = ctx.branchByName.get(String(assignedTo).trim().toLowerCase()) || '';
+    if (branch === MUMBAI_BRANCH) return 'a week-off (2nd/4th Saturday — Mumbai office)';
+  }
   return null;
 }
 /* Approved leave, per person. A checklist occurrence dated inside somebody's
@@ -4254,15 +4385,15 @@ function leaveOn(leaveCtx, name, dateStr) {
 }
 
 const CHECKLIST_SHIFT_FREQS = new Set(['weekly', 'alternative_week', 'alternate_week', 'monthly', 'quarterly', 'yearly']);
-function skipNonWorkingDays(dates, freq, ctx) {
+function skipNonWorkingDays(dates, freq, ctx, assignedTo) {
   const shift = CHECKLIST_SHIFT_FREQS.has(String(freq || '').toLowerCase());
   const out = []; const seen = new Set();
   for (let d of dates) {
-    if (nonWorkingReason(d, ctx)) {
+    if (nonWorkingReason(d, ctx, assignedTo)) {
       if (!shift) continue; // daily: that day's task is simply not created
       let hops = 0;
-      while (hops < 14 && nonWorkingReason(d, ctx)) { d = _checklistPlusDays(d, 1); hops++; }
-      if (nonWorkingReason(d, ctx)) continue; // >2 weeks closed — give up on this one
+      while (hops < 14 && nonWorkingReason(d, ctx, assignedTo)) { d = _checklistPlusDays(d, 1); hops++; }
+      if (nonWorkingReason(d, ctx, assignedTo)) continue; // >2 weeks closed — give up on this one
     }
     if (seen.has(d)) continue; // two shifted occurrences can land on the same day
     seen.add(d); out.push(d);
@@ -4287,7 +4418,7 @@ app.post('/api/masters/backfill-recurring', requireAuth, requireAdmin, async (re
     for (const m of existing) {
       const startDate = toDateStr(m.start_date);
       const endDate = toDateStr(m.end_date) || defaultChecklistSeriesEnd(startDate);
-      const dates = skipNonWorkingDays(generateChecklistDates(startDate, endDate, m.frequency).slice(1), m.frequency, workCtx);
+      const dates = skipNonWorkingDays(generateChecklistDates(startDate, endDate, m.frequency).slice(1), m.frequency, workCtx, m.assigned_to);
       let any = false;
       for (const date of dates) {
         const key = keyOf(m.task, m.assigned_to, date);
@@ -4315,9 +4446,9 @@ app.post('/api/masters/backfill-recurring', requireAuth, requireAdmin, async (re
 async function shiftNonWorkingTasks() {
   const ctx = await getWorkingDayContext();
   const today = todayIST();
-  const nextWorking = (d) => {
+  const nextWorking = (d, assignedTo) => {
     let hops = 0;
-    while (hops < 14 && nonWorkingReason(d, ctx)) { d = _checklistPlusDays(d, 1); hops++; }
+    while (hops < 14 && nonWorkingReason(d, ctx, assignedTo)) { d = _checklistPlusDays(d, 1); hops++; }
     return d;
   };
 
@@ -4327,9 +4458,9 @@ async function shiftNonWorkingTasks() {
   let checklistShifted = 0, checklistRemoved = 0;
   for (const r of rows) {
     const d = toDateStr(r.start_date);
-    if (!nonWorkingReason(d, ctx) || done.has(r.id)) continue;
-    const target = nextWorking(d);
-    if (nonWorkingReason(target, ctx)) continue; // >2 weeks closed — leave it
+    if (!nonWorkingReason(d, ctx, r.assigned_to) || done.has(r.id)) continue;
+    const target = nextWorking(d, r.assigned_to);
+    if (nonWorkingReason(target, ctx, r.assigned_to)) continue; // >2 weeks closed — leave it
     const key = (r.task || '') + '||' + (r.assigned_to || '') + '||' + target;
     if (occupied.has(key)) {
       await pool.query('DELETE FROM masters WHERE id=$1', [r.id]);
@@ -4341,13 +4472,13 @@ async function shiftNonWorkingTasks() {
     }
   }
 
-  const dels = await q(`SELECT id, due_date FROM delegations WHERE status <> 'done' AND due_date >= $1`, [today]);
+  const dels = await q(`SELECT id, due_date, doer FROM delegations WHERE status <> 'done' AND due_date >= $1`, [today]);
   let delegationsShifted = 0;
   for (const r of dels) {
     const d = toDateStr(r.due_date);
-    if (!nonWorkingReason(d, ctx)) continue;
-    const target = nextWorking(d);
-    if (nonWorkingReason(target, ctx)) continue;
+    if (!nonWorkingReason(d, ctx, r.doer)) continue;
+    const target = nextWorking(d, r.doer);
+    if (nonWorkingReason(target, ctx, r.doer)) continue;
     await pool.query('UPDATE delegations SET due_date=$1 WHERE id=$2', [target, r.id]);
     delegationsShifted++;
   }
@@ -4389,7 +4520,7 @@ app.post('/api/masters', requireAuth, async (req, res) => {
     const department = await canonicalDept(body.department);
     const startDate = body.startDate || null;
     const workCtx = await getWorkingDayContext();
-    const dates = startDate ? skipNonWorkingDays(generateChecklistDates(startDate, body.endDate || null, frequency), frequency, workCtx) : [null];
+    const dates = startDate ? skipNonWorkingDays(generateChecklistDates(startDate, body.endDate || null, frequency), frequency, workCtx, assignedTo) : [null];
     if (!dates.length) return res.status(400).json({ error: 'Every date in this series falls on a week-off or holiday, so no tasks would be created. Please pick a different start date.' });
     const base = Date.now().toString(36).toUpperCase();
     const ids = dates.map((_, i) => 'CHK' + base + i.toString(36).padStart(3, '0').toUpperCase());
@@ -4686,8 +4817,17 @@ app.get('/api/users', requireAuth, async (req, res) => {
     : 'u.*';
   const rows = await q(`SELECT ${cols}, p.notification_email AS notif_email
                           FROM users u LEFT JOIN profile p ON p.user_id = u.id ORDER BY u.id`);
-  return res.json(rows.map(({ password_hash, notif_email, ...u }) =>
-    ({ ...u, notifEmail: notif_email || '', permissions: parsePermissions(u.permissions) })));
+  const out = rows.map(({ password_hash, notif_email, ...u }) =>
+    ({ ...u, notifEmail: notif_email || '', permissions: parsePermissions(u.permissions) }));
+  // roles/permissions is a full map of who holds Admin/HOD and exactly what
+  // each account can do — useful social-engineering reconnaissance, and not
+  // needed by the dropdowns (Dashboard/All Tasks/FMS/Help Ticket) that were
+  // the reason ?lite=1 exists. Only the admin-only Users page needs it on
+  // OTHER people's rows; everyone can still see their own via /auth/session.
+  if (!isAdminUser(req.session?.user)) {
+    return res.json(out.map(({ roles, permissions, phone, leave_approver, substitute_approver, ...rest }) => rest));
+  }
+  return res.json(out);
 });
 
 /* The Users form's "Notification Email" writes here — the same profile row the
@@ -5230,7 +5370,6 @@ app.delete('/api/meetings', requireAuth, async (req, res) => {
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
-
 // An attendee opting out ("na add krne ka option") — different from DELETE
 // above (which cancels the whole meeting for everyone and is organizer/
 // admin-only): this just drops the caller's own name from the plain
@@ -5253,6 +5392,7 @@ app.patch('/api/meetings/decline', requireAuth, async (req, res) => {
     return res.json({ success: true });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
+
 // ── Leaves ────────────────────────────────────────────────────────────────────
 // Leave reasons are personal — illness, bereavement, family trouble. Admins and
 // HODs see everyone because approving is their job; everyone else sees their own
@@ -5322,6 +5462,7 @@ app.patch('/api/leaves', requireAuth, requireAdmin, async (req, res) => {
     if (!body.id||!body.status) return res.status(400).json({ error:'id and status required' });
     const decision = await hrms.applyLeaveDecision(body.id, body.status, req.session?.user?.name || '');
     if (!decision) return res.status(404).json({ error:'Leave request not found' });
+    if (decision.alreadyDecided) return res.status(409).json({ error: 'This request was just decided by someone else' });
     return res.json({ success:true, balanceAfter: decision.balanceAfter });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -5528,7 +5669,12 @@ app.post('/leave-action', async (req, res) => {
       }));
     }
 
-    await hrms.applyLeaveDecision(row.id, status, by);
+    const decision = await hrms.applyLeaveDecision(row.id, status, by);
+    // Someone else (the other named approver, or a double-click racing this
+    // one) decided it in the gap between the _leaveDecided check above and
+    // this call — the balance was not moved a second time; show the same
+    // "already decided" page the pre-check above would have shown.
+    if (decision?.alreadyDecided) return res.send(_alreadyPage(row));
 
     const good = status === 'Approved';
     res.send(_leaveActionPage({
@@ -6224,6 +6370,13 @@ app.get('/api/fms-tasks/:id', requireAuth, fmsGate, async (req, res) => {
     const user = req.session.user;
     const admin = isAdminUser(user);
     const steps = await fmsSheet.getStepsForTaskView(req.params.id, user.id, admin);
+    // Unlike /pc (coordinator-or-admin) and /sync (filtered to the user's own
+    // sheets), this route had no membership check at all — any authenticated
+    // user who learned/guessed this FMS id got back every step's full
+    // config (doer names, user_ids, column letters), not just their own.
+    if (!admin && sheet.process_coordinator_id !== user.id && !steps.some(s => s.isMyStep)) {
+      return res.status(403).json({ error: 'You are not assigned to any step on this FMS' });
+    }
     const relevantSteps = admin ? steps : steps.filter(s => s.isMyStep);
     const pendingByStep = await fmsSheet.getPendingRowsForFmsSteps(req.params.id, relevantSteps, { userName: user.name, isAdmin: admin });
     const stepsOut = steps.map(s => ({
@@ -7123,14 +7276,14 @@ async function _erpPrLogRow(prNo) {
   const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
   let rows = [];
   try {
-    const r = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const r = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:L`, valueRenderOption: 'FORMATTED_VALUE' });
     rows = r.data.values || [];
   } catch (e) {
     if (/unable to parse range/i.test(e.message || '')) return null;
     throw e;
   }
   const row = rows.find(x => x[0] && _normalizePrNo(x[0]) === key);
-  return row ? { prNo: String(row[0]).trim(), format: row[1] || '', party: row[3] || '', status: row[11] || 'Active' } : null;
+  return row ? { prNo: String(row[0]).trim(), format: row[1] || '', party: row[3] || '', department: row[5] || '', createdBy: row[8] || '', status: row[11] || 'Active' } : null;
 }
 
 app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res) => {
@@ -7248,7 +7401,7 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:N1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:N`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).filter(r => r[0]).map(r => {
       let form = null;
       try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
@@ -7266,6 +7419,41 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
   }
 });
 
+// Whether any non-cancelled GRN has already been raised against this PO —
+// cancelling a PO that already has receiving activity used to be allowed
+// unconditionally, which then hid that PO from /grn-creation/po-list (it
+// filters out Cancelled) while its GRN(s) still pointed at a now-cancelled
+// PO number: an orphaned, hard-to-audit state.
+async function _grnExistsForPo(poNo) {
+  const key = _seqKey(poNo);
+  if (!key) return false;
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
+  try {
+    const r = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:M`, valueRenderOption: 'FORMATTED_VALUE' });
+    return (r.data.values || []).some(row => _seqKey(row[5]) === key && (row[12] || '') !== 'Cancelled');
+  } catch (e) {
+    if (/unable to parse range/i.test(e.message || '')) return false;
+    throw e;
+  }
+}
+
+// Same idea one level up: whether any non-cancelled PO has already been
+// raised against this PR.
+async function _poExistsForPr(prNo) {
+  const key = _normalizePrNo(prNo);
+  if (!key) return false;
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
+  try {
+    const r = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:L`, valueRenderOption: 'FORMATTED_VALUE' });
+    return (r.data.values || []).some(row => _prNosFromCell(row[9]).includes(key) && (row[11] || '') !== 'Cancelled');
+  } catch (e) {
+    if (/unable to parse range/i.test(e.message || '')) return false;
+    throw e;
+  }
+}
+
 // PUT /api/po-creation/cancel?poNo=... — marks that PO's row Cancelled in
 // "ERP PO Log" (column L) instead of deleting it: the row stays for history/
 // audit, but drops out of GRN Creation's PO picker. The archived PDF in
@@ -7274,6 +7462,14 @@ app.put('/api/po-creation/cancel', requireAuth, async (req, res) => {
   try {
     const poNo = req.query.poNo;
     if (!poNo) return res.status(400).json({ error: 'poNo is required' });
+    const { error, row } = await _poLogRow(poNo);
+    if (error) return res.status(404).json({ error });
+    if (!canManageDeptRow(req.session.user, row.department, row.createdBy)) {
+      return res.status(403).json({ error: 'Only the department that raised this PO (or an Admin/HOD) can cancel it' });
+    }
+    if (await _grnExistsForPo(poNo)) {
+      return res.status(409).json({ error: `${row.poNo} already has a GRN raised against it — cancel that GRN first` });
+    }
     await _setLogRowStatus(PO_CREATION_SHEET_ID, PO_CREATION_LOG_TAB, poNo, 'L', 'Cancelled');
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
@@ -7289,6 +7485,9 @@ app.post('/api/po-creation/resend-approval', requireAuth, async (req, res) => {
     if (!poNo) return res.status(400).json({ error: 'poNo is required' });
     const { error, row } = await _poLogRow(poNo);
     if (error) return res.status(404).json({ error });
+    if (!canManageDeptRow(req.session.user, row.department, row.createdBy)) {
+      return res.status(403).json({ error: 'Only the department that raised this PO (or an Admin/HOD) can resend its approval mail' });
+    }
     if (_poDecided(row)) return res.status(400).json({ error: `${row.poNo} is already ${row.status} — nothing to approve` });
     const sentTo = await sendPoApprovalEmail({
       poNumber: row.poNo, format: row.format, party: row.party, department: row.department, prNo: row.prNo,
@@ -7335,7 +7534,7 @@ app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
 
     let prRows = [];
     try {
-      const prRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      const prRes = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:L`, valueRenderOption: 'FORMATTED_VALUE' });
       prRows = prRes.data.values || [];
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
@@ -7355,7 +7554,7 @@ app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
     // exceeded its own required quantity.
     let orderedByPr = new Map(); // normalized PR No -> Map(item code lower -> { qty, stickerQty, boxQty, plateQty })
     try {
-      const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:L`, valueRenderOption: 'FORMATTED_VALUE' });
       for (const r of (poRes.data.values || [])) {
         const prNos = _prNosFromCell(r[9]);
         if (!prNos.length || ['Cancelled', 'Rejected'].includes(r[11] || 'Active')) continue;
@@ -7885,7 +8084,7 @@ app.get('/api/pr-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:N1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'${PR_CREATION_LOG_TAB}'!A2:N`, valueRenderOption: 'FORMATTED_VALUE' });
     // The approvers answer the Stores FMS's Google Forms, not this log's
     // email button, so a PR the log still calls Active may well be approved
     // there — see _fmsPrApprovals. A Monitoring read failure only costs the
@@ -7925,6 +8124,14 @@ app.put('/api/pr-creation/cancel', requireAuth, async (req, res) => {
   try {
     const prNo = req.query.prNo;
     if (!prNo) return res.status(400).json({ error: 'prNo is required' });
+    const row = await _erpPrLogRow(prNo);
+    if (!row) return res.status(404).json({ error: `${prNo} is not on the PR log` });
+    if (!canManageDeptRow(req.session.user, row.department, row.createdBy)) {
+      return res.status(403).json({ error: 'Only the department that raised this PR (or an Admin/HOD) can cancel it' });
+    }
+    if (await _poExistsForPr(prNo)) {
+      return res.status(409).json({ error: `${row.prNo} already has a PO raised against it — cancel that PO first` });
+    }
     await _setLogRowStatus(PR_CREATION_SHEET_ID, PR_CREATION_LOG_TAB, prNo, 'L', 'Cancelled');
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
@@ -8123,8 +8330,8 @@ async function _buildFmsPoPending() {
 
   const [monRows, erpPrRows, erpPoRows] = await Promise.all([
     read(FMS_MONITORING_SHEET_ID, `'${FMS_MONITORING_TAB}'!A1:EO1000`),
-    read(PR_CREATION_SHEET_ID, `'${PR_CREATION_LOG_TAB}'!A2:L1000`),
-    read(PO_CREATION_SHEET_ID, `'${PO_CREATION_LOG_TAB}'!A2:L1000`),
+    read(PR_CREATION_SHEET_ID, `'${PR_CREATION_LOG_TAB}'!A2:L`),
+    read(PO_CREATION_SHEET_ID, `'${PO_CREATION_LOG_TAB}'!A2:L`),
   ]);
 
   // Data starts at row 4 (index 3) — rows 1-3 are the two header bands.
@@ -8412,7 +8619,7 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
     const sheets = google.sheets({ version: 'v4', auth });
     let poRows = [];
     try {
-      const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:L1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      const poRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:L`, valueRenderOption: 'FORMATTED_VALUE' });
       poRows = poRes.data.values || [];
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
@@ -8427,7 +8634,7 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
     // every one of its items has that much or more.
     let receivedByPo = new Map(); // normalized PO No -> Map(item code lower -> qty already received)
     try {
-      const grnRes = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:M1000`, valueRenderOption: 'FORMATTED_VALUE' });
+      const grnRes = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:M`, valueRenderOption: 'FORMATTED_VALUE' });
       for (const r of (grnRes.data.values || [])) {
         const poNo = _seqKey(r[5]);
         if (!poNo || (r[12] || '') === 'Cancelled') continue; // a cancelled GRN never happened
@@ -8556,6 +8763,15 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn'), async (req, r
   try {
     const { date, madeBy, prNo, vendorName, poNo, billNo, billRecvDate, deptHead, items, cgst, sgst, roundOff, comments } = req.body;
     if (!date || !vendorName || !madeBy) return res.status(400).json({ error: 'Date, Vendor Name and Made By are required' });
+    // CGST/SGST are tax amounts — unlike roundOff (legitimately negative,
+    // rounding the total either way), a negative tax figure can only be bad
+    // input, and parseFloat(x)||0 let it straight through into a Total
+    // formula on the printed GRN.
+    for (const [label, v] of [['CGST', cgst], ['SGST', sgst]]) {
+      if (v !== undefined && v !== null && v !== '' && !(parseFloat(v) >= 0)) {
+        return res.status(400).json({ error: `${label} must be a number 0 or greater` });
+      }
+    }
     const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemNo || '').trim());
     if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
     // The template has a fixed number of item rows and anything past the last
@@ -8564,6 +8780,18 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn'), async (req, r
     // Form JSON. Refusing is the only honest answer.
     const grnCapacity = GRN_ITEMS.lastRow - GRN_ITEMS.firstRow + 1;
     if (cleanItems.length > grnCapacity) return res.status(400).json({ error: `A GRN fits ${grnCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one GRN.` });
+
+    // Item quantities/rate were written to the sheet with no numeric check at
+    // all — a negative or garbage value silently corrupted the Total formula
+    // and the PO/PR fully-received reconciliation math (both treat these as
+    // plain parseFloat(...)||0 numbers).
+    for (const it of cleanItems) {
+      for (const [label, v] of [['Received Qty', it.receivedQty], ['Approved Qty', it.approvedQty], ['Rejected Qty', it.rejectedQty], ['Rate', it.rate]]) {
+        if (v !== undefined && v !== null && v !== '' && !(parseFloat(v) >= 0)) {
+          return res.status(400).json({ error: `${it.itemNo || 'An item'}: ${label} must be a number 0 or greater` });
+        }
+      }
+    }
 
     // Same user re-submitting the identical GRN (a timed-out first attempt, a
     // double-fired submit) gets the first create's result back, not a second GRN.
@@ -8715,7 +8943,7 @@ app.get('/api/grn-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:M1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:M`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).filter(r => r[0]).map(r => {
       let form = null;
       try { form = JSON.parse(r[11] || 'null'); } catch { form = null; }
@@ -8733,6 +8961,20 @@ app.get('/api/grn-creation/list', requireAuth, async (req, res) => {
   }
 });
 
+// GRN log has no Department column (see the header list a few lines up) —
+// only "Made By"/"Created By" identify who raised it, so ownership below can
+// only be checked against those, not a department.
+async function _grnLogRow(grNo) {
+  let rowIndex;
+  try { rowIndex = await _findRowIndexByKey(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, grNo); }
+  catch (e) { if (e.notFound) return null; throw e; }
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
+  const got = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A${rowIndex + 1}:M${rowIndex + 1}`, valueRenderOption: 'FORMATTED_VALUE' });
+  const r = got.data.values?.[0] || [];
+  return { grNo: r[0] || grNo, madeBy: r[2] || '', createdBy: r[9] || '', status: r[12] || 'Active' };
+}
+
 // PUT /api/grn-creation/cancel?grNo=... — marks that GRN's row Cancelled in
 // "ERP GRN Log" (column M) instead of deleting it: the row stays for
 // history/audit. The archived PDF in Drive and the GRN's own number are both
@@ -8741,6 +8983,13 @@ app.put('/api/grn-creation/cancel', requireAuth, async (req, res) => {
   try {
     const grNo = req.query.grNo;
     if (!grNo) return res.status(400).json({ error: 'grNo is required' });
+    const row = await _grnLogRow(grNo);
+    if (!row) { const e = new Error('Entry not found'); e.notFound = true; throw e; }
+    // No department field on a GRN row — either name field (Made By or
+    // Created By) may match the caller, in addition to Admin/HOD.
+    if (!canManageDeptRow(req.session.user, null, row.createdBy) && !canManageDeptRow(req.session.user, null, row.madeBy)) {
+      return res.status(403).json({ error: 'Only who raised this GRN (or an Admin/HOD) can cancel it' });
+    }
     await _setLogRowStatus(GRN_CREATION_SHEET_ID, GRN_CREATION_LOG_TAB, grNo, 'M', 'Cancelled');
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
@@ -8890,10 +9139,19 @@ async function _piSheetMeta(fy) {
   const tpl = meta.data.sheets.find(s => s.properties.title === PI_TEMPLATE_TAB);
   let maxSeq = 0;
   try {
-    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'FORMATTED_VALUE' });
+    // Retry + rethrow on anything but "tab doesn't exist yet", same as
+    // _poSheetMeta/_prSheetMeta/_grnSheetMeta — a swallowed quota/network
+    // error here must not let numbering silently fall back to maxSeq=0, or
+    // the next PI is issued with a number already in use (this is the exact
+    // failure mode that produced two PR206s on 2026-09-02, before those
+    // three were patched; PI numbering had not been).
+    const logRes = await _sheetsReadWithRetry(() => sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'FORMATTED_VALUE' }));
     for (const row of (logRes.data.values || [])) maxSeq = Math.max(maxSeq, _piSeqOf(row[0], fy));
   } catch (e) {
-    if (!/unable to parse range/i.test(e.message || '')) console.error('[proforma-invoice] log read for numbering failed:', e.message);
+    if (!/unable to parse range/i.test(e.message || '')) {
+      console.error('[proforma-invoice] log read for numbering failed:', e.message);
+      throw new Error('Could not read the PI log to assign the next PI number — please try again in a minute. (' + e.message + ')');
+    }
   }
   return {
     nextSeq: maxSeq + 1,
@@ -9555,9 +9813,11 @@ async function _exportDocsPutPdf(drive, folderId, name, buffer) {
     media: { mimeType: 'application/pdf', body: Readable.from(buffer) },
     fields: 'id,webViewLink', supportsAllDrives: true,
   });
-  await drive.permissions.create({
-    fileId: file.data.id, requestBody: { role: 'reader', type: 'anyone' }, supportsAllDrives: true,
-  }).catch(e => console.error('[export-docs] share failed:', e.message));
+  // No longer grants "anyone with the link" (public, unauthenticated, no
+  // expiry) by default. These are Packing Lists/Annexures/DBK/VGM/Customer
+  // Invoices with buyer TRNs, addresses and invoice values, only ever opened
+  // from inside the ERP by staff who already have access to this Shared
+  // Drive folder — that membership is all the access this file needs.
   return file.data.webViewLink;
 }
 
@@ -9655,7 +9915,12 @@ app.get('/api/consignee-master', requireAuth, async (req, res) => {
 // IMPORTRANGE of a different workbook ("Final Consignee") that this app has no
 // access to — which is also why the form has no Contact No. / Email ID: those
 // two columns live only in that imported master.
-app.post('/api/consignee-master', requireAuth, async (req, res) => {
+// sheetSerialised: the duplicate-name check below is read-check-append with
+// nothing else guarding it — two near-simultaneous submissions of the same
+// new consignee name would both pass "not already present" and both get
+// appended, producing two rows for the same buyer in the master the PI
+// typeahead reads from. Same lock key style already used for order/packing.
+app.post('/api/consignee-master', requireAuth, sheetSerialised('consignee'), async (req, res) => {
   try {
     const allowed = await userCanUseFeature(req.session.user, 'consignee-master', 'add');
     if (!allowed) return res.status(403).json({ error: 'You do not have permission to add a consignee' });
@@ -10147,7 +10412,7 @@ app.post('/api/proforma-invoice/revise', requireAuth, sheetSerialised('pi'), asy
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
 
-    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K`, valueRenderOption: 'FORMATTED_VALUE' });
     const logRows = logRes.data.values || [];
     const parent = logRows.find(r => String(r[0] || '').trim() === piNo);
     if (!parent) return res.status(404).json({ error: `Proforma Invoice ${piNo} was not found` });
@@ -10233,7 +10498,7 @@ app.get('/api/proforma-invoice/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K`, valueRenderOption: 'FORMATTED_VALUE' });
     const canSetPrice = await userCanUseFeature(req.session.user, 'proforma-invoice', 'set_price');
     const rows = (result.data.values || []).map(r => {
       let form = null;
@@ -10269,7 +10534,7 @@ app.get('/api/proforma-invoice/last-prices', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = result.data.values || [];
 
     const target = rows.find(r => String(r[0] || '').trim() === piNo);
@@ -10382,7 +10647,7 @@ app.get('/api/proforma-invoice/buyer-codes', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K`, valueRenderOption: 'FORMATTED_VALUE' });
     const want = _piConsigneeKey(buyer);
     const codes = {};
     for (const r of (result.data.values || [])) {
@@ -10421,7 +10686,7 @@ async function _piDraftRows() {
   const sheets = google.sheets({ version: 'v4', auth });
   let values = [];
   try {
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K`, valueRenderOption: 'FORMATTED_VALUE' });
     values = result.data.values || [];
   } catch (e) {
     if (!/unable to parse range/i.test(e.message || '')) throw e;
@@ -10576,7 +10841,17 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi'), async
     const rowIndex = await _findRowIndexByKey(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo);
     const rowRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A${rowIndex + 1}:K${rowIndex + 1}`, valueRenderOption: 'FORMATTED_VALUE' });
     const rowVals = rowRes.data.values?.[0] || [];
-    if ((rowVals[10] || 'Draft') === 'Cancelled') return res.status(400).json({ error: 'This Proforma Invoice has been cancelled' });
+    const piStatus = rowVals[10] || 'Draft';
+    if (piStatus === 'Cancelled') return res.status(400).json({ error: 'This Proforma Invoice has been cancelled' });
+    // The frontend already only shows "Add Price" for a Draft PI (canSetPrice
+    // && status === 'Draft') — that was a UI hint only, so this route itself
+    // would happily overwrite an already-Priced PI's rate/total with no
+    // record of what it was before. Revise is the path that keeps history
+    // (it supersedes the old row rather than overwriting it); this route
+    // no longer allows silently re-pricing straight over a Priced PI.
+    if (piStatus === 'Priced') {
+      return res.status(400).json({ error: 'This Proforma Invoice is already Priced — use Revise to change its price, which keeps the old version.' });
+    }
     let existingForm = {};
     try { existingForm = rowVals[9] ? JSON.parse(rowVals[9]) : {}; } catch {}
 
@@ -10596,6 +10871,18 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi'), async
       itemName: it.itemName || it.description || '',
       rate: rateByIndex[i] ?? it.rate,
     }));
+
+    // A rate was accepted as-is before — negative, zero or non-numeric text
+    // all landed straight on a document already emailed to the buyer, either
+    // printing the bad value literally or breaking the sheet's own
+    // QTY*RATE amount formula. Blank/unset (not yet priced) is still fine.
+    for (const it of mergedItems) {
+      if (it.rate === undefined || it.rate === null || it.rate === '') continue;
+      const n = Number(it.rate);
+      if (!Number.isFinite(n) || n <= 0) {
+        return res.status(400).json({ error: `Invalid rate "${it.rate}" for ${it.modelNo || it.itemName || 'an item'} — rate must be a positive number` });
+      }
+    }
 
     // Price basis and currency are chosen here, alongside the rates — the two
     // labels the whole printed document is built from. Only values off the
@@ -10934,7 +11221,7 @@ async function _finishOrderSubmission(orderNo, templateSheetId) {
 async function _piFormByNo(sheets, piNo) {
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: PI_CREATION_SHEET_ID,
-    range: `'${PI_CREATION_LOG_TAB}'!A2:K1000`,
+    range: `'${PI_CREATION_LOG_TAB}'!A2:K`,
     valueRenderOption: 'FORMATTED_VALUE',
   });
   const row = (res.data.values || []).find(r => String(r[0] || '').trim() === String(piNo).trim());
@@ -10977,6 +11264,17 @@ app.post('/api/order-sheet', requireAuth, sheetSerialised('order'), async (req, 
       Array.isArray(b.items) && b.items.length ? b : { items: piForm.items || [] }
     );
     if (itemsError) return res.status(400).json({ error: itemsError });
+
+    // Same guard PO/PR/GRN creation already has: this create is a multi-step
+    // Sheets write + PDF export slow enough for a browser timeout to trigger
+    // a resubmit of the identical form, which used to raise a second order
+    // (a real duplicate production order) against the same PI/items.
+    const dupeKey = _createFingerprint('order-sheet', req, { piNo, orderDate: b.orderDate, items: cleanItems });
+    const prevResult = _recentCreateResult(dupeKey);
+    if (prevResult) {
+      console.log('[order-sheet] duplicate submit absorbed — returning', prevResult.orderNo);
+      return res.json(prevResult);
+    }
 
     const fy = _piFyLabel(b.orderDate);
     const { nextSeq, templateSheetId } = await _orderSheetMeta(fy);
@@ -11023,7 +11321,9 @@ app.post('/api/order-sheet', requireAuth, sheetSerialised('order'), async (req, 
     // out) a save that has already succeeded.
     _closeFmsAppPageSteps('orderSheet', [piNo], req.session.user?.name || '');
 
-    return res.json({ success: true, orderNo, pdfLink, piNo, fmsTracked });
+    const orderResultPayload = { success: true, orderNo, pdfLink, piNo, fmsTracked };
+    _rememberCreate(dupeKey, orderResultPayload);
+    return res.json(orderResultPayload);
   } catch (e) {
     console.error('[order-sheet] create failed:', e.message);
     return res.status(500).json({ error: e.message });
@@ -11044,7 +11344,7 @@ app.get('/api/order-sheet/xlsx', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J`, valueRenderOption: 'FORMATTED_VALUE' });
     const row = (result.data.values || []).find(r => String(r[0] || '').trim() === orderNo);
     if (!row) return res.status(404).json({ error: 'Order ' + orderNo + ' is not on the Order Sheet log' });
     let form = null;
@@ -11068,7 +11368,7 @@ app.get('/api/order-sheet/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).map(r => {
       let form = null;
       try { form = r[8] ? JSON.parse(r[8]) : null; } catch {}
@@ -11092,6 +11392,20 @@ app.put('/api/order-sheet/cancel', requireAuth, async (req, res) => {
   try {
     const orderNo = req.query.orderNo;
     if (!orderNo) return res.status(400).json({ error: 'orderNo is required' });
+    // No department on an Order Sheet row (the export flow is one team), so
+    // ownership is by creator alone, same as GRN. This used to be unchecked
+    // entirely — any signed-in user could cancel any order's paperwork by
+    // its (sequential, guessable) order number.
+    let rowIndex;
+    try { rowIndex = await _findRowIndexByKey(PI_CREATION_SHEET_ID, ORDER_LOG_TAB, orderNo); }
+    catch (e) { if (e.notFound) return res.status(404).json({ error: e.message }); throw e; }
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
+    const got = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A${rowIndex + 1}:J${rowIndex + 1}`, valueRenderOption: 'FORMATTED_VALUE' });
+    const createdBy = got.data.values?.[0]?.[6] || '';
+    if (!canManageDeptRow(req.session.user, null, createdBy)) {
+      return res.status(403).json({ error: 'Only who raised this order (or an Admin/HOD) can cancel it' });
+    }
     await _setLogRowStatus(PI_CREATION_SHEET_ID, ORDER_LOG_TAB, orderNo, 'J', 'Cancelled');
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
@@ -11196,8 +11510,8 @@ function _plRowFromLog(r) {
 // order-status write-back all need exactly this pair and nothing else.
 async function _plReadLogs(sheets) {
   const [orderRes, plRes] = await Promise.all([
-    sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J1000`, valueRenderOption: 'FORMATTED_VALUE' }).catch(_plEmptyRange),
-    sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:M1000`, valueRenderOption: 'FORMATTED_VALUE' }).catch(_plEmptyRange),
+    sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J`, valueRenderOption: 'FORMATTED_VALUE' }).catch(_plEmptyRange),
+    sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:M`, valueRenderOption: 'FORMATTED_VALUE' }).catch(_plEmptyRange),
   ]);
   const orders = (orderRes.data.values || []).map(r => {
     let form = null;
@@ -11408,11 +11722,18 @@ function _plCollectLines(b, ordersByNo, packed) {
       orderQty: src.orderedQty,
       packedQty: it.packedQty,
       netPerCarton: it.netPerCarton,
-      netTotal: _plRound(it.netPerCarton * it.cartons, 3),
+      // Scaled off packedQty (pieces), not cartons: when an explicit packedQty
+      // override is used for a part carton, `cartons` is 0 and cartons*figure
+      // would silently print Net/Gross/CBM as zero for goods that really
+      // shipped — wrong on a customs document. Scaling per piece (assuming
+      // uniform weight/volume per piece, same assumption perPcsWt already
+      // made) keeps the total non-zero and equal to the old cartons*figure
+      // result whenever packedQty === cartons*perCarton, i.e. the normal case.
+      netTotal: it.perCarton > 0 ? _plRound((it.netPerCarton / it.perCarton) * it.packedQty, 3) : _plRound(it.netPerCarton * it.cartons, 3),
       grossPerCarton: it.grossPerCarton,
-      grossTotal: _plRound(it.grossPerCarton * it.cartons, 3),
+      grossTotal: it.perCarton > 0 ? _plRound((it.grossPerCarton / it.perCarton) * it.packedQty, 3) : _plRound(it.grossPerCarton * it.cartons, 3),
       cbmPerCarton: it.cbmPerCarton,
-      cbmTotal: _plRound(it.cbmPerCarton * it.cartons, 4),
+      cbmTotal: it.perCarton > 0 ? _plRound((it.cbmPerCarton / it.perCarton) * it.packedQty, 4) : _plRound(it.cbmPerCarton * it.cartons, 4),
       perPcsWt: it.perCarton > 0 ? _plRound(it.netPerCarton / it.perCarton, 3) : 0,
       // Stored alongside the quantity so the printed document can be rebuilt
       // later exactly as it went out, even after the order is fully shipped.
@@ -11616,6 +11937,20 @@ app.post('/api/packing-list', requireAuth, sheetSerialised('packing'), async (re
     const { lines, error } = _plCollectLines(b, ordersByNo, packed);
     if (error) return res.status(400).json({ error });
 
+    // Same duplicate-submit guard as order-sheet/PO/PR/GRN — this create is
+    // slow enough (Sheets fill + PDF export) for a browser timeout to trigger
+    // a resubmit of the identical form. Here a resubmit wouldn't silently
+    // double-ship (the balance re-check above rejects the same quantity as
+    // already packed once the first request's log row lands), but without
+    // this the user sees a confusing "only 0 left to ship" error instead of
+    // the first request's actual success result.
+    const plDupeKey = _createFingerprint('packing-list', req, { plDate: b.plDate, lines });
+    const plPrevResult = _recentCreateResult(plDupeKey);
+    if (plPrevResult) {
+      console.log('[packing-list] duplicate submit absorbed — returning', plPrevResult.plNo);
+      return res.json(plPrevResult);
+    }
+
     // One packing list is one consignment to one consignee. Combining two
     // buyers onto it would print one party name over another's goods, so the
     // orders have to agree on who they are going to.
@@ -11664,10 +11999,12 @@ app.post('/api/packing-list', requireAuth, sheetSerialised('packing'), async (re
     // for the same reason as the order-sheet route above.
     _closeFmsAppPageSteps('packingList', form.orderNos, req.session.user?.name || '');
 
-    return res.json({
+    const plResultPayload = {
       success: true, plNo, pdfLink, orderNos: form.orderNos,
       totalQty: form.totalPackedQty, totalCartons: form.totalCartons, ordersUpdated,
-    });
+    };
+    _rememberCreate(plDupeKey, plResultPayload);
+    return res.json(plResultPayload);
   } catch (e) {
     console.error('[packing-list] create failed:', e.message);
     return res.status(500).json({ error: e.message });
@@ -11681,7 +12018,7 @@ app.get('/api/packing-list/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:M1000`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:M`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).map(_plRowFromLog).filter(r => r.plNo).reverse().slice(0, 200);
     return res.json(rows);
   } catch (e) {
@@ -11711,6 +12048,10 @@ app.put('/api/packing-list/cancel', requireAuth, sheetSerialised('packing'), asy
     const sheets = google.sheets({ version: 'v4', auth });
 
     const row = await _plByNo(sheets, plNo);
+    if (!row) { const e = new Error('Entry not found'); e.notFound = true; throw e; }
+    if (!canManageDeptRow(req.session.user, null, row.createdBy)) {
+      return res.status(403).json({ error: 'Only who raised this packing list (or an Admin/HOD) can cancel it' });
+    }
     await _setLogRowStatus(PI_CREATION_SHEET_ID, PACKING_LOG_TAB, plNo, PL_FMT.PACKING_LOG_STATUS_COL, 'Cancelled');
     try {
       await _plSyncOrderStatuses(sheets, (row && row.form && row.form.orderNos) || []);
@@ -11756,7 +12097,10 @@ async function nextPaymentEntryId() {
 }
 
 // GET /api/payment-entries — return all draft entries
-app.get('/api/payment-entries', requireAuth, async (req, res) => {
+// Admin/HOD only: this and the three routes below handle real bank-payment
+// batches and (payment-history) bank account numbers — there is no separate
+// "Accounts" role in this app, so Admin/HOD is the narrowest existing gate.
+app.get('/api/payment-entries', requireAuth, requireAdmin, async (req, res) => {
   try {
     await ensureSchema();
     const rows = await q(`SELECT id, vendor_id, amount, txn_type, narration, status, created_by, created_at FROM payment_entries WHERE status='draft' ORDER BY created_at ASC`);
@@ -11765,27 +12109,40 @@ app.get('/api/payment-entries', requireAuth, async (req, res) => {
 });
 
 // POST /api/payment-entries — replace all drafts with submitted array
-app.post('/api/payment-entries', requireAuth, async (req, res) => {
+app.post('/api/payment-entries', requireAuth, requireAdmin, async (req, res) => {
+  const c = await pool.connect();
   try {
     await ensureSchema();
     const entries = req.body?.entries;
-    if (!Array.isArray(entries)) return res.status(400).json({ error: 'entries array required' });
+    if (!Array.isArray(entries)) { c.release(); return res.status(400).json({ error: 'entries array required' }); }
     const user = req.session?.user?.name || req.session?.user?.email || '';
-    // Delete all current drafts then re-insert
-    await pool.query(`DELETE FROM payment_entries WHERE status='draft'`);
+    // Delete-then-reinsert, but now inside one transaction: a crash partway
+    // through the insert loop used to leave the table with the old drafts
+    // gone and only some of the new ones written, with no way back. BEGIN/
+    // COMMIT/ROLLBACK is the same pattern writeStoreDb() already uses.
+    await c.query('BEGIN');
+    await c.query(`DELETE FROM payment_entries WHERE status='draft'`);
     let counter = 0;
     let base = await nextPaymentEntryId();
     for (const e of entries) {
-      if (!e.vendorId || !e.amount) continue;
+      // toAmount() rejects negative/non-numeric instead of silently coercing
+      // to 0 like parseFloat(e.amount)||0 did — a bad amount now drops the
+      // row instead of entering a real bank-payment batch as ₹0 or negative.
+      const amt = toAmount(e.amount);
+      if (!e.vendorId || amt === null || amt === 0) continue;
       counter++;
       const eid = 'PE' + String(base + counter).padStart(6, '0');
-      await pool.query(
+      await c.query(
         `INSERT INTO payment_entries (id, vendor_id, amount, txn_type, narration, status, created_by) VALUES ($1,$2,$3,$4,$5,'draft',$6)`,
-        [eid, String(e.vendorId), parseFloat(e.amount) || 0, e.txnType || 'N', e.narration || '', user]
+        [eid, String(e.vendorId), amt, e.txnType || 'N', e.narration || '', user]
       );
     }
+    await c.query('COMMIT');
     return res.json({ success: true, saved: counter });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await c.query('ROLLBACK').catch(() => {});
+    return res.status(500).json({ error: err.message });
+  } finally { c.release(); }
 });
 
 // PATCH /api/payment-entries — mark exported entries as such, recording history
@@ -11793,40 +12150,52 @@ app.post('/api/payment-entries', requireAuth, async (req, res) => {
 // Entries exported straight from freshly-typed rows (never saved as a draft first)
 // have no id yet — inserting them here rather than silently dropping them is what
 // keeps Payment History from losing those exports.
-app.patch('/api/payment-entries', requireAuth, async (req, res) => {
+app.patch('/api/payment-entries', requireAuth, requireAdmin, async (req, res) => {
+  const c = await pool.connect();
   try {
     await ensureSchema();
     const { entries, batchLabel } = req.body || {};
-    if (!Array.isArray(entries) || !entries.length) return res.status(400).json({ error: 'entries required' });
+    if (!Array.isArray(entries) || !entries.length) { c.release(); return res.status(400).json({ error: 'entries required' }); }
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
     const label = batchLabel || ('Export ' + new Date().toLocaleDateString('en-IN'));
     const user = req.session?.user?.name || req.session?.user?.email || '';
     let base = await nextPaymentEntryId();
     const ids = [];
+    // Transaction so a duplicate-id collision (two concurrent exports computing
+    // the same base — nextPaymentEntryId() is a plain MAX(), not a locked
+    // sequence) rolls the whole export back instead of leaving it half-written.
+    await c.query('BEGIN');
     for (const e of entries) {
       if (e.id) {
-        await pool.query(
+        await c.query(
           `UPDATE payment_entries SET status='exported', exported_at=$1, batch_label=$2 WHERE id=$3`,
           [now, label, e.id]
         );
         ids.push(e.id);
-      } else if (e.vendorId && e.amount) {
+      } else if (e.vendorId) {
+        const amt = toAmount(e.amount);
+        if (amt === null || amt === 0) continue;
         base++;
         const eid = 'PE' + String(base).padStart(6, '0');
-        await pool.query(
+        await c.query(
           `INSERT INTO payment_entries (id, vendor_id, amount, txn_type, narration, status, created_by, exported_at, batch_label)
            VALUES ($1,$2,$3,$4,$5,'exported',$6,$7,$8)`,
-          [eid, String(e.vendorId), parseFloat(e.amount) || 0, e.txnType || 'N', e.narration || '', user, now, label]
+          [eid, String(e.vendorId), amt, e.txnType || 'N', e.narration || '', user, now, label]
         );
         ids.push(eid);
       }
     }
+    await c.query('COMMIT');
     return res.json({ success: true, ids });
-  } catch (err) { console.error('[payment-entries] PATCH failed:', err.message); return res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    await c.query('ROLLBACK').catch(() => {});
+    console.error('[payment-entries] PATCH failed:', err.message);
+    return res.status(500).json({ error: err.message });
+  } finally { c.release(); }
 });
 
 // GET /api/payment-history — exported entries with vendor info
-app.get('/api/payment-history', requireAuth, async (req, res) => {
+app.get('/api/payment-history', requireAuth, requireAdmin, async (req, res) => {
   try {
     await ensureSchema();
     const rows = await q(`
@@ -12217,46 +12586,64 @@ async function _imsCreateTxn(direction, body, user) {
   // Inward records the vendor the goods came from (the form asks for that
   // instead of a department); Outward posts nothing here and stores ''.
   const vendor = String(body.vendor || '').trim().slice(0, 255);
-  const id = await withSeqId('ims_transactions', direction, 6, (newId) => pool.query(
-    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, size, quantity, uom, department, remarks, status, created_by, source, vendor)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Active',$11,$12,$13)`,
-    [newId, txnDate, direction, itemCode, body.description || '', size, quantity, body.uom || '', department, body.remarks || '', user, source, vendor]
-  ));
   const delta = direction === 'IN' ? quantity : -quantity;
-  // current_stock is a stored running balance that is never recomputed from the
-  // ledger, so if this second statement fails the two are permanently and
-  // silently out of step. There is no usable transaction across this pool, so
-  // the entry is backed out instead and the caller is told it failed.
+  // The insert and the balance update used to be two independent pool.query()
+  // calls with only a best-effort compensating delete if the second one
+  // failed — a process crash/timeout between the two (not just a query-level
+  // error) left an "Active" ledger row with no corresponding balance change,
+  // permanently desyncing current_stock (a stored running total, never
+  // recomputed from the ledger) from reality. A real BEGIN/COMMIT/ROLLBACK
+  // on one connection closes that window; withSeqId's own duplicate-key
+  // retry still works on this connection since a caught error doesn't poison
+  // the rest of a MySQL/MariaDB transaction the way it would on Postgres.
+  const c = await pool.connect();
+  let id;
   try {
-    await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, itemCode]);
+    await c.query('BEGIN');
+    id = await withSeqId('ims_transactions', direction, 6, (newId) => c.query(
+      `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, size, quantity, uom, department, remarks, status, created_by, source, vendor)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'Active',$11,$12,$13)`,
+      [newId, txnDate, direction, itemCode, body.description || '', size, quantity, body.uom || '', department, body.remarks || '', user, source, vendor]
+    ));
+    await c.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, itemCode]);
+    await c.query('COMMIT');
   } catch (e) {
-    await pool.query('DELETE FROM ims_transactions WHERE id=$1', [id]).catch(() => {});
+    await c.query('ROLLBACK').catch(() => {});
     throw e;
-  }
+  } finally { c.release(); }
   return id;
 }
 
-async function _imsCancelTxn(id, direction) {
+async function _imsCancelTxn(id, direction, user) {
   const rows = await q('SELECT * FROM ims_transactions WHERE id=$1 AND direction=$2', [id, direction]);
   if (!rows.length) throw Object.assign(new Error('Not found'), { status: 404 });
   const row = rows[0];
+  // Any signed-in user used to be able to cancel any department's ledger
+  // entry via its id — checked once here so all three cancel routes below
+  // (Inward/Outward/Physical-Stock) share the same rule.
+  if (!canManageDeptRow(user, row.department, row.created_by)) {
+    throw Object.assign(new Error('Only the department that logged this entry (or an Admin/HOD) can cancel it'), { status: 403 });
+  }
   if (row.status === 'Cancelled') return; // already cancelled — no-op, not an error
-  await pool.query(`UPDATE ims_transactions SET status='Cancelled' WHERE id=$1`, [id]);
   // Reverse the stock impact: an IN added +quantity, so cancelling it removes
   // that quantity again; an OUT subtracted quantity, so cancelling it gives it
   // back. ADJ (physical-stock adjustment) stores its already-signed variance
   // in quantity and was added exactly like IN, so it reverses the same way.
   // Skipping this would let current_stock silently drift from reality.
   const delta = direction === 'OUT' ? Number(row.quantity) : -Number(row.quantity);
-  // Same reasoning as _imsCreateTxn: if the balance cannot be moved, put the row
-  // back to Active rather than leaving a "Cancelled" entry whose quantity is
-  // still counted in current_stock.
+  // Same transaction discipline as _imsCreateTxn: the status flip and the
+  // balance reversal used to be two independent statements with only a
+  // best-effort compensating status-revert on failure.
+  const c = await pool.connect();
   try {
-    await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, row.item_code]);
+    await c.query('BEGIN');
+    await c.query(`UPDATE ims_transactions SET status='Cancelled' WHERE id=$1`, [id]);
+    await c.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [delta, row.item_code]);
+    await c.query('COMMIT');
   } catch (e) {
-    await pool.query(`UPDATE ims_transactions SET status='Active' WHERE id=$1`, [id]).catch(() => {});
+    await c.query('ROLLBACK').catch(() => {});
     throw e;
-  }
+  } finally { c.release(); }
 }
 
 // Owner-only delete of one ledger entry — see SUPER_ADMIN_EMAIL.
@@ -12300,19 +12687,25 @@ async function _imsPhysicalStockUpdate(body, user) {
 
   const remarksNote = `Physical count: ${physicalStock} (system was ${systemStock}, variance ${variance > 0 ? '+' : ''}${variance}).`
     + (body.remarks ? ` ${body.remarks}` : '');
-  const id = await withSeqId('ims_transactions', 'ADJ', 6, (newId) => pool.query(
-    `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, size, quantity, uom, department, remarks, status, created_by, source)
-     VALUES ($1,$2,'ADJ',$3,$4,$5,$6,$7,'',$8,'Active',$9,'')`,
-    [newId, txnDate, itemCode, item.description || '', item.size || '', variance, item.uom || '', remarksNote, user]
-  ));
-  if (variance !== 0) {
-    try {
-      await pool.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [variance, itemCode]);
-    } catch (e) {
-      await pool.query('DELETE FROM ims_transactions WHERE id=$1', [id]).catch(() => {});
-      throw e;
+  // Same transaction discipline as _imsCreateTxn/_imsCancelTxn — one
+  // connection, insert + balance update committed or rolled back together.
+  const c = await pool.connect();
+  let id;
+  try {
+    await c.query('BEGIN');
+    id = await withSeqId('ims_transactions', 'ADJ', 6, (newId) => c.query(
+      `INSERT INTO ims_transactions (id, txn_date, direction, item_code, item_name, size, quantity, uom, department, remarks, status, created_by, source)
+       VALUES ($1,$2,'ADJ',$3,$4,$5,$6,$7,'',$8,'Active',$9,'')`,
+      [newId, txnDate, itemCode, item.description || '', item.size || '', variance, item.uom || '', remarksNote, user]
+    ));
+    if (variance !== 0) {
+      await c.query('UPDATE ims_items SET current_stock = current_stock + $1 WHERE item_code=$2', [variance, itemCode]);
     }
-  }
+    await c.query('COMMIT');
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally { c.release(); }
   return { id, systemStock, physicalStock, variance };
 }
 
@@ -12359,7 +12752,7 @@ app.put('/api/ims/inward/cancel', requireAuth, async (req, res) => {
     await ensureSchema();
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: 'id is required' });
-    await _imsCancelTxn(id, 'IN');
+    await _imsCancelTxn(id, 'IN', req.session.user);
     return res.json({ success: true });
   } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
 });
@@ -12399,7 +12792,7 @@ app.put('/api/ims/outward/cancel', requireAuth, async (req, res) => {
     await ensureSchema();
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: 'id is required' });
-    await _imsCancelTxn(id, 'OUT');
+    await _imsCancelTxn(id, 'OUT', req.session.user);
     return res.json({ success: true });
   } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
 });
@@ -12443,7 +12836,7 @@ app.put('/api/ims/physical-stock/cancel', requireAuth, async (req, res) => {
     await ensureSchema();
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: 'id is required' });
-    await _imsCancelTxn(id, 'ADJ');
+    await _imsCancelTxn(id, 'ADJ', req.session.user);
     return res.json({ success: true });
   } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
 });
@@ -12727,11 +13120,38 @@ app.post('/api/developer/access', async (req, res) => {
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
 
+// Reads the same access_enabled flag the two routes above show/set. Every
+// OTHER /api/developer/* route below now checks this too — before, turning
+// "Developer access" off only changed what GET /access reported; reset,
+// restore, export and reset-users stayed fully reachable behind the secret
+// alone, so the toggle was cosmetic.
+async function devAccessEnabled() {
+  try {
+    const { rows } = await pool.query(`SELECT "value" FROM app_config WHERE "key" = 'access_enabled'`);
+    return !rows.length || rows[0].value !== 'false';
+  } catch { return true; }
+}
+async function checkDevAccess(req) {
+  if (!checkSecret(req)) return false;
+  return await devAccessEnabled();
+}
+
+// Who/when invoked a developer route — there was previously no way to tell
+// which human triggered a reset/restore/export beyond "someone with the
+// secret". Best-effort: never lets a logging failure block the action itself.
+async function logDevAction(req, action, detail = '') {
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS dev_audit_log (id INT AUTO_INCREMENT PRIMARY KEY, action VARCHAR(64) NOT NULL, detail VARCHAR(255) DEFAULT '', ip VARCHAR(64) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+    await pool.query('INSERT INTO dev_audit_log (action, detail, ip) VALUES ($1,$2,$3)', [action, detail, req.ip || '']);
+  } catch (e) { console.error('[dev-audit]', action, e.message); }
+}
+
 // ── Developer: reset ──────────────────────────────────────────────────────────
 app.post('/api/developer/reset', async (req, res) => {
-  if (!checkSecret(req)) return res.status(401).json({ error:'Unauthorized' });
+  if (!(await checkDevAccess(req))) return res.status(401).json({ error:'Unauthorized' });
   try {
     const backupId = await createBackup('Before Delete All Tasks').catch(()=>null);
+    await logDevAction(req, 'reset', 'backupId=' + backupId);
     await pool.query('DELETE FROM checklist_completions');
     await pool.query('DELETE FROM delegations');
     await pool.query('DELETE FROM masters');
@@ -12741,9 +13161,10 @@ app.post('/api/developer/reset', async (req, res) => {
 
 // ── Developer: reset checklist masters only (leaves delegations + completion history intact) ──
 app.post('/api/developer/reset-checklist', async (req, res) => {
-  if (!checkSecret(req)) return res.status(401).json({ error:'Unauthorized' });
+  if (!(await checkDevAccess(req))) return res.status(401).json({ error:'Unauthorized' });
   try {
     const backupId = await createBackup('Before Delete All Checklist Tasks').catch(()=>null);
+    await logDevAction(req, 'reset-checklist', 'backupId=' + backupId);
     await pool.query('DELETE FROM masters');
     return res.json({ success:true, backupId });
   } catch (err) { return res.status(500).json({ error:err.message }); }
@@ -12751,8 +13172,9 @@ app.post('/api/developer/reset-checklist', async (req, res) => {
 
 // ── Developer: export ─────────────────────────────────────────────────────────
 app.get('/api/developer/export', async (req, res) => {
-  if (!checkSecret(req)) return res.status(401).json({ error:'Unauthorized' });
+  if (!(await checkDevAccess(req))) return res.status(401).json({ error:'Unauthorized' });
   try {
+    await logDevAction(req, 'export');
     const [delegations, users, masters, holidays] = await Promise.all([
       q(`SELECT id, description, doer, due_date AS due_date, client, status, priority, url, remarks, approval, delegated_by, created_at, completed_at, transferred_from, transferred_by FROM delegations ORDER BY created_at DESC`),
       q(`SELECT id, name, email, phone, department, roles, active, created_at FROM users ORDER BY name`),
@@ -12765,7 +13187,7 @@ app.get('/api/developer/export', async (req, res) => {
 
 // ── Developer: backups ────────────────────────────────────────────────────────
 app.get('/api/developer/backups', async (req, res) => {
-  if (!checkSecret(req)) return res.status(401).json({ error:'Unauthorized' });
+  if (!(await checkDevAccess(req))) return res.status(401).json({ error:'Unauthorized' });
   try {
     await ensureBackupTable();
     await pool.query('DELETE FROM dev_backups WHERE expires_at < NOW()');
@@ -12776,12 +13198,13 @@ app.get('/api/developer/backups', async (req, res) => {
 
 // ── Developer: restore ────────────────────────────────────────────────────────
 app.post('/api/developer/restore', async (req, res) => {
-  if (!checkSecret(req)) return res.status(401).json({ error:'Unauthorized' });
+  if (!(await checkDevAccess(req))) return res.status(401).json({ error:'Unauthorized' });
   try {
     const { id } = req.body;
     if (!id) return res.status(400).json({ error:'Backup ID required' });
     const rows = await q('SELECT data FROM dev_backups WHERE id = $1', [id]);
     if (!rows.length) return res.status(404).json({ error:'Backup not found or expired' });
+    await logDevAction(req, 'restore', 'backupId=' + id);
     const backup = JSON.parse(rows[0].data);
     await ensureSchema();
     await pool.query('DELETE FROM delegations');
@@ -12819,11 +13242,21 @@ app.post('/api/developer/restore', async (req, res) => {
 
 // ── Developer: reset-users ────────────────────────────────────────────────────
 app.post('/api/developer/reset-users', async (req, res) => {
-  if (!checkSecret(req)) return res.status(401).json({ error:'Unauthorized' });
+  if (!(await checkDevAccess(req))) return res.status(401).json({ error:'Unauthorized' });
   try {
-    const { mode='all' } = req.body;
+    // Validated against an allow-list rather than interpolated as-is: this
+    // string is stored as the backup's label and later rendered by
+    // developer.js — an arbitrary value here used to be a stored-XSS path
+    // into the "View Backups" screen for whoever holds the developer secret.
+    let { mode='all' } = req.body;
+    if (!['all', 'users', 'admins'].includes(mode)) mode = 'all';
+    await logDevAction(req, 'reset-users', 'mode=' + mode);
     await createBackup(`Before Delete Users (mode: ${mode})`).catch(()=>null);
-    const NEW_ADMIN = { id:'U001', name:'Admin', email:'Admin@lal.com', password:'Admin@1234', roles:'Admin' };
+    // Password is randomized per call (not a fixed string in source) since this
+    // recreates the Admin@lal.com account, which is also SUPER_ADMIN_EMAIL — a
+    // hardcoded password here would be a permanent, source-visible backdoor.
+    const randomPassword = crypto.randomBytes(9).toString('base64').replace(/[+/=]/g, '') + '!1';
+    const NEW_ADMIN = { id:'U001', name:'Admin', email:'Admin@lal.com', password:randomPassword, roles:'Admin' };
 
     if (!USE_DB) {
       const store = await readStore();
@@ -12924,7 +13357,7 @@ app.get('/api/google-cred-check', requireAuth, requireAdmin, async (req, res) =>
 });
 
 // ── Sync Sheets ───────────────────────────────────────────────────────────────
-app.post('/api/sync-sheets', requireAuth, async (req, res) => {
+app.post('/api/sync-sheets', requireAuth, requireAdmin, async (req, res) => {
   // getGoogleAuth accepts either GOOGLE_PRIVATE_KEY or GOOGLE_PRIVATE_KEY_B64
   // — checking the raw env var here rejected a B64-only configuration.
   if (!getGoogleAuth()) return res.status(500).json({ error:'Google credentials not configured' });
@@ -12936,12 +13369,20 @@ app.post('/api/sync-sheets', requireAuth, async (req, res) => {
 });
 
 // ── DB test ───────────────────────────────────────────────────────────────────
+// Diagnostic tooling, same gate as /api/developer/* — this used to have NO
+// guard at all: any anonymous request ran a schema check plus a live query
+// and got back the exact user count (and, on failure, raw MariaDB driver
+// error text), a free unauthenticated probe/DoS vector on every request.
 app.get('/api/db-test', async (req, res) => {
+  if (!checkSecret(req)) return res.status(401).json({ error: 'Unauthorized' });
   try {
     await ensureSchema();
     const rows = await q('SELECT COUNT(*) AS cnt FROM users');
     return res.json({ ok:true, users:Number(rows[0].cnt) });
-  } catch (err) { return res.status(500).json({ ok:false, error:err.message, code:err.code }); }
+  } catch (err) {
+    console.error('[db-test]', err.message);
+    return res.status(500).json({ ok:false, error:'Query failed' });
+  }
 });
 
 /* REMOVED: GET /api/setup-passwords
@@ -12956,24 +13397,44 @@ app.get('/api/db-test', async (req, res) => {
 // the panel is unreachable rather than open to everybody.
 const MASTER_KEY = process.env.MASTER_KEY || '';
 
+// GET is read-only now (shows the panel + current status); the actual
+// enable/disable used to happen on a GET too, with the secret key sitting in
+// the query string — state-changing GETs land in proxy/server access logs
+// and browser history, and can be fired unintentionally by a link-preview
+// bot (Slack/Teams/WhatsApp unfurling) if the URL is ever pasted anywhere.
+// The panel's own buttons now POST instead. Both verbs share the same
+// IP-keyed throttle on guessing MASTER_KEY, which this route had none of
+// before.
 app.get('/api/master', async (req, res) => {
   const key = req.query.key;
+  if (!rateAllow('master:' + (req.ip || ''), 10, 15 * 60 * 1000)) return res.status(429).json({ error: 'Too many attempts. Please try again in 15 minutes.' });
   if (!MASTER_KEY || !timingSafeEq(key, MASTER_KEY)) return res.status(401).json({ error:'Unauthorized' });
   await ensureSchema();
   const { rows } = await pool.query(`SELECT "value" FROM app_config WHERE "key" = 'app_active'`);
   const isActive = rows.length===0 ? true : rows[0].value==='true';
-  const action = req.query.action;
+  const html = `<!DOCTYPE html><html><head><title>Master Control Panel</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box;margin:0;padding:0;font-family:Inter,system-ui,sans-serif}body{background:#0f172a;color:#f1f5f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem}.card{background:#1e293b;border:1px solid #334155;border-radius:1rem;padding:2rem;width:100%;max-width:420px}h1{font-size:1.25rem;font-weight:700;margin-bottom:.25rem}.sub{color:#94a3b8;font-size:.8rem;margin-bottom:2rem}.status{display:flex;align-items:center;gap:.75rem;padding:1rem;border-radius:.75rem;margin-bottom:1.5rem;font-weight:600}.status.on{background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);color:#34d399}.status.off{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171}.dot{width:10px;height:10px;border-radius:50%}.dot.on{background:#34d399}.dot.off{background:#f87171}.btn{display:block;width:100%;padding:.875rem;border:none;border-radius:.75rem;font-size:.9rem;font-weight:600;cursor:pointer;text-align:center;text-decoration:none;margin-bottom:.75rem}.btn-red{background:linear-gradient(135deg,#dc2626,#991b1b);color:white}.btn-green{background:linear-gradient(135deg,#059669,#065f46);color:white}.note{font-size:.75rem;color:#64748b;text-align:center;margin-top:1rem}</style></head><body><div class="card"><h1>Master Control Panel</h1><p class="sub">E-Marketing Task Manager</p><div class="status ${isActive?'on':'off'}"><span class="dot ${isActive?'on':'off'}"></span>App is currently <strong style="margin-left:4px">${isActive?'ACTIVE':'DISABLED'}</strong></div>${isActive
+    ? `<form method="POST" action="/api/master"><input type="hidden" name="key" value="${MASTER_KEY}"><input type="hidden" name="action" value="disable"><button type="submit" class="btn btn-red">Disable App</button></form>`
+    : `<form method="POST" action="/api/master"><input type="hidden" name="key" value="${MASTER_KEY}"><input type="hidden" name="action" value="enable"><button type="submit" class="btn btn-green">Enable App</button></form>`
+  }<p class="note">Keep this URL secret</p></div></body></html>`;
+  res.setHeader('Content-Type','text/html');
+  return res.send(html);
+});
+
+app.post('/api/master', async (req, res) => {
+  const key = req.body?.key;
+  if (!rateAllow('master:' + (req.ip || ''), 10, 15 * 60 * 1000)) return res.status(429).json({ error: 'Too many attempts. Please try again in 15 minutes.' });
+  if (!MASTER_KEY || !timingSafeEq(key, MASTER_KEY)) return res.status(401).json({ error:'Unauthorized' });
+  await ensureSchema();
+  const action = req.body?.action;
   if (action==='disable') {
     await pool.query(`INSERT INTO app_config ("key","value") VALUES ('app_active','false') ON CONFLICT ("key") DO UPDATE SET "value"='false'`);
-    return res.json({ success:true, app_active:false, message:'App DISABLED' });
+    return res.redirect(303, '/api/master?key=' + encodeURIComponent(MASTER_KEY));
   }
   if (action==='enable') {
     await pool.query(`INSERT INTO app_config ("key","value") VALUES ('app_active','true') ON CONFLICT ("key") DO UPDATE SET "value"='true'`);
-    return res.json({ success:true, app_active:true, message:'App ENABLED' });
+    return res.redirect(303, '/api/master?key=' + encodeURIComponent(MASTER_KEY));
   }
-  const html = `<!DOCTYPE html><html><head><title>Master Control Panel</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box;margin:0;padding:0;font-family:Inter,system-ui,sans-serif}body{background:#0f172a;color:#f1f5f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem}.card{background:#1e293b;border:1px solid #334155;border-radius:1rem;padding:2rem;width:100%;max-width:420px}h1{font-size:1.25rem;font-weight:700;margin-bottom:.25rem}.sub{color:#94a3b8;font-size:.8rem;margin-bottom:2rem}.status{display:flex;align-items:center;gap:.75rem;padding:1rem;border-radius:.75rem;margin-bottom:1.5rem;font-weight:600}.status.on{background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);color:#34d399}.status.off{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171}.dot{width:10px;height:10px;border-radius:50%}.dot.on{background:#34d399}.dot.off{background:#f87171}.btn{display:block;width:100%;padding:.875rem;border:none;border-radius:.75rem;font-size:.9rem;font-weight:600;cursor:pointer;text-align:center;text-decoration:none;margin-bottom:.75rem}.btn-red{background:linear-gradient(135deg,#dc2626,#991b1b);color:white}.btn-green{background:linear-gradient(135deg,#059669,#065f46);color:white}.note{font-size:.75rem;color:#64748b;text-align:center;margin-top:1rem}</style></head><body><div class="card"><h1>Master Control Panel</h1><p class="sub">E-Marketing Task Manager</p><div class="status ${isActive?'on':'off'}"><span class="dot ${isActive?'on':'off'}"></span>App is currently <strong style="margin-left:4px">${isActive?'ACTIVE':'DISABLED'}</strong></div>${isActive?`<a href="?key=${MASTER_KEY}&action=disable" class="btn btn-red">Disable App</a>`:`<a href="?key=${MASTER_KEY}&action=enable" class="btn btn-green">Enable App</a>`}<p class="note">Keep this URL secret</p></div></body></html>`;
-  res.setHeader('Content-Type','text/html');
-  return res.send(html);
+  return res.status(400).json({ error: 'Unknown action' });
 });
 
 // ── CEO Dashboard (route kept as 'company-overview') ─────────────────────────

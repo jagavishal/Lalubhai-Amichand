@@ -54,7 +54,18 @@ window.Utils = {
   // The one escape function for text going into innerHTML. Every page used to
   // carry an identical private copy; they now alias this one.
   esc(s) {
-    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  },
+
+  // esc() alone stops an attribute breaking out of its quotes, but a
+  // user-entered "URL" field (e.g. the Delegate Task modal's optional URL)
+  // can still hold a `javascript:` value that survives escaping intact and
+  // runs when the link is clicked. Used for every href built from a
+  // user-supplied URL: returns the value only when it starts with a scheme
+  // that can't execute script, '#' otherwise.
+  safeUrl(s) {
+    const v = String(s ?? '').trim();
+    return /^(https?:|mailto:)/i.test(v) ? v : '#';
   },
 
   // One CSV cell: quoted (with doubled quotes) only when the value needs it.

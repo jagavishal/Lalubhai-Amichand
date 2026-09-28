@@ -498,7 +498,12 @@ window.Pages.login = {
           if (window.Topbar)   window.Topbar.render(data.user);
           if (window.Router) {
             window.Router.init();
-            window.Router.navigate('dashboard');
+            if (data.user?.mustChangePassword) {
+              window.Router.navigate('profile');
+              window.Utils?.showToast?.('Please set your own password to finish signing in.', 'info');
+            } else {
+              window.Router.navigate('dashboard');
+            }
           }
         }
 

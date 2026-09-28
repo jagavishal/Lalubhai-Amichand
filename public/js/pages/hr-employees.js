@@ -448,7 +448,7 @@ window.Pages['hr-employees'] = (() => {
         `${H.esc(d.doc_type)}${d.onMaster
           ? '<div style="font-size:10px;color:#94a3b8;">on the employee record</div>' : ''}`,
         H.esc(d.doc_no || '—'),
-        d.url ? `<a href="${H.esc(d.url)}" target="_blank" rel="noopener" style="color:var(--color-primary);">Open</a>` : '—',
+        d.url ? `<a href="${H.esc(Utils.safeUrl(d.url))}" target="_blank" rel="noopener" style="color:var(--color-primary);">Open</a>` : '—',
         d.onMaster ? '—' : H.fmtDate(d.issued_on),
         d.expires_on
           ? `<span style="color:${d.expires_on < H.todayISO() ? '#b91c1c' : '#334155'};">${H.fmtDate(d.expires_on)}</span>`

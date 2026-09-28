@@ -54,6 +54,20 @@ window.Pages.dashboard = (function () {
     return window.UI.avatar(name || '', { size: 22 });
   }
 
+  function greetingWord() {
+    const h = new Date().getHours();
+    return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  }
+
+  // Type breakdown for the "Total Tasks" tile ("61 del · 3 chk") — computed
+  // client-side off the same pendingTasks list the table already has, so it
+  // never needs its own round trip and always agrees with what's on screen.
+  function taskTypeBreakdown(tasks) {
+    const counts = { Delegation: 0, Checklist: 0 };
+    (tasks || []).forEach(t => { if (counts[t.type] != null) counts[t.type]++; });
+    return counts;
+  }
+
   function typePillHTML(type) {
     // PI: a Draft Proforma Invoice waiting for its price — listed for anyone
     // who can price, straight off the PI log (see /api/dashboard).
@@ -203,6 +217,47 @@ window.Pages.dashboard = (function () {
     else window.Router.navigate('hr-leave');
   }
 
+  /* The Meetings tile + panel are the signed-in user's own agenda (GET
+     /api/scheduler already scopes to organizer-or-attendee — see server.js),
+     independent of whichever employee an admin has picked in the dashboard's
+     doer filter. Its own fetch, same reasoning as _paintOnLeave(): decoration
+     that must never hold up or break the task board. */
+  async function _paintMeetings() {
+    const valueEl = document.getElementById('db-stat-meetings');
+    const subEl   = document.getElementById('db-stat-meetings-sub');
+    const bodyEl  = document.getElementById('db-meetings-body');
+    if (!valueEl && !bodyEl) return;
+    const from = todayISO();
+    const toDate = new Date(); toDate.setDate(toDate.getDate() + 6);
+    const to = toDate.toISOString().split('T')[0];
+    const data = await Utils.apiFetch(`/api/scheduler?from=${from}&to=${to}`).catch(() => null);
+    const meetings = (data && data.meetings) || [];
+    const todayCount = meetings.filter(m => m.date === from).length;
+
+    if (valueEl) valueEl.textContent = meetings.length;
+    if (subEl) subEl.textContent = todayCount ? `${todayCount} today` : (meetings.length ? 'this week' : 'none scheduled');
+    if (!bodyEl) return;
+
+    if (!meetings.length) {
+      bodyEl.innerHTML = `
+        <div style="text-align:center;padding:28px 12px;color:#94a3b8;">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:8px;"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
+          <div style="font-size:12.5px;">No meetings in this window</div>
+        </div>`;
+      return;
+    }
+    bodyEl.innerHTML = meetings.slice(0, 8).map(m => `
+      <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9;">
+        <div style="width:56px;flex-shrink:0;font-size:11px;font-weight:700;color:#334155;line-height:1.4;">
+          ${fmt(m.date)}${m.startTime ? `<br><span style="font-weight:500;color:#94a3b8;">${esc(m.startTime)}</span>` : ''}
+        </div>
+        <div style="min-width:0;">
+          <div style="font-size:12.5px;font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.title)}</div>
+          ${m.location ? `<div style="font-size:11px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.location)}</div>` : ''}
+        </div>
+      </div>`).join('');
+  }
+
   /* ── full render ─────────────────────────────────────────────────── */
   async function render() {
     const el = document.getElementById('main-content');
@@ -241,6 +296,7 @@ window.Pages.dashboard = (function () {
 
     _renderShell(el, admin, hod);
     _paintOnLeave();
+    _paintMeetings();
     } catch(err) {
       el.innerHTML = `<div style="padding:2rem;color:#dc2626;font-size:14px;">❌ Dashboard error: ${err.message}</div>`;
       console.error('Dashboard render error:', err);
@@ -297,9 +353,31 @@ window.Pages.dashboard = (function () {
         .pill-grant { background:var(--color-success-bg);color:var(--color-success-text); } .pill-grant:hover { background:var(--color-success-border); }
         .pill-deny  { background:var(--color-neutral-bg);color:var(--color-neutral-text); } .pill-deny:hover  { background:var(--border-base); }
         .pill-pending-wait { background:var(--color-warning-bg);color:var(--color-warning-text);display:inline-flex;align-items:center;padding:2px 8px;font-size:10.5px;font-weight:600;border-radius:9999px; }
+        /* Greeting banner */
+        #db-banner { background:linear-gradient(120deg, var(--color-primary) 0%, var(--color-primary-dark) 100%); border-radius:16px; padding:20px 24px; display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:20px; color:#fff; box-shadow:0 8px 20px var(--color-primary-ring); }
+        #db-banner-eyebrow { font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.75; margin:0 0 2px; }
+        #db-banner-name { font-size:21px; font-weight:800; margin:0; letter-spacing:-.01em; }
+        #db-banner-sub { font-size:12.5px; opacity:.85; margin:4px 0 0; }
+        #db-btn-new-task { display:inline-flex; align-items:center; gap:6px; padding:10px 18px; border-radius:10px; font-size:13px; font-weight:700; background:#fff; color:var(--color-primary-dark); border:none; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.15); white-space:nowrap; }
+        #db-btn-new-task:hover { background:#f8fafc; }
+        @media (max-width:767px) { #db-banner { padding:16px 18px; } #db-banner-name { font-size:18px; } }
+        @media (max-width:1200px) and (min-width:768px) { #db-stat-cards { grid-template-columns:repeat(3,1fr) !important; } }
       </style>
 
       <div id="db-wrap">
+        <!-- Greeting banner -->
+        <div id="db-banner">
+          <div>
+            <p id="db-banner-eyebrow">${esc(greetingWord())}</p>
+            <h1 id="db-banner-name">${esc((me?.name || 'there'))}</h1>
+            <p id="db-banner-sub">${esc(new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}${hod ? ' · HOD view' : admin ? ' · Admin view' : ''}</p>
+          </div>
+          <button id="db-btn-new-task" type="button">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+            New Task
+          </button>
+        </div>
+
         <!-- Top bar: emp picker LEFT | buttons RIGHT -->
         <div id="db-topbar" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-bottom:20px;">
 
@@ -379,60 +457,82 @@ window.Pages.dashboard = (function () {
              after the shell renders; stays empty (and invisible) when nobody is out. -->
         <div id="db-onleave" style="display:none;margin-bottom:16px;"></div>
 
-        <div id="db-stat-cards" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:1rem;margin-bottom:20px;">
-          <div class="card db-stat-card active" data-filter="All" title="Show all pending tasks" style="padding:20px;cursor:pointer;">
+        <div id="db-stat-cards" style="display:grid;grid-template-columns:repeat(5,1fr);gap:1rem;margin-bottom:20px;">
+          <div class="card db-stat-card" style="padding:18px 20px;">
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Total Tasks</div>
+            <div id="db-stat-total" style="font-size:2.2rem;font-weight:800;color:var(--color-primary);">${admin ? data.total : data.pendingTasks.length}</div>
+            <div id="db-stat-total-sub" style="font-size:11px;font-weight:600;color:var(--text-muted);margin-top:4px;">${(() => { const b = taskTypeBreakdown(data.pendingTasks); return `${b.Delegation} del · ${b.Checklist} chk`; })()}</div>
+          </div>
+          <div class="card db-stat-card active" data-filter="All" title="Show pending tasks" style="padding:18px 20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Pending</div>
-            <div id="db-stat-pending" style="font-size:2.5rem;font-weight:800;color:var(--color-danger);">${data.pending}</div>
+            <div id="db-stat-pending" style="font-size:2.2rem;font-weight:800;color:var(--color-danger);">${data.pending}</div>
             <div id="db-stat-revised" style="font-size:11px;font-weight:600;color:var(--color-warning);margin-top:4px;${data.revised > 0 ? '' : 'display:none;'}">+ ${data.revised} shifted</div>
+            <div id="db-stat-pending-sub" style="font-size:11px;font-weight:600;color:var(--color-success);margin-top:4px;${data.revised > 0 ? 'display:none;' : ''}">${data.pending > 0 ? 'Awaiting action' : 'On track'}</div>
           </div>
-          <div class="card db-stat-card" data-filter="Shifted" title="Show shifted tasks" style="padding:20px;cursor:pointer;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Shifted</div>
-            <div id="db-stat-revised-count" style="font-size:2.5rem;font-weight:800;color:var(--color-warning);">${data.revised || 0}</div>
-          </div>
-          <div class="card db-stat-card" data-filter="Completed" title="Show completed tasks" style="padding:20px;cursor:pointer;">
+          <div class="card db-stat-card" data-filter="Completed" title="Show completed tasks" style="padding:18px 20px;cursor:pointer;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Completed</div>
-            <div id="db-stat-completed" style="font-size:2.5rem;font-weight:800;color:var(--color-success);">${data.completed}</div>
+            <div id="db-stat-completed" style="font-size:2.2rem;font-weight:800;color:var(--color-success);">${data.completed}</div>
+            <div style="height:5px;border-radius:3px;background:var(--border-base);margin-top:8px;overflow:hidden;">
+              <div id="db-stat-completed-bar" style="height:100%;border-radius:3px;background:var(--color-success);width:${data.total ? Math.round(data.completed / data.total * 100) : 0}%;"></div>
+            </div>
+            <div id="db-stat-completed-sub" style="font-size:11px;font-weight:600;color:var(--text-muted);margin-top:4px;">${data.total ? Math.round(data.completed / data.total * 100) : 0}% done</div>
           </div>
-          <div class="card db-stat-card" data-filter="Upcoming" title="Show upcoming tasks" style="padding:20px;cursor:pointer;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Upcoming</div>
-            <div id="db-stat-upcoming" style="font-size:2.5rem;font-weight:800;color:var(--color-purple);">${data.upcoming || 0}</div>
+          <div class="card db-stat-card" data-filter="Shifted" title="Show shifted tasks" style="padding:18px 20px;cursor:pointer;">
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Revised</div>
+            <div id="db-stat-revised-count" style="font-size:2.2rem;font-weight:800;color:var(--color-warning);">${data.revised || 0}</div>
+            <div id="db-stat-revised-sub" style="font-size:11px;font-weight:600;color:var(--text-muted);margin-top:4px;">${(data.revised || 0) > 0 ? 'Needs rework' : 'None pending'}</div>
           </div>
-          <div class="card db-stat-card" style="padding:20px;display:none;" id="db-stat-total-card">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Total</div>
-            <div id="db-stat-total" style="font-size:2.5rem;font-weight:800;color:var(--color-primary);">${admin ? data.total : data.pendingTasks.length}</div>
+          <a href="#scheduler" class="card db-stat-card" title="Open Scheduler" style="padding:18px 20px;cursor:pointer;display:block;text-decoration:none;color:inherit;">
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Meetings</div>
+            <div id="db-stat-meetings" style="font-size:2.2rem;font-weight:800;color:var(--color-purple);">–</div>
+            <div id="db-stat-meetings-sub" style="font-size:11px;font-weight:600;color:var(--text-muted);margin-top:4px;">next 7 days</div>
+          </a>
+        </div>
+
+        <!-- Task Status + Meetings -->
+        <div id="db-main-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
+
+          <!-- Task status donut card -->
+          <div class="card" style="padding:1.1rem;display:flex;flex-direction:column;">
+            <div>
+              <h3 style="font-size:13px;font-weight:700;color:#0f172a;margin:0;">Task Status</h3>
+              <p style="font-size:11.5px;color:#64748b;margin:3px 0 0;">Completed, pending &amp; revised</p>
+            </div>
+            <div id="db-pie-container" style="flex:1;display:flex;align-items:center;justify-content:center;padding-top:10px;">
+              ${renderPieSVG(data.completed, data.pending, data.revised, data.upcoming || 0)}
+            </div>
+          </div>
+
+          <!-- Meetings card -->
+          <div class="card" style="padding:1.1rem;display:flex;flex-direction:column;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+              <div>
+                <h3 style="font-size:13px;font-weight:700;color:#0f172a;margin:0;">Meetings</h3>
+                <p style="font-size:11.5px;color:#64748b;margin:3px 0 0;">Next 7 days</p>
+              </div>
+              <a href="#scheduler" style="font-size:11.5px;font-weight:600;color:var(--color-primary);text-decoration:none;white-space:nowrap;">Scheduler →</a>
+            </div>
+            <div id="db-meetings-body" style="margin-top:6px;">
+              <div style="text-align:center;padding:28px 12px;color:#94a3b8;font-size:12.5px;">Loading…</div>
+            </div>
           </div>
         </div>
 
-        <!-- Tasks + Pie -->
-        <div id="db-main-grid" style="display:grid;grid-template-columns:1fr 280px;gap:1rem;margin-bottom:20px;">
-
-          <!-- Tasks card -->
-          <div class="card" style="overflow:hidden;">
-            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:12px 20px;border-bottom:1px solid #f1f5f9;">
-              <div>
-                <h2 style="font-size:13.5px;font-weight:700;color:#0f172a;margin:0;">All Pending Tasks</h2>
-                <p id="db-tasks-count" style="font-size:11.5px;color:#64748b;margin:2px 0 0;"></p>
-              </div>
-              <div style="display:flex;align-items:center;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px;">
-                ${['All','Delegation','Checklist', ...(window.currentUser?.featureFlags?.fms ? ['FMS'] : []), 'Upcoming'].map(t =>
-                  `<button class="db-tab-btn" data-tab="${t}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">${t}</button>`
-                ).join('')}
-              </div>
+        <!-- Recent Activity -->
+        <div class="card" style="overflow:hidden;margin-bottom:20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:12px 20px;border-bottom:1px solid #f1f5f9;">
+            <div>
+              <h2 style="font-size:13.5px;font-weight:700;color:#0f172a;margin:0;">Recent Activity</h2>
+              <p id="db-tasks-count" style="font-size:11.5px;color:#64748b;margin:2px 0 0;"></p>
             </div>
-            <div style="overflow-x:auto;max-height:420px;overflow-y:auto;">
-              <table id="db-tasks-table" style="width:100%;border-collapse:collapse;font-size:12.5px;"></table>
+            <div style="display:flex;align-items:center;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px;">
+              ${['All','Delegation','Checklist', ...(window.currentUser?.featureFlags?.fms ? ['FMS'] : []), 'Upcoming'].map(t =>
+                `<button class="db-tab-btn" data-tab="${t}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">${t}</button>`
+              ).join('')}
             </div>
           </div>
-
-          <!-- Pie chart card -->
-          <div class="card" style="padding:1rem;display:flex;flex-direction:column;">
-            <div>
-              <h3 style="font-size:13px;font-weight:700;color:#0f172a;margin:0;">Task Overview</h3>
-              <p style="font-size:11.5px;color:#64748b;margin:3px 0 0;">Overall distribution</p>
-            </div>
-            <div id="db-pie-container" style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-top:12px;">
-              ${renderPieSVG(data.completed, data.pending, data.revised, data.upcoming || 0)}
-            </div>
+          <div style="overflow-x:auto;max-height:420px;overflow-y:auto;">
+            <table id="db-tasks-table" style="width:100%;border-collapse:collapse;font-size:12.5px;"></table>
           </div>
         </div>
 
@@ -792,47 +892,56 @@ window.Pages.dashboard = (function () {
     window.addEventListener('resize', _applyMobileLayout, { signal: window.Router.pageSignal() });
   }
 
-  /* ── pie chart svg ───────────────────────────────────────────────── */
+  /* ── task status donut ───────────────────────────────────────────── */
   function renderPieSVG(completed, pending, revised, upcoming) {
-    const size = 200;
-    const cx = size / 2, cy = size / 2, r = size / 2 - 6;
-    const allSlices = [
-      { value: completed,        color: '#10b981', label: 'Completed' },
+    const segs = [
+      { value: completed,               color: '#10b981', label: 'Completed' },
       { value: pending - (upcoming||0), color: '#ef4444', label: 'Pending'   },
-      { value: revised,          color: '#f59e0b', label: 'Shifted'   },
-      { value: upcoming || 0,    color: '#7c3aed', label: 'Upcoming'  },
+      { value: revised,                 color: '#f59e0b', label: 'Revised'   },
+      { value: upcoming || 0,           color: '#7c3aed', label: 'Upcoming'  },
     ];
-    const slices = allSlices.filter(s => s.value > 0);
-    const total = slices.reduce((a, s) => a + s.value, 0);
+    const total = segs.reduce((a, s) => a + s.value, 0);
+    const size = 150, cx = size / 2, cy = size / 2, r = 58, sw = 17, C = 2 * Math.PI * r;
+    const visible = segs.filter(s => s.value > 0);
+    const gap = visible.length > 1 ? 3 : 0;
 
-    let paths = '';
+    let arcs;
     if (total === 0) {
-      paths = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#e2e8f0"/>`;
-    } else if (slices.length === 1) {
-      paths = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${slices[0].color}" stroke="#fff" stroke-width="2"/>`;
+      arcs = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="${sw}"/>`;
     } else {
-      let angle = -Math.PI / 2;
-      slices.forEach(s => {
-        const sweep = (s.value / total) * Math.PI * 2;
-        const x1 = cx + r * Math.cos(angle);
-        const y1 = cy + r * Math.sin(angle);
-        angle += sweep;
-        const x2 = cx + r * Math.cos(angle);
-        const y2 = cy + r * Math.sin(angle);
-        const largeArc = sweep > Math.PI ? 1 : 0;
-        paths += `<path d="M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z" fill="${s.color}" stroke="#fff" stroke-width="2"/>`;
-      });
+      let off = 0;
+      arcs = visible.map(s => {
+        const len = (s.value / total) * C;
+        const circle = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${s.color}" stroke-width="${sw}"
+          stroke-dasharray="${Math.max(0, len - gap)} ${C}" stroke-dashoffset="${-off}" transform="rotate(-90 ${cx} ${cy})"/>`;
+        off += len;
+        return circle;
+      }).join('');
     }
 
-    const legend = allSlices.map(s => `
-      <div style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#475569;">
-        <span style="width:10px;height:10px;border-radius:50%;background:${s.color};flex-shrink:0;"></span>
-        <span>${s.label}</span>
+    const pct = total ? Math.round(completed / total * 100) : 0;
+    const rows = segs.map(s => `
+      <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#475569;padding:4px 0;">
+        <span style="width:9px;height:9px;border-radius:3px;background:${s.color};flex-shrink:0;"></span>
+        <span style="flex:1;">${s.label}</span>
+        <b style="color:#0f172a;">${s.value}</b>
+        <span style="color:#94a3b8;font-size:11px;width:34px;text-align:right;">${total ? Math.round(s.value / total * 100) : 0}%</span>
       </div>`).join('');
 
     return `
-      <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${paths}</svg>
-      <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px 16px;margin-top:12px;">${legend}</div>`;
+      <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;justify-content:center;width:100%;">
+        <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="flex-shrink:0;">
+          ${arcs}
+          <text x="${cx}" y="${cy - 4}" text-anchor="middle" style="font-size:22px;font-weight:800;fill:#0f172a;">${pct}%</text>
+          <text x="${cx}" y="${cy + 15}" text-anchor="middle" style="font-size:10px;fill:#94a3b8;">completed</text>
+        </svg>
+        <div style="flex:1;min-width:160px;">
+          ${rows}
+          <div style="border-top:1px solid #f1f5f9;margin-top:6px;padding-top:6px;display:flex;justify-content:space-between;font-size:12.5px;">
+            <span style="color:#64748b;font-weight:600;">Total</span><b style="color:#0f172a;">${total}</b>
+          </div>
+        </div>
+      </div>`;
   }
 
   /* ── tasks table update ──────────────────────────────────────────── */
@@ -875,9 +984,9 @@ window.Pages.dashboard = (function () {
 
     const rows = sortDashTasks(filtered).map(t => {
       const dateStyle = t.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#475569;';
-      const urlLink = t.url ? `<a href="${t.url}" target="_blank" rel="noopener noreferrer" title="${t.url}" style="color:var(--color-primary-strong);flex-shrink:0;display:inline-flex;margin-left:4px;">
+      const urlLink = t.url ? `<a href="${esc(Utils.safeUrl(t.url))}" target="_blank" rel="noopener noreferrer" title="${esc(t.url)}" style="color:var(--color-primary-strong);flex-shrink:0;display:inline-flex;margin-left:4px;">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>` : '';
-      const transferred = t.transferredFrom ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 6px;border-radius:5px;background:#fffbeb;color:#b45309;border:1px solid #fde68a;font-weight:600;" title="${t.transferredBy ? 'Transferred by ' + t.transferredBy : ''}">🔄 from ${t.transferredFrom}</span>` : '';
+      const transferred = t.transferredFrom ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 6px;border-radius:5px;background:#fffbeb;color:#b45309;border:1px solid #fde68a;font-weight:600;" title="${t.transferredBy ? 'Transferred by ' + esc(t.transferredBy) : ''}">🔄 from ${esc(t.transferredFrom)}</span>` : '';
 
       let actionHTML;
       if (t.status === 'done') {
@@ -901,14 +1010,14 @@ window.Pages.dashboard = (function () {
             <span style="font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;" title="${esc(t.description)}">${esc(t.description)}</span>
             ${urlLink}
           </div>
-          ${t.type === 'Checklist' && t.department ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${t.department}</div>` : ''}
+          ${t.type === 'Checklist' && t.department ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${esc(t.department)}</div>` : ''}
           ${(t.type === 'FMS' || t.type === 'PI') && Array.isArray(t.details) && t.details.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${t.details.map(d => `<span style="font-size:10px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:1px 6px;white-space:nowrap;"><b>${esc(d.header)}:</b> ${esc(d.value) || '—'}</span>`).join('')}</div>` : ''}
           ${transferred}
         </td>
         <td style="${tdStyle}">
           <div style="display:flex;align-items:center;gap:6px;">
             ${avatarHTML(t.doer)}
-            <span style="color:#334155;">${t.doer || '—'}</span>
+            <span style="color:#334155;">${esc(t.doer) || '—'}</span>
           </div>
         </td>
         <td style="${tdStyle}">${t.frequency ? t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1) : '—'}</td>
@@ -1501,6 +1610,19 @@ window.Pages.dashboard = (function () {
           statRevised.textContent = newData.revised > 0 ? `+ ${newData.revised} shifted` : '';
           statRevised.style.display = newData.revised > 0 ? '' : 'none';
         }
+        /* update tile sub-labels */
+        const b = taskTypeBreakdown(newData.pendingTasks);
+        const statTotalSub     = el.querySelector('#db-stat-total-sub');
+        const statPendingSub   = el.querySelector('#db-stat-pending-sub');
+        const statCompletedBar = el.querySelector('#db-stat-completed-bar');
+        const statCompletedSub = el.querySelector('#db-stat-completed-sub');
+        const statRevisedSub   = el.querySelector('#db-stat-revised-sub');
+        const pct = newData.total ? Math.round(newData.completed / newData.total * 100) : 0;
+        if (statTotalSub)     statTotalSub.textContent = `${b.Delegation} del · ${b.Checklist} chk`;
+        if (statPendingSub)   { statPendingSub.textContent = newData.pending > 0 ? 'Awaiting action' : 'On track'; statPendingSub.style.display = newData.revised > 0 ? 'none' : ''; }
+        if (statCompletedBar) statCompletedBar.style.width = `${pct}%`;
+        if (statCompletedSub) statCompletedSub.textContent = `${pct}% done`;
+        if (statRevisedSub)   statRevisedSub.textContent = (newData.revised || 0) > 0 ? 'Needs rework' : 'None pending';
         /* update pie chart */
         const pieEl = el.querySelector('#db-pie-container');
         if (pieEl) pieEl.innerHTML = renderPieSVG(newData.completed, newData.pending, newData.revised, newData.upcoming || 0);
@@ -1569,6 +1691,8 @@ window.Pages.dashboard = (function () {
     }
     const btnDelegate = el.querySelector('#db-btn-delegate');
     if (btnDelegate) btnDelegate.addEventListener('click', () => { resetDelegateForm(); showModal('modal-delegate'); });
+    const btnNewTask = el.querySelector('#db-btn-new-task');
+    if (btnNewTask) btnNewTask.addEventListener('click', () => { resetDelegateForm(); showModal('modal-delegate'); });
     el.querySelector('#modal-delegate-close')?.addEventListener('click', () => hideModal('modal-delegate'));
     el.querySelector('#modal-delegate-cancel')?.addEventListener('click', () => hideModal('modal-delegate'));
     el.querySelector('#modal-delegate')?.addEventListener('click', () => hideModal('modal-delegate'));
@@ -2051,9 +2175,22 @@ window.Pages.dashboard = (function () {
       statRevised.textContent = dashData.revised > 0 ? `+ ${dashData.revised} revised` : '';
       statRevised.style.display = dashData.revised > 0 ? '' : 'none';
     }
+    const b = taskTypeBreakdown(dashData.pendingTasks);
+    const statTotalSub     = wrap.querySelector('#db-stat-total-sub');
+    const statPendingSub   = wrap.querySelector('#db-stat-pending-sub');
+    const statCompletedBar = wrap.querySelector('#db-stat-completed-bar');
+    const statCompletedSub = wrap.querySelector('#db-stat-completed-sub');
+    const statRevisedSub   = wrap.querySelector('#db-stat-revised-sub');
+    const pct = dashData.total ? Math.round(dashData.completed / dashData.total * 100) : 0;
+    if (statTotalSub)     statTotalSub.textContent = `${b.Delegation} del · ${b.Checklist} chk`;
+    if (statPendingSub)   { statPendingSub.textContent = dashData.pending > 0 ? 'Awaiting action' : 'On track'; statPendingSub.style.display = dashData.revised > 0 ? 'none' : ''; }
+    if (statCompletedBar) statCompletedBar.style.width = `${pct}%`;
+    if (statCompletedSub) statCompletedSub.textContent = `${pct}% done`;
+    if (statRevisedSub)   statRevisedSub.textContent = (dashData.revised || 0) > 0 ? 'Needs rework' : 'None pending';
     const pieEl = wrap.querySelector('#db-pie-container');
     if (pieEl) pieEl.innerHTML = renderPieSVG(dashData.completed, dashData.pending, dashData.revised, dashData.upcoming || 0);
 
+    _paintMeetings();
     _updateTasksTable(admin);
   }
 

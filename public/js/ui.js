@@ -27,7 +27,11 @@ window.UI = (function () {
     }
     const fontSize = Math.max(9, Math.round(size * 0.36));
     const radius = shape === 'square' ? 'var(--radius-md)' : '50%';
-    return `<div${id ? ` id="${id}"` : ''} class="ui-avatar ${className}" style="${bg};width:${size}px;height:${size}px;border-radius:${radius};display:inline-flex;align-items:center;justify-content:center;color:${textColor};font-size:${fontSize}px;font-weight:700;flex-shrink:0;letter-spacing:.02em;">${initials}</div>`;
+    // `initials` is derived from the first character of each word in `name`
+    // (a task's doer, a user's name, ...) — if that first character happens
+    // to be '<' or '&', it lands in this innerHTML unescaped.
+    const safeInitials = window.Utils ? window.Utils.esc(initials) : initials;
+    return `<div${id ? ` id="${id}"` : ''} class="ui-avatar ${className}" style="${bg};width:${size}px;height:${size}px;border-radius:${radius};display:inline-flex;align-items:center;justify-content:center;color:${textColor};font-size:${fontSize}px;font-weight:700;flex-shrink:0;letter-spacing:.02em;">${safeInitials}</div>`;
   }
 
   /* ── Pill (status/label) ────────────────────────────────────────── */
