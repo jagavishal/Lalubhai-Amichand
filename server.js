@@ -2292,6 +2292,18 @@ async function userCanUseFeature(user, page, feat) {
    adminOnly" rule. Admin/HOD pass as always; anyone else passes only when
    Users → Access has granted them that page. Used where a whole page's API
    surface (Employee Master) can be handed to a non-admin. */
+// Route-level mirror of userCanUseFeature, for an API surface that stays
+// Admin/HOD-only by default but can be handed to a specific User via a
+// page+feature checkbox in Users → Access (e.g. client-master's Payment
+// Management/History tabs) — unlike requireAdminOrPage, which only gates on
+// whole-page access, this needs the finer per-feature grant.
+function requireFeature(page, feat) {
+  return async (req, res, next) => {
+    if (await userCanUseFeature(req.session?.user, page, feat)) return next();
+    res.status(403).json({ error: 'Forbidden' });
+  };
+}
+
 function requireAdminOrPage(page) {
   return async (req, res, next) => {
     const user = req.session?.user;
@@ -12097,10 +12109,12 @@ async function nextPaymentEntryId() {
 }
 
 // GET /api/payment-entries — return all draft entries
-// Admin/HOD only: this and the three routes below handle real bank-payment
-// batches and (payment-history) bank account numbers — there is no separate
-// "Accounts" role in this app, so Admin/HOD is the narrowest existing gate.
-app.get('/api/payment-entries', requireAuth, requireAdmin, async (req, res) => {
+// Admin/HOD by default, same as this and the two routes below — real
+// bank-payment batches, no separate "Accounts" role in this app — but
+// Users → Access can grant a specific User the 'payment_management'
+// feature on 'client-master' (see client-master.js's Payment Management
+// tab), so this checks that instead of requireAdmin outright.
+app.get('/api/payment-entries', requireAuth, requireFeature('client-master', 'payment_management'), async (req, res) => {
   try {
     await ensureSchema();
     const rows = await q(`SELECT id, vendor_id, amount, txn_type, narration, status, created_by, created_at FROM payment_entries WHERE status='draft' ORDER BY created_at ASC`);
@@ -12109,7 +12123,7 @@ app.get('/api/payment-entries', requireAuth, requireAdmin, async (req, res) => {
 });
 
 // POST /api/payment-entries — replace all drafts with submitted array
-app.post('/api/payment-entries', requireAuth, requireAdmin, async (req, res) => {
+app.post('/api/payment-entries', requireAuth, requireFeature('client-master', 'payment_management'), async (req, res) => {
   const c = await pool.connect();
   try {
     await ensureSchema();
@@ -12150,7 +12164,7 @@ app.post('/api/payment-entries', requireAuth, requireAdmin, async (req, res) => 
 // Entries exported straight from freshly-typed rows (never saved as a draft first)
 // have no id yet — inserting them here rather than silently dropping them is what
 // keeps Payment History from losing those exports.
-app.patch('/api/payment-entries', requireAuth, requireAdmin, async (req, res) => {
+app.patch('/api/payment-entries', requireAuth, requireFeature('client-master', 'payment_management'), async (req, res) => {
   const c = await pool.connect();
   try {
     await ensureSchema();
@@ -12195,7 +12209,9 @@ app.patch('/api/payment-entries', requireAuth, requireAdmin, async (req, res) =>
 });
 
 // GET /api/payment-history — exported entries with vendor info
-app.get('/api/payment-history', requireAuth, requireAdmin, async (req, res) => {
+// Same reasoning as payment-entries above, gated on the separate
+// 'payment_history' feature so it can be granted independently.
+app.get('/api/payment-history', requireAuth, requireFeature('client-master', 'payment_history'), async (req, res) => {
   try {
     await ensureSchema();
     const rows = await q(`

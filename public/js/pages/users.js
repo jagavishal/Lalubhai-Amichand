@@ -111,6 +111,8 @@ window.Pages.users = (() => {
     ],
     'client-master': [
       { key: 'add', label: 'Add Vendor' },
+      { key: 'payment_management', label: 'Payment Management' },
+      { key: 'payment_history',    label: 'Payment History' },
     ],
     'consignee-master': [
       { key: 'add', label: 'Add Consignee' },

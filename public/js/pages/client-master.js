@@ -1202,10 +1202,14 @@ window.Pages['client-master'] = (() => {
     if (!el) return;
 
     // Payment Management/History call /api/payment-entries and
-    // /api/payment-history, which are Admin/HOD-only server-side — hide the
-    // tabs for everyone else instead of showing a tab that just 403s.
-    const showPayments = _isAdmin();
-    if (!showPayments && _tab !== 'vendors') _tab = 'vendors';
+    // /api/payment-history, which are Admin/HOD by default but grantable to a
+    // specific User via Users → Access ('payment_management'/'payment_history'
+    // on 'client-master') — hide whichever tab isn't granted instead of
+    // showing one that just 403s.
+    const canPaymentMgmt  = _hasFeature('payment_management');
+    const canPaymentHist  = _hasFeature('payment_history');
+    if (_tab === 'payments' && !canPaymentMgmt) _tab = 'vendors';
+    if (_tab === 'history'  && !canPaymentHist) _tab = 'vendors';
 
     let tabContent;
     if (_tab === 'vendors')       tabContent = _renderVendorTab();
@@ -1231,8 +1235,8 @@ window.Pages['client-master'] = (() => {
 
         + '<div style="display:flex;gap:0;border-top:1px solid #f1f5f9;padding:0 10px;">'
           + _tabBtn('tab-vendors',  'Vendor List',        iconVendor,  _tab === 'vendors')
-          + (showPayments ? _tabBtn('tab-payments', 'Payment Management', iconPayment, _tab === 'payments') : '')
-          + (showPayments ? _tabBtn('tab-history',  'Payment History',    iconHistory, _tab === 'history') : '')
+          + (canPaymentMgmt ? _tabBtn('tab-payments', 'Payment Management', iconPayment, _tab === 'payments') : '')
+          + (canPaymentHist ? _tabBtn('tab-history',  'Payment History',    iconHistory, _tab === 'history') : '')
         + '</div>'
 
       + '</div>'
@@ -1312,11 +1316,12 @@ window.Pages['client-master'] = (() => {
       const el = document.getElementById('main-content');
       if (el) el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:60vh;"><div style="text-align:center;"><div style="width:40px;height:40px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 14px;"></div><div style="font-size:13px;color:#94a3b8;font-weight:500;">Loading…</div></div></div>';
       // Load vendor list + draft payment entries in parallel, then render once.
-      // The payment-entries fetch is Admin/HOD-only server-side; skip it for
-      // everyone else rather than firing a request that will just 403.
+      // The payment-entries fetch 403s for anyone without the 'payment_management'
+      // feature server-side; skip it for everyone else rather than firing a
+      // request that will just fail.
       const [, draftRes] = await Promise.all([
         _load(true),
-        _isAdmin() ? fetch('/api/payment-entries').then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+        _hasFeature('payment_management') ? fetch('/api/payment-entries').then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
       ]);
       _initRows(Array.isArray(draftRes) ? draftRes : []);
       _render();
