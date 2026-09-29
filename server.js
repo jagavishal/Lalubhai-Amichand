@@ -1078,14 +1078,27 @@ function withSheetLock(key, fn) {
   _sheetLocks.set(key, next.catch(() => {}));
   return next;
 }
-function sheetSerialised(key, timeoutMs = 120000) {
+function sheetSerialised(key, handler, timeoutMs = 120000) {
   return (req, res, next) => withSheetLock(key, () => new Promise((resolve) => {
+    // The lock must stay held until HANDLER ITSELF finishes, not until the
+    // response reaches the client. This used to resolve on res's own
+    // 'finish'/'close' events instead — but a client-side abort (the
+    // frontend's 45s fetch timeout calling controller.abort()) fires 'close'
+    // on the server's response object immediately, well before the still-
+    // running Sheets/Drive calls below it complete, since the socket is
+    // simply gone. That released the lock early: the user's resubmit then
+    // ran concurrently with the still-in-flight first attempt, both read the
+    // same "next number" before either had logged its row, and both wrote a
+    // GRN/PO/PR/PI under that same number — a duplicated pair in the log
+    // (e.g. two GR #241s). Only the handler's own completion (or this
+    // timeoutMs ceiling, for a truly wedged request) may release the lock now.
     let done = false;
     const finish = () => { if (done) return; done = true; clearTimeout(timer); resolve(); };
     const timer = setTimeout(finish, timeoutMs);
-    res.on('finish', finish);
-    res.on('close', finish);
-    next();
+    Promise.resolve().then(() => handler(req, res, next)).catch((err) => {
+      console.error(`[sheetSerialised:${key}] handler threw:`, err && err.message);
+      if (!res.headersSent) { try { res.status(500).json({ error: 'Unexpected server error' }); } catch {} }
+    }).finally(finish);
   }));
 }
 
@@ -7306,7 +7319,7 @@ async function _erpPrLogRow(prNo) {
   return row ? { prNo: String(row[0]).trim(), format: row[1] || '', party: row[3] || '', department: row[5] || '', createdBy: row[8] || '', status: row[11] || 'Active' } : null;
 }
 
-app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res) => {
+app.post('/api/po-creation', requireAuth, sheetSerialised('po', async (req, res) => {
   try {
     const cfg = PO_FORMAT_CONFIG[req.body?.format];
     if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
@@ -7411,7 +7424,7 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po'), async (req, res
     _rememberCreate(dupeKey, resultPayload);
     return res.json(resultPayload);
   } catch (e) { console.error('[po-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
-});
+}));
 
 // GET /api/po-creation/list — recent POs created via the ERP, read straight
 // from the "ERP PO Log" tab (most recent first).
@@ -7920,7 +7933,7 @@ app.post('/api/pr-creation/items', requireAuth, async (req, res) => {
 // POST /api/pr-creation — fills the live template tab for the chosen format,
 // exports it as a PDF (saved to Drive), and logs the PR in "ERP PR Log". This
 // IS the database write; nothing is stored locally.
-app.post('/api/pr-creation', requireAuth, sheetSerialised('pr'), async (req, res) => {
+app.post('/api/pr-creation', requireAuth, sheetSerialised('pr', async (req, res) => {
   try {
     const cfg = PR_FORMAT_CONFIG[req.body?.format];
     if (!cfg) return res.status(400).json({ error: 'Unknown PR format' });
@@ -8094,7 +8107,7 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr'), async (req, res
     _rememberCreate(dupeKey, resultPayload);
     return res.json(resultPayload);
   } catch (e) { console.error('[pr-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
-});
+}));
 
 // GET /api/pr-creation/list — recent PRs created via the ERP, read straight
 // from the "ERP PR Log" tab (most recent first).
@@ -8779,7 +8792,7 @@ async function _ensureGrnItemCatalog(sheets) {
   return true;
 }
 
-app.post('/api/grn-creation', requireAuth, sheetSerialised('grn'), async (req, res) => {
+app.post('/api/grn-creation', requireAuth, sheetSerialised('grn', async (req, res) => {
   try {
     const { date, madeBy, prNo, vendorName, poNo, billNo, billRecvDate, deptHead, items, cgst, sgst, roundOff, comments } = req.body;
     if (!date || !vendorName || !madeBy) return res.status(400).json({ error: 'Date, Vendor Name and Made By are required' });
@@ -8953,7 +8966,7 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn'), async (req, r
     _rememberCreate(dupeKey, resultPayload);
     return res.json(resultPayload);
   } catch (e) { console.error('[grn-creation] failed:', e.message); return res.status(500).json({ error: e.message }); }
-});
+}));
 
 // GET /api/grn-creation/list — recent GRNs created via the ERP, read straight
 // from the "ERP GRN Log" tab (most recent first).
@@ -9940,7 +9953,7 @@ app.get('/api/consignee-master', requireAuth, async (req, res) => {
 // new consignee name would both pass "not already present" and both get
 // appended, producing two rows for the same buyer in the master the PI
 // typeahead reads from. Same lock key style already used for order/packing.
-app.post('/api/consignee-master', requireAuth, sheetSerialised('consignee'), async (req, res) => {
+app.post('/api/consignee-master', requireAuth, sheetSerialised('consignee', async (req, res) => {
   try {
     const allowed = await userCanUseFeature(req.session.user, 'consignee-master', 'add');
     if (!allowed) return res.status(403).json({ error: 'You do not have permission to add a consignee' });
@@ -9997,7 +10010,7 @@ app.post('/api/consignee-master', requireAuth, sheetSerialised('consignee'), asy
     console.error('[consignee-master] add failed:', e.message);
     return res.status(500).json({ error: e.message });
   }
-});
+}));
 
 // GET /api/proforma-invoice/masters?date=YYYY-MM-DD — next PI number for that
 // date's financial year, the boilerplate defaults the create form pre-fills
@@ -10292,7 +10305,7 @@ function _piFormFromBody(b, user, cleanItems) {
 // POST /api/proforma-invoice — User stage. No rate/price field is ever read
 // from the body here, by design: pricing is a separate, permission-gated
 // step (PUT /price below).
-app.post('/api/proforma-invoice', requireAuth, sheetSerialised('pi'), async (req, res) => {
+app.post('/api/proforma-invoice', requireAuth, sheetSerialised('pi', async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.date || !String(b.buyerName || '').trim()) return res.status(400).json({ error: 'Date and Consignee Name are required' });
@@ -10352,7 +10365,7 @@ app.post('/api/proforma-invoice', requireAuth, sheetSerialised('pi'), async (req
 
     return res.json({ success: true, piNumber: piNoFormatted, pdfLink, fmsTracked });
   } catch (e) { console.error('[proforma-invoice] create failed:', e.message); return res.status(500).json({ error: e.message }); }
-});
+}));
 
 // DELETE /api/consignee-master?name=... — owner-only, see SUPER_ADMIN_EMAIL.
 // Only the writable A:F block can be touched, so this removes the buyer from
@@ -10417,7 +10430,7 @@ app.delete('/api/consignee-master', requireAuth, requireSuperAdmin, async (req, 
 // and loses the thread. So this issues the NEXT REVISION of the same number
 // ("VTV/052/25-26" -> "VTV/052/25-26 R1"), marks the parent Superseded, and
 // leaves the parent's own PDF in place as the record of what was first offered.
-app.post('/api/proforma-invoice/revise', requireAuth, sheetSerialised('pi'), async (req, res) => {
+app.post('/api/proforma-invoice/revise', requireAuth, sheetSerialised('pi', async (req, res) => {
   try {
     const piNo = String(req.query.piNo || '').trim();
     if (!piNo) return res.status(400).json({ error: 'piNo is required' });
@@ -10506,7 +10519,7 @@ app.post('/api/proforma-invoice/revise', requireAuth, sheetSerialised('pi'), asy
     console.error('[proforma-invoice] revise failed:', e.message);
     return res.status(500).json({ error: e.message });
   }
-});
+}));
 
 // GET /api/proforma-invoice/list — recent PIs, newest first, capped at 200 —
 // same shape as PO/PR/GRN's own /list routes. `canSetPrice` is computed
@@ -10846,7 +10859,7 @@ async function _closeFmsAppPageSteps(kind, keys, userName) {
 // PI's own stored Form JSON for buyer/item/qty details (the template tab may
 // belong to a different, newer PI by now), merges in rate/GST/freight, does
 // a full re-fill + re-export, then updates the SAME log row in place.
-app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi'), async (req, res) => {
+app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi', async (req, res) => {
   try {
     const piNo = req.query.piNo;
     if (!piNo) return res.status(400).json({ error: 'piNo is required' });
@@ -10953,7 +10966,7 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi'), async
     console.error('[proforma-invoice] price update failed:', e.message);
     return res.status(e.notFound ? 404 : 500).json({ error: e.message });
   }
-});
+}));
 
 // PUT /api/proforma-invoice/cancel?piNo=... — same Cancel-in-place pattern
 // as PO/PR/GRN: flips Status only, never deletes the row or touches the
@@ -11256,7 +11269,7 @@ async function _piFormByNo(sheets, piNo) {
 // POST /api/order-sheet — raises the Order Sheet for one PI: fills the tab,
 // exports the PDF and logs the order. Body carries only the order-side fields;
 // everything about the customer and the goods comes from the PI.
-app.post('/api/order-sheet', requireAuth, sheetSerialised('order'), async (req, res) => {
+app.post('/api/order-sheet', requireAuth, sheetSerialised('order', async (req, res) => {
   try {
     const b = req.body || {};
     const piNo = String(b.piNo || '').trim();
@@ -11348,7 +11361,7 @@ app.post('/api/order-sheet', requireAuth, sheetSerialised('order'), async (req, 
     console.error('[order-sheet] create failed:', e.message);
     return res.status(500).json({ error: e.message });
   }
-});
+}));
 
 // GET /api/order-sheet/xlsx?orderNo=... — the same order as a real Excel
 // workbook, built from the order's stored form rather than exported from the
@@ -11940,7 +11953,7 @@ async function _plSyncOrderStatuses(sheets, orderNos) {
 // POST /api/packing-list — raises one Packing List across one or more orders:
 // fills the tab, exports the PDF, logs it and moves every order it shipped to
 // Partly Packed or Packed.
-app.post('/api/packing-list', requireAuth, sheetSerialised('packing'), async (req, res) => {
+app.post('/api/packing-list', requireAuth, sheetSerialised('packing', async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.plDate) return res.status(400).json({ error: 'Date is required' });
@@ -12029,7 +12042,7 @@ app.post('/api/packing-list', requireAuth, sheetSerialised('packing'), async (re
     console.error('[packing-list] create failed:', e.message);
     return res.status(500).json({ error: e.message });
   }
-});
+}));
 
 // GET /api/packing-list/list — recent packing lists, newest first, capped at 200.
 app.get('/api/packing-list/list', requireAuth, async (req, res) => {
@@ -12058,7 +12071,7 @@ async function _plByNo(sheets, plNo) {
 // PI and the Order Sheet: the row stays and the archived PDF is never touched.
 // The quantities it held go straight back onto the orders' balance, which is
 // the whole reason a mis-keyed packing list is cancelled rather than left.
-app.put('/api/packing-list/cancel', requireAuth, sheetSerialised('packing'), async (req, res) => {
+app.put('/api/packing-list/cancel', requireAuth, sheetSerialised('packing', async (req, res) => {
   try {
     const plNo = req.query.plNo;
     if (!plNo) return res.status(400).json({ error: 'plNo is required' });
@@ -12078,13 +12091,13 @@ app.put('/api/packing-list/cancel', requireAuth, sheetSerialised('packing'), asy
     } catch (e) { console.error('[packing-list] order status write-back after cancel failed:', e.message); }
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
-});
+}));
 
 // Owner-only, and worth the same warning the PI's and the order's deletes
 // carry: the next packing list number is the highest on this log plus one, so
 // deleting the most recent one hands its number to the next one raised — while
 // its PDF may already be with the shipping line.
-app.delete('/api/packing-list', requireAuth, requireSuperAdmin, sheetSerialised('packing'), async (req, res) => {
+app.delete('/api/packing-list', requireAuth, requireSuperAdmin, sheetSerialised('packing', async (req, res) => {
   try {
     const plNo = req.query.plNo;
     if (!plNo) return res.status(400).json({ error: 'plNo is required' });
@@ -12100,7 +12113,7 @@ app.delete('/api/packing-list', requireAuth, requireSuperAdmin, sheetSerialised(
     } catch (e) { console.error('[packing-list] order status write-back after delete failed:', e.message); }
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
-});
+}));
 
 // ── Payment Entries ───────────────────────────────────────────────────────────
 
