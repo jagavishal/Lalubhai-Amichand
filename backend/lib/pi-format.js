@@ -24,7 +24,7 @@
 // stamps the version it painted onto the tab as developer metadata and
 // repaints the tab before the next fill when the two differ — so a layout
 // change ships with an ordinary deploy, no script run needed.
-const TEMPLATE_VERSION = 2;
+const TEMPLATE_VERSION = 3;
 const TEMPLATE_VERSION_KEY = 'lal_pi_template_version';
 
 const LETTERHEAD = {
@@ -66,7 +66,18 @@ function buildLayout() {
   const itemsFirstRow = 16;
   const itemsLastRow = itemsFirstRow + ITEM_ROWS - 1;
   const totalRow = itemsLastRow + 1;
-  const wordsRow = totalRow + 1;
+  // Set on the Add Price screen, at the whole-PI level (not per item) — see
+  // CELLS.extraChargesLabel/Amount and discountLabel/Amount below. Always
+  // printed, even at 0, same discipline as GRN's CGST/SGST/RoundOff rows.
+  const extraChargesRow = totalRow + 1;
+  const discountRow = extraChargesRow + 1;
+  // Items total + Extra Charges - Special Discount — a live formula painted
+  // once by pi-template.js, never written per-PI (same "never recompute the
+  // formula's math server-side" rule as totalRow itself). This is the figure
+  // server.js reads back as the PI's total for the log/mail/FMS tracker and
+  // the amount-in-words line, so it already reflects both adjustments.
+  const grandTotalRow = discountRow + 1;
+  const wordsRow = grandTotalRow + 1;
   const validityRow = wordsRow + 2;          // one 6px spacer row between
   const bankRow = validityRow + 1;
   const termsHeadingRow = bankRow + 1;
@@ -108,6 +119,9 @@ function buildLayout() {
     itemsLastRow,
     totalRow,
     totalLabelFirst: 'A', totalLabelLast: 'H',   // merged "TOTAL" cell
+    extraChargesRow,
+    discountRow,
+    grandTotalRow,
     wordsRow,
     wordsFirst: 'A', wordsLast: 'I',             // amount in words
     totalCapFirst: 'J', totalCapLast: 'L',       // total caption — see priceLabels()
@@ -170,6 +184,17 @@ const CELLS = {
   countryOfOrigin: 'K13',
   // Full-width lines
   shipmentNote: 'A14',
+  // Extra Charges / Special Discount — whole-PI, set on the Add Price screen.
+  // Label holds a composed description ("Extra Charges — Freight: 500.00,
+  // Handling: 200.00"); Amount holds the summed figure. Both are plain
+  // values written by server.js, unlike grandTotalRow's own amount (a
+  // formula the template painter writes once — see LAYOUT.grandTotalRow).
+  // 'N' matches ITEMS.amountCol below — hardcoded rather than referenced
+  // because ITEMS is declared after CELLS in this file.
+  extraChargesLabel: `A${LAYOUT.extraChargesRow}`,
+  extraChargesAmount: `N${LAYOUT.extraChargesRow}`,
+  discountLabel: `A${LAYOUT.discountRow}`,
+  discountAmount: `N${LAYOUT.discountRow}`,
   amountInWords: `A${LAYOUT.wordsRow}`,
   validityNote: `A${LAYOUT.validityRow}`,
   bankNote: `A${LAYOUT.bankRow}`,
@@ -230,6 +255,10 @@ const ITEMS = {
 };
 
 const TOTAL_CELL = `${ITEMS.amountCol}${LAYOUT.totalRow}`;
+// Items total + Extra Charges - Special Discount — see LAYOUT.grandTotalRow.
+// This, not TOTAL_CELL, is what a PI's "total" means everywhere outside the
+// item table itself: log, mail, FMS tracker, amount in words.
+const GRAND_TOTAL_CELL = `${ITEMS.amountCol}${LAYOUT.grandTotalRow}`;
 
 // ── Price basis and currency ────────────────────────────────────────────────
 // Both are chosen on the Add Price screen, not at create time — until a rate
@@ -454,7 +483,7 @@ function validityNote(validity) {
 
 module.exports = {
   TEMPLATE_VERSION, TEMPLATE_VERSION_KEY,
-  LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL,
+  LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, GRAND_TOTAL_CELL,
   PRODUCT_SOURCE, RATE_SOURCE, CONTAINERS, CONSIGNEE_SOURCE, FMS_TRACKER, DEFAULTS, SHIPMENT_DAYS_RE,
   PRICE_TYPES, CURRENCIES, PRICE_DEFAULT, priceLabels, validityNote,
 };

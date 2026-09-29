@@ -184,13 +184,24 @@ const DEFAULTS = {
 // Order Nos and PI Nos are comma-joined because one packing list can answer to
 // several of each; the authoritative per-line breakdown is in Form JSON, which
 // is also what the balance-still-to-ship is computed from.
+// Approval Status/Decided By/Decided At (N:P) are a SEPARATE axis from Status
+// (M) — M stays Open/Cancelled and keeps doing its existing job (driving the
+// order's still-to-ship balance in _plPackedByLine); folding Sajil Sir's
+// approve/reject into that same column, PO/PR-style, would mean a Cancelled
+// list could no longer be told apart from a Rejected one, and cancelling
+// would have to know how to leave an approval decision alone. N starts every
+// new packing list as 'Pending' and is set by /pl-action, same bridge as
+// /po-action and /pr-action.
 const PACKING_LOG_HEADER = [
   'Packing List No', 'Date', 'Invoice No', 'Order Nos', 'PI Nos', 'Customer',
   'Total Packed Qty', 'Total Cartons', 'PDF Link', 'Created By', 'Created At',
-  'Form JSON', 'Status',
+  'Form JSON', 'Status', 'Approval Status', 'Decided By', 'Decided At',
 ];
 // Status column of that log, for the Cancel-in-place route.
 const PACKING_LOG_STATUS_COL = 'M';
+// Sajil Sir's approve/reject axis — see the comment above PACKING_LOG_HEADER.
+const PACKING_LOG_APPROVAL_COL = 'N';
+const PACKING_LOG_DECISION_HEADERS = ['Decided By', 'Decided At'];
 
 // How far along an order sheet is, written back onto the "ERP Order sheet Log"
 // Status column as packing lists are raised against it. 'Open' is what raising
@@ -206,5 +217,6 @@ const ORDER_LOG_STATUS_COL = 'J';
 
 module.exports = {
   COMPANY, DEPARTMENT, LAYOUT, HEADER_LINES, CELLS, ITEMS, DEFAULTS,
-  PACKING_LOG_HEADER, PACKING_LOG_STATUS_COL, ORDER_STATUS, ORDER_LOG_STATUS_COL,
+  PACKING_LOG_HEADER, PACKING_LOG_STATUS_COL, PACKING_LOG_APPROVAL_COL, PACKING_LOG_DECISION_HEADERS,
+  ORDER_STATUS, ORDER_LOG_STATUS_COL,
 };

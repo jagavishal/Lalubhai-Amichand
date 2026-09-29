@@ -183,7 +183,29 @@ async function paintPiTemplate(sheets, spreadsheetId, sheetId, tabTitle, log) {
     .forEach(col => values.push({ range: `'${TAB}'!${col}${L.totalRow}`, values: [[sumRange(col)]] }));
   values.push(put(`${RATE}${L.totalRow}`, '-'));
   values.push({ range: `'${TAB}'!${ITEMS.amountCol}${L.totalRow}`, values: [[sumRange(ITEMS.amountCol)]] });
-  values.push({ range: `'${TAB}'!${L.totalValFirst}${L.wordsRow}`, values: [[`=${ITEMS.amountCol}${L.totalRow}`]] });
+
+  // Extra Charges / Special Discount — server.js writes the label + amount
+  // per PI at pricing time (see PI_FMT.CELLS.extraChargesLabel/Amount and
+  // discountLabel/Amount); painted here only as the default placeholder text
+  // an unpriced PI (or one raised before this existed) shows.
+  values.push(put(PI.CELLS.extraChargesLabel, 'Extra Charges'));
+  values.push(put(PI.CELLS.discountLabel, 'Special Discount'));
+  // Grand Total = Items Total + Extra Charges - Special Discount. A live
+  // formula, painted once — never written per-PI, same rule as the item
+  // Amount column and the plain TOTAL above. N() treats either summary row's
+  // blank/placeholder cell as 0, so an unpriced PI's Grand Total is simply
+  // its item total.
+  const n = (a1) => `N(${a1})`;
+  values.push({
+    range: `'${TAB}'!${ITEMS.amountCol}${L.grandTotalRow}`,
+    values: [[`=IF(AND(${n(`${ITEMS.amountCol}${L.totalRow}`)}=0,${n(PI.CELLS.extraChargesAmount)}=0,${n(PI.CELLS.discountAmount)}=0),"",`
+      + `ROUND(${n(`${ITEMS.amountCol}${L.totalRow}`)}+${n(PI.CELLS.extraChargesAmount)}-${n(PI.CELLS.discountAmount)},2))`]],
+  });
+  values.push(put(`A${L.grandTotalRow}`, 'GRAND TOTAL'));
+  // The "total value" figure beside "Amount in words" is the Grand Total, not
+  // the raw item total — the words themselves are written by server.js's
+  // _finishPiSubmission once it reads PI_FMT.GRAND_TOTAL_CELL back.
+  values.push({ range: `'${TAB}'!${L.totalValFirst}${L.wordsRow}`, values: [[`=${ITEMS.amountCol}${L.grandTotalRow}`]] });
 
   await sheets.spreadsheets.values.batchUpdate({
     spreadsheetId,
@@ -255,11 +277,19 @@ async function paintPiTemplate(sheets, spreadsheetId, sheetId, tabTitle, log) {
   requests.push(numberFormat(sheetId, L.itemsFirstRow, L.totalRow, ITEMS.fields.rate, ITEMS.fields.rate, '0.000'));
   requests.push(numberFormat(sheetId, L.itemsFirstRow, L.wordsRow, ITEMS.amountCol, ITEMS.amountCol, '#,##0.00'));
 
-  // ── totals row + amount-in-words row
-  requests.push(merge(sheetId, L.totalRow, L.totalRow, L.totalLabelFirst, L.totalLabelLast));
-  requests.push(text(sheetId, L.totalRow, L.totalRow, FC, LC, { align: 'CENTER', bold: true, size: 9, bg: SOFT }));
+  // ── totals row, Extra Charges / Special Discount / Grand Total, and
+  // amount-in-words row. Extra Charges and Special Discount use the LABEL
+  // side (A:H) as a plain left-aligned line for the composed description
+  // rather than a right-aligned caption, since that cell's text is the whole
+  // point of the row; Grand Total goes back to the TOTAL row's own style.
+  [L.totalRow, L.extraChargesRow, L.discountRow, L.grandTotalRow].forEach(r => {
+    requests.push(merge(sheetId, r, r, L.totalLabelFirst, L.totalLabelLast));
+    requests.push(text(sheetId, r, r, FC, LC, { align: 'CENTER', bold: true, size: 9, bg: SOFT }));
+    requests.push(rowHeight(sheetId, r, r, 20));
+  });
   requests.push(text(sheetId, L.totalRow, L.totalRow, L.totalLabelFirst, L.totalLabelLast, { align: 'RIGHT', bold: true, size: 9, bg: SOFT }));
-  requests.push(rowHeight(sheetId, L.totalRow, L.totalRow, 20));
+  requests.push(text(sheetId, L.extraChargesRow, L.discountRow, L.totalLabelFirst, L.totalLabelLast, { align: 'LEFT', bold: false, size: 8, bg: SOFT }));
+  requests.push(text(sheetId, L.grandTotalRow, L.grandTotalRow, L.totalLabelFirst, L.totalLabelLast, { align: 'RIGHT', bold: true, size: 9, bg: SOFT }));
   requests.push(merge(sheetId, L.wordsRow, L.wordsRow, L.wordsFirst, L.wordsLast));
   requests.push(merge(sheetId, L.wordsRow, L.wordsRow, L.totalCapFirst, L.totalCapLast));
   requests.push(merge(sheetId, L.wordsRow, L.wordsRow, L.totalValFirst, LC));

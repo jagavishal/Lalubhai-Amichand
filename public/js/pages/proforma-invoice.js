@@ -60,6 +60,12 @@ window.Pages['proforma-invoice'] = (() => {
   // after that starts with the code the buyer knows.
   let _buyerCodes = {};
   let _buyerCodesFor = '';
+  // Same idea, for Per Box Dozen Packing / CBM per Box / Weight per Pc — the
+  // product master's figures are a generic default; a buyer-specific box
+  // count or CBM correction made on an earlier PI should keep applying to
+  // every later line for that buyer + model instead of being re-typed each time.
+  let _buyerSpecs = {};
+  let _buyerSpecsFor = '';
 
   // PI List (in-page tab) state — read-only history from the ERP PI Log tab.
   let _pilRows = [];
@@ -419,7 +425,7 @@ window.Pages['proforma-invoice'] = (() => {
     input.addEventListener('focus', showMatches);
     // A name typed straight in (a buyer not on either list) still gets its
     // earlier client codes looked up once the box is left.
-    input.addEventListener('change', () => _loadBuyerCodes(input.value.trim()));
+    input.addEventListener('change', () => { _loadBuyerCodes(input.value.trim()); _loadBuyerSpecs(input.value.trim()); });
     dd.addEventListener('mousedown', (e) => {
       const opt = e.target.closest('.pic-buyer-opt');
       if (!opt) return;
@@ -428,6 +434,7 @@ window.Pages['proforma-invoice'] = (() => {
       input.value = c.name;
       if (!c.recent) _fillFromConsignee(c);
       _loadBuyerCodes(c.name);
+      _loadBuyerSpecs(c.name);
       dd.style.display = 'none';
     });
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
@@ -464,6 +471,42 @@ window.Pages['proforma-invoice'] = (() => {
     if (!model) return;
     const code = _buyerCodes[model + '|' + _sizeKey(sizeEl ? sizeEl.value : '')] || _buyerCodes[model] || '';
     if (code) codeEl.value = code;
+  }
+
+  /* ── Buyer-specific Per Box Dozen Packing / CBM per Box / Weight per Pc ──
+     Same fetch-once-per-buyer, apply-to-every-matching-line pattern as the
+     client codes above, just for these three physical specs instead — see
+     GET /api/proforma-invoice/buyer-item-specs. Unlike a client code, these
+     DO overwrite whatever the product master just filled in (picking a
+     product already overwrites a typed value for the same reason — see
+     _applyProduct), since a buyer-specific figure is more specific than the
+     master's generic one; a further hand-edit after that still wins. */
+  async function _loadBuyerSpecs(buyerName) {
+    const name = String(buyerName || '').trim();
+    if (!name || name === _buyerSpecsFor) return;
+    _buyerSpecsFor = name;
+    _buyerSpecs = {};
+    try {
+      const data = await Utils.apiFetch('/api/proforma-invoice/buyer-item-specs?buyer=' + encodeURIComponent(name));
+      if (_buyerSpecsFor !== name) return;   // the buyer changed again meanwhile
+      _buyerSpecs = (data && data.specs) || {};
+    } catch { return; }
+    document.querySelectorAll('#pic-items-tbody .pic-item-row').forEach(_applyBuyerSpec);
+  }
+
+  function _applyBuyerSpec(row) {
+    const modelEl = row.querySelector('[data-field="modelNo"]');
+    if (!modelEl) return;
+    const model = modelEl.value.trim().toLowerCase();
+    if (!model) return;
+    const sizeEl = row.querySelector('[data-field="size"]');
+    const spec = _buyerSpecs[model + '|' + _sizeKey(sizeEl ? sizeEl.value : '')] || _buyerSpecs[model];
+    if (!spec) return;
+    const put = (f, v) => { if (!v) return; const el = row.querySelector('[data-field="' + f + '"]'); if (el) el.value = v; };
+    put('packing', spec.packing);
+    put('cbmPerBox', spec.cbmPerBox);
+    put('weightPerPc', spec.weightPerPc);
+    _recomputeRow(row);
   }
 
   /* ── Model-No typeahead per row — same fixed-position dropdown pattern
@@ -600,6 +643,7 @@ window.Pages['proforma-invoice'] = (() => {
       ? '<img src="' + esc(p.imageUrl) + '" alt="" onerror="this.remove()" style="max-width:44px;max-height:40px;object-fit:contain;border-radius:4px;" />'
       : '<span style="font-size:10px;color:#cbd5e1;">no photo</span>';
     _applyBuyerCode(row);
+    _applyBuyerSpec(row);
     _recomputeRow(row);
   }
 
@@ -856,6 +900,7 @@ window.Pages['proforma-invoice'] = (() => {
     renderPage();
     _prefillForm(row.form || {});
     _loadBuyerCodes((row.form || {}).buyerName);
+    _loadBuyerSpecs((row.form || {}).buyerName);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -1443,7 +1488,7 @@ window.Pages['proforma-invoice'] = (() => {
   function _priceRecompute() {
     const modal = document.getElementById('pi-price-modal');
     if (!modal) return;
-    let total = 0;
+    let itemsTotal = 0;
     const kgEl = document.getElementById('pipm-rate-kg');
     const rateKg = kgEl ? _num(kgEl.value) : 0;
     modal.querySelectorAll('.pipm-item-row').forEach(row => {
@@ -1452,7 +1497,7 @@ window.Pages['proforma-invoice'] = (() => {
       const rate = _num(row.querySelector('.pipm-rate').value);
       const amt = Math.round(qty * rate * 100) / 100;
       row.querySelector('.pipm-amount').textContent = _fmtUsd(amt);
-      total += amt;
+      itemsTotal += amt;
       // The typed rate read back as a rate per kg — the check the pricer
       // does in their head, done for them.
       const perKg = row.querySelector('.pipm-perkg');
@@ -1469,7 +1514,59 @@ window.Pages['proforma-invoice'] = (() => {
         }
       }
     });
-    document.getElementById('pipm-total').textContent = _fmtUsd(total);
+    // Extra Charges / Special Discount — whole-PI, not per item (see the
+    // section below the item table). Grand Total is what the PI actually
+    // prints (see PI_FMT.CELLS.grandTotalRow server-side).
+    const sumCharges = (kind) => Array.from(modal.querySelectorAll('.pipm-charge-row[data-kind="' + kind + '"] .pipm-charge-amount'))
+      .reduce((s, el) => s + _num(el.value), 0);
+    const extraTotal = sumCharges('extra');
+    const discountTotal = sumCharges('discount');
+    const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    set('pipm-items-total', _fmtUsd(itemsTotal));
+    set('pipm-extra-total', _fmtUsd(extraTotal));
+    set('pipm-discount-total', _fmtUsd(discountTotal));
+    set('pipm-total', _fmtUsd(itemsTotal + extraTotal - discountTotal));
+  }
+
+  /* ── Extra Charges / Special Discount — repeatable, whole-PI lines ────── */
+  function _chargeLineHtml(kind, line) {
+    line = line || {};
+    return '<div class="pipm-charge-row" data-kind="' + esc(kind) + '" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">'
+      + '<input type="text" class="pipm-charge-label" placeholder="Description" value="' + esc(line.label || '') + '" style="flex:1;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
+      + '<input type="text" inputmode="decimal" class="pipm-charge-amount" placeholder="0.00" value="' + esc(line.amount ?? '') + '" style="width:96px;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" />'
+      + '<button type="button" class="pipm-charge-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;flex:none;" title="Remove line">×</button>'
+    + '</div>';
+  }
+
+  function _chargeSectionHtml(kind, label, lines, color) {
+    return '<div style="flex:1;min-width:240px;">'
+      + '<div style="font-size:11px;font-weight:700;color:' + color + ';text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">' + esc(label) + '</div>'
+      + '<div class="pipm-charge-list" data-kind="' + esc(kind) + '">' + (lines.length ? lines.map(l => _chargeLineHtml(kind, l)).join('') : '') + '</div>'
+      + '<button type="button" class="pipm-charge-add" data-kind="' + esc(kind) + '" style="padding:5px 12px;border-radius:7px;background:#fff;border:1.5px dashed #cbd5e1;color:#64748b;font-size:12px;font-weight:600;cursor:pointer;">+ Add line</button>'
+    + '</div>';
+  }
+
+  // Bound once on the modal (the outer div persists across opens — only its
+  // innerHTML is rebuilt — same reason _bindRateUseLinks guards itself).
+  function _bindChargeLines(modal) {
+    if (modal.dataset.chargeLinesBound) return;
+    modal.dataset.chargeLinesBound = '1';
+    modal.addEventListener('click', (e) => {
+      const addBtn = e.target.closest('.pipm-charge-add');
+      if (addBtn) {
+        const list = modal.querySelector('.pipm-charge-list[data-kind="' + addBtn.dataset.kind + '"]');
+        if (list) list.insertAdjacentHTML('beforeend', _chargeLineHtml(addBtn.dataset.kind, null));
+        return;
+      }
+      const rmBtn = e.target.closest('.pipm-charge-remove');
+      if (rmBtn) {
+        rmBtn.closest('.pipm-charge-row').remove();
+        _priceRecompute();
+      }
+    });
+    modal.addEventListener('input', (e) => {
+      if (e.target.classList.contains('pipm-charge-amount')) _priceRecompute();
+    });
   }
 
   // Every "use this rate" link on the Add Price screen — last price, sheet
@@ -1619,8 +1716,19 @@ window.Pages['proforma-invoice'] = (() => {
               + '</tbody>'
             + '</table>'
           + '</div>'
+          // Extra Charges / Special Discount — whole-PI, not per item, and
+          // each can hold more than one line (freight, handling, a loyalty
+          // discount, ...). Printed on the PI just above its Grand Total.
+          + '<div style="display:flex;flex-wrap:wrap;gap:20px;padding:14px 16px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;">'
+            + _chargeSectionHtml('extra', 'Extra Charges', Array.isArray(form.extraCharges) ? form.extraCharges : [], '#b45309')
+            + _chargeSectionHtml('discount', 'Special Discount', Array.isArray(form.specialDiscounts) ? form.specialDiscounts : [], '#b91c1c')
+          + '</div>'
           + '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
-            + '<div><span id="pipm-total-cap" style="font-size:12.5px;font-weight:700;color:#64748b;">' + esc('Total ' + priceType + ' ' + _currencyLabel(currency)) + ' </span><span style="font-size:17px;font-weight:800;color:#0f172a;"><span id="pipm-total">0.00</span></span></div>'
+            + '<div style="font-size:12.5px;color:#64748b;">Items Total <b id="pipm-items-total" style="color:#0f172a;">0.00</b></div>'
+            + '<div style="font-size:12.5px;color:#b45309;">Extra Charges <b id="pipm-extra-total">0.00</b></div>'
+            + '<div style="font-size:12.5px;color:#b91c1c;">Special Discount <b id="pipm-discount-total">0.00</b></div>'
+            + '<div style="border-top:1px solid #e2e8f0;width:100%;margin:2px 0;"></div>'
+            + '<div><span id="pipm-total-cap" style="font-size:12.5px;font-weight:700;color:#64748b;">' + esc('Grand Total ' + priceType + ' ' + _currencyLabel(currency)) + ' </span><span style="font-size:17px;font-weight:800;color:#0f172a;"><span id="pipm-total">0.00</span></span></div>'
             + '<div style="font-size:11.5px;color:#94a3b8;">Shown for confirmation — the printed total is the sheet\'s own formula.</div>'
           + '</div>'
         + '</div>'
@@ -1643,7 +1751,7 @@ window.Pages['proforma-invoice'] = (() => {
       const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
       set('pipm-rate-head', t + ' ' + c + ' Per Pc');
       set('pipm-amount-head', 'Amount (' + c + ')');
-      set('pipm-total-cap', 'Total ' + t + ' ' + c + ' ');
+      set('pipm-total-cap', 'Grand Total ' + t + ' ' + c + ' ');
       set('pipm-price-note', 'The PI prints these: “' + t + ' ' + c + ' Per Pc” on the rate column, and the total and amount in words to match.');
     };
     ['pipm-price-type', 'pipm-currency'].forEach(id => {
@@ -1669,6 +1777,7 @@ window.Pages['proforma-invoice'] = (() => {
       Utils.showToast(filled ? filled + ' rate' + (filled > 1 ? 's' : '') + ' filled from ' + _fmtRate(rateKg) + '/kg' : 'Every line already has a rate (or no weight per pc to work from)', filled ? 'success' : 'warning');
     });
     _bindRateUseLinks(modal);
+    _bindChargeLines(modal);
     _priceRecompute();
     _loadLastPrices(row);
   }
@@ -1731,6 +1840,10 @@ window.Pages['proforma-invoice'] = (() => {
       index: parseInt(row.dataset.index, 10),
       rate: row.querySelector('.pipm-rate').value.trim(),
     }));
+    const chargeLines = (kind) => Array.from(modal.querySelectorAll('.pipm-charge-row[data-kind="' + kind + '"]')).map(row => ({
+      label: row.querySelector('.pipm-charge-label').value.trim(),
+      amount: row.querySelector('.pipm-charge-amount').value.trim(),
+    }));
 
     _priceSaving = true;
     const btn = document.getElementById('pipm-save');
@@ -1743,6 +1856,8 @@ window.Pages['proforma-invoice'] = (() => {
           priceType: document.getElementById('pipm-price-type').value,
           currency: document.getElementById('pipm-currency').value,
           ratePerKg: (document.getElementById('pipm-rate-kg') || {}).value || '',
+          extraCharges: chargeLines('extra'),
+          specialDiscounts: chargeLines('discount'),
         }),
       });
       // The server closes the tracker's "Add Pricing" step as part of this
@@ -2155,7 +2270,20 @@ window.Pages['proforma-invoice'] = (() => {
       + (styles[status] || styles.Open) + '">' + esc(status || 'Open') + '</span>';
   }
 
-  const _PKL_COLS = ['Packing List No', 'Date', 'Invoice No', 'Orders Shipped', 'Party', 'Status', 'Packed Qty', 'Cartons', 'PDF', 'Actions'];
+  // Sajil Sir's approve/reject decision, as recorded from the emailed
+  // /pl-action link — a SEPARATE axis from the Open/Cancelled pill above
+  // (see the comment on PACKING_LOG_HEADER in packing-list-format.js). Same
+  // pill styling as po-creation.js's own approval pill.
+  function _pklApprovalPillHtml(r) {
+    const pill = (label, bg, fg, title) => '<span title="' + esc(title || '') + '" style="display:inline-flex;padding:2px 8px;border-radius:10px;background:' + bg + ';color:' + fg + ';font-size:11px;font-weight:600;">' + esc(label) + '</span>';
+    if (r.status === 'Cancelled') return pill('—', '#f1f5f9', '#94a3b8');
+    const who = r.decidedBy ? 'by ' + r.decidedBy + (r.decidedAt ? ' on ' + r.decidedAt : '') : '';
+    if (r.approvalStatus === 'Approved') return pill('Approved', '#dcfce7', '#15803d', who);
+    if (r.approvalStatus === 'Rejected') return pill('Rejected', '#fee2e2', '#b91c1c', who);
+    return pill('Awaiting approval', '#fef3c7', '#b45309');
+  }
+
+  const _PKL_COLS = ['Packing List No', 'Date', 'Invoice No', 'Orders Shipped', 'Party', 'Status', 'Approval', 'Packed Qty', 'Cartons', 'PDF', 'Actions'];
 
   function _pklFilterBarHtml() {
     return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
@@ -2215,6 +2343,7 @@ window.Pages['proforma-invoice'] = (() => {
         + '<td style="padding:8px 10px;font-size:12px;line-height:1.5;">' + esc(r.orderNos || '—') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + _pklStatusPillHtml(r.status) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + _pklApprovalPillHtml(r) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">' + num(r.totalQty) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">' + num(r.totalCartons) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
@@ -2222,6 +2351,9 @@ window.Pages['proforma-invoice'] = (() => {
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
             : '<button type="button" class="pkl-cancel-btn" data-pl="' + esc(r.plNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
+          + (r.status !== 'Cancelled' && r.approvalStatus !== 'Approved' && r.approvalStatus !== 'Rejected'
+            ? '<button type="button" class="pkl-resend-btn" data-pl="' + esc(r.plNo) + '" title="Email the approver again with Approve / Reject buttons" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Resend mail</button>'
+            : '')
           + Utils.ownerDeleteBtn('pkl-delete-btn', 'pl', r.plNo)
         + '</td>'
       + '</tr>').join('');
@@ -2254,6 +2386,14 @@ window.Pages['proforma-invoice'] = (() => {
           Utils.showToast('Packing List ' + cancelBtn.dataset.pl + ' cancelled', 'success');
           await _pklLoad();
         } catch (err) { Utils.showToast(err.message || 'Failed to cancel', 'error'); }
+        return;
+      }
+      const resendBtn = e.target.closest('.pkl-resend-btn');
+      if (resendBtn) {
+        try {
+          const result = await Utils.apiFetch('/api/packing-list/resend-approval?plNo=' + encodeURIComponent(resendBtn.dataset.pl), { method: 'POST' });
+          Utils.showToast('Approval mail resent to ' + (result.sentTo || 'the approver'), 'success');
+        } catch (err) { Utils.showToast(err.message || 'Failed to resend', 'error'); }
         return;
       }
       const delBtn = e.target.closest('.pkl-delete-btn');

@@ -9469,6 +9469,16 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
   put(`${IT.amountCol}${L.itemHeaderRow}`, money.amountHeader);
   put(`${L.totalCapFirst}${L.wordsRow}`, money.totalCaption);
 
+  // Extra Charges / Special Discount — whole-PI, set on the Add Price screen
+  // (see the PUT /price route, which composes these two onto pricedForm).
+  // Always written, even for a Draft PI that has never been priced — this is
+  // a full rewrite of the tab like every other cell here, so leaving these
+  // out would only ever ERASE a previous PI's figures, not simply skip them.
+  put(C.extraChargesLabel, form.extraChargesLabel || 'Extra Charges');
+  put(C.extraChargesAmount, form.extraChargesAmount || 0);
+  put(C.discountLabel, form.discountLabel || 'Special Discount');
+  put(C.discountAmount, form.discountAmount || 0);
+
   items.forEach((it, i) => {
     const row = L.itemsFirstRow + i;
     if (row > L.itemsLastRow) return;   // beyond template capacity — see the cap enforced in POST
@@ -9562,7 +9572,10 @@ async function _finishPiSubmission(sheets, piNoFormatted, templateSheetId, label
   await _sleep(2000);
   let totalAmount = null;
   try {
-    const totalRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_TEMPLATE_TAB}'!${PI_FMT.TOTAL_CELL}`, valueRenderOption: 'UNFORMATTED_VALUE' });
+    // Grand Total, not the raw item total — see PI_FMT.GRAND_TOTAL_CELL. At
+    // create time (no Extra Charges/Special Discount yet) the two are the
+    // same figure; once priced, this is the adjusted one.
+    const totalRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_TEMPLATE_TAB}'!${PI_FMT.GRAND_TOTAL_CELL}`, valueRenderOption: 'UNFORMATTED_VALUE' });
     totalAmount = totalRes.data.values?.[0]?.[0] ?? null;
   } catch (e) { console.error('[proforma-invoice] total read-back failed:', e.message); }
   try {
@@ -10702,6 +10715,49 @@ app.get('/api/proforma-invoice/buyer-codes', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/proforma-invoice/buyer-item-specs?buyer=... — same idea and same
+// buyer-codes scan above, for the physical specs (Per Box Dozen Packing, CBM
+// per box, Weight per piece) instead of the client code. Those three come off
+// the product master by default (see /api/proforma-invoice/items), but the
+// export team routinely corrects them per buyer on the line — a box count or
+// CBM fix made on one PI used to only ever help that one PI. Any status
+// counts (unlike last-prices below, packing/CBM are set at create time, not
+// pricing time), latest PI wins on a conflict.
+app.get('/api/proforma-invoice/buyer-item-specs', requireAuth, async (req, res) => {
+  try {
+    const buyer = String(req.query.buyer || '').trim();
+    if (!buyer) return res.json({ specs: {} });
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K`, valueRenderOption: 'FORMATTED_VALUE' });
+    const want = _piConsigneeKey(buyer);
+    const specs = {};
+    for (const r of (result.data.values || [])) {
+      if (_piConsigneeKey(r[2]) !== want) continue;
+      const piNo = String(r[0] || '').trim();
+      let form = null;
+      try { form = r[9] ? JSON.parse(r[9]) : null; } catch {}
+      for (const it of (form && Array.isArray(form.items) ? form.items : [])) {
+        const model = String(it.modelNo || '').trim().toLowerCase();
+        if (!model) continue;
+        const packing = String(it.packing ?? '').trim();
+        const cbmPerBox = String(it.cbmPerBox ?? '').trim();
+        const weightPerPc = String(it.weightPerPc ?? '').trim();
+        if (!packing && !cbmPerBox && !weightPerPc) continue;
+        const rec = { packing, cbmPerBox, weightPerPc, piNo };
+        specs[model + '|' + PI_RATES.sizeKey(it.size)] = rec;
+        specs[model] = rec;
+      }
+    }
+    return res.json({ specs });
+  } catch (e) {
+    if (/unable to parse range/i.test(e.message || '')) return res.json({ specs: {} });
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // ── PIs awaiting a price ────────────────────────────────────────────────────
 // The FMS tracker is one way a Draft PI reaches the pricer; it depends on the
 // tracker row having a planned date and on the pricer being that step's doer
@@ -10854,6 +10910,26 @@ async function _closeFmsAppPageSteps(kind, keys, userName) {
   }
 }
 
+// A repeatable Extra Charges / Special Discount line from the Add Price
+// screen — whole-PI, not per item, and there can be more than one of each
+// (freight, handling, a loyalty discount, ...). A row with neither a label
+// nor an amount is a blank trailing entry the UI leaves for the next
+// addition, dropped here rather than rejected.
+function _piCleanChargeLines(raw) {
+  return (Array.isArray(raw) ? raw : [])
+    .map(x => ({ label: String(x?.label || '').trim(), amount: x?.amount }))
+    .filter(x => x.label || (x.amount !== undefined && x.amount !== null && String(x.amount).trim() !== ''));
+}
+
+// One composed line for the printed PI (e.g. "Extra Charges — Freight:
+// 500.00, Handling: 200.00") plus the summed figure the Grand Total formula
+// reads (see PI_FMT.CELLS.extraChargesAmount/discountAmount).
+function _piChargesLabel(lines, fallback) {
+  return lines.length
+    ? fallback + ' — ' + lines.map(x => (x.label || 'Item') + ': ' + x.amount.toFixed(2)).join(', ')
+    : fallback;
+}
+
 // PUT /api/proforma-invoice/price?piNo=... — Admin (or a User explicitly
 // granted the 'set_price' feature via Users → Access tab) stage. Loads the
 // PI's own stored Form JSON for buyer/item/qty details (the template tab may
@@ -10934,12 +11010,36 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi', async 
     // were derived from. Not printed; kept with the PI "for my record", which
     // is what the Add Price screen shows back the next time it is opened.
     const ratePerKg = parseFloat(req.body?.ratePerKg);
+
+    // Extra Charges / Special Discount — whole-PI, can be more than one of
+    // each. Every line needs a positive amount; a bad one is rejected outright
+    // rather than silently dropped or zeroed, same as an invalid rate above.
+    const extraChargeLines = _piCleanChargeLines(req.body?.extraCharges);
+    const discountLines = _piCleanChargeLines(req.body?.specialDiscounts);
+    for (const [kind, lines] of [['Extra Charges', extraChargeLines], ['Special Discount', discountLines]]) {
+      for (const x of lines) {
+        const n = parseFloat(x.amount);
+        if (!Number.isFinite(n) || n <= 0) {
+          return res.status(400).json({ error: `${kind}: "${x.label || 'a line'}" needs an amount greater than 0` });
+        }
+        x.amount = n;
+      }
+    }
+    const extraChargesTotal = extraChargeLines.reduce((s, x) => s + x.amount, 0);
+    const discountTotal = discountLines.reduce((s, x) => s + x.amount, 0);
+
     const pricedForm = {
       ...existingForm,
       items: mergedItems,
       priceType: wantType || existingForm.priceType || PI_FMT.PRICE_DEFAULT.priceType,
       currency: wantCurrency || existingForm.currency || PI_FMT.PRICE_DEFAULT.currency,
       ratePerKg: ratePerKg > 0 ? ratePerKg : (existingForm.ratePerKg || ''),
+      extraCharges: extraChargeLines,
+      specialDiscounts: discountLines,
+      extraChargesLabel: _piChargesLabel(extraChargeLines, 'Extra Charges'),
+      extraChargesAmount: extraChargesTotal,
+      discountLabel: _piChargesLabel(discountLines, 'Special Discount'),
+      discountAmount: discountTotal,
     };
 
     const meta = await _piSheetMeta(_piFyLabel(existingForm.date));
@@ -11536,6 +11636,11 @@ function _plRowFromLog(r) {
     orderNos: r[3] || '', piNos: r[4] || '', buyer: r[5] || '',
     totalQty: r[6] || '', totalCartons: r[7] || '', pdfLink: r[8] || '',
     createdBy: r[9] || '', createdAt: r[10] || '', form, status: r[12] || 'Open',
+    // Sajil Sir's approve/reject axis — see the comment on PACKING_LOG_HEADER
+    // in packing-list-format.js. A log row from before this existed has
+    // nothing in N, which reads back as 'Pending' rather than blank so an old
+    // packing list still shows a state on PL List instead of nothing at all.
+    approvalStatus: r[13] || 'Pending', decidedBy: r[14] || '', decidedAt: r[15] || '',
   };
 }
 
@@ -11544,7 +11649,7 @@ function _plRowFromLog(r) {
 async function _plReadLogs(sheets) {
   const [orderRes, plRes] = await Promise.all([
     sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J`, valueRenderOption: 'FORMATTED_VALUE' }).catch(_plEmptyRange),
-    sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:M`, valueRenderOption: 'FORMATTED_VALUE' }).catch(_plEmptyRange),
+    sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:P`, valueRenderOption: 'FORMATTED_VALUE' }).catch(_plEmptyRange),
   ]);
   const orders = (orderRes.data.values || []).map(r => {
     let form = null;
@@ -12014,7 +12119,17 @@ app.post('/api/packing-list', requireAuth, sheetSerialised('packing', async (req
       req.session.user.name || '', _timestampForSheet(),
       JSON.stringify(form),
       'Open',
+      'Pending', '', '',
     ]);
+
+    // Sajil Sir gets an "awaiting your approval" mail with Approve/Reject
+    // links, same bridge as PO/PR — fire-and-forget, same reasoning as the
+    // order-status write-back and the FMS step-close right below: the
+    // packing list itself is already filled, exported and logged by now.
+    sendPackingListApprovalEmail({
+      plNo, buyer: form.buyerName, orderNos: form.orderNos, invoiceNo: form.invoiceNo,
+      totalQty: form.totalPackedQty, totalCartons: form.totalCartons, pdfLink, createdBy: req.session.user.name || '',
+    }).catch((e) => console.error('[packing-list] approval mail failed:', e.message));
 
     // Reported back rather than thrown: the packing list itself is already
     // filled, exported and logged by this point, and the order's status is a
@@ -12051,7 +12166,7 @@ app.get('/api/packing-list/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:M`, valueRenderOption: 'FORMATTED_VALUE' });
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:P`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).map(_plRowFromLog).filter(r => r.plNo).reverse().slice(0, 200);
     return res.json(rows);
   } catch (e) {
@@ -12114,6 +12229,211 @@ app.delete('/api/packing-list', requireAuth, requireSuperAdmin, sheetSerialised(
     return res.json({ success: true });
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 }));
+
+/* ── Packing List approval — same signed-link bridge as PO/PR (/po-action,
+   /pr-action), for Sajil Sir. Deliberately its OWN axis (Approval Status /
+   Decided By / Decided At, N:P) rather than folded into the packing list's
+   own Status column (M, Open/Cancelled) — see the comment on
+   PACKING_LOG_HEADER in packing-list-format.js for why. Who approves is
+   app_config 'packing_list_approver', same default as PO/PR
+   (_configuredApprover falls back to DEFAULT_PO_APPROVER = 'Sajil Shah'). */
+const PL_TOKEN_NS = 'pl:';
+const plActionUrl = (plNo, decision, email) =>
+  `${APP_ORIGIN}/pl-action?t=${encodeURIComponent(leaveTokenFor(PL_TOKEN_NS + plNo, decision, email))}`;
+
+async function sendPackingListApprovalEmail({ plNo, buyer, orderNos, invoiceNo, totalQty, totalCartons, pdfLink, createdBy }) {
+  const mailer = getMailer();
+  if (!mailer) { console.log('[email] Packing List approval mail skipped — SMTP not configured'); return null; }
+  const approverName = await _configuredApprover('packing_list_approver');
+  const who = await userByName(approverName);
+  if (!who || !who.email) {
+    console.log('[email] Packing List approval mail skipped — no login/email found for approver:', approverName);
+    return null;
+  }
+  await mailer.sendMail({
+    from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+    to: who.email,
+    subject: `Approval needed — ${plNo}${buyer ? ' (' + buyer + ')' : ''}`,
+    html: _leaveMailHtml({
+      heading: 'Packing List Awaiting Your Approval',
+      colour: '#0150AA',
+      lead: `Hi <b>${who.name}</b>, <b>${createdBy || 'the export team'}</b> has raised a Packing List in the ERP. Please review the PDF and approve or reject it below.`,
+      rows: [
+        ['Packing List No', plNo], ['Invoice No', invoiceNo], ['Customer', buyer],
+        ['Order Nos', Array.isArray(orderNos) ? orderNos.join(', ') : orderNos],
+        ['Total Qty', totalQty], ['Total Cartons', totalCartons], ['Created By', createdBy],
+      ],
+      actions: (pdfLink
+        ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open Packing List PDF</a></td></tr></table>`
+        : '')
+        + _decisionButtons(plActionUrl(plNo, 'Approved', who.email), plActionUrl(plNo, 'Rejected', who.email)),
+      footer: 'Each button opens a page that asks you to confirm — nothing is decided until you press the button there. Open <b>Proforma Invoice → Packing List</b> in the ERP to see every packing list and its approval status.',
+    }),
+  });
+  console.log('[email] Packing List approval mail sent to:', who.email, 'for', plNo);
+  return who.email;
+}
+
+async function sendPackingListDecisionEmail({ plNo, buyer, orderNos, invoiceNo, totalQty, totalCartons, pdfLink, createdBy, status, decidedBy }) {
+  const mailer = getMailer();
+  if (!mailer) return;
+  const who = await userByName(createdBy);
+  if (!who || !who.email) { console.log('[email] Packing List decision mail skipped — no login/email for creator:', createdBy); return; }
+  const approved = status === 'Approved';
+  await mailer.sendMail({
+    from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+    to: who.email,
+    subject: `${plNo} ${approved ? 'approved' : 'rejected'}${buyer ? ' — ' + buyer : ''}`,
+    html: _leaveMailHtml({
+      heading: `Packing List ${status}`,
+      colour: approved ? '#15803d' : '#b91c1c',
+      lead: `Hi <b>${who.name}</b>, <b>${decidedBy || 'the approver'}</b> has <b>${status.toLowerCase()}</b> ${plNo}.`,
+      rows: [
+        ['Packing List No', plNo], ['Invoice No', invoiceNo], ['Customer', buyer],
+        ['Order Nos', Array.isArray(orderNos) ? orderNos.join(', ') : orderNos],
+        ['Total Qty', totalQty], ['Total Cartons', totalCartons],
+      ],
+      actions: pdfLink ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open Packing List PDF</a></td></tr></table>` : '',
+      footer: approved ? 'You can send it on to the shipping line / buyer.' : 'Speak to the approver before raising it again.',
+    }),
+  });
+  console.log('[email] Packing List decision mail sent to:', who.email, 'for', plNo, status);
+}
+
+// One packing list's row off the log, by number, WITH its rowIndex — needed
+// for the batchUpdate below. Deliberately separate from _plByNo (which reads
+// the whole log for the create/cancel/delete routes above and has no
+// rowIndex) — same split as _poLogRow vs the PO List page's own full-log read.
+async function _plLogRow(plNo) {
+  const auth = getGoogleAuth();
+  if (!auth) return { error: 'Google Sheets is not configured on this server.' };
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  let rowIndex;
+  try { rowIndex = await _findRowIndexByKey(PI_CREATION_SHEET_ID, PACKING_LOG_TAB, plNo); }
+  catch (e) { if (e.notFound) return { error: `${plNo} is no longer on the Packing List log.` }; throw e; }
+  const got = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A${rowIndex + 1}:P${rowIndex + 1}`, valueRenderOption: 'FORMATTED_VALUE' });
+  const row = _plRowFromLog(got.data.values?.[0] || []);
+  return { row: { ...row, rowIndex } };
+}
+
+async function _plForToken(token) {
+  const claim = readLeaveToken(token);
+  if (!claim || !String(claim.id).startsWith(PL_TOKEN_NS)) {
+    return { error: 'This link is not valid. It may have been altered in transit — open Proforma Invoice → Packing List in the ERP instead.' };
+  }
+  const plNo = claim.id.slice(PL_TOKEN_NS.length);
+  const { error, row } = await _plLogRow(plNo);
+  if (error) return { error };
+  return { claim: { ...claim, id: plNo }, row };
+}
+
+const _plActionRows = (row) => [
+  ['Packing List No', row.plNo], ['Invoice No', row.invoiceNo], ['Customer', row.buyer],
+  ['Order Nos', row.orderNos], ['Total Qty', row.totalQty], ['Total Cartons', row.totalCartons],
+  ['Created By', row.createdBy],
+];
+const _plPdfNote = (row) => row.pdfLink ? `<a href="${escHtml(row.pdfLink)}" target="_blank" rel="noopener">Open the Packing List PDF</a> to check it first.` : '';
+const _plDecided = (row) => ['Approved', 'Rejected'].includes(row.approvalStatus);
+
+const _plAlreadyPage = (row) => _leaveActionPage({
+  title: row.status === 'Cancelled' ? 'Packing List cancelled' : 'Already decided', tone: 'plain',
+  lead: row.status === 'Cancelled'
+    ? `${escHtml(row.plNo)} was cancelled, so there is nothing to approve.`
+    : `${escHtml(row.plNo)} was already marked <b>${escHtml(row.approvalStatus)}</b>${row.decidedBy ? ' by ' + escHtml(row.decidedBy) : ''}${row.decidedAt ? ' on ' + escHtml(row.decidedAt) : ''}. Nothing more to do.`,
+  rows: _plActionRows(row),
+});
+
+app.get('/pl-action', async (req, res) => {
+  try {
+    const { error, claim, row } = await _plForToken(req.query.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    if (row.status === 'Cancelled' || _plDecided(row)) return res.send(_plAlreadyPage(row));
+    const good = /^approved$/i.test(claim.decision);
+    const other = good ? 'Rejected' : 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? `Approve ${row.plNo}?` : `Reject ${row.plNo}?`,
+      tone: good ? 'good' : 'bad',
+      lead: `You are about to mark <b>${escHtml(row.plNo)}</b>${row.buyer ? ' for <b>' + escHtml(row.buyer) + '</b>' : ''} as <b>${escHtml(claim.decision)}</b>. ${_plPdfNote(row)}`,
+      rows: _plActionRows(row),
+      form: `<form method="POST" action="/pl-action">
+               <input type="hidden" name="t" value="${escHtml(String(req.query.t))}">
+               <button type="submit">Yes, ${good ? 'approve' : 'reject'} it</button>
+             </form>`,
+      note: `Meant to do the opposite? <a href="/pl-action?t=${encodeURIComponent(leaveTokenFor(PL_TOKEN_NS + row.plNo, other, claim.email))}">Switch to ${other}</a>.`,
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Something went wrong', tone: 'bad', lead: escHtml(e.message) }));
+  }
+});
+
+app.post('/pl-action', async (req, res) => {
+  try {
+    const { error, claim, row } = await _plForToken(req.body?.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    // A double-click or a forwarded mail — not worth an error page, and it
+    // must never overwrite who decided first.
+    if (row.status === 'Cancelled' || _plDecided(row)) return res.send(_plAlreadyPage(row));
+
+    const status = /^approved$/i.test(claim.decision) ? 'Approved' : 'Rejected';
+    let by = claim.email || 'Approver (by email)';
+    if (claim.email && USE_DB) {
+      const u = (await q('SELECT name FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [claim.email]).catch(() => []))[0];
+      if (u?.name) by = u.name;
+    }
+    const when = _timestampForSheet();
+
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
+    const col = PL_FMT.PACKING_LOG_APPROVAL_COL; // 'N'
+    const data = [{ range: `'${PACKING_LOG_TAB}'!${col}${row.rowIndex + 1}:${String.fromCharCode(col.charCodeAt(0) + 2)}${row.rowIndex + 1}`, values: [[status, by, when]] }];
+    // The log predates these three columns; label them the first time one is written.
+    const headRange = `'${PACKING_LOG_TAB}'!${col}1:${String.fromCharCode(col.charCodeAt(0) + 2)}1`;
+    const head = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: headRange, valueRenderOption: 'FORMATTED_VALUE' });
+    if (!(head.data.values?.[0] || []).some(c => String(c ?? '').trim())) data.push({ range: headRange, values: [['Approval Status', ...PL_FMT.PACKING_LOG_DECISION_HEADERS]] });
+    await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
+
+    sendPackingListDecisionEmail({
+      plNo: row.plNo, buyer: row.buyer, orderNos: row.orderNos, invoiceNo: row.invoiceNo,
+      totalQty: row.totalQty, totalCartons: row.totalCartons, pdfLink: row.pdfLink, createdBy: row.createdBy, status, decidedBy: by,
+    }).catch((e) => console.error('[pl-action] decision mail failed:', e.message));
+
+    const good = status === 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? 'Approved' : 'Rejected',
+      tone: good ? 'good' : 'bad',
+      lead: `<b>${escHtml(row.plNo)}</b> has been marked <b>${status.toLowerCase()}</b>.`
+        + (row.createdBy ? ' ' + escHtml(row.createdBy) + ' has been emailed.' : ''),
+      rows: _plActionRows({ ...row, approvalStatus: status }),
+      note: row.pdfLink ? `<a href="${escHtml(row.pdfLink)}" target="_blank" rel="noopener">Open the Packing List PDF</a>. You can close this tab.` : 'You can close this tab.',
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Could not record the decision', tone: 'bad', lead: escHtml(e.message) }));
+  }
+});
+
+// POST /api/packing-list/resend-approval?plNo=... — mails the approver again
+// for a packing list still awaiting a decision (Approve/Reject links are
+// minted fresh). Refused once decided or cancelled — nothing left to approve.
+app.post('/api/packing-list/resend-approval', requireAuth, async (req, res) => {
+  try {
+    const plNo = String(req.query.plNo || '').trim();
+    if (!plNo) return res.status(400).json({ error: 'plNo is required' });
+    const { error, row } = await _plLogRow(plNo);
+    if (error) return res.status(404).json({ error });
+    if (!canManageDeptRow(req.session.user, null, row.createdBy)) {
+      return res.status(403).json({ error: 'Only who raised this packing list (or an Admin/HOD) can resend its approval mail' });
+    }
+    if (row.status === 'Cancelled') return res.status(400).json({ error: `${row.plNo} is cancelled — nothing to approve` });
+    if (_plDecided(row)) return res.status(400).json({ error: `${row.plNo} is already ${row.approvalStatus} — nothing to approve` });
+    const sentTo = await sendPackingListApprovalEmail({
+      plNo: row.plNo, buyer: row.buyer, orderNos: row.orderNos, invoiceNo: row.invoiceNo,
+      totalQty: row.totalQty, totalCartons: row.totalCartons, pdfLink: row.pdfLink, createdBy: row.createdBy,
+    });
+    if (!sentTo) return res.status(500).json({ error: 'Mail not sent — SMTP is not configured or the Packing List approver has no login email' });
+    return res.json({ success: true, sentTo });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
 
 // ── Payment Entries ───────────────────────────────────────────────────────────
 
