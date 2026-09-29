@@ -1718,6 +1718,11 @@ async function sendPoApprovalEmail({ poNumber, format, party, department, prNo, 
 // Who is told, besides whoever raised it, when a SERVICE PO is approved — the
 // store, the factory office and Khurshid, who act on it. Goods POs keep going
 // to their creator alone.
+// Whose dashboard lists draft PIs as "Add price" tasks. Everyone with the
+// set_price feature can still price from the Proforma Invoice page itself;
+// this only decides whose Recent Activity carries the reminder rows.
+const PI_DASHBOARD_PRICER_EMAILS = (process.env.PI_DASHBOARD_PRICER_EMAILS || 'shivalshah@laltd.in')
+  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 const SERVICE_PO_APPROVED_NOTIFY = ['khurshidalam@laltd.in', 'factory.ahd@laltd.in', 'store@laltd.in'];
 
 async function sendPoDecisionEmail({ poNumber, format, party, department, totalAmount, pdfLink, createdBy, status, decidedBy }) {
@@ -2591,11 +2596,14 @@ app.get('/api/dashboard', requireAuth, async (req, res) => {
     }
   }
 
-  // Draft PIs, for anyone who can price them — see _piDraftRows(). Listed
-  // straight off the PI log so a tracker row without a planned date, or a
-  // pricer who is not the FMS step's configured doer, no longer hides them.
+  // Draft PIs, listed straight off the PI log (see _piDraftRows()) so a
+  // tracker row without a planned date no longer hides them. Shown ONLY to
+  // the designated pricer (PI_DASHBOARD_PRICER_EMAILS) — admins and other
+  // set_price holders used to see "Add price" rows for every draft on their
+  // own dashboard too, which cluttered everyone's Recent Activity.
   try {
-    const canPrice = isAdminUser(user) || await userCanUseFeature(user, 'proforma-invoice', 'set_price');
+    const email = String(user.email || '').trim().toLowerCase();
+    const canPrice = PI_DASHBOARD_PRICER_EMAILS.includes(email);
     if (canPrice) {
       const drafts = await _piDraftRows();
       // Their own task on a personal view; on an admin's per-person view the
