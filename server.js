@@ -12795,9 +12795,12 @@ app.get('/api/ims/series-summary', requireAuth, async (req, res) => {
     // item_code -> series, so the transaction rollup below buckets by lookup
     // instead of re-parsing a description per transaction row.
     const seriesOf = new Map();
+    // item_code -> per-SKU row for the SKU-wise table (same window as the buckets).
+    const skuOf = new Map();
     for (const it of items) {
       const name = _imsAlloySeries(`${it.description || ''} ${it.size || ''}`);
       seriesOf.set(it.itemCode, name);
+      skuOf.set(it.itemCode, { itemCode: it.itemCode, description: it.description || '', size: it.size || '', series: name, stock: Number(it.currentStock) || 0, inward: 0, outward: 0 });
       const b = bucket(name);
       b.items += 1;
       b.stock += Number(it.currentStock) || 0;
@@ -12831,6 +12834,8 @@ app.get('/api/ims/series-summary', requireAuth, async (req, res) => {
       const qty = Number(r.qty) || 0;
       const out = r.direction === 'OUT';
       if (out) b.outward += qty; else b.inward += qty;
+      const sku = skuOf.get(r.itemCode);
+      if (sku) { if (out) sku.outward += qty; else sku.inward += qty; }
 
       const month = (_isoDateOnly(r.txnDate) || '').slice(0, 7);
       if (!month) continue;
@@ -12863,7 +12868,9 @@ app.get('/api/ims/series-summary', requireAuth, async (req, res) => {
       return row;
     });
 
-    return res.json({ series, monthly, from, to, knownSeries: IMS_ALLOY_SERIES });
+    const skus = [...skuOf.values()].map(s => ({ ...s, stock: round2(s.stock), inward: round2(s.inward), outward: round2(s.outward) }));
+
+    return res.json({ series, monthly, skus, from, to, knownSeries: IMS_ALLOY_SERIES });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 

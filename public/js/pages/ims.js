@@ -114,6 +114,9 @@ window.Pages = window.Pages || {};
     // pre-ordered from /api/ims/series-summary.
     let _seriesRows = [];
     let _seriesMonthly = []; // [{ month:'2026-08', series:{ '6061': {inward, outward} } }]
+    let _skuRows = []; // per-SKU (item code) rows from the same rollup
+    let _skuSearch = '';
+    let _skuSort = { key: 'itemCode', dir: 1 };
     let _seriesLoaded = false;
     let _seriesLoadError = '';
     let _seriesFrom = '';
@@ -830,7 +833,7 @@ window.Pages = window.Pages || {};
       _seriesLoaded = false;
       _seriesLoadError = '';
       _renderSeriesBody();
-      let rows = [], monthly = [], err = '';
+      let rows = [], monthly = [], skus = [], err = '';
       try {
         const params = new URLSearchParams({ category: _book });
         if (_seriesFrom) params.set('from', _seriesFrom);
@@ -838,9 +841,11 @@ window.Pages = window.Pages || {};
         const data = await Utils.apiFetch('/api/ims/series-summary?' + params.toString());
         rows = (data && data.series) || [];
         monthly = (data && data.monthly) || [];
+        skus = (data && data.skus) || [];
       } catch (e) {
         err = e.message || 'Failed to load the series summary';
       }
+      _skuRows = skus;
       _seriesRows = rows;
       _seriesMonthly = monthly;
       _seriesLoadError = err;
@@ -1148,6 +1153,87 @@ window.Pages = window.Pages || {};
       _downloadCSV('IMS_' + _bookSlug + '_SeriesWise_' + _todayStamp() + '.csv', headers, rows);
     }
 
+    /* ── SKU-wise table: one row per item code, with its alloy grade, live stock
+       and the Inward/Outward for the selected dates. Search + header sort are
+       client-side over the rows already loaded (a few hundred SKUs). ─────────── */
+    const _SKU_COLS = [
+      ['itemCode', 'SKU / Item Code', false], ['description', 'Description', false], ['size', 'Size', false],
+      ['series', 'Series', false], ['stock', 'Current Stock', true], ['inward', 'Inward', true], ['outward', 'Outward', true],
+    ];
+    function _visibleSkus() {
+      const q = _skuSearch.trim().toLowerCase();
+      const { key, dir } = _skuSort;
+      const numeric = _SKU_COLS.find(c => c[0] === key)[2];
+      return _skuRows
+        .filter(r => !q || (r.itemCode + ' ' + r.description + ' ' + r.size + ' ' + r.series).toLowerCase().includes(q))
+        .sort((a, b) => dir * (numeric ? _num(a[key]) - _num(b[key])
+          : String(a[key]).localeCompare(String(b[key]), undefined, { numeric: true, sensitivity: 'base' })));
+    }
+    function _skuTableHtml() {
+      const rows = _visibleSkus();
+      const cell = 'padding:7px 10px;font-size:12.5px;';
+      const tot = (k) => rows.reduce((s, r) => s + _num(r[k]), 0);
+      const totalCell = 'padding:10px;font-size:12.5px;font-weight:700;color:#0f172a;background:#f8fafc;text-align:right;';
+      return '<div style="overflow:auto;max-height:560px;border:1px solid #e2e8f0;border-radius:10px;">'
+        + '<table style="width:100%;border-collapse:collapse;min-width:760px;">'
+          + '<thead><tr>'
+            + _SKU_COLS.map(([k, h, num]) => '<th class="ims-sku-th" data-key="' + k + '" style="position:sticky;top:0;background:#f8fafc;padding:8px 10px;text-align:' + (num ? 'right' : 'left') + ';font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;cursor:pointer;white-space:nowrap;border-bottom:1px solid #e2e8f0;">'
+              + esc(h) + (_skuSort.key === k ? (_skuSort.dir > 0 ? ' ▲' : ' ▼') : '') + '</th>').join('')
+          + '</tr></thead><tbody>'
+          + (rows.length ? rows.map(r => '<tr style="border-bottom:1px solid #f1f5f9;">'
+              + '<td style="' + cell + 'font-weight:700;">' + esc(r.itemCode) + '</td>'
+              + '<td style="' + cell + '">' + esc(r.description) + '</td>'
+              + '<td style="' + cell + '">' + esc(r.size) + '</td>'
+              + '<td style="' + cell + '">' + esc(r.series) + '</td>'
+              + '<td style="' + cell + 'text-align:right;font-weight:700;' + (_num(r.stock) < 0 ? 'color:#c2410c;' : '') + '">' + esc(_fmtQty(r.stock)) + '</td>'
+              + '<td style="' + cell + 'text-align:right;">' + esc(_fmtQty(r.inward)) + '</td>'
+              + '<td style="' + cell + 'text-align:right;">' + esc(_fmtQty(r.outward)) + '</td>'
+            + '</tr>').join('')
+            : '<tr><td colspan="7" style="padding:24px;text-align:center;color:#94a3b8;font-size:12.5px;">No SKUs match</td></tr>')
+          + '</tbody>'
+          + (rows.length ? '<tfoot><tr>'
+              + '<td style="' + totalCell + 'text-align:left;position:sticky;bottom:0;" colspan="4">Total (' + rows.length + ' SKUs)</td>'
+              + ['stock', 'inward', 'outward'].map(k => '<td style="' + totalCell + 'position:sticky;bottom:0;">' + esc(_fmtQty(tot(k))) + '</td>').join('')
+            + '</tr></tfoot>' : '')
+        + '</table>'
+      + '</div>';
+    }
+    function _skuSectionHtml() {
+      return '<div style="margin-top:18px;">'
+        + '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:10px;">'
+          + '<div><div style="font-size:13.5px;font-weight:700;color:#0f172a;">SKU-wise stock &amp; movement</div>'
+          + '<div style="font-size:11.5px;color:#64748b;margin-top:2px;">Inward / Outward ' + esc(_seriesRangeLabel()) + '; current stock is live as of today.</div></div>'
+          + '<div style="display:flex;gap:8px;align-items:center;">'
+            + '<input type="text" id="ims-sku-search" placeholder="Search SKU, description, size…" value="' + esc(_skuSearch) + '" style="' + _inputStyle + 'width:240px;" />'
+            + '<button type="button" id="ims-sku-export" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">SKU CSV</button>'
+          + '</div>'
+        + '</div>'
+        + '<div id="ims-sku-table">' + _skuTableHtml() + '</div>'
+      + '</div>';
+    }
+    function _bindSkuTable() {
+      document.querySelectorAll('.ims-sku-th').forEach(th => th.addEventListener('click', () => {
+        const k = th.dataset.key;
+        _skuSort = { key: k, dir: _skuSort.key === k ? -_skuSort.dir : 1 };
+        _repaintSkuTable();
+      }));
+    }
+    function _repaintSkuTable() {
+      const t = document.getElementById('ims-sku-table');
+      if (!t) return;
+      t.innerHTML = _skuTableHtml();
+      _bindSkuTable();
+    }
+    function _exportSkuCSV() {
+      const rows = _visibleSkus();
+      if (!rows.length) { Utils.showToast('Nothing to export yet', 'warning'); return; }
+      const headers = ['SKU / Item Code', 'Description', 'Size', 'Series', 'Current Stock', 'Inward', 'Outward'];
+      const out = rows.map(r => [r.itemCode, r.description, r.size, r.series, r.stock, r.inward, r.outward]);
+      out.push(['Total (' + rows.length + ' SKUs)', '', '', '',
+        rows.reduce((s, r) => s + _num(r.stock), 0), rows.reduce((s, r) => s + _num(r.inward), 0), rows.reduce((s, r) => s + _num(r.outward), 0)]);
+      _downloadCSV('IMS_' + _bookSlug + '_SKUWise_' + _todayStamp() + '.csv', headers, out);
+    }
+
     function _seriesRangeLabel() {
       if (_seriesFrom && _seriesTo) return _dateLabel(_seriesFrom) + ' to ' + _dateLabel(_seriesTo);
       if (_seriesFrom) return 'from ' + _dateLabel(_seriesFrom);
@@ -1198,7 +1284,13 @@ window.Pages = window.Pages || {};
         + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;align-items:start;margin-top:14px;">'
           + _monthlySalesCardHtml(rows)
           + _seriesTableHtml(rows)
-        + '</div>';
+        + '</div>'
+        + _skuSectionHtml();
+      const search = document.getElementById('ims-sku-search');
+      if (search) search.addEventListener('input', (e) => { _skuSearch = e.target.value; _repaintSkuTable(); });
+      const exp = document.getElementById('ims-sku-export');
+      if (exp) exp.addEventListener('click', _exportSkuCSV);
+      _bindSkuTable();
     }
 
     function _seriesFilterBarHtml() {
