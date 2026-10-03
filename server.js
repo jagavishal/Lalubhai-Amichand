@@ -1890,6 +1890,8 @@ function istToday() {
 // anything. Change it in app_config under 'greetings_hour'.
 const GREETINGS_DEFAULT_HOUR = 10;
 
+const { festivalMail } = require('./backend/lib/festival-mail.js');
+
 async function sendGreetingEmail({ toEmail, toName, kind, years, occasion }) {
   const mailer = getMailer();
   // Every greeting is copied to the office groups; a group that IS the
@@ -1912,13 +1914,15 @@ async function sendGreetingEmail({ toEmail, toName, kind, years, occasion }) {
   const heading = festival ? `Happy ${occasion}` : birthday ? 'Happy Birthday' : 'Happy Work Anniversary';
   const colour = festival ? '#b45309' : birthday ? '#b45309' : '#0150AA';
   const emoji = festival ? '&#127882;' : birthday ? '&#127874;' : '&#127881;';
+  // Festivals get the full banner layout; see backend/lib/festival-mail.js.
+  const fest = festival ? festivalMail(occasion, istToday().iso) : null;
   try {
     await mailer.sendMail({
       from: `"Lallubhai Amichand" <${process.env.SMTP_USER}>`,
       to: toEmail || cc,
       ...(toEmail && cc ? { cc } : {}),
-      subject,
-      html: `
+      subject: fest ? fest.subject : subject,
+      html: fest ? fest.html : `
         <div style="font-family:Arial,sans-serif;max-width:520px;padding:28px;border:1px solid #e2e8f0;border-radius:10px;text-align:center">
           <div style="font-size:40px;line-height:1">${emoji}</div>
           <h2 style="color:${colour};margin:12px 0 14px">${heading}</h2>
