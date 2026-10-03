@@ -325,7 +325,8 @@ window.Pages['po-creation'] = (() => {
       let list = _pendingPrs.filter(p => !already.has(String(p.prNo).toLowerCase()));
       if (_appliedPrs.length) {
         const first = _appliedPrs[0];
-        list = list.filter(p => p.party === first.party && p.prTabName === first.prTabName);
+        const norm = s => String(s || '').replace(/[\s ​]+/g, ' ').trim().toLowerCase();
+        list = list.filter(p => norm(p.party) === norm(first.party) && p.prTabName === first.prTabName);
       }
       return list;
     };

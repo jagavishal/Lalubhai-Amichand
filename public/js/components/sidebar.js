@@ -558,35 +558,181 @@ window.Sidebar = {
 
   _syncBottomNav() {
     const activeRoute = (window.location.hash || '').replace('#', '') || 'dashboard';
+    let anyActive = false;
     document.querySelectorAll('#bottom-nav [data-route]').forEach(el => {
-      el.classList.toggle('active', el.dataset.route === activeRoute);
+      const on = el.dataset.route === activeRoute;
+      if (on) anyActive = true;
+      el.classList.toggle('active', on);
     });
+    // Any page that isn't one of the fixed tabs lives behind "Menu", so the
+    // Menu tab lights up for it — the bar always shows where you are.
+    document.getElementById('bn-menu')?.classList.toggle('active', !anyActive);
+    this.closeMobileMenu();
+  },
+
+  /* ── Mobile bottom bar ─────────────────────────────────────────────
+     The rail is hidden under 768px, so the phone gets four fixed tabs plus a
+     "Menu" tab that opens a sheet with every page the rail would show —
+     same sections, same permission rules (canAccess), nothing left out. ── */
+  _BOTTOM_TABS: [
+    { route: 'dashboard', label: 'Home',      icon: 'dashboard' },
+    { route: 'all-tasks', label: 'Tasks',     icon: 'tasks' },
+    { route: 'approvals', label: 'Approvals', icon: 'approve', badge: true },
+    { route: 'profile',   label: 'Profile',   icon: 'profile' },
+  ],
+
+  // One accent per section so the sheet reads as departments at a glance.
+  _SECTION_ACCENTS: {
+    'Basic':              '#2563EB',
+    'Export Department':  '#4F46E5',
+    'Trading Department': '#D97706',
+    'Retail':             '#059669',
+    'Admin Section':      '#DC2626',
+    'HR Section':         '#9333EA',
+    'Accounts':           '#0D9488',
   },
 
   _renderBottomNav(user, pendingCount) {
     const nav = document.getElementById('bottom-nav');
     if (!nav) return;
-    const isAdmin = this._isAdmin(user);
     const activeRoute = (window.location.hash || '').replace('#', '') || 'dashboard';
+    const tabs = this._BOTTOM_TABS.filter(t => this.canAccess(t.route, user));
 
-    const items = [
-      { route: 'dashboard', label: 'Dashboard', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>' },
-      { route: 'all-tasks', label: 'Tasks',     icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="m9 14 2 2 4-4"/></svg>' },
-      { route: 'approvals', label: 'Approvals', badge: pendingCount, icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>' },
-      ...(isAdmin ? [{ route: 'users', label: 'Users', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>' }] : []),
-      ...(isAdmin ? [{ route: 'mis', label: 'MIS', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 5-6"/></svg>' }] : []),
-      { route: 'profile', label: 'Profile', icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>' },
-    ];
-
-    nav.innerHTML = items.map(item => {
+    let anyActive = false;
+    const tabsHTML = tabs.map(item => {
       const active = activeRoute === item.route;
-      const badge = item.badge > 0 ? `<span class="bn-badge">${item.badge}</span>` : '';
+      if (active) anyActive = true;
+      const badge = item.badge && pendingCount > 0 ? `<span class="bn-badge">${pendingCount > 99 ? '99+' : pendingCount}</span>` : '';
       return `<a class="bn-item${active ? ' active' : ''}" data-route="${item.route}" href="#${item.route}" onclick="Router.navigate('${item.route}');return false;">
-        ${badge}
-        ${item.icon}
-        <span>${item.label}</span>
+        <span class="bn-ico">${this._icons[item.icon] || ''}${badge}</span>
+        <span class="bn-label">${item.label}</span>
       </a>`;
     }).join('');
+
+    const menuIcon = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';
+    nav.innerHTML = tabsHTML + `
+      <button type="button" id="bn-menu" class="bn-item${anyActive ? '' : ' active'}" onclick="window.Sidebar.openMobileMenu()" aria-label="All pages">
+        <span class="bn-ico">${menuIcon}</span>
+        <span class="bn-label">Menu</span>
+      </button>`;
+  },
+
+  _esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  },
+
+  _buildMobileMenuHTML(user) {
+    const activeRoute = (window.location.hash || '').replace('#', '') || 'dashboard';
+    const roles = (user?.roles || ['User']).join(' · ');
+    const pending = this._pendingCount;
+
+    const sectionsHTML = this._sections.map(sec => {
+      const accent = this._SECTION_ACCENTS[sec.title] || 'var(--color-primary)';
+      let lastGroup = null;
+      const visible = sec.items.filter(i => this.canAccess(i.route, user));
+      if (!visible.length) return '';
+      const tiles = visible.map(item => {
+        const head = item.group && item.group !== lastGroup
+          ? `<div class="mm-group">${this._esc(item.group)}</div>` : '';
+        if (item.group) lastGroup = item.group;
+        const active = item.route === activeRoute;
+        const badge = item.badge && pending > 0 ? `<span class="bn-badge">${pending > 99 ? '99+' : pending}</span>` : '';
+        return head + `
+          <a class="mm-tile${active ? ' active' : ''}" href="#${item.route}" data-label="${this._esc(item.label.toLowerCase())}"
+             onclick="window.Sidebar.closeMobileMenu();Router.navigate('${item.route}');return false;">
+            <span class="mm-ico">${this._icons[item.icon] || ''}${badge}</span>
+            <span class="mm-label">${this._esc(item.label)}</span>
+          </a>`;
+      }).join('');
+      return `
+        <section class="mm-sec" style="--mm-accent:${accent};">
+          <div class="mm-sec-head">
+            <span class="mm-sec-dot"></span>
+            <span class="mm-sec-title">${this._esc(sec.title)}</span>
+            <span class="mm-sec-count">${visible.length}</span>
+          </div>
+          <div class="mm-grid">${tiles}</div>
+        </section>`;
+    }).join('');
+
+    const isDark = document.documentElement.dataset.theme === 'dark';
+    const themeIcon = isDark
+      ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>'
+      : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>';
+
+    return `
+      <div class="mm-handle" onclick="window.Sidebar.closeMobileMenu()"></div>
+      <div class="mm-user">
+        ${window.UI.avatar(user?.name, { variant: 'brand', size: 40, shape: 'square' })}
+        <div class="mm-user-info">
+          <div class="mm-user-name">${this._esc(user?.name || 'User')}</div>
+          <div class="mm-user-role">${this._esc(roles)}</div>
+        </div>
+        <button type="button" class="mm-icon-btn" title="Light / dark mode"
+                onclick="window.Theme && window.Theme.toggle(); window.Sidebar.openMobileMenu();">${themeIcon}</button>
+        <button type="button" class="mm-icon-btn mm-signout" title="Sign out" onclick="window.Sidebar._logout()">${this._icons.signout}</button>
+      </div>
+      <div class="mm-search">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="search" id="mm-search-input" placeholder="Search pages…" autocomplete="off"
+               oninput="window.Sidebar._filterMobileMenu(this.value)" />
+      </div>
+      <div class="mm-body" id="mm-body">
+        ${sectionsHTML}
+        <div class="mm-empty" id="mm-empty">No page matches that search.</div>
+      </div>`;
+  },
+
+  _filterMobileMenu(q) {
+    const term = String(q || '').trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('#mm-sheet .mm-sec').forEach(sec => {
+      let n = 0;
+      sec.querySelectorAll('.mm-tile').forEach(t => {
+        const hit = !term || t.dataset.label.includes(term);
+        t.style.display = hit ? '' : 'none';
+        if (hit) n++;
+      });
+      // Sub-headings only make sense when the full list is showing.
+      sec.querySelectorAll('.mm-group').forEach(g => { g.style.display = term ? 'none' : ''; });
+      sec.style.display = n ? '' : 'none';
+      shown += n;
+    });
+    const empty = document.getElementById('mm-empty');
+    if (empty) empty.style.display = shown ? 'none' : 'block';
+  },
+
+  openMobileMenu() {
+    const user = this._user || window.currentUser;
+    let overlay = document.getElementById('mm-overlay');
+    let sheet = document.getElementById('mm-sheet');
+    if (!sheet) {
+      overlay = document.createElement('div');
+      overlay.id = 'mm-overlay';
+      overlay.onclick = () => this.closeMobileMenu();
+      sheet = document.createElement('div');
+      sheet.id = 'mm-sheet';
+      sheet.setAttribute('role', 'dialog');
+      sheet.setAttribute('aria-label', 'All pages');
+      document.body.append(overlay, sheet);
+      document.addEventListener('keydown', e => { if (e.key === 'Escape') this.closeMobileMenu(); });
+    }
+    sheet.innerHTML = this._buildMobileMenuHTML(user);
+    // Next frame so the slide-up transition runs on first open too.
+    requestAnimationFrame(() => {
+      overlay.classList.add('open');
+      sheet.classList.add('open');
+      sheet.querySelector('.mm-tile.active')?.scrollIntoView({ block: 'center' });
+    });
+    document.body.style.overflow = 'hidden';
+  },
+
+  closeMobileMenu() {
+    const sheet = document.getElementById('mm-sheet');
+    if (!sheet || !sheet.classList.contains('open')) return;
+    sheet.classList.remove('open');
+    document.getElementById('mm-overlay')?.classList.remove('open');
+    document.body.style.overflow = '';
   },
 
   async render(user) {

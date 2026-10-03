@@ -275,9 +275,11 @@ window.Pages.dashboard = (function () {
     /* parallel fetches */
     const [dashData, usersData, holidaysData, delegationsData] = await Promise.all([
       Utils.apiFetch('/api/dashboard'),
-      Utils.apiFetch('/api/users?lite=1'),
-      Utils.apiFetch('/api/holidays'),
-      admin ? Utils.apiFetch('/api/delegations') : Promise.resolve([]),
+      // Only /api/dashboard is essential — a hiccup on the dropdown/holiday/
+      // delegation lists shouldn't blank the whole page.
+      Utils.apiFetch('/api/users?lite=1').catch(() => []),
+      Utils.apiFetch('/api/holidays').catch(() => []),
+      admin ? Utils.apiFetch('/api/delegations').catch(() => []) : Promise.resolve([]),
     ]);
 
     if (!dashData) return;

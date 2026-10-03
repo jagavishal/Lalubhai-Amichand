@@ -7060,6 +7060,30 @@ async function _poSheetMeta() {
   return { nextPoNo: maxPoNo + 1, sheetIdByTitle, sheetCount: meta.data.sheets.length };
 }
 
+// The PO templates fetch the vendor's address with an exact-match VLOOKUP of
+// the party cell against 'Vendor Details'!A — a stray leading/trailing/double
+// space (or a non-breaking one pasted in) on either side and the address comes
+// out blank ("PO mai vendor name clean kro, space aaye to address fetch nahi
+// krta"). The picker shows cleaned names; on submit the cleaned name is mapped
+// back to the sheet's own spelling of that row, so the lookup always hits.
+function _cleanPartyName(s) {
+  return String(s ?? '').replace(/[\s ​]+/g, ' ').trim();
+}
+async function _resolvePoVendorName(party) {
+  const clean = _cleanPartyName(party);
+  try {
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:A200`, valueRenderOption: 'FORMATTED_VALUE' });
+    const key = clean.toLowerCase();
+    const hit = (res.data.values || []).map(r => r[0]).find(v => v && _cleanPartyName(v).toLowerCase() === key);
+    if (hit) return hit;
+  } catch (e) {
+    console.error('[po-creation] Vendor Details read for name match failed:', e.message);
+  }
+  return clean;
+}
+
 // GET /api/po-creation/masters — vendor list, ship-to locations (PurchaseOrder
 // only) and the next PO number, all read live off the sheet (no local mirror),
 // plus departments — which no longer come from the sheet's own Vendor Details!
@@ -7080,7 +7104,7 @@ app.get('/api/po-creation/masters', requireAuth, async (req, res) => {
         listDepartments(),
         _poSheetMeta(),
       ]);
-      const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+      const vendors = [...new Set((vendorsRes.data.values || []).map(r => _cleanPartyName(r[0])).filter(Boolean))];
       const shipToLocations = (shipToRes.data.values || []).filter(r => r[0]).map(r => r[0]);
       return { vendors, shipToLocations, departments, nextPoNumber: _padSeqNo('PO', meta.nextPoNo) };
     });
@@ -7327,9 +7351,11 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po', async (req, res)
   try {
     const cfg = PO_FORMAT_CONFIG[req.body?.format];
     if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
-    const { date, prNo: prNoRaw, department: departmentRaw, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
+    const { date, prNo: prNoRaw, department: departmentRaw, party: partyRaw, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
     // One spelling on the sheet, the PO log and the app — see canonicalDept.
     const department = await canonicalDept(departmentRaw);
+    // Vendor Details' own spelling, so the template's address VLOOKUP matches.
+    const party = _cleanPartyName(partyRaw) ? await _resolvePoVendorName(partyRaw) : '';
     if (!date || !party || !poMadeBy) return res.status(400).json({ error: 'Date, ' + cfg.partyLabel + ' and PO Made By are required' });
     // Every goods PO is raised against a PR; only a Service PO stands on its
     // own ("PO without PR nahi banna chahiye, sirf Service wala PO bane"). The
@@ -7349,7 +7375,7 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po', async (req, res)
         const pr = await _erpPrLogRow(part);
         if (!pr) return res.status(400).json({ error: `${part} is not on the ERP PR Log — create the PR first, then raise the PO against it.` });
         if (['Cancelled', 'Rejected'].includes(pr.status)) return res.status(400).json({ error: `${pr.prNo} is ${pr.status.toLowerCase()} — a PO cannot be raised against it.` });
-        if (pr.party && party && pr.party !== party) return res.status(400).json({ error: `${pr.prNo} was raised for ${pr.party}, not ${party} — a PO can only combine PRs for the same ${cfg.partyLabel.toLowerCase()}.` });
+        if (pr.party && party && _cleanPartyName(pr.party).toLowerCase() !== _cleanPartyName(party).toLowerCase()) return res.status(400).json({ error: `${pr.prNo} was raised for ${pr.party}, not ${party} — a PO can only combine PRs for the same ${cfg.partyLabel.toLowerCase()}.` });
         canonical.push(pr.prNo);
       }
       prNo = canonical.join(', ');

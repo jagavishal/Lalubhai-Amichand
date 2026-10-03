@@ -6,7 +6,7 @@ window.Utils = {
   // recalculation pause server-side — comfortably over 15s on a slow day,
   // which was surfacing as a false "Request timed out" even though the
   // server-side write had actually gone through.
-  async apiFetch(url, opts = {}) {
+  async apiFetch(url, opts = {}, _attempt = 0) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 45000);
     try {
@@ -29,6 +29,14 @@ window.Utils = {
         }
         return null;
       }
+      // A gateway error (502/503/504) on a read is almost always the Node app
+      // restarting or momentarily overloaded behind Hostinger's proxy — the body is
+      // empty, which used to surface as a bare "Error". Reads are safe to repeat,
+      // so retry twice before giving up; writes are never retried.
+      if ([502, 503, 504].includes(res.status) && _attempt < 2 && (!opts.method || String(opts.method).toUpperCase() === 'GET')) {
+        await new Promise(r => setTimeout(r, 1500 * (_attempt + 1)));
+        return this.apiFetch(url, opts, _attempt + 1);
+      }
       // A proxy/hosting-layer error (Hostinger, or Node itself crashing mid-
       // request) doesn't return JSON — it returns an HTML or plain-text error
       // page. Calling res.json() directly on that throws a raw browser
@@ -41,7 +49,7 @@ window.Utils = {
         try { data = JSON.parse(raw); }
         catch { throw new Error(res.ok ? 'Server returned an unexpected response — please try again' : `Server error (HTTP ${res.status}) — please try again`); }
       }
-      if (!res.ok) throw new Error(data?.error || 'Error');
+      if (!res.ok) throw new Error(data?.error || data?.message || `Error (HTTP ${res.status} on ${String(url).split('?')[0]})`);
       return data;
     } catch (e) {
       clearTimeout(timer);

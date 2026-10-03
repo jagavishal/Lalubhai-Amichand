@@ -1273,7 +1273,21 @@ window.Pages = window.Pages || {};
       // Two-up on a wide screen, stacking below ~900px — the charts are read
       // against each other (what's on hand vs what moved), so they belong side
       // by side wherever there's room for both at a legible size.
+      // Item-code (SKU) view leads; the alloy-series rollup follows as the summary.
+      const topSkus = _skuRows.slice().sort((a, b) => _num(b.outward) - _num(a.outward)).slice(0, 10);
+      const topChart = topSkus.length && topSkus.some(r => _num(r.inward) || _num(r.outward))
+        ? '<div style="margin-top:14px;">' + _chartCardHtml('Top 10 item codes by Outward',
+            'Stock movement logged ' + _seriesRangeLabel() + ', cancelled entries excluded.',
+            _legendHtml([[_CHART_INWARD, 'Inward'], [_CHART_OUTWARD, 'Outward']]),
+            _barChartSvg(topSkus.map(r => ({ label: r.itemCode, values: [
+              { key: 'inward', label: 'Inward', value: r.inward },
+              { key: 'outward', label: 'Outward', value: r.outward },
+            ] })), { inward: _CHART_INWARD, outward: _CHART_OUTWARD })) + '</div>'
+        : '';
       el.innerHTML = _seriesStatsHtml(rows)
+        + _skuSectionHtml()
+        + topChart
+        + '<div style="margin:20px 0 10px;font-size:13.5px;font-weight:700;color:#0f172a;">Alloy series summary</div>'
         + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;align-items:start;">'
           + _chartCardHtml('Current stock by series', 'Live balance as of today — bars below the line are items issued past what was received.', '', stockChart)
           + _chartCardHtml('Inward vs Outward by series', 'Stock movement logged ' + _seriesRangeLabel() + ', cancelled entries excluded.',
@@ -1284,8 +1298,7 @@ window.Pages = window.Pages || {};
         + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;align-items:start;margin-top:14px;">'
           + _monthlySalesCardHtml(rows)
           + _seriesTableHtml(rows)
-        + '</div>'
-        + _skuSectionHtml();
+        + '</div>';
       const search = document.getElementById('ims-sku-search');
       if (search) search.addEventListener('input', (e) => { _skuSearch = e.target.value; _repaintSkuTable(); });
       const exp = document.getElementById('ims-sku-export');
@@ -1326,7 +1339,7 @@ window.Pages = window.Pages || {};
       if (!_isActive()) return;
       const el = document.getElementById('ims-tabbody');
       if (!el) return;
-      el.innerHTML = '<p style="font-size:12.5px;color:#64748b;margin:0 0 14px;">Alloy grade read off each item\'s description — ' + esc(SERIES_LABELS.join(', ')) + ', anything else grouped as Other.</p>'
+      el.innerHTML = '<p style="font-size:12.5px;color:#64748b;margin:0 0 14px;">Item code (SKU) wise stock and movement first; alloy grade (read off each item\'s description — ' + esc(SERIES_LABELS.join(', ')) + ', else Other) summarised below.</p>'
         + _seriesFilterBarHtml()
         + '<div id="ims-series-body"></div>';
       _bindSeriesFilterBar();
