@@ -993,29 +993,89 @@ window.Pages['all-tasks'] = (function () {
     </div>`;
   }
 
+  /* ─── Bulk CSV upload (same section + parsing as Dashboard's modals) ──── */
+  function parseCsvLine(line) {
+    const out = [];
+    let cur = '', inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; }
+          else inQuotes = false;
+        } else cur += c;
+      } else if (c === '"') inQuotes = true;
+      else if (c === ',') { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+    out.push(cur);
+    return out;
+  }
+
+  async function readCsvRows(file, headerAliases = {}) {
+    const text = (await file.text()).replace(/^﻿/, '');
+    const lines = text.trim().split('\n').filter(Boolean);
+    const headers = parseCsvLine(lines[0] || '').map(h => { const k = h.trim().toLowerCase(); return headerAliases[k] || k; });
+    return lines.slice(1).map(row => {
+      const cols = parseCsvLine(row).map(c => c.trim());
+      const obj = {};
+      headers.forEach((h, i) => obj[h] = cols[i] || '');
+      return obj;
+    });
+  }
+
+  const userByEmail = (email) => {
+    const e = String(email || '').trim().toLowerCase();
+    return e ? _users.find(u => (u.email || '').toLowerCase() === e) : null;
+  };
+
+  function csvUploadSection(prefix, sampleHref, formatText) {
+    return `<div style="border-top:1px solid #f1f5f9;padding:12px 24px 16px;background:#fafafa;flex-shrink:0">
+      <p style="font-size:10.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#94a3b8;text-align:center;margin:0 0 10px;">Or Bulk Upload CSV</p>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <input type="file" id="${prefix}-csv-file" accept=".csv" style="font-size:12px;flex:1;min-width:0;" />
+        <button id="${prefix}-csv-upload" style="padding:6px 14px;border-radius:7px;background:#10b981;color:#fff;border:none;cursor:pointer;font-size:12px;font-weight:700;white-space:nowrap;">+ Upload CSV</button>
+        <a href="${sampleHref}" download style="padding:6px 14px;border-radius:7px;background:#fff;color:#374151;border:1.5px solid #e2e8f0;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap;">↓ Sample</a>
+      </div>
+      <p style="font-size:10.5px;color:#94a3b8;margin:8px 0 0;">${formatText}</p>
+    </div>`;
+  }
+
   /* ─── Delegate Task Modal ───────────────────────────────────────────────── */
+  // Same fields as Dashboard's "+ Delegate Task" modal: Doer, Due Date
+  // (defaults to today), Priority, Approval Required, Description, URL,
+  // Remarks, plus the bulk CSV upload.
   function openDelegateModal() {
     const userOpts = _users.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('');
     const div = modalOverlay('at-delegate-modal', `
       ${modalHeader('Delegate Task', "document.getElementById('at-delegate-modal').remove()")}
       <div style="padding:20px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px">
-        <div>
-          <label class="at-label">Description *</label>
-          <textarea id="atd-desc" rows="3" class="at-input" style="width:100%;height:auto;padding:8px 10px;resize:none"></textarea>
-        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
           <div>
-            <label class="at-label">Doer *</label>
+            <label class="at-label">Doer (Assign To) *</label>
             <select id="atd-doer" class="at-input" style="width:100%"><option value="">— Select —</option>${userOpts}</select>
           </div>
           <div>
             <label class="at-label">Due Date *</label>
-            <input type="date" id="atd-due" class="at-input" style="width:100%" />
+            <input type="date" id="atd-due" class="at-input" style="width:100%" value="${esc(Utils.todayISO())}" />
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <label class="at-label">Priority</label>
+            <select id="atd-priority" class="at-input" style="width:100%"><option>Low</option><option>Medium</option><option>High</option></select>
+          </div>
+          <div>
+            <label class="at-label">Approval Required</label>
+            <select id="atd-approval" class="at-input" style="width:100%">
+              <option value="No Approval">No Approval</option>
+              <option value="Approval Required">Approval Required</option>
+            </select>
           </div>
         </div>
         <div>
-          <label class="at-label">Priority</label>
-          <select id="atd-priority" class="at-input" style="width:100%"><option>Low</option><option>Medium</option><option>High</option></select>
+          <label class="at-label">Description *</label>
+          <textarea id="atd-desc" rows="3" class="at-input" style="width:100%;height:auto;padding:8px 10px;resize:none" placeholder="Enter task description..."></textarea>
         </div>
         <div>
           <label class="at-label">URL <span style="color:#94a3b8;font-weight:400">(optional)</span></label>
@@ -1031,13 +1091,48 @@ window.Pages['all-tasks'] = (function () {
         <button onclick="document.getElementById('at-delegate-modal').remove()" class="at-btn at-btn-secondary">Cancel</button>
         <button id="atd-save" class="at-btn at-btn-primary">Delegate</button>
       </div>
+      ${csvUploadSection('atd', '/api/samples/delegation', 'Format: doer_email, approver_email, due_date, priority, approval, description, remarks, client_name')}
     `);
+
+    document.getElementById('atd-csv-upload').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const file = document.getElementById('atd-csv-file').files?.[0];
+      if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
+      btn.disabled = true; btn.textContent = 'Uploading…';
+      let ok = 0, fail = 0;
+      for (const obj of await readCsvRows(file)) {
+        const doer = userByEmail(obj['doer_email']);
+        if (!doer) { fail++; continue; }
+        try {
+          await Utils.apiFetch('/api/delegations', {
+            method: 'POST',
+            body: JSON.stringify({
+              description: obj['description'] || '',
+              doerId: doer.id, doerName: doer.name,
+              delegatedBy: currentUserId(),
+              dueDate: obj['due_date'] || Utils.todayISO(),
+              priority: obj['priority'] || 'Low',
+              approval: obj['approval'] === 'yes' ? 'Approval Required' : 'No Approval',
+              client: obj['client_name'] || '',
+              remarks: obj['remarks'] || '',
+              url: '',
+            }),
+          });
+          ok++;
+        } catch { fail++; }
+      }
+      div.remove();
+      Utils.showToast(`${ok} tasks uploaded${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
+      await reload();
+    });
 
     document.getElementById('atd-save').addEventListener('click', async () => {
       const desc     = document.getElementById('atd-desc').value.trim();
       const doerId   = document.getElementById('atd-doer').value;
+      const doerName = _users.find(u => u.id === doerId)?.name || '';
       const dueDate  = document.getElementById('atd-due').value;
       const priority = document.getElementById('atd-priority').value;
+      const approval = document.getElementById('atd-approval').value || 'No Approval';
       const url      = document.getElementById('atd-url').value.trim();
       const remarks  = document.getElementById('atd-remarks').value.trim();
       const errEl    = document.getElementById('atd-err');
@@ -1051,7 +1146,7 @@ window.Pages['all-tasks'] = (function () {
       try {
         await Utils.apiFetch('/api/delegations', {
           method: 'POST',
-          body: JSON.stringify({ description: desc, doerId, dueDate, priority, url, remarks, delegatedBy: currentUserId() }),
+          body: JSON.stringify({ description: desc, doerId, doerName, dueDate, priority, approval, url, remarks, delegatedBy: currentUserId() }),
         });
         div.remove();
         Utils.showToast('Task delegated successfully');
@@ -1102,18 +1197,12 @@ window.Pages['all-tasks'] = (function () {
       ${modalHeader('Add Checklist Task', "document.getElementById('at-checklist-modal').remove()")}
       <div style="padding:20px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px">
         <div>
-          <label class="at-label">Task *</label>
-          <textarea id="atc-task" rows="3" class="at-input" style="width:100%;height:auto;padding:8px 10px;resize:none"></textarea>
+          <label class="at-label">Select Employee *</label>
+          <select id="atc-assigned" class="at-input" style="width:100%"><option value="">— Select —</option>${userOpts}</select>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div>
-            <label class="at-label">Assigned To</label>
-            <select id="atc-assigned" class="at-input" style="width:100%"><option value="">— Select —</option>${userOpts}</select>
-          </div>
-          <div>
-            <label class="at-label">Frequency</label>
-            <select id="atc-freq" class="at-input" style="width:100%">${_checklistFreqOptsHtml('daily')}</select>
-          </div>
+        <div>
+          <label class="at-label">Frequency</label>
+          <select id="atc-freq" class="at-input" style="width:100%">${_checklistFreqOptsHtml('daily')}</select>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
           <div>
@@ -1126,6 +1215,10 @@ window.Pages['all-tasks'] = (function () {
           </div>
         </div>
         <div>
+          <label class="at-label">Task Name / Description *</label>
+          <input type="text" id="atc-task" class="at-input" style="width:100%" placeholder="Enter task name..." />
+        </div>
+        <div>
           <label class="at-label">Remarks</label>
           <input type="text" id="atc-remarks" class="at-input" style="width:100%" placeholder="Any remarks..." />
         </div>
@@ -1135,7 +1228,64 @@ window.Pages['all-tasks'] = (function () {
         <button onclick="document.getElementById('at-checklist-modal').remove()" class="at-btn at-btn-secondary">Cancel</button>
         <button id="atc-save" class="at-btn" style="background:#10b981;color:#fff;border-color:#10b981">Add Checklist</button>
       </div>
+      ${csvUploadSection('atc', '/api/samples/checklist-bulk', 'Format: user_email, frequency (daily/weekly/monthly/yearly/quarterly/alternative_week), start_date, description, remarks — tasks auto-generate!')}
     `);
+
+    document.getElementById('atc-csv-upload').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const file = document.getElementById('atc-csv-file').files?.[0];
+      if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
+      btn.disabled = true; btn.textContent = 'Uploading…';
+      const HEADER_ALIASES = {
+        email: 'user_email', 'user email': 'user_email',
+        task: 'description', 'task name': 'description', 'task name / description': 'description', 'task/description': 'description',
+        'next due date': 'start_date', 'due date': 'start_date', 'start date': 'start_date',
+      };
+      const FREQUENCY_ALIASES = { y: 'yearly', m: 'monthly', q: 'quarterly', w: 'weekly', d: 'daily', aw: 'alternative_week' };
+      const MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
+      const parseFlexibleDate = (s) => {
+        if (!s) return null;
+        s = s.trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+        let m = s.match(/^(\d{1,2})-([A-Za-z]{3,})-(\d{2,4})$/);
+        if (m) {
+          const mon = MONTHS[m[2].toLowerCase().slice(0, 3)];
+          if (mon) return `${m[3].length === 2 ? '20' + m[3] : m[3]}-${String(mon).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+        }
+        m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+        if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+        return null;
+      };
+      const rows = await readCsvRows(file, HEADER_ALIASES);
+      let ok = 0, fail = 0;
+      const failures = [];
+      for (let i = 0; i < rows.length; i++) {
+        const obj = rows[i];
+        const rowLabel = `Row ${i + 2} (${obj['user_email'] || 'no email'})`;
+        const user = userByEmail(obj['user_email']);
+        if (!user) { fail++; failures.push(`${rowLabel}: email not found in Users list`); continue; }
+        if (!obj['description']) { fail++; failures.push(`${rowLabel}: description/task is empty`); continue; }
+        const freqRaw = (obj['frequency'] || 'daily').trim().toLowerCase();
+        try {
+          await Utils.apiFetch('/api/masters', {
+            method: 'POST',
+            body: JSON.stringify({
+              task: obj['description'],
+              assignedTo: user.name,
+              frequency: FREQUENCY_ALIASES[freqRaw] || freqRaw,
+              startDate: parseFlexibleDate(obj['start_date']),
+              remarks: obj['remarks'] || '',
+              department: obj['department'] || '',
+            }),
+          });
+          ok++;
+        } catch (e) { fail++; failures.push(`${rowLabel}: ${e.message || 'server error'}`); }
+      }
+      div.remove();
+      Utils.showToast(`${ok} checklist(s) created${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
+      if (failures.length) alert(`${failures.length} row(s) failed to upload:\n\n${failures.join('\n')}`);
+      await reload();
+    });
 
     document.getElementById('atc-save').addEventListener('click', async () => {
       const task     = document.getElementById('atc-task').value.trim();
