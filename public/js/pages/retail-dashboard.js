@@ -229,7 +229,7 @@ window.Pages['retail-dashboard'] = (() => {
       <div style="margin-bottom:16px;">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--color-primary);margin-bottom:8px;">${H.esc(title)}</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;">
-          ${list.length ? list.map((v) => `<span class="pill pill-neutral pill-sm">${H.esc(v)}</span>`).join('') : '<span style="font-size:12px;color:#94a3b8;">Nothing yet</span>'}
+          ${list.length ? list.map((v) => `<span class="pill pill-neutral pill-sm" style="display:inline-flex;align-items:center;gap:4px;">${H.esc(v)}<button type="button" data-rdl-remove="${type}" data-value="${H.esc(v)}" title="Remove ${H.esc(v)}" aria-label="Remove ${H.esc(v)}" style="border:0;background:none;padding:0 0 0 2px;cursor:pointer;color:#94a3b8;font-size:14px;line-height:1;">×</button></span>`).join('') : '<span style="font-size:12px;color:#94a3b8;">Nothing yet</span>'}
         </div>
         <div style="display:flex;gap:8px;">
           <input id="rdl-${type}-input" placeholder="Add a ${singular}…" style="${H.CONTROL}flex:1;" />
@@ -241,6 +241,18 @@ window.Pages['retail-dashboard'] = (() => {
       width: 520, hideConfirm: true, cancelText: 'Close',
       bodyHTML: section('category', 'Categories', 'category', _config.categories) + section('item', 'Items', 'item', _config.items) + section('branch', 'Branches', 'branch', _config.branches),
       onOpen: (root) => {
+        root.querySelectorAll('[data-rdl-remove]').forEach((btn) => btn.addEventListener('click', async () => {
+          const type = btn.dataset.rdlRemove;
+          const value = btn.dataset.value;
+          if (!confirm(`Remove "${value}" from the list? Past expenses keep it.`)) return;
+          try {
+            await H.del(`/api/retail-dashboard/config?type=${encodeURIComponent(type)}&value=${encodeURIComponent(value)}`);
+            await loadConfig();
+            H.toast('Removed');
+            H.closeModal('rdl');
+            openLists();
+          } catch (e) { H.fail(e); }
+        }));
         root.querySelectorAll('[data-rdl-add]').forEach((btn) => btn.addEventListener('click', async () => {
           const type = btn.dataset.rdlAdd;
           const input = root.querySelector(`#rdl-${type}-input`);

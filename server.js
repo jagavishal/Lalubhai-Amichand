@@ -3925,6 +3925,18 @@ async function _rdAllRows() {
   return ((await readStore()).retailExpenses || []).slice().sort((a, b) => String(b.entry_date).localeCompare(String(a.entry_date)) || String(b.created_at).localeCompare(String(a.created_at)));
 }
 
+async function _rdRemoveConfig(type, value) {
+  const key = _rdConfigKey[type];
+  if (!key) throw Object.assign(new Error('Unknown list'), { status: 400 });
+  const target = String(value || '').trim().toLowerCase();
+  const seed = type === 'category' ? DEFAULT_RETAIL_EXPENSE_CATEGORIES : type === 'item' ? DEFAULT_RETAIL_EXPENSE_ITEMS : DEFAULT_RETAIL_EXPENSE_BRANCHES;
+  const list = await readAuthority(key, seed);
+  const next = list.filter((v) => String(v).trim().toLowerCase() !== target);
+  if (next.length === list.length) throw Object.assign(new Error('Not in the list'), { status: 404 });
+  await writeAuthority(key, next);
+  return next;
+}
+
 app.get('/api/retail-dashboard/config', requireAuth, requireAdminOrPage('retail-dashboard'), async (req, res) => {
   try { await ensureSchema(); return res.json(await _rdConfig()); }
   catch (e) { return res.status(500).json({ error: e.message }); }
@@ -3936,6 +3948,15 @@ app.post('/api/retail-dashboard/config', requireAuth, requireAdminOrPage('retail
     const { type, value } = req.body || {};
     const list = await _rdAddConfig(String(type || ''), value);
     return res.status(201).json({ list });
+  } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
+});
+
+app.delete('/api/retail-dashboard/config', requireAuth, requireAdminOrPage('retail-dashboard'), async (req, res) => {
+  try {
+    await ensureSchema();
+    const { type, value } = req.query || {};
+    const list = await _rdRemoveConfig(String(type || ''), value);
+    return res.json({ list });
   } catch (e) { return res.status(e.status || 500).json({ error: e.message }); }
 });
 
