@@ -3876,11 +3876,20 @@ async function _rdEnsureTable() {
   _rdTableReady = true;
 }
 
+// Prod stored an empty branch list before the Satellite/Bopal seed existed, and
+// readAuthority only seeds a missing key — so treat an empty list as unseeded too.
+async function _rdBranches() {
+  const list = await readAuthority('retail_expense_branches', DEFAULT_RETAIL_EXPENSE_BRANCHES);
+  if (list.length) return list;
+  await writeAuthority('retail_expense_branches', DEFAULT_RETAIL_EXPENSE_BRANCHES).catch(() => {});
+  return [...DEFAULT_RETAIL_EXPENSE_BRANCHES];
+}
+
 async function _rdConfig() {
   const [categories, items, branches] = await Promise.all([
     readAuthority('retail_expense_categories', DEFAULT_RETAIL_EXPENSE_CATEGORIES),
     readAuthority('retail_expense_items', DEFAULT_RETAIL_EXPENSE_ITEMS),
-    readAuthority('retail_expense_branches', DEFAULT_RETAIL_EXPENSE_BRANCHES),
+    _rdBranches(),
   ]);
   return { categories, items, branches, paymentTypes: RETAIL_EXPENSE_PAYMENT_TYPES };
 }
@@ -3892,7 +3901,7 @@ async function _rdAddConfig(type, value) {
   const clean = String(value || '').trim();
   if (!clean) throw Object.assign(new Error('Enter a value'), { status: 400 });
   const seed = type === 'category' ? DEFAULT_RETAIL_EXPENSE_CATEGORIES : type === 'item' ? DEFAULT_RETAIL_EXPENSE_ITEMS : DEFAULT_RETAIL_EXPENSE_BRANCHES;
-  const list = await readAuthority(key, seed);
+  const list = type === 'branch' ? await _rdBranches() : await readAuthority(key, seed);
   if (list.some((v) => String(v).toLowerCase() === clean.toLowerCase())) throw Object.assign(new Error('Already in the list'), { status: 409 });
   list.push(clean);
   await writeAuthority(key, list);
