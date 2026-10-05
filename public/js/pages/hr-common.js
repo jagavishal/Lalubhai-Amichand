@@ -71,6 +71,9 @@ window.HR = (function () {
     .hr-modal-foot { padding:12px 16px calc(12px + env(safe-area-inset-bottom, 0px)) !important; }
     .hr-modal-foot > button { flex:1 1 0; min-height:42px; justify-content:center; }
     .hr-modal-x { width:36px !important; height:36px !important; }
+    .hr-modal-ok-top { display:inline-flex !important; min-height:36px; padding:0 14px !important; white-space:nowrap; }
+    .hr-drawer > .hr-modal-box { height:100% !important; }
+    .hr-modal-body { padding-bottom:28px !important; }
   }`;
   if (typeof document !== 'undefined' && !document.getElementById('hr-mobile-css')) {
     const st = document.createElement('style');
@@ -300,7 +303,15 @@ window.HR = (function () {
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
                 stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>`;
-    const footer = `<div class="hr-modal-foot" style="padding:15px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
+    // Phones only (hr-mobile-css shows it): a second Save in the header. The
+    // footer's can end up under iOS Safari's floating toolbar, out of reach;
+    // the header never does. It just clicks the footer button.
+    const headActions = hideConfirm ? closeBtn
+      : `<div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+           <button id="${id}-ok-top" class="btn-primary hr-modal-ok-top" style="display:none;" ${saving ? 'disabled' : ''}>${esc(saving ? 'Saving…' : confirmText)}</button>
+           ${closeBtn}
+         </div>`;
+    const footer =`<div class="hr-modal-foot" style="padding:15px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
             <button id="${id}-cancel" class="btn-secondary">${esc(cancelText)}</button>
             ${hideConfirm ? '' : `<button id="${id}-ok" class="btn-primary" ${saving ? 'disabled' : ''}>${esc(saving ? 'Saving…' : confirmText)}</button>`}
           </div>`;
@@ -315,7 +326,7 @@ window.HR = (function () {
               <div style="font-size:15px;font-weight:700;color:#0f172a;">${esc(title)}</div>
               ${subtitle ? `<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">${esc(subtitle)}</div>` : ''}
             </div>
-            ${closeBtn}
+            ${headActions}
           </div>
           <div class="hr-modal-body" style="padding:20px 22px;overflow-y:auto;flex:1;">${bodyHTML}</div>
           ${footer}
@@ -330,7 +341,7 @@ window.HR = (function () {
               <div style="font-size:15px;font-weight:700;color:#0f172a;">${esc(title)}</div>
               ${subtitle ? `<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">${esc(subtitle)}</div>` : ''}
             </div>
-            ${closeBtn}
+            ${headActions}
           </div>
           <div class="hr-modal-body" style="padding:20px 22px;">${bodyHTML}</div>
           ${footer}
@@ -345,11 +356,12 @@ window.HR = (function () {
     root.addEventListener('click', (e) => { if (e.target === root) close(); });
     if (onConfirm) {
       document.getElementById(`${id}-ok`)?.addEventListener('click', async () => {
-        const btn = document.getElementById(`${id}-ok`);
-        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+        const btns = [document.getElementById(`${id}-ok`), document.getElementById(`${id}-ok-top`)].filter(Boolean);
+        btns.forEach(b => { b.disabled = true; b.textContent = 'Saving…'; });
         try { await onConfirm(); }
-        catch (e) { fail(e); if (btn) { btn.disabled = false; btn.textContent = confirmText; } }
+        catch (e) { fail(e); btns.forEach(b => { b.disabled = false; b.textContent = confirmText; }); }
       });
+      document.getElementById(`${id}-ok-top`)?.addEventListener('click', () => document.getElementById(`${id}-ok`)?.click());
     }
     if (isDrawer) {
       const box = document.getElementById(`${id}-box`);

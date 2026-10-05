@@ -787,6 +787,17 @@ html[data-theme="dark"] .card img[data-zoom] { background: var(--surface-alt); }
     display: none !important;
   }
 
+  /* Full-screen overlays end where the visible area ends (see --vvh in
+     ui.js), not under the browser toolbar or keyboard — otherwise a bottom
+     sheet's footer (Save / Submit) is drawn where nobody can reach it. */
+  .modal-overlay, .hr-modal, .at-modal-overlay,
+  #main-content :is([style*="position:fixed"], [style*="position: fixed"]):is([style*="inset:0"], [style*="inset: 0"]),
+  body > div:is([style*="position:fixed"], [style*="position: fixed"]):is([style*="inset:0"], [style*="inset: 0"]) {
+    bottom: auto !important;
+    height: 100dvh !important;
+    height: var(--vvh, 100dvh) !important;
+  }
+
   /* Helpers pages opt into */
   .m-hide { display: none !important; }
   .m-stack { flex-direction: column !important; align-items: stretch !important; }

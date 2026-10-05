@@ -195,6 +195,19 @@ window.UI = (function () {
     });
   }
 
+  /* ── Visible-viewport height ─────────────────────────────────────────
+     On phones a `position:fixed; inset:0` overlay can run under the
+     browser's own bottom toolbar (iOS Safari's floating bar) or the
+     on-screen keyboard, hiding a sheet's Save button. --vvh is the height
+     actually visible; style.css sizes overlays to it. */
+  const setVvh = () => {
+    const h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    document.documentElement.style.setProperty('--vvh', Math.round(h) + 'px');
+  };
+  setVvh();
+  (window.visualViewport || window).addEventListener('resize', setVvh);
+  window.addEventListener('orientationchange', setVvh);
+
   let _lcQueued = false;
   new MutationObserver(() => {
     if (_lcQueued) return;
