@@ -58,6 +58,18 @@ window.Pages['hr-leave'] = (() => {
 
     el.innerHTML = `
       <div class="animate-fade-in">
+        <style>
+          @media (max-width: 767px) {
+            .hrl-filt { grid-template-columns:repeat(2,minmax(0,1fr)) !important; padding:12px !important; gap:10px !important; }
+            .hrl-filt > div:last-child:nth-child(odd) { grid-column:1 / -1; }
+            .hrl-filt button { min-height:40px; }
+            .hrl-filt-bal { grid-template-columns:minmax(0,1fr) !important; }
+            .hrl-hol-grid { grid-template-columns:minmax(0,1fr) !important; gap:10px !important; }
+            .hrl-hol-grid .hrl-hol-del { min-height:34px; }
+            .hrl-type-bar > button { width:100%; min-height:40px; justify-content:center; }
+            .hr-tbl-sticky td:first-child > div { white-space:normal; }
+          }
+        </style>
         ${H.header('Leave Management',
           admin ? 'Requests, approvals, balances and the holiday calendar' : 'Apply for leave and track your balance',
           `<button id="hrl-apply" class="btn-primary btn-sm">+ Apply for Leave</button>`)}
@@ -169,22 +181,23 @@ window.Pages['hr-leave'] = (() => {
 
     // An employee's own list does not need a column repeating their own name,
     // and has nothing to approve — so it drops the first and last columns.
-    const cols = ['Employee', 'Type', 'Period', { label: 'Days', align: 'right' }, 'Reason', 'Status',
-      { label: 'Balance After', align: 'right' }];
-    if (admin) cols.push({ label: 'Action', nowrap: true });
+    // m: how each column reads as a card on a phone (see H.table).
+    const cols = [{ label: 'Employee', m: 'title' }, { label: 'Type', m: admin ? undefined : 'title' }, 'Period',
+      { label: 'Days', align: 'right' }, 'Reason', 'Status', { label: 'Balance After', align: 'right' }];
+    if (admin) cols.push({ label: 'Action', nowrap: true, m: 'actions' });
     const shownCols = admin ? cols : cols.slice(1);
     const shownRows = rows.map((r) => (admin ? r : r.slice(1, 7)));
 
     return `
       ${myBalanceStrip()}
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
+      <div class="hrl-filt" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px;align-items:end;">
         ${H.select('hrl-f-status', 'Status', _statusFilter, ['All', ...STATUSES])}
         ${H.select('hrl-f-year', 'Year', _year, H.yearList())}
         <div><button id="hrl-export" class="btn-secondary btn-sm" style="width:100%;">Export CSV</button></div>
       </div>
       ${H.table(shownCols, shownRows,
-        { empty: admin ? 'No leave requests for these filters' : 'You have not applied for any leave in this period' })}`;
+        { empty: admin ? 'No leave requests for these filters' : 'You have not applied for any leave in this period', cards: true })}`;
   }
 
 
@@ -215,7 +228,7 @@ window.Pages['hr-leave'] = (() => {
     const cols = ['Employee', ...types.map((t) => ({ label: t.code, align: 'right' })), { label: '', nowrap: true }];
 
     return `
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
+      <div class="hrl-filt hrl-filt-bal" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;align-items:end;">
         ${H.select('hrl-b-year', 'Year', _year, H.yearList())}
         <div><button id="hrl-carry" class="btn-secondary btn-sm" style="width:100%;">Carry Forward from ${_year - 1}</button></div>
@@ -225,7 +238,7 @@ window.Pages['hr-leave'] = (() => {
       <div style="font-size:12px;color:#94a3b8;margin-bottom:11px;">
         Entitled is the year's quota plus anything carried forward. Balance moves only when a request is approved.
       </div>
-      ${H.table(cols, rows, { empty: 'No active employees', maxHeight: '62vh' })}`;
+      ${H.table(cols, rows, { empty: 'No active employees', maxHeight: '62vh', sticky: true })}`;
   }
 
   /* ── Holiday calendar ─────────────────────────────────────────────── */
@@ -261,13 +274,13 @@ window.Pages['hr-leave'] = (() => {
     }).filter(Boolean).join('');
 
     return `
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
+      <div class="hrl-filt" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;align-items:end;">
         ${H.select('hrl-h-year', 'Year', _year, H.yearList())}
         ${admin ? '<div><button id="hrl-hol-add" class="btn-primary btn-sm" style="width:100%;">+ Add Holiday</button></div>' : ''}
       </div>
       ${cards
-        ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:13px;">${cards}</div>`
+        ? `<div class="hrl-hol-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:13px;">${cards}</div>`
         : H.empty(`No holidays listed for ${_year}`, 'Add the year’s calendar so leave counting and the muster roll know which days are off.')}`;
   }
 
@@ -283,8 +296,9 @@ window.Pages['hr-leave'] = (() => {
       `<button class="btn-ghost btn-xs hrl-type-edit" data-code="${H.esc(t.code)}">Edit</button>`,
     ]);
     return `
-      <div style="margin-bottom:13px;"><button id="hrl-type-add" class="btn-primary btn-sm">+ Add Leave Type</button></div>
-      ${H.table(['Code', 'Name', { label: 'Annual Quota', align: 'right' }, 'Pay', 'Carry Forward', { label: '', nowrap: true }], rows)}
+      <div class="hrl-type-bar" style="margin-bottom:13px;"><button id="hrl-type-add" class="btn-primary btn-sm">+ Add Leave Type</button></div>
+      ${H.table([{ label: 'Code', m: 'title' }, 'Name', { label: 'Annual Quota', align: 'right' }, 'Pay', 'Carry Forward',
+        { label: '', nowrap: true, m: 'actions' }], rows, { cards: true })}
       <div style="font-size:12px;color:#94a3b8;margin-top:11px;line-height:1.55;">
         An unpaid type is what payroll treats as loss of pay — LWP exists for exactly that. Changing a quota
         affects balances created from now on; existing balances are adjusted from the Balances tab.

@@ -38,9 +38,9 @@ window.Pages['grn-creation'] = (() => {
   function _fmtMoney(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
   /* ── Helpers (styled like PO Creation, for a consistent look) ─────────── */
-  function _fieldWrap(label, innerHtml, extra) {
-    return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
-      + '<div style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">' + esc(label) + '</div>'
+  function _fieldWrap(label, innerHtml, extra, cls) {
+    return '<div class="grnc-fw' + (cls ? ' ' + cls : '') + '" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
+      + '<div class="grnc-fl" style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">' + esc(label) + '</div>'
       + innerHtml
       + '</div>';
   }
@@ -104,7 +104,7 @@ window.Pages['grn-creation'] = (() => {
   function _poNoField() {
     return _fieldWrap('PO No.', ''
       + '<input type="text" id="grnc-po-no" autocomplete="off" placeholder="Type, or pick a PO…" style="' + _inputStyle + '" />'
-      + '<div id="grnc-pono-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>');
+      + '<div id="grnc-pono-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>', '', 'grnc-wide');
   }
 
   // Per-format extraction, mirroring how PO Creation's own PR_ITEM_MAPPERS
@@ -219,7 +219,7 @@ window.Pages['grn-creation'] = (() => {
   function _vendorField() {
     return _fieldWrap('Vendor Name', ''
       + '<input type="text" id="grnc-vendor" autocomplete="off" placeholder="Type to search…" style="' + _inputStyle + '" />'
-      + '<div id="grnc-vendor-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>');
+      + '<div id="grnc-vendor-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>', '', 'grnc-wide');
   }
 
   function _bindVendorField() {
@@ -340,26 +340,26 @@ window.Pages['grn-creation'] = (() => {
   /* ── Item rows ──────────────────────────────────────────────────────── */
   function _itemRowHtml() {
     return '<tr class="grnc-item-row" style="border-bottom:1px solid #f1f5f9;">'
-      + '<td style="padding:6px;min-width:150px;position:relative;">'
+      + '<td class="grnc-c-code" data-label="Item No." style="padding:6px;min-width:150px;position:relative;">'
         + '<input type="text" class="grnc-item-no" autocomplete="off" placeholder="Item No…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
         + '<div class="grnc-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
       + '</td>'
-      + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="grnc-item-desc">—</td>'
-      + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="grnc-item-size">—</td>'
-      + '<td style="padding:6px;min-width:80px;font-size:12px;color:#64748b;text-align:right;" class="grnc-item-ordered">—</td>'
-      + '<td style="padding:6px;"><input type="text" inputmode="decimal" data-field="receivedQty" class="grnc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
-      + '<td style="padding:6px;"><input type="text" inputmode="decimal" data-field="approvedQty" class="grnc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
-      + '<td style="padding:6px;"><input type="text" inputmode="decimal" data-field="rejectedQty" class="grnc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
-      + '<td style="padding:6px;"><input type="text" data-field="uom" class="grnc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
-      + '<td style="padding:6px;"><input type="text" inputmode="decimal" data-field="rate" class="grnc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
-      + '<td class="grnc-item-total" style="padding:6px 10px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;">0.00</td>'
-      + '<td style="padding:6px;text-align:center;"><button type="button" class="grnc-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
+      + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="grnc-item-desc grnc-c-wide" data-label="Description">—</td>'
+      + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="grnc-item-size" data-label="Dept/Size">—</td>'
+      + '<td style="padding:6px;min-width:80px;font-size:12px;color:#64748b;text-align:right;" class="grnc-item-ordered" data-label="Ordered Qty">—</td>'
+      + '<td data-label="Received Qty" style="padding:6px;"><input type="text" inputmode="decimal" data-field="receivedQty" class="grnc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + '<td data-label="Approved Qty" style="padding:6px;"><input type="text" inputmode="decimal" data-field="approvedQty" class="grnc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + '<td data-label="Rejected Qty" style="padding:6px;"><input type="text" inputmode="decimal" data-field="rejectedQty" class="grnc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + '<td data-label="UOM" style="padding:6px;"><input type="text" data-field="uom" class="grnc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + '<td data-label="Rate per UOM" style="padding:6px;"><input type="text" inputmode="decimal" data-field="rate" class="grnc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + '<td class="grnc-item-total" data-label="Total (INR)" style="padding:6px 10px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;">0.00</td>'
+      + '<td class="grnc-c-rm" style="padding:6px;text-align:center;"><button type="button" class="grnc-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
     + '</tr>';
   }
 
   function _itemsTableHtml() {
-    return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:1080px;">'
+    return '<div class="grnc-items-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+      + '<table class="grnc-items" style="width:100%;border-collapse:collapse;min-width:1080px;">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
           + ['Item No.', 'Description', 'Dept/Size', 'Ordered Qty', 'Received Qty', 'Approved Qty', 'Rejected Qty', 'UOM', 'Rate per UOM'].map(h => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '<th style="padding:8px 6px;text-align:right;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">Total (INR)</th>'
@@ -433,7 +433,7 @@ window.Pages['grn-creation'] = (() => {
     }
     body.innerHTML = rows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
-        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">#' + esc(r.grNo) + '</td>'
+        + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;">#' + esc(r.grNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.vendorName) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.prNo) + '</td>'
@@ -441,7 +441,7 @@ window.Pages['grn-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+        + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
             : '<button type="button" class="grnc-cancel-btn" data-gr="' + esc(r.grNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
@@ -484,10 +484,10 @@ window.Pages['grn-creation'] = (() => {
   }
 
   function _grlFilterBarHtml() {
-    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+    return '<div class="grnc-fbar" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
       + '<input type="text" id="grnl-vendor" placeholder="Search vendor…" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
       + '<input type="date" id="grnl-from" style="' + _inputStyle + 'width:auto;" />'
-      + '<span style="color:#94a3b8;font-size:12px;">to</span>'
+      + '<span class="grnc-fbar-to" style="color:#94a3b8;font-size:12px;">to</span>'
       + '<input type="date" id="grnl-to" style="' + _inputStyle + 'width:auto;" />'
       + '<button type="button" id="grnl-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
       + '<button type="button" id="grnl-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
@@ -514,8 +514,8 @@ window.Pages['grn-creation'] = (() => {
         + '<span id="grnl-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
       + '</div>'
       + _grlFilterBarHtml()
-      + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
+      + '<div class="grnc-list-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+        + '<table class="m-cards grnc-list" style="width:100%;border-collapse:collapse;min-width:920px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
             + ['GR No', 'Date', 'Vendor', 'PR No', 'PO No', 'Total (INR)', 'Created By', 'PDF', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
@@ -526,7 +526,7 @@ window.Pages['grn-creation'] = (() => {
 
   /* ── Header fields ──────────────────────────────────────────────────── */
   function _headerFieldsHtml() {
-    return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
+    return '<div class="grnc-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
       + _textField('grnc-date', 'Date of Making GRN', { type: 'date', value: _today() })
       + _readonlyField('grnc-next-no', 'GR NO. (auto-assigned)', _nextGrNumber != null ? ('#' + _nextGrNumber) : 'Loading…')
       + _textField('grnc-made-by', 'Made By', { value: (window.currentUser && window.currentUser.name) || '' })
@@ -553,7 +553,7 @@ window.Pages['grn-creation'] = (() => {
   }
 
   function _tabsHtml() {
-    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
+    return '<div class="grnc-tabs" style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
       + _tabTab('Create GRN', _view === 'create', 'class="grnc-create-tab"')
       + _tabTab('GRN List', _view === 'list', 'class="grnc-list-tab"')
     + '</div>';
@@ -609,6 +609,47 @@ window.Pages['grn-creation'] = (() => {
   }
 
   /* ── Render ─────────────────────────────────────────────────────────── */
+  /* ── Phone layout (< 768px only; desktop untouched). Field groups share one
+     card in two columns, each item line becomes a compact card, GRN List
+     rows become cards (shared .m-cards). ─────────────────────────────────── */
+  const MOBILE_CSS = `@media (max-width: 767px) {
+    .grnc-page { padding-bottom: 16px !important; }
+    .grnc-tabs { gap: 0 !important; margin-bottom: 14px !important; }
+    .grnc-tabs > button { flex: 1 1 0; padding: 10px 12px !important; white-space: nowrap; }
+    .grnc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; grid-auto-flow: dense; gap: 12px 10px !important; background: var(--surface); border: 1px solid var(--border-light); border-radius: 12px; padding: 14px 12px; }
+    .grnc-grid > .grnc-fw { background: transparent !important; border: none !important; border-radius: 0 !important; padding: 0 !important; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; max-width: none !important; }
+    .grnc-grid > .grnc-wide { grid-column: 1 / -1; }
+    .grnc-grid .grnc-fl, .grnc-solo .grnc-fl { font-size: 11.5px !important; font-weight: 600 !important; color: var(--text-secondary) !important; margin-bottom: 5px !important; }
+    .grnc-grid input, .grnc-grid select, .grnc-grid #grnc-next-no { min-height: 40px; }
+    .grnc-solo { padding: 14px 12px !important; }
+    .grnc-items-wrap { overflow: visible !important; border: none !important; border-radius: 0 !important; }
+    table.grnc-items { min-width: 0 !important; display: block; }
+    table.grnc-items thead { display: none; }
+    table.grnc-items tbody { display: flex; flex-direction: column; gap: 10px; }
+    table.grnc-items tr.grnc-item-row { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px; background: var(--surface); border: 1px solid var(--border-light) !important; border-radius: 12px; }
+    table.grnc-items td { display: block; padding: 0 !important; min-width: 0 !important; white-space: normal !important; text-align: left !important; overflow-wrap: anywhere; }
+    table.grnc-items td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+    table.grnc-items td.grnc-c-code { grid-column: 1 / -1; padding-right: 46px !important; }
+    table.grnc-items td.grnc-c-wide { grid-column: 1 / -1; }
+    table.grnc-items td.grnc-item-total { font-weight: 700; color: var(--text-primary) !important; }
+    table.grnc-items td.grnc-c-rm { position: absolute; top: 29px; right: 12px; }
+    table.grnc-items .grnc-item-remove { width: 38px; height: 40px; border-radius: 8px !important; background: var(--color-danger-bg) !important; font-size: 20px !important; }
+    table.grnc-items input { min-height: 40px; }
+    .grnc-addrow > button { width: 100%; min-height: 42px; border-style: dashed !important; }
+    .grnc-total { justify-content: space-between !important; }
+    #grnc-submit-btn { align-self: stretch !important; min-height: 46px; font-size: 14.5px !important; }
+    .grnc-fbar { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
+    .grnc-fbar > * { width: 100% !important; min-width: 0 !important; min-height: 40px; }
+    .grnc-fbar > #grnl-vendor { grid-column: 1 / -1; }
+    .grnc-fbar > .grnc-fbar-to { display: none; }
+    .grnc-list-wrap { overflow: visible !important; background: var(--surface); }
+    table.grnc-list { min-width: 0 !important; }
+    table.grnc-list td.m-card-title { font-size: 14.5px !important; gap: 0; }
+    table.grnc-list td.m-card-title::before { display: inline !important; content: "GRN " !important; white-space: pre; flex: none !important; font-size: inherit !important; font-weight: inherit !important; color: inherit !important; }
+    table.grnc-list td.m-card-actions { align-items: center; gap: 6px; }
+    table.grnc-list td.m-card-actions button { min-height: 34px; }
+  }`;
+
   function renderPage() {
     const el = document.getElementById('main-content');
     if (!el) return;
@@ -620,13 +661,13 @@ window.Pages['grn-creation'] = (() => {
         + _headerFieldsHtml()
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
         + _itemsTableHtml()
-        + '<div>'
+        + '<div class="grnc-addrow">'
           + '<button type="button" id="grnc-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item</button>'
         + '</div>'
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Comments</div>'
-        + _fieldWrap('Extra Comments / Reason for GRN Delay', '<textarea id="grnc-comments" rows="2" style="' + _inputStyle + 'resize:vertical;"></textarea>')
+        + _fieldWrap('Extra Comments / Reason for GRN Delay', '<textarea id="grnc-comments" rows="2" style="' + _inputStyle + 'resize:vertical;"></textarea>', '', 'grnc-solo')
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Charges</div>'
-        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">'
+        + '<div class="grnc-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">'
           + _fieldWrap('GST % (auto-fills CGST + SGST)', '<select id="grnc-gst-percent" style="' + _inputStyle + 'background:#fff;">'
               + [['', 'Manual — enter below myself'], ['0', '0%'], ['5', '5% (2.5 + 2.5)'], ['12', '12% (6 + 6)'], ['18', '18% (9 + 9)'], ['28', '28% (14 + 14)']]
                 .map(([v, label]) => '<option value="' + v + '">' + esc(label) + '</option>').join('')
@@ -636,14 +677,15 @@ window.Pages['grn-creation'] = (() => {
           + _fieldWrap('Round Off', '<input type="text" inputmode="decimal" id="grnc-round-off" class="grnc-summary-field" style="' + _inputStyle + '" placeholder="0" />')
         + '</div>'
         + '<div style="font-size:11.5px;color:#94a3b8;margin:-10px 2px 0;">Inter-state vendor (IGST)? The live GRN sheet doesn\'t have an IGST cell yet — enter the full amount in CGST or SGST and adjust manually, or ask to have an IGST row added to the sheet.</div>'
-        + '<div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
+        + '<div class="grnc-total" style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
           + '<span style="font-size:12.5px;font-weight:700;color:#64748b;">Estimated Total</span>'
           + '<span id="grnc-grand-total" style="font-size:17px;font-weight:800;color:#0f172a;">₹0.00</span>'
         + '</div>'
         + '<button type="submit" id="grnc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create GRN</button>'
       + '</form>';
 
-    el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '1080px') + ';margin:0 auto;padding:4px 0 40px;">'
+    el.innerHTML = '<style>' + MOBILE_CSS + '</style>'
+      + '<div class="grnc-page" style="max-width:' + (isList ? '1200px' : '1080px') + ';margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">GRN Creation</h1>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fills the same live GRN Google Sheet the store team already uses, then saves a PDF of it to Drive.</p>'

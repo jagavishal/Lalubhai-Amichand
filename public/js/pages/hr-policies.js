@@ -71,7 +71,7 @@ window.Pages['hr-policies'] = (() => {
         ${H.header('HR Policies', 'The rules of the house — read them once, find them here forever',
           admin && cur && !_editing ? `<button id="hrp-edit" class="btn-secondary btn-sm">Edit this policy</button>` : '')}
         <div style="display:grid;grid-template-columns:230px 1fr;gap:14px;align-items:start;" id="hrp-grid">
-          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:8px;">
+          <div class="hrp-list" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:8px;">
             ${_list.map((p) => `
               <button data-open="${H.esc(p.id)}" style="display:block;width:100%;text-align:left;font:inherit;
                   font-size:13px;font-weight:${p.id === (cur && cur.id) ? '700' : '500'};
@@ -81,12 +81,25 @@ window.Pages['hr-policies'] = (() => {
                 ${H.esc(p.title)}
               </button>`).join('') || '<div style="padding:16px;font-size:12.5px;color:#94a3b8;">No policies yet.</div>'}
           </div>
-          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px 28px;min-height:300px;">
+          <div class="hrp-doc" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px 28px;min-height:300px;">
             ${cur ? (_editing ? editor(cur) : reader(cur)) : ''}
           </div>
         </div>
         <style>
           @media (max-width: 700px) { #hrp-grid { grid-template-columns: 1fr; } }
+          /* Phone: the policy list becomes a sideways chip strip above the text */
+          @media (max-width: 767px) {
+            #hrp-grid { grid-template-columns:minmax(0,1fr) !important; gap:10px !important; }
+            .hrp-list { display:flex; gap:6px; overflow-x:auto; padding:6px !important; scrollbar-width:none;
+              -webkit-overflow-scrolling:touch; overscroll-behavior-x:contain; }
+            .hrp-list::-webkit-scrollbar { display:none; }
+            .hrp-list > button[data-open] { flex-shrink:0; width:auto !important; white-space:nowrap; margin:0 !important;
+              padding:9px 14px !important; min-height:38px; }
+            .hrp-doc { padding:16px !important; min-height:0 !important; overflow-wrap:anywhere; }
+            .hrp-doc > div:first-child > a.btn-secondary { width:100%; justify-content:center; min-height:40px; }
+            .hrp-doc #hrp-body { min-height:55vh !important; }
+            .hrp-doc #hrp-save, .hrp-doc #hrp-cancel { flex:1; min-height:40px; justify-content:center; }
+          }
         </style>
       </div>`;
     bind();
@@ -126,6 +139,14 @@ window.Pages['hr-policies'] = (() => {
   /* ── Events ───────────────────────────────────────────────────────── */
 
   function bind() {
+    // On a phone the list is a sideways strip; keep the open policy's chip in view.
+    const strip = document.querySelector('.hrp-list');
+    const on = strip && strip.scrollWidth > strip.clientWidth
+      ? [...strip.querySelectorAll('[data-open]')].find((b) => b.getAttribute('data-open') === _open) : null;
+    if (on) {
+      const x = on.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft;
+      strip.scrollLeft = x - (strip.clientWidth - on.offsetWidth) / 2;
+    }
     document.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => {
       _open = b.getAttribute('data-open');
       _editing = false;

@@ -128,7 +128,7 @@ window.Pages['retail-dashboard'] = (() => {
         <button id="rd-csv" class="btn-secondary" style="font-size:12px;">Export CSV</button>
       </div>
       ${rows.length ? H.table(
-        ['Date', 'Branch', 'Item', 'Category', { label: 'Amount', align: 'right' }, 'Payment', 'Entered By', 'Invoice', 'Note'],
+        ['Date', 'Branch', { label: 'Item', m: 'title' }, 'Category', { label: 'Amount', align: 'right' }, 'Payment', 'Entered By', 'Invoice', 'Note'],
         rows.map((r) => [
           H.esc(H.fmtDate(r.entry_date)),
           H.esc(r.branch_name || '—'),
@@ -140,7 +140,7 @@ window.Pages['retail-dashboard'] = (() => {
           r.has_invoice ? `<a href="/api/retail-dashboard/expenses/${encodeURIComponent(r.id)}/invoice" target="_blank" style="color:var(--color-primary);font-weight:600;">View</a>` : '—',
           `<span style="display:inline-block;max-width:220px;white-space:normal;">${H.esc(r.note || '—')}</span>`,
         ]),
-        { maxHeight: '560px' },
+        { maxHeight: '560px', cards: true },
       ) : H.empty('No expenses here', all.length ? 'Nothing matches these filters.' : 'Press "+ New Expense" to log the first one.')}`;
   }
 
@@ -289,10 +289,28 @@ window.Pages['retail-dashboard'] = (() => {
           #rd-wrap > div:first-child { flex-direction: column; align-items: stretch !important; }
           #rd-wrap > div:first-child > div:last-child { width: 100%; }
           #rd-wrap > div:first-child > div:last-child button { flex: 1; }
-          #rd-month-scroll > div { min-width: ${Math.max(360, (_summary?.monthly?.length || 12) * 34)}px; }
+          /* all 12 months fit the card width — no hidden sideways scroll */
+          #rd-month-scroll > div { gap: 3px !important; }
+          #rd-month-scroll > div:last-child > div { font-size: 9px !important; line-height: 1.25; }
+          #rd-month-scroll { overflow-x: visible !important; }
           #rd-filters { flex-direction: column; align-items: stretch; }
           #rd-filters input, #rd-filters select { width: 100% !important; }
           #rd-filter-count { text-align: center; }
+          #rd-filters input, #rd-filters select, #rd-csv { min-height: 40px; }
+          #rd-csv { width: 100%; }
+          #rd-filters #rd-search { min-width: 0 !important; }
+          #rd-wrap .hr-tbl-scroll { max-height: none !important; }
+          #rd-wrap .hr-tbl-cards td[data-label]::before { flex-basis: 84px; }
+          #rd-wrap .hr-tbl-cards td span[style*="max-width:220px"] { max-width: none !important; }
+          #rd-wrap > div:first-child > div:last-child button { min-height: 40px; }
+          /* New Expense drawer: one field per row (cheque pair stays 2-up) */
+          #rdn .hr-modal-body > .hr-grid { grid-template-columns: minmax(0, 1fr) !important; gap: 12px !important; }
+          #rdn .hr-modal-body > .hr-grid > div { grid-column: 1 / -1 !important; }
+          #rdn .hr-modal-body { padding: 16px !important; }
+          #rdn .hr-modal-head { padding: 14px 16px !important; }
+          #rdn .hr-modal-foot { padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)) !important; }
+          #rdn .hr-modal-foot button { flex: 1; min-height: 44px; }
+          #rdl .hr-modal-foot button { flex: 1; min-height: 42px; }
         }
       </style>
       <div id="rd-wrap" class="animate-fade-in">

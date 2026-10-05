@@ -171,5 +171,36 @@ window.UI = (function () {
       </div>`;
   }
 
-  return { avatar, pill, badge, modal, statTile, emptyState, lightbox, hideLightbox };
+  /* ── Phone card tables ──────────────────────────────────────────────
+     A <table class="m-cards"> is laid out as one card per row on phones
+     (see style.css). The card needs each cell to carry its column name, so
+     this copies the header text onto every td as data-label. It runs on its
+     own whenever a page re-renders — pages only add the class. A cell that
+     already has data-label keeps it (set data-label="" to show no label). */
+  function labelCards(root = document) {
+    root.querySelectorAll('table.m-cards').forEach(tbl => {
+      const heads = [...(tbl.tHead?.rows[0]?.cells || [])].map(th => th.textContent.trim());
+      if (!heads.length) return;
+      for (const body of tbl.tBodies) {
+        for (const tr of body.rows) {
+          let col = 0;
+          for (const td of tr.cells) {
+            if (!td.hasAttribute('data-label') && (td.colSpan || 1) === 1) {
+              td.setAttribute('data-label', heads[col] || '');
+            }
+            col += td.colSpan || 1;
+          }
+        }
+      }
+    });
+  }
+
+  let _lcQueued = false;
+  new MutationObserver(() => {
+    if (_lcQueued) return;
+    _lcQueued = true;
+    requestAnimationFrame(() => { _lcQueued = false; labelCards(); });
+  }).observe(document.documentElement, { childList: true, subtree: true });
+
+  return { avatar, pill, badge, modal, statTile, emptyState, lightbox, hideLightbox, labelCards };
 })();

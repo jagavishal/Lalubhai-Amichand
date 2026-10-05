@@ -117,17 +117,17 @@ window.Pages.scheduler = (() => {
     // instead of the ellipsis actually taking effect.
     const itemHTML = shown.map(it => {
       const color = it.muted ? 'var(--text-muted)' : (it.kind === 'meeting' ? 'var(--color-purple-text)' : 'var(--color-warning-text)');
-      return `<div style="display:flex;align-items:center;gap:4px;min-width:0;">
+      return `<div class="sch-item" style="display:flex;align-items:center;gap:4px;min-width:0;">
           <span style="width:5px;height:5px;border-radius:50%;flex-shrink:0;background:${ITEM_DOT[it.kind]};opacity:${it.muted ? '.4' : '1'};"></span>
-          <span style="flex:1;min-width:0;font-size:10.5px;font-weight:500;color:${color};text-decoration:${it.done ? 'line-through' : 'none'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(it.label)}">${esc(it.label)}</span>
+          <span class="sch-item-label" style="flex:1;min-width:0;font-size:10.5px;font-weight:500;color:${color};text-decoration:${it.done ? 'line-through' : 'none'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(it.label)}">${esc(it.label)}</span>
         </div>`;
     }).join('');
-    const moreHTML = more > 0 ? `<div style="font-size:10px;font-weight:600;color:var(--text-muted);padding-left:9px;">+ ${more} more</div>` : '';
+    const moreHTML = more > 0 ? `<div class="sch-more" style="font-size:10px;font-weight:600;color:var(--text-muted);padding-left:9px;">+ ${more} more</div>` : '';
 
     const tagHTML = info.holiday
-      ? `<span style="font-size:10px;font-weight:700;color:var(--color-danger);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:64px;" title="${esc(info.holiday.name)}">${esc(info.holiday.name)}</span>`
+      ? `<span class="sch-tag" style="font-size:10px;font-weight:700;color:var(--color-danger);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:64px;" title="${esc(info.holiday.name)}">${esc(info.holiday.name)}</span>`
       : off
-      ? `<span style="font-size:10px;font-weight:700;color:var(--color-danger);">Off</span>`
+      ? `<span class="sch-tag" style="font-size:10px;font-weight:700;color:var(--color-danger);">Off</span>`
       : '';
 
     const numHTML = (isSelected || isToday)
@@ -148,7 +148,7 @@ window.Pages.scheduler = (() => {
           <span style="font-size:12.5px;font-weight:600;color:var(--text-primary);flex-shrink:0;">${numHTML}</span>
           ${tagHTML}
         </div>
-        <div style="display:flex;flex-direction:column;gap:3px;min-width:0;overflow:hidden;">${itemHTML}${moreHTML}</div>
+        <div class="sch-items" style="display:flex;flex-direction:column;gap:3px;min-width:0;overflow:hidden;">${itemHTML}${moreHTML}</div>
       </div>`;
   }
 
@@ -284,14 +284,41 @@ window.Pages.scheduler = (() => {
     if (!el) return;
 
     el.innerHTML = `
+      <style>
+        /* Phone: compact month grid (dots instead of titles), full-width day panel,
+           bigger nav targets, meeting form tidied into the bottom sheet. */
+        @media (max-width: 767px) {
+          .sch-toolbar { gap: 10px !important; }
+          .sch-toolbar-left { width: 100%; gap: 8px !important; }
+          #sch-today { min-height: 38px; }
+          #sch-prev, #sch-next { width: 36px !important; height: 34px !important; }
+          #sch-month-label { min-width: 0 !important; flex: 1; text-align: right; font-size: 15px !important; white-space: nowrap; }
+          #sch-schedule-btn { width: 100%; justify-content: center; min-height: 42px; }
+          #sch-grid-wrap { flex-basis: 100% !important; padding: 8px !important; }
+          #sch-grid .sch-cell { min-height: 54px !important; padding: 4px 3px !important; gap: 3px !important; }
+          #sch-grid .sch-cell > div:first-child { flex-direction: column; align-items: flex-start !important; gap: 0 !important; }
+          #sch-grid .sch-tag { font-size: 8.5px !important; max-width: 100% !important; line-height: 1.1; }
+          #sch-grid .sch-items { flex-direction: row !important; flex-wrap: wrap; gap: 3px !important; }
+          #sch-grid .sch-item-label, #sch-grid .sch-more { display: none !important; }
+          #sch-grid .sch-item > span:first-child { width: 6px !important; height: 6px !important; }
+          #sch-day-panel { flex-basis: 100% !important; max-width: none !important; min-width: 0 !important; }
+          #sch-add-btn { width: 36px !important; height: 36px !important; border-radius: 9px !important; }
+          .sch-meeting-del { width: 32px !important; height: 32px !important; }
+          #sch-meeting-modal-overlay [style*="grid-template-columns:1fr 1fr"] > div:nth-child(1),
+          #sch-meeting-modal-overlay [style*="grid-template-columns:1fr 1fr"] > div:nth-child(2),
+          #sch-meeting-modal-overlay [style*="grid-template-columns:1fr 1fr"] > div:nth-child(5),
+          #sch-meeting-modal-overlay [style*="grid-template-columns:1fr 1fr"] > div:nth-child(6) { grid-column: 1 / -1; }
+          #sch-meeting-modal-overlay .modal-footer > button { flex: 1 1 0; justify-content: center; min-height: 42px; }
+        }
+      </style>
       <div style="padding:4px 0;">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
           <h1 style="font-size:18px;font-weight:700;color:var(--text-primary);letter-spacing:-0.02em;margin:0;">Scheduler</h1>
         </div>
 
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
-          <div style="display:flex;align-items:center;gap:10px;">
+        <div class="sch-toolbar" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
+          <div class="sch-toolbar-left" style="display:flex;align-items:center;gap:10px;">
             <button id="sch-today" class="btn-secondary" style="padding:7px 12px;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;">Today</button>
             <div style="display:flex;align-items:center;gap:2px;border:1.5px solid var(--border-base);border-radius:8px;padding:2px;">
               <button id="sch-prev" style="width:26px;height:26px;border-radius:6px;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>

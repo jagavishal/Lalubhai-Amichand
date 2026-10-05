@@ -202,7 +202,7 @@ window.Pages.approvals = {
       const busy = this._leaveBusy === l.id;
       const half = l.half_day && l.half_day !== 'full' ? ` <span class="text-[10px] text-amber-600">(${esc(l.half_day)} half)</span>` : '';
       return `<tr class="border-b border-slate-100 hover:bg-slate-50/60">
-        <td class="px-4 py-3">
+        <td class="px-4 py-3 m-card-title">
           <div class="text-[13px] font-semibold text-slate-900">${esc(l.employee_name || l.user_name || '—')}</div>
           <div class="text-[11px] text-slate-400">${esc(l.employee_id || '')}${l.department ? ' · ' + esc(l.department) : ''}</div>
         </td>
@@ -212,7 +212,7 @@ window.Pages.approvals = {
         </td>
         <td class="px-4 py-3 text-[13px] text-slate-700 text-right">${Number(l.total_days || 0)}${half}</td>
         <td class="px-4 py-3 text-[13px] text-slate-600 max-w-[240px]">${esc(l.reason || '—')}</td>
-        <td class="px-4 py-3 whitespace-nowrap">
+        <td class="px-4 py-3 whitespace-nowrap m-card-actions">
           <div class="flex gap-2">
             <button data-leave-ok="${esc(l.id)}" class="btn-success !py-1 text-xs" ${busy ? 'disabled' : ''}>${busy ? '…' : 'Approve'}</button>
             <button data-leave-no="${esc(l.id)}" class="btn-danger !py-1 text-xs" ${busy ? 'disabled' : ''}>Reject</button>
@@ -222,7 +222,7 @@ window.Pages.approvals = {
     }).join('');
 
     return `<div class="card overflow-hidden">
-      <div class="overflow-x-auto"><table class="w-full">
+      <div class="overflow-x-auto"><table class="w-full m-cards">
         <thead><tr class="border-b border-slate-200 bg-slate-50">
           <th class="px-4 py-2.5 text-left text-[10px] uppercase tracking-wider font-bold text-slate-500">Employee</th>
           <th class="px-4 py-2.5 text-left text-[10px] uppercase tracking-wider font-bold text-slate-500">Type</th>
@@ -326,8 +326,8 @@ window.Pages.approvals = {
       const extra = [r.reference_no ? 'Ref: ' + esc(r.reference_no) : '', r.bank_details ? esc(r.bank_details) : '', r.remarks ? esc(r.remarks) : '']
         .filter(Boolean).join(' · ');
       return `<tr class="table-row" ${pending && admin ? 'style="background:rgba(245,158,11,0.06)"' : ''}>
-        <td class="table-td text-slate-400 text-xs font-mono">${i + 1}</td>
-        <td class="table-td whitespace-nowrap">
+        <td class="table-td text-slate-400 text-xs font-mono m-card-hide">${i + 1}</td>
+        <td class="table-td whitespace-nowrap m-card-title">
           <div class="font-semibold text-slate-800 text-xs font-mono">${esc(r.id)}</div>
           <div class="text-[11px] text-slate-400">${this._fmt(r.request_date || r.created_at)}</div>
         </td>
@@ -340,16 +340,16 @@ window.Pages.approvals = {
           <div class="text-[11px] text-slate-400">${esc(r.payment_mode || '')}</div>
         </td>
         <td class="table-td text-right font-semibold text-slate-900 whitespace-nowrap">${this._rupees(r.amount)}</td>
-        <td class="table-td text-slate-600 max-w-[260px]">
+        <td class="table-td text-slate-600 max-w-[260px]"><div>
           <div style="white-space:pre-line">${esc(r.purpose || '—')}</div>
           ${extra ? `<div class="text-[11px] text-slate-400 mt-1">${extra}</div>` : ''}
           ${this._upDocLinks(r)}
-        </td>
+        </div></td>
         <td class="table-td text-slate-600 whitespace-nowrap">${this._fmt(r.required_by)}</td>
         <td class="table-td">
           <span class="pill font-semibold ${s.cls}">${s.label}</span>${decided}
         </td>
-        ${admin ? `<td class="table-td whitespace-nowrap">${pending ? `
+        ${admin ? `<td class="table-td whitespace-nowrap m-card-actions">${pending ? `
           <div class="flex gap-1.5">
             ${this._hasFeature('approve') ? `<button data-up-ok="${esc(r.id)}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer" ${busy ? 'disabled' : ''}>${busy ? '…' : 'Approve'}</button>` : ''}
             ${this._hasFeature('reject') ? `<button data-up-no="${esc(r.id)}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer" ${busy ? 'disabled' : ''}>Reject</button>` : ''}
@@ -359,7 +359,7 @@ window.Pages.approvals = {
 
     return `<div class="card overflow-hidden">
       ${toggle}
-      <div class="overflow-x-auto"><table class="w-full text-sm">
+      <div class="overflow-x-auto"><table class="w-full text-sm m-cards">
         <thead class="bg-slate-50/80">
           <tr>
             <th class="table-th">#</th>
@@ -512,13 +512,13 @@ window.Pages.approvals = {
       const content = this._tab === 'My Requests' ? this._buildUserView()
         : this._tab === 'Urgent Payment' ? this._buildUrgentTable(false)
         : this._buildLeaveTable();
-      root.innerHTML = `
-        <div class="flex gap-2 flex-wrap">
+      root.innerHTML = `${this._mobileTitle()}
+        <div class="ap-tabs flex gap-2 flex-wrap">
           ${hasLeave ? tab('Leave Requests', this._leaveRequests.length) : ''}
           ${tab('My Requests', this._myRequests.length)}
           ${tab('Urgent Payment', upPending)}
         </div>
-        <div id="approvals-content">${content}</div>`;
+        <div id="approvals-content">${content}</div>${this._mobileCss()}`;
       root.querySelectorAll('.approvals-tab').forEach(btn => {
         btn.addEventListener('click', () => { this._tab = btn.dataset.tab; this._renderContent(); });
       });
@@ -572,9 +572,9 @@ window.Pages.approvals = {
       contentHtml = this._buildTaskApprovalsTable();
     }
 
-    return `
-      <div class="flex gap-2 flex-wrap">${tabHtml}</div>
-      <div id="approvals-content">${contentHtml}</div>
+    return `${this._mobileTitle()}
+      <div class="ap-tabs flex gap-2 flex-wrap">${tabHtml}</div>
+      <div id="approvals-content">${contentHtml}</div>${this._mobileCss()}
     `;
   },
 
@@ -589,14 +589,14 @@ window.Pages.approvals = {
       const titleCls = unseen ? 'font-semibold text-amber-700' : 'font-medium text-slate-800';
       const newBadge = unseen ? '<span class="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400 text-black">NEW</span>' : '';
       return `<tr class="table-row" ${rowStyle}>
-        <td class="table-td text-slate-400 text-xs font-mono">${i + 1}</td>
-        <td class="table-td max-w-[240px] truncate">
+        <td class="table-td text-slate-400 text-xs font-mono m-card-hide">${i + 1}</td>
+        <td class="table-td max-w-[240px] truncate m-card-title">
           <span class="${titleCls}">${this._esc(t.description)}</span>${newBadge}
         </td>
         <td class="table-td text-slate-600">${this._esc(t.doer || '—')}</td>
         <td class="table-td text-slate-500 whitespace-nowrap">${this._fmt(t.createdAt)}</td>
         <td class="table-td text-slate-500">${this._esc(t.remarks || '—')}</td>
-        <td class="table-td">
+        <td class="table-td m-card-actions">
           <div class="flex gap-1.5">
             ${this._hasFeature('grant_revise') ? `<button data-action="grant" data-id="${t.id}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer">Grant</button>` : ''}
             ${this._hasFeature('reject') ? `<button data-action="deny" data-id="${t.id}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer">Deny</button>` : ''}
@@ -605,7 +605,7 @@ window.Pages.approvals = {
       </tr>`;
     }).join('');
     return `<div class="card overflow-hidden">
-      <table class="w-full text-sm">
+      <table class="w-full text-sm m-cards">
         <thead class="bg-slate-50/80">
           <tr>
             <th class="table-th">#</th>
@@ -642,15 +642,15 @@ window.Pages.approvals = {
       const newBadge = unseen ? '<span class="ml-2 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400 text-black">NEW</span>' : '';
       const priCls = t.priority === 'High' ? 'bg-red-50 text-red-700' : t.priority === 'Medium' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600';
       return `<tr class="table-row" ${rowStyle}>
-        <td class="table-td text-slate-400 text-xs font-mono">${i + 1}</td>
-        <td class="table-td max-w-[220px] truncate">
+        <td class="table-td text-slate-400 text-xs font-mono m-card-hide">${i + 1}</td>
+        <td class="table-td max-w-[220px] truncate m-card-title">
           <span class="${titleCls}">${this._esc(t.description)}</span>${newBadge}
         </td>
         <td class="table-td text-slate-600">${this._esc(t.doer || '—')}</td>
         <td class="table-td text-slate-500">${this._esc(t.client || '—')}</td>
         <td class="table-td text-slate-500 whitespace-nowrap">${this._fmt(t.dueDate)}</td>
         <td class="table-td"><span class="pill ${priCls}">${this._esc(t.priority || 'Low')}</span></td>
-        <td class="table-td">
+        <td class="table-td m-card-actions">
           <div class="flex gap-1.5">
             ${this._hasFeature('approve') ? `<button data-action="approve" data-id="${t.id}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer">Approve</button>` : ''}
             ${this._hasFeature('reject') ? `<button data-action="reject" data-id="${t.id}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer">Reject</button>` : ''}
@@ -660,7 +660,7 @@ window.Pages.approvals = {
     }).join('');
     return `<div class="card overflow-hidden">
       ${toggle}
-      <table class="w-full text-sm">
+      <table class="w-full text-sm m-cards">
         <thead class="bg-slate-50/80">
           <tr>
             <th class="table-th">#</th>
@@ -825,8 +825,8 @@ window.Pages.approvals = {
     const rows = items.map((t, i) => {
       const s = STATUS[t.reviseAction] || STATUS.pending;
       return `<tr class="table-row">
-        <td class="table-td text-slate-400 text-xs font-mono">${i + 1}</td>
-        <td class="table-td font-medium text-slate-800 max-w-[240px] truncate">${this._esc(t.description)}</td>
+        <td class="table-td text-slate-400 text-xs font-mono m-card-hide">${i + 1}</td>
+        <td class="table-td font-medium text-slate-800 max-w-[240px] truncate m-card-title">${this._esc(t.description)}</td>
         <td class="table-td text-slate-500">${this._esc(t.client || '—')}</td>
         <td class="table-td text-slate-500 whitespace-nowrap">${this._fmt(t.dueDate)}</td>
         <td class="table-td text-slate-500 whitespace-nowrap">${this._fmt(t.createdAt)}</td>
@@ -836,7 +836,7 @@ window.Pages.approvals = {
     }).join('');
 
     return `<div class="card overflow-hidden">
-      <table class="w-full text-sm">
+      <table class="w-full text-sm m-cards">
         <thead class="bg-slate-50/80">
           <tr>
             <th class="table-th">#</th>
@@ -854,6 +854,36 @@ window.Pages.approvals = {
   },
 
   /* ── shared UI helpers ─────────────────────────────────── */
+  /* Phone only (<768px): tabs scroll sideways, tables become cards (m-cards),
+     the grant / urgent-decision dialogs open as bottom sheets. */
+  // Phone-only page heading (the topbar is hidden there). The hidden attribute
+  // keeps it out of desktop layout AND out of space-y-5's sibling margins.
+  _mobileTitle() {
+    return '<h1 class="ap-m-title" hidden>Approvals</h1>';
+  },
+
+  _mobileCss() {
+    return `<style>
+      @media (max-width: 767px) {
+        #approvals-root .ap-m-title { display: block; margin: 0 0 12px; font-size: 20px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; }
+        #approvals-root .ap-tabs { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; margin: 0 -12px; padding: 2px 12px 4px; }
+        #approvals-root .ap-tabs::-webkit-scrollbar { display: none; }
+        #approvals-root .ap-tabs > .approvals-tab { flex-shrink: 0; white-space: nowrap; padding: 9px 14px; }
+        #approvals-content .card.p-14 { padding: 36px 20px; }
+        #approvals-content table.m-cards td.m-card-actions > div { width: 100%; }
+        #approvals-content table.m-cards td.m-card-actions button { flex: 1 1 0; justify-content: center; min-height: 38px; font-size: 13px; padding: 8px 14px; }
+        #approvals-content table.m-cards td.m-card-title { display: block; }
+        #approvals-content table.m-cards td > div { min-width: 0; }
+        #approvals-content table.m-cards td a.pill { max-width: 100% !important; }
+        #grant-modal-overlay, #up-decide-overlay { align-items: flex-end !important; padding: 0 !important; }
+        #grant-modal-overlay > div, #up-decide-overlay > div { max-width: 100% !important; border-radius: 18px 18px 0 0 !important; max-height: 92vh; overflow-y: auto; }
+        #grant-modal-overlay .p-6, #up-decide-overlay .p-6 { padding: 16px; }
+        #grant-modal-overlay .px-6, #up-decide-overlay .px-6 { padding-left: 16px; padding-right: 16px; }
+        #grant-modal-overlay .justify-end > button, #up-decide-overlay .justify-end > button { flex: 1 1 0; min-height: 42px; justify-content: center; }
+      }
+    </style>`;
+  },
+
   _emptyState(iconHtml, title, subtitle) {
     return `<div class="card p-14 text-center">
       <div class="w-14 h-14 rounded-2xl bg-primary-50 grid place-items-center mx-auto mb-3">

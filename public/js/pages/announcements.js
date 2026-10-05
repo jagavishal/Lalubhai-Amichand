@@ -39,7 +39,7 @@ window.Pages.announcements = (() => {
 
     const cards = _items.length
       ? _items.map(a => `
-        <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:18px 20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+        <div class="ann-card" style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:18px 20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);">
           <div style="display:flex;align-items:flex-start;gap:14px;">
             <div style="width:38px;height:38px;border-radius:12px;background:#fffbeb;color:#d97706;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
@@ -55,8 +55,21 @@ window.Pages.announcements = (() => {
       : '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;padding:60px 20px;text-align:center;color:#94a3b8;font-size:13px;">No announcements yet</div>';
 
     el.innerHTML = `
+      <style>
+        /* Phone: full-width post button, roomier delete target, compose dialog as a bottom sheet */
+        @media (max-width: 767px) {
+          .ann-head { margin-bottom: 14px !important; }
+          #ann-new-btn { width: 100%; justify-content: center; min-height: 42px; }
+          .ann-card { padding: 14px !important; }
+          .ann-card > div { gap: 12px !important; }
+          .ann-del { width: 36px !important; height: 36px !important; }
+          #ann-modal { align-items: flex-end !important; padding: 0 !important; }
+          #ann-modal > div { max-width: 100% !important; border-radius: 18px 18px 0 0 !important; max-height: 92vh; overflow-y: auto !important; }
+          #ann-modal > div > div:last-child > button { flex: 1 1 0; justify-content: center; min-height: 42px; }
+        }
+      </style>
       <div style="max-width:720px;margin:0 auto;padding:4px 0;">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px;">
+        <div class="ann-head" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px;">
           <div>
             <h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Announcements</h1>
             <p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Company-wide notices and updates</p>

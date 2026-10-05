@@ -510,11 +510,11 @@ window.Pages['help-ticket'] = (() => {
       const rowBg = t.status === 'resolved' ? '#f0fdf4' : '';
 
       return `<tr style="transition:background .1s;background:${rowBg};" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='${rowBg}'">
-        <td style="padding:11px 14px;font-size:13px;font-weight:600;color:#0f172a;vertical-align:top;">
-          ${esc(forName)}${transferredBadge}
+        <td class="m-card-title" style="padding:11px 14px;font-size:13px;font-weight:600;color:#0f172a;vertical-align:top;">
+          <div>${esc(forName)}${transferredBadge}</div>
         </td>
         <td style="padding:11px 14px;font-size:12.5px;color:#64748b;vertical-align:top;">${esc(filedBy || '—')}</td>
-        <td style="padding:11px 14px;font-size:13px;color:#374151;vertical-align:top;min-width:280px;">
+        <td class="ht-c-issue" style="padding:11px 14px;font-size:13px;color:#374151;vertical-align:top;min-width:280px;">
           <div style="white-space:pre-wrap;overflow-wrap:anywhere;">${esc(t.subject||'—')}</div>
           ${t.description ? `<div style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:#64748b;margin-top:3px;">${esc(t.description)}</div>` : ''}
         </td>
@@ -524,13 +524,40 @@ window.Pages['help-ticket'] = (() => {
           <span style="font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;background:${ps.bg};color:${ps.color}">${esc(t.priority||'Medium')}</span>
         </td>
         <td style="padding:11px 14px;">${statusCell}</td>
-        ${admin ? `<td style="padding:11px 14px;"><div style="display:flex;align-items:center;gap:6px;">${transferBtn}${reopenBtn}</div></td>` : ''}
+        ${admin ? `<td class="m-card-actions" style="padding:11px 14px;"><div style="display:flex;align-items:center;gap:6px;">${transferBtn}${reopenBtn}</div></td>` : ''}
       </tr>`;
     }).join('');
 
     const thStyle = 'padding:10px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:700;color:#64748b;text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;background:#f8fafc;';
 
     el.innerHTML = `
+      <style>
+        /* Phone: header buttons share a row, tabs scroll, tickets become cards,
+           every dialog opens as a bottom sheet (authority tables scroll sideways). */
+        @media (max-width: 767px) {
+          .ht-head-btns { width: 100%; }
+          .ht-head-btns > button { flex: 1 1 0; justify-content: center; min-height: 40px; padding: 8px 10px !important; white-space: nowrap; }
+          .ht-tabs { overflow-x: auto; scrollbar-width: none; }
+          .ht-tabs::-webkit-scrollbar { display: none; }
+          .ht-tabs > .ht-tab { flex-shrink: 0; white-space: nowrap; padding: 10px 14px !important; }
+          .ht-table td.ht-c-issue { order: -1; display: block; font-weight: 500; }
+          .ht-table td.ht-c-issue::before { display: none !important; }
+          .ht-table td.m-card-title > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: 12px; color: var(--text-muted); font-weight: 600; }
+          .ht-table td.m-card-title { order: -2; }
+          .ht-table td .ht-status-sel { min-height: 34px; font-size: 13px !important; }
+          .ht-table td.m-card-actions button { min-height: 36px; padding: 6px 14px !important; font-size: 12.5px !important; }
+          .ht-table td[colspan] { padding: 40px 16px !important; text-align: center !important; }
+          #ht-modal, #ht-transfer-modal, #ht-auth-modal { align-items: flex-end !important; padding: 0 !important; }
+          #ht-modal > div, #ht-transfer-modal > div, #ht-auth-modal > div { max-width: 100% !important; border-radius: 18px 18px 0 0 !important; max-height: 92vh !important; }
+          #ht-modal > div, #ht-transfer-modal > div { overflow-y: auto !important; }
+          #ht-modal [style*="grid-template-columns:1fr 1fr"] { grid-template-columns: 1fr !important; }
+          #ht-modal > div > div:last-child > button, #ht-transfer-modal > div > div:last-child > button,
+          #ht-auth-modal > div > div:last-child > button { flex: 1 1 0; justify-content: center; min-height: 42px; }
+          #ht-auth-body { overflow-x: auto; padding: 14px 16px !important; }
+          #ht-auth-body table { min-width: 620px; }
+          #ht-auth-body [data-kill] { width: 32px !important; height: 32px !important; }
+        }
+      </style>
       <div style="display:flex;flex-direction:column;gap:16px;">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
           <div>
@@ -539,7 +566,7 @@ window.Pages['help-ticket'] = (() => {
               ? 'Spend that needs an approval, routed to whoever holds that authority'
               : 'Submit issues or requests to the admin team'}</p>
           </div>
-          <div style="display:flex;align-items:center;gap:8px;">
+          <div class="ht-head-btns" style="display:flex;align-items:center;gap:8px;">
           ${admin ? `<button id="ht-authority-btn" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;cursor:pointer;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>
             Approval Authority
@@ -550,7 +577,7 @@ window.Pages['help-ticket'] = (() => {
           </button>
           </div>
         </div>
-        <div style="display:flex;gap:4px;border-bottom:1px solid #e2e8f0;">
+        <div class="ht-tabs" style="display:flex;gap:4px;border-bottom:1px solid #e2e8f0;">
           ${[['ticket', 'Help Tickets'], ['payment', 'Payment Requests']].map(([k, label]) => {
             const on = _tab === k;
             const n = _tickets.filter(t => kindOf(t) === k).length;
@@ -561,7 +588,7 @@ window.Pages['help-ticket'] = (() => {
         </div>
         <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
           <div style="overflow-x:auto;">
-            <table style="width:100%;border-collapse:collapse;">
+            <table class="m-cards ht-table" style="width:100%;border-collapse:collapse;">
               <thead>
                 <tr>
                   <th style="${thStyle}">Name</th>

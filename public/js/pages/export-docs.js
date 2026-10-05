@@ -256,7 +256,7 @@ window.Pages['export-documentation'] = (() => {
         + '<button type="button" id="ed-pl-load" style="padding:8px 16px;border:none;border-radius:8px;background:var(--color-primary);color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Load</button>'
       + '</div>';
     }
-    return '<div id="ed-pl-picker" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:14px 18px;margin-bottom:14px;">'
+    return '<div id="ed-pl-picker" class="ed-sec" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:14px 18px;margin-bottom:14px;">'
       + '<div style="font-size:13px;font-weight:800;color:#1e40af;">Load from Packing List</div>'
       + '<div style="font-size:11.5px;color:#3b82f6;margin:2px 0 8px;">Pick a packing list and everything fills in — order numbers, consignee, container and every item/carton row. Rates, exchange rate and stuffing details are then all that is left to add.</div>'
       + inner
@@ -383,7 +383,7 @@ window.Pages['export-documentation'] = (() => {
     + '</div>';
   }
   function _section(title, note, gridHtml, cols) {
-    return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;margin-bottom:14px;">'
+    return '<div class="ed-sec" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;margin-bottom:14px;">'
       + '<div style="font-size:13px;font-weight:800;color:#0f172a;">' + esc(title) + '</div>'
       + (note ? '<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">' + esc(note) + '</div>' : '')
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(' + (cols || 190) + 'px,1fr));gap:12px;margin-top:12px;">' + gridHtml + '</div>'
@@ -400,20 +400,26 @@ window.Pages['export-documentation'] = (() => {
   }
   function _tabsHtml() {
     const canAdd = _hasFeature('add');
-    return '<div style="display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid #e2e8f0;">'
+    return '<div class="ed-tabs" style="display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid #e2e8f0;">'
       + (canAdd ? _tabBtn(_editingId ? ('Editing ' + (_form.invoiceNo || 'shipment')) : 'Custom Invoice', _view === 'form', 'ed-form-tab') : '')
       + _tabBtn('Shipments' + (_loaded ? ' (' + _rows.length + ')' : ''), _view === 'list', 'ed-list-tab')
     + '</div>';
   }
 
   /* ── items table (form) ───────────────────────────────────────────────── */
+  // Column names for the phone card layout (data-l, read by ED_MOBILE_CSS only).
+  const _ITEM_LABELS = {
+    invItem: 'Item (Invoice)', itemName: 'Item Name (Packing List)', productCode: 'Product Code', size: 'Size', swgMm: 'SWG mm',
+    barcode: 'Barcode', poNo: 'P.O. No', container: 'Container', scheme: 'Scheme', qty: 'Qty', uom: 'UOM', rate: 'Rate US$',
+    cartonFrom: 'Carton From', cartonTo: 'Carton To', pcsPerCarton: 'Pcs/Carton', ntWtPerCarton: 'Nt Wt/Carton (kg)',
+  };
   function _itemCell(idx, key, width, ph) {
-    return '<td style="padding:3px;"><input type="text" data-item-idx="' + idx + '" data-item-key="' + key + '" value="' + esc(_items[idx][key] ?? '') + '" placeholder="' + esc(ph || '') + '" autocomplete="off" style="' + _inputStyle + 'padding:6px 7px;font-size:12px;min-width:' + width + 'px;" /></td>';
+    return '<td class="ed-ic-' + key + '" data-l="' + esc(_ITEM_LABELS[key] || '') + '" style="padding:3px;"><input type="text" data-item-idx="' + idx + '" data-item-key="' + key + '" value="' + esc(_items[idx][key] ?? '') + '" placeholder="' + esc(ph || '') + '" autocomplete="off" style="' + _inputStyle + 'padding:6px 7px;font-size:12px;min-width:' + width + 'px;" /></td>';
   }
   function _itemSelect(idx, key, options, width) {
     const cur = String(_items[idx][key] ?? '');
     const opts = options.includes(cur) ? options : options.concat([cur]);
-    return '<td style="padding:3px;"><select data-item-idx="' + idx + '" data-item-key="' + key + '" style="' + _inputStyle + 'padding:6px 7px;font-size:12px;min-width:' + width + 'px;">'
+    return '<td class="ed-ic-' + key + '" data-l="' + esc(_ITEM_LABELS[key] || '') + '" style="padding:3px;"><select data-item-idx="' + idx + '" data-item-key="' + key + '" style="' + _inputStyle + 'padding:6px 7px;font-size:12px;min-width:' + width + 'px;">'
       + opts.map(o => '<option value="' + esc(o) + '"' + (o === cur ? ' selected' : '') + '>' + (o ? esc(o) : '—') + '</option>').join('')
       + '</select></td>';
   }
@@ -423,8 +429,8 @@ window.Pages['export-documentation'] = (() => {
       .map(h => '<th style="padding:6px 6px;text-align:left;font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap;">' + esc(h) + '</th>').join('');
     const body = _items.map((it, i) => {
       const d = c.items[i];
-      return '<tr style="border-top:1px solid #f1f5f9;">'
-        + '<td style="padding:3px 6px;font-size:12px;color:#94a3b8;">' + (i + 1) + '</td>'
+      return '<tr class="ed-item-row" style="border-top:1px solid #f1f5f9;">'
+        + '<td class="ed-ic-no" style="padding:3px 6px;font-size:12px;color:#94a3b8;">' + (i + 1) + '</td>'
         + _itemCell(i, 'invItem', 90)
         + _itemCell(i, 'itemName', 160, 'e.g. Mug With Handle Naxi')
         + _itemCell(i, 'productCode', 90, '022-0201')
@@ -436,19 +442,19 @@ window.Pages['export-documentation'] = (() => {
         + _itemCell(i, 'scheme', 80)
         + _itemCell(i, 'qty', 60)
         + _itemSelect(i, 'uom', UOM_OPTIONS, 62)
-        + '<td style="padding:3px 6px;font-size:12px;color:#94a3b8;text-align:right;white-space:nowrap;" title="Rate quoted on the Proforma Invoice — for reference only">' + esc(it.piRate || '') + '</td>'
+        + '<td class="ed-ic-calc" data-l="PI Rate" style="padding:3px 6px;font-size:12px;color:#94a3b8;text-align:right;white-space:nowrap;" title="Rate quoted on the Proforma Invoice — for reference only">' + esc(it.piRate || '') + '</td>'
         + _itemCell(i, 'rate', 70)
         + _itemCell(i, 'cartonFrom', 60)
         + _itemCell(i, 'cartonTo', 60)
         + _itemCell(i, 'pcsPerCarton', 60)
         + _itemCell(i, 'ntWtPerCarton', 75)
-        + '<td style="padding:3px 6px;font-size:12px;color:#475569;text-align:right;white-space:nowrap;">' + (d.cartons || '') + '</td>'
-        + '<td style="padding:3px 6px;font-size:12px;color:#475569;text-align:right;white-space:nowrap;">' + (d.amount ? money(d.amount) : '') + '</td>'
-        + '<td style="padding:3px 4px;"><button type="button" class="ed-del-item" data-idx="' + i + '" title="Remove row" style="border:none;background:#fef2f2;color:#dc2626;border-radius:6px;width:24px;height:24px;cursor:pointer;font-weight:700;">×</button></td>'
+        + '<td class="ed-ic-calc" data-l="Cartons" style="padding:3px 6px;font-size:12px;color:#475569;text-align:right;white-space:nowrap;">' + (d.cartons || '') + '</td>'
+        + '<td class="ed-ic-calc" data-l="Amount US$" style="padding:3px 6px;font-size:12px;color:#475569;text-align:right;white-space:nowrap;">' + (d.amount ? money(d.amount) : '') + '</td>'
+        + '<td class="ed-ic-del" style="padding:3px 4px;"><button type="button" class="ed-del-item" data-idx="' + i + '" title="Remove row" style="border:none;background:#fef2f2;color:#dc2626;border-radius:6px;width:24px;height:24px;cursor:pointer;font-weight:700;">×</button></td>'
       + '</tr>';
     }).join('');
-    return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;background:#fff;">'
-      + '<table style="border-collapse:collapse;width:100%;min-width:1900px;"><thead><tr style="background:#f8fafc;">' + head + '</tr></thead><tbody>' + body + '</tbody></table>'
+    return '<div class="ed-items-scroll" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;background:#fff;">'
+      + '<table class="ed-items-tbl" style="border-collapse:collapse;width:100%;min-width:1900px;"><thead><tr style="background:#f8fafc;">' + head + '</tr></thead><tbody>' + body + '</tbody></table>'
     + '</div>';
   }
 
@@ -557,7 +563,7 @@ window.Pages['export-documentation'] = (() => {
         + _fld('signatoryContact', '24×7 Contact')
         + '<div style="grid-column:1/-1;">' + _fld('fspNo', 'Factory Stuffing Permission F.No. (Annexure)') + '</div>', 220)
 
-      + '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;margin-bottom:14px;">'
+      + '<div class="ed-sec" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;margin-bottom:14px;">'
         + '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">'
           + '<div><div style="font-size:13px;font-weight:800;color:#0f172a;">Items & Cartons</div>'
           + '<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">One row per product/carton range. Cartons, net weight and amounts calculate themselves. UOM is chosen per row (PCS / SET); PI Rate is what the Proforma Invoice quoted, shown for reference only.</div></div>'
@@ -567,7 +573,7 @@ window.Pages['export-documentation'] = (() => {
         + _totalsHtml()
       + '</div>'
 
-      + '<div style="display:flex;align-items:center;gap:12px;margin-top:4px;">'
+      + '<div class="ed-submit-row" style="display:flex;align-items:center;gap:12px;margin-top:4px;">'
         + '<button type="submit" id="ed-submit" style="padding:10px 24px;border:none;border-radius:9px;background:var(--color-primary);color:#fff;font-size:13px;font-weight:700;cursor:pointer;">' + (_saving ? 'Saving…' : (_editingId ? 'Update Shipment' : 'Save Shipment')) + '</button>'
         + (_editingId ? '<button type="button" id="ed-cancel-edit" style="padding:10px 18px;border:1.5px solid #e2e8f0;border-radius:9px;background:#fff;color:#475569;font-size:13px;font-weight:700;cursor:pointer;">Cancel Edit</button>' : '')
         + '<span style="font-size:12px;color:#94a3b8;">Saving opens the Shipments tab, where each document prints from this one entry.</span>'
@@ -619,19 +625,19 @@ window.Pages['export-documentation'] = (() => {
           try { d = JSON.parse(r.data || '{}'); } catch {}
           const totals = d._totals || {};
           return '<tr style="border-top:1px solid #f1f5f9;">'
-            + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;color:#1e293b;white-space:nowrap;">' + esc(r.invoice_no) + '</td>'
+            + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;color:#1e293b;white-space:nowrap;">' + esc(r.invoice_no) + '</td>'
             + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;white-space:nowrap;">' + esc(r.invoice_date) + '</td>'
             + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;">' + esc(r.consignee_name) + '</td>'
             + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;text-align:right;">' + esc(totals.cartons ?? '') + '</td>'
             + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;text-align:right;white-space:nowrap;">' + esc(totals.cf ?? '') + '</td>'
-            + '<td style="padding:6px 10px;"><div style="display:flex;gap:5px;flex-wrap:wrap;">'
+            + '<td class="ed-docs-td" data-label="" style="padding:6px 10px;"><div style="display:flex;gap:5px;flex-wrap:wrap;">'
               + '<button type="button" class="ed-doc-btn" data-id="' + esc(r.id) + '" data-doc="all" style="padding:5px 10px;border:none;border-radius:7px;background:var(--color-primary);color:#fff;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">⬇ All Documents</button>'
               + _DOCS.map(([k, l]) => docBtn(r.id, k, l)
                   + (k === 'invoice' ? xlsxBtn(r.id, 'invoice', 'Excel') : k === 'custInvoice' ? xlsxBtn(r.id, 'custInvoice', 'Excel') : '')).join('')
               + _STATIC_DOCS.map(([href, l]) => '<a href="' + esc(href) + '" target="_blank" rel="noopener" style="padding:5px 9px;border:1px solid #e2e8f0;border-radius:7px;background:#f8fafc;color:#475569;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;text-decoration:none;">' + esc(l) + '</a>').join('')
               + (d._driveFolder ? '<a href="' + esc(d._driveFolder) + '" target="_blank" rel="noopener" style="padding:5px 9px;border:1px solid #bbf7d0;border-radius:7px;background:#f0fdf4;color:#15803d;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;text-decoration:none;">📁 Drive</a>' : '')
             + '</div></td>'
-            + '<td style="padding:8px 10px;white-space:nowrap;">'
+            + '<td class="m-card-actions" style="padding:8px 10px;white-space:nowrap;">'
               + (canAdd ? '<button type="button" class="ed-edit-btn" data-id="' + esc(r.id) + '" style="padding:5px 10px;border:1px solid #e2e8f0;border-radius:7px;background:#fff;color:#475569;font-size:11px;font-weight:700;cursor:pointer;">Edit</button>' : '')
               + (owner ? ' <button type="button" class="ed-delete-btn" data-id="' + esc(r.id) + '" data-name="' + esc(r.invoice_no) + '" style="padding:5px 10px;border:1px solid #fecaca;border-radius:7px;background:#fef2f2;color:#dc2626;font-size:11px;font-weight:700;cursor:pointer;">Delete</button>' : '')
             + '</td>'
@@ -640,7 +646,7 @@ window.Pages['export-documentation'] = (() => {
       : '<tr><td colspan="7" style="padding:26px;text-align:center;font-size:13px;color:#94a3b8;">' + (_rows.length ? 'No shipment matches "' + esc(_q) + '".' : 'No shipments yet — fill the Custom Invoice tab and every document generates from it.') + '</td></tr>';
 
     return '<div id="ed-table" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:980px;"><thead><tr style="background:#f8fafc;">' + head + '</tr></thead>'
+      + '<table class="m-cards ed-list-tbl" style="width:100%;border-collapse:collapse;min-width:980px;"><thead><tr style="background:#f8fafc;">' + head + '</tr></thead>'
       + '<tbody>' + body + '</tbody></table>'
     + '</div>';
   }
@@ -648,7 +654,7 @@ window.Pages['export-documentation'] = (() => {
   function _listHtml() {
     if (!_loaded) return '<div style="padding:26px;text-align:center;font-size:13px;color:#94a3b8;">Loading…</div>';
     if (_loadError) return '<div style="padding:16px;border:1px solid #fecaca;background:#fef2f2;border-radius:10px;font-size:13px;color:#b91c1c;">' + esc(_loadError) + '</div>';
-    return '<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;">'
+    return '<div class="ed-searchbar" style="display:flex;gap:10px;align-items:center;margin-bottom:12px;">'
         + '<input type="text" id="ed-search" value="' + esc(_q) + '" placeholder="Search invoice no, consignee…" style="' + _inputStyle + 'max-width:340px;" />'
         + '<span id="ed-count" style="font-size:12px;color:#94a3b8;">' + _filtered().length + ' of ' + _rows.length + '</span>'
       + '</div>'
@@ -1587,13 +1593,59 @@ window.Pages['export-documentation'] = (() => {
   }
 
   /* ── render ───────────────────────────────────────────────────────────── */
+  /* ── Phone layout (under 768px) — the on-screen form and list only. The
+     printed documents are built by the _doc* functions into their own
+     window / off-screen holder with _DOC_CSS, and nothing here reaches them.
+     Each item row restacks into a labelled card instead of a 1900px grid. ── */
+  const ED_MOBILE_CSS = '<style>@media (max-width: 767px) {'
+    + '.ed-page { padding:10px 0 24px !important; }'
+    + '.ed-page h2 { font-size:18px !important; }'
+    + '.ed-tabs { overflow-x:auto; scrollbar-width:none; gap:0 !important; margin-bottom:12px !important; }'
+    + '.ed-tabs::-webkit-scrollbar { display:none; }'
+    + '.ed-tabs > button { flex-shrink:0; white-space:nowrap; min-height:42px; padding:9px 12px !important; }'
+    + '.ed-sec { padding:14px !important; margin-bottom:12px !important; }'
+    + '.ed-sec > div[style*="display:grid"] { gap:10px !important; margin-top:10px !important; }'
+    + '#ed-pl-select { max-width:none !important; flex:1 1 100%; }'
+    + '#ed-pl-load, #ed-pl-retry { flex:1; min-height:40px; }'
+    + '#ed-add-item { width:100%; min-height:40px; }'
+    /* item rows as cards */
+    + '.ed-items-scroll { overflow:visible !important; border:none !important; background:none !important; }'
+    + '.ed-items-tbl { min-width:0 !important; display:block; }'
+    + '.ed-items-tbl thead { display:none; }'
+    + '.ed-items-tbl tbody { display:flex; flex-direction:column; gap:10px; }'
+    + '.ed-items-tbl tr.ed-item-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 10px; padding:12px; border:1px solid var(--border-base,#e2e8f0) !important; border-radius:12px; background:var(--surface,#fff); }'
+    + '.ed-items-tbl tr.ed-item-row td { display:block; padding:0 !important; min-width:0; white-space:normal !important; text-align:left !important; }'
+    + '.ed-items-tbl tr.ed-item-row td input, .ed-items-tbl tr.ed-item-row td select { min-width:0 !important; min-height:38px; }'
+    + '.ed-items-tbl td[data-l]::before { content:attr(data-l); display:block; font-size:10.5px; font-weight:600; color:var(--text-muted,#64748b); margin:0 0 3px 1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }'
+    + '.ed-items-tbl tr.ed-item-row td.ed-ic-no { grid-column:1; grid-row:1; align-self:center; font-weight:700; font-size:13px !important; }'
+    + '.ed-items-tbl tr.ed-item-row td.ed-ic-no::before { content:"Row "; display:inline; }'
+    + '.ed-items-tbl tr.ed-item-row td.ed-ic-del { grid-column:2; grid-row:1; text-align:right !important; }'
+    + '.ed-items-tbl tr.ed-item-row td.ed-ic-del button { width:36px !important; height:36px !important; font-size:18px; }'
+    + '.ed-items-tbl tr.ed-item-row td.ed-ic-invItem, .ed-items-tbl tr.ed-item-row td.ed-ic-itemName { grid-column:1 / -1; }'
+    + '.ed-items-tbl tr.ed-item-row td.ed-ic-calc { font-size:13px !important; font-weight:700; color:var(--text-primary,#0f172a) !important; padding-top:2px !important; }'
+    + '#ed-totals { display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px !important; }'
+    + '#ed-totals > div { min-width:0 !important; }'
+    + '.ed-submit-row { flex-direction:column; align-items:stretch !important; gap:8px !important; }'
+    + '.ed-submit-row > button { width:100%; min-height:46px; }'
+    + '.ed-submit-row > span { text-align:center; }'
+    /* shipments list as cards */
+    + '.ed-searchbar #ed-search { max-width:none !important; flex:1; min-width:0; }'
+    + '.ed-searchbar #ed-count { white-space:nowrap; }'
+    + '.ed-list-tbl { min-width:0 !important; }'
+    + '.ed-list-tbl td.ed-docs-td > div { width:100%; }'
+    + '.ed-list-tbl td.ed-docs-td button, .ed-list-tbl td.ed-docs-td a { padding:8px 11px !important; font-size:12px !important; }'
+    + '.ed-list-tbl td.ed-docs-td button[data-doc="all"] { flex-basis:100%; min-height:40px; font-size:13px !important; }'
+    + '.ed-list-tbl td.m-card-actions button { flex:1; min-height:38px; font-size:12.5px !important; }'
+  + '}</style>';
+
   function render() {
     const canAdd = _hasFeature('add');
     if (_view === 'form' && !canAdd) _view = 'list';
 
     const mc = document.getElementById('main-content');
     if (!mc) return;
-    mc.innerHTML = '<div style="padding:22px 24px 40px;">'
+    mc.innerHTML = '<div class="ed-page" style="padding:22px 24px 40px;">'
+      + ED_MOBILE_CSS
       + '<div style="margin-bottom:16px;">'
         + '<h2 style="margin:0;font-size:20px;font-weight:800;color:#0f172a;">Export Documentation</h2>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fill the Custom Invoice once — the Packing List, Annexure, DBK Declaration, VGM and the customer\'s own Invoice print themselves from it. LUT ARN details are prefilled and updated once per financial year.</p>'

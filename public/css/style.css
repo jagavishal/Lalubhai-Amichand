@@ -750,6 +750,83 @@ html[data-theme="dark"] .card img[data-zoom] { background: var(--surface-alt); }
   /* Page title smaller */
   .page-title { font-size: 17px; }
 
+  /* iOS zooms the whole page into any field under 16px and never zooms back
+     out — the single most "not an app" thing on a phone. */
+  #main-content input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  #main-content select, #main-content textarea,
+  .modal-box input:not([type="checkbox"]):not([type="radio"]), .modal-box select, .modal-box textarea,
+  body > div:is([style*="position:fixed"], [style*="position: fixed"]) input:not([type="checkbox"]):not([type="radio"]),
+  body > div:is([style*="position:fixed"], [style*="position: fixed"]) :is(select, textarea) {
+    font-size: 16px !important;
+  }
+
+  /* Sideways scrollers (tab strips, wide tables) glide and don't drag the page */
+  #main-content [style*="overflow-x:auto"], #main-content [style*="overflow-x: auto"],
+  #main-content .overflow-x-auto, #main-content .m-hscroll {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .m-hscroll { display: flex; overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+  .m-hscroll::-webkit-scrollbar { display: none; }
+  .m-hscroll > * { flex-shrink: 0; white-space: nowrap; }
+
+  /* Toasts sit above the bottom nav, full width */
+  .utils-toast {
+    left: 12px !important; right: 12px !important;
+    bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important;
+    max-width: none !important; min-width: 0 !important;
+  }
+
+  /* A page's own full-screen overlay (inline `position:fixed;inset:0` or
+     Tailwind `fixed inset-0`) shares z-index 50 with the bottom nav, and the
+     nav comes later in the DOM, so it covered sheet footers and Close
+     buttons. While any such modal is open the nav steps aside. */
+  body:has(:is(.modal-overlay, #main-content .fixed.inset-0,
+               #main-content :is([style*="position:fixed"], [style*="position: fixed"]):is([style*="inset:0"], [style*="inset: 0"]),
+               body > div:is([style*="position:fixed"], [style*="position: fixed"]):is([style*="inset:0"], [style*="inset: 0"])):not([style*="display:none"]):not([style*="display: none"]):not(.hidden)) #bottom-nav {
+    display: none !important;
+  }
+
+  /* Helpers pages opt into */
+  .m-hide { display: none !important; }
+  .m-stack { flex-direction: column !important; align-items: stretch !important; }
+  .m-wrap { flex-wrap: wrap !important; }
+  .m-full { width: 100% !important; max-width: 100% !important; }
+  .m-grid-1 { grid-template-columns: minmax(0, 1fr) !important; }
+  .m-grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+
+  /* table.m-cards — each row becomes a card. UI.labelCards() copies the header
+     text onto every cell as data-label; cells with .m-card-title head the
+     card, .m-card-actions sit at its foot, .m-card-hide drop out. */
+  table.m-cards, table.m-cards tbody { display: block; width: 100% !important; min-width: 0 !important; }
+  table.m-cards thead { display: none; }
+  table.m-cards tr {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 12px 14px; border-bottom: 1px solid var(--border-light);
+  }
+  table.m-cards tr:hover { background: none; }
+  table.m-cards td {
+    display: flex; gap: 10px; align-items: baseline;
+    padding: 0 !important; border: none !important;
+    max-width: none !important; min-width: 0 !important; width: auto !important;
+    white-space: normal !important; text-align: left !important;
+    font-size: 12.5px; overflow-wrap: anywhere;
+  }
+  table.m-cards td[data-label]:not([data-label=""])::before {
+    content: attr(data-label);
+    flex: 0 0 96px;
+    font-size: 11.5px; font-weight: 600; color: var(--text-muted);
+    text-transform: none; letter-spacing: 0;
+  }
+  /* block, not flex: a title holding text + an inline badge must flow as one line */
+  table.m-cards td.m-card-title { display: block; order: -1; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+  table.m-cards td.m-card-title::before, table.m-cards td.m-card-actions::before { display: none; }
+  table.m-cards td.m-card-actions { order: 99; margin-top: 6px; flex-wrap: wrap; }
+  table.m-cards td.m-card-hide, table.m-cards td:empty { display: none !important; }
+  /* a colspan row (group header / empty state) stays a plain full-width line */
+  table.m-cards td[colspan] { display: block; }
+  table.m-cards td[colspan]::before { display: none; }
+
 }
 
 @media (max-width: 480px) {

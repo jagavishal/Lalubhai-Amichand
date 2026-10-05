@@ -70,11 +70,49 @@
     const s = this._state;
     const body = document.getElementById('mis-body');
     body.innerHTML = `
+      <style>
+        /* Phone (<768px) only: filters stack, MIS tabs scroll sideways, each
+           person becomes a card with a 5-up figure strip, and the detail
+           popup opens as a bottom sheet with its task list as cards. */
+        @media (max-width: 767px) {
+          #mis-panel .mis-filter { padding: 14px !important; }
+          #mis-panel .mis-filter-row { display: grid !important; grid-template-columns: 1fr 1fr; gap: 10px !important; }
+          #mis-panel .mis-filter-row .input { width: 100% !important; }
+          #mis-panel .mis-filter-row > button { justify-content: center; min-height: 42px; }
+          #mis-tabs { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; }
+          #mis-tabs::-webkit-scrollbar { display: none; }
+          #mis-tabs > button { flex-shrink: 0; white-space: nowrap; min-height: 36px; }
+          #mis-summary { gap: 8px !important; }
+          #mis-summary > div { flex: 1 1 auto; min-width: calc(33.33% - 6px); padding: 8px 12px !important; }
+          #mis-summary > div > div:last-child { font-size: 16px !important; }
+
+          .mis-tbl, .mis-tbl tbody { display: block; width: 100%; }
+          .mis-tbl thead { display: none; }
+          .mis-tbl tr.mis-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px 4px; padding: 14px; }
+          .mis-tbl tr.mis-row:active { background: var(--surface-alt); }
+          .mis-tbl td { padding: 0 !important; min-width: 0 !important; }
+          .mis-tbl td.mis-c-idx { display: none; }
+          .mis-tbl td.mis-c-name { grid-column: 1 / -1; font-size: 14.5px; font-weight: 600; }
+          .mis-tbl td.mis-c-num { display: flex; flex-direction: column; align-items: center; padding: 6px 0 !important; border-radius: 8px; background: var(--surface-alt); font-size: 15px; }
+          .mis-tbl td.mis-c-num::before { content: attr(data-label); font-size: 9.5px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--text-muted); margin-bottom: 1px; }
+          .mis-tbl td.mis-c-score { grid-column: 1 / -1; }
+
+          #mis-modal-backdrop { align-items: flex-end !important; padding: 0 !important; z-index: 1000 !important; }
+          #mis-modal-inner { border-radius: 18px 18px 0 0 !important; max-height: 92vh !important; padding-bottom: env(safe-area-inset-bottom, 0px); }
+          #mis-modal-inner > div:first-child { padding: 14px 16px !important; gap: 10px; }
+          #mis-modal-inner > div:first-child h2 { font-size: 14.5px; min-width: 0; }
+          #mis-modal-inner > div:nth-child(2) { padding: 12px 16px !important; }
+          #mis-modal-inner > div:nth-child(2) > div:first-child { font-size: 30px !important; }
+          #mis-modal-inner > div:nth-child(3) > div:first-child { padding: 10px 16px !important; }
+          #mis-modal-inner > div:last-child { padding: 12px 16px !important; }
+          #mis-modal-close2 { width: 100%; justify-content: center; min-height: 44px; }
+        }
+      </style>
       <div class="space-y-5 animate-fade-in" id="mis-panel">
 
         <!-- Filter bar -->
-        <div class="card p-5 space-y-4">
-          <div class="flex items-end gap-3 flex-wrap">
+        <div class="card p-5 space-y-4 mis-filter">
+          <div class="flex items-end gap-3 flex-wrap mis-filter-row">
             <div>
               <label class="label">Start Date</label>
               <input type="date" id="mis-start" value="${s.misStart}" class="input !w-44" />
@@ -209,14 +247,14 @@
         : `<svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg> Needs Improvement`;
       return `
         <tr class="border-t border-slate-100 hover:bg-slate-50 cursor-pointer transition mis-row" data-idx="${i}">
-          <td class="px-5 py-3.5 text-xs text-slate-400 font-mono">${i + 1}</td>
-          <td class="px-5 py-3.5 font-medium text-primary-600 hover:text-primary-800">${this._esc(r.name)}</td>
-          <td class="px-4 py-3.5 text-center font-semibold text-slate-800">${r.total}</td>
-          <td class="px-4 py-3.5 text-center font-semibold text-orange-500">${r.pending}</td>
-          <td class="px-4 py-3.5 text-center font-semibold text-emerald-600">${r.completed}</td>
-          <td class="px-4 py-3.5 text-center font-semibold text-amber-500">${r.revised}</td>
-          <td class="px-4 py-3.5 text-center font-semibold text-red-500">${r.delayed}</td>
-          <td class="px-4 py-3.5 min-w-[160px]">
+          <td class="px-5 py-3.5 text-xs text-slate-400 font-mono mis-c-idx">${i + 1}</td>
+          <td class="px-5 py-3.5 font-medium text-primary-600 hover:text-primary-800 mis-c-name">${this._esc(r.name)}</td>
+          <td class="px-4 py-3.5 text-center font-semibold text-slate-800 mis-c-num" data-label="Total">${r.total}</td>
+          <td class="px-4 py-3.5 text-center font-semibold text-orange-500 mis-c-num" data-label="Pending">${r.pending}</td>
+          <td class="px-4 py-3.5 text-center font-semibold text-emerald-600 mis-c-num" data-label="Done">${r.completed}</td>
+          <td class="px-4 py-3.5 text-center font-semibold text-amber-500 mis-c-num" data-label="Revised">${r.revised}</td>
+          <td class="px-4 py-3.5 text-center font-semibold text-red-500 mis-c-num" data-label="Delayed">${r.delayed}</td>
+          <td class="px-4 py-3.5 min-w-[160px] mis-c-score">
             <div class="font-bold text-sm ${scoreColor}">${r.score > 0 ? '+' : ''}${r.score}%</div>
             <div class="flex items-center gap-1 mt-0.5 text-[10px] font-medium ${scoreColor}">${label}</div>
             <div class="mt-1 h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
@@ -228,7 +266,7 @@
 
     wrap.innerHTML = `
       <div class="overflow-x-auto">
-        <table class="w-full text-sm">
+        <table class="w-full text-sm mis-tbl">
           <thead class="bg-slate-50/80 border-b border-slate-200">
             <tr>
               <th class="text-left px-5 py-3 text-[11px] uppercase tracking-wider font-semibold text-slate-500">#</th>
@@ -313,8 +351,8 @@
       };
       const taskRows = s.misModal.tasks.map((t, j) => `
         <tr class="border-t border-slate-100">
-          <td class="px-4 py-2.5 text-xs text-slate-400">${j + 1}</td>
-          <td class="px-4 py-2.5 text-slate-700 max-w-[260px]">${this._esc(t['Description'] || '')}</td>
+          <td class="px-4 py-2.5 text-xs text-slate-400 m-card-hide">${j + 1}</td>
+          <td class="px-4 py-2.5 text-slate-700 max-w-[260px] m-card-title">${this._esc(t['Description'] || '')}</td>
           <td class="px-4 py-2.5 text-slate-500 whitespace-nowrap">${this._esc(t['Assigned By'] || t['AssignedBy'] || '—')}</td>
           <td class="px-4 py-2.5 text-slate-500 whitespace-nowrap">${this._esc(t['Due Date'] || '')}</td>
           <td class="px-4 py-2.5">
@@ -322,7 +360,7 @@
           </td>
         </tr>`).join('');
       taskBody = `
-        <table class="w-full text-sm">
+        <table class="w-full text-sm m-cards">
           <thead class="bg-slate-50/80 sticky top-0">
             <tr>
               <th class="text-left px-4 py-2.5 text-[10px] uppercase tracking-wider font-semibold text-slate-400">#</th>

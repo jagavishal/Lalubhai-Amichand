@@ -90,7 +90,7 @@ window.Pages['hr-employees'] = (() => {
     ]);
 
     const filterBar = `
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
+      <div class="hre-filters" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px;align-items:end;">
         ${H.select('hre-f-status', 'Status', _filters.status, ['All', ...STATUSES])}
         ${H.select('hre-f-branch', 'Branch', _filters.branch, ['All', ...(_masters.branches || [])])}
@@ -123,11 +123,20 @@ window.Pages['hr-employees'] = (() => {
 
     el.innerHTML = `
       <div class="animate-fade-in">
+        <style>
+          @media (max-width: 767px) {
+            .hre-filters { grid-template-columns:repeat(2,minmax(0,1fr)) !important; padding:12px !important; gap:10px !important; }
+            .hre-filters > div:last-child { grid-column:1 / -1 !important; }
+            .hre-filters select, .hre-filters input { min-height:40px; }
+            .hre-head-id { flex-wrap:wrap; }
+          }
+        </style>
         ${H.header('Employee Master', 'Everyone on the rolls — personal details, salary structure, leave and documents', actions)}
         ${statTiles}
         ${filterBar}
         ${H.table(
-          ['Code', 'Employee', 'Department', 'Branch', 'Joined', 'Tenure', 'Status', { label: 'Actions', nowrap: true }],
+          ['Code', { label: 'Employee', m: 'title' }, 'Department', 'Branch', 'Joined', 'Tenure', 'Status',
+            { label: 'Actions', nowrap: true, m: 'actions' }],
           rows,
           // An empty master almost always means the one-time import has not been
           // run yet, so the empty state says who can run it rather than pointing
@@ -136,7 +145,8 @@ window.Pages['hr-employees'] = (() => {
               ? 'No employee matches these filters'
               : (H.isOwner()
                 ? 'No employees yet — add one, or use Import from Sheet to bring across the old HRMS spreadsheet'
-                : 'No employees yet. The one-time import from the old HRMS spreadsheet has to be run from the owner account; after that everyone appears here.') },
+                : 'No employees yet. The one-time import from the old HRMS spreadsheet has to be run from the owner account; after that everyone appears here.'),
+            cards: true },
         )}
       </div>`;
 
@@ -291,7 +301,7 @@ window.Pages['hr-employees'] = (() => {
     ];
 
     const body = `
-      <div style="display:flex;align-items:center;gap:13px;margin-bottom:16px;">
+      <div class="hre-head-id" style="display:flex;align-items:center;gap:13px;margin-bottom:16px;">
         <div style="position:relative;width:52px;height:52px;flex-shrink:0;">
           ${UI.avatar(e.name, { size: 52, shape: 'square' })}
           ${e.avatar_url
@@ -326,7 +336,7 @@ window.Pages['hr-employees'] = (() => {
     const e = p.employee;
 
     if (_profileTab === 'overview') {
-      return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+      return `<div class="m-grid-1" style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
         <div>
           <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--color-primary);margin-bottom:8px;">Job</div>
           ${H.readout('Employee Code', e.id)}
@@ -397,7 +407,7 @@ window.Pages['hr-employees'] = (() => {
       return `${head}
         ${admin ? '<div style="margin-bottom:12px;"><button id="hrep-add-salary" class="btn-primary btn-sm">+ Add Salary Revision</button></div>' : ''}
         ${H.table(cols.map((c, i) => (i === 0 ? c : { label: c, align: 'right' })), rows,
-          { empty: 'No salary structure recorded yet', maxHeight: '340px' })}
+          { empty: 'No salary structure recorded yet', maxHeight: '340px', sticky: true })}
         <div style="font-size:11.5px;color:#94a3b8;margin-top:9px;line-height:1.5;">
           A revision never overwrites the previous one — each row stays as the basis for the payslips issued while it was in force.
         </div>`;
@@ -424,8 +434,8 @@ window.Pages['hr-employees'] = (() => {
           { label: 'Used', align: 'right' }, { label: 'Balance', align: 'right' }], rows)}
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--color-primary);margin:18px 0 8px;">
           Leave History</div>
-        ${H.table(['Type', 'Period', { label: 'Days', align: 'right' }, 'Reason', 'Status', 'Approver'], hist,
-          { empty: 'No leave taken yet', maxHeight: '280px' })}`;
+        ${H.table([{ label: 'Type', m: 'title' }, 'Period', { label: 'Days', align: 'right' }, 'Reason', 'Status', 'Approver'], hist,
+          { empty: 'No leave taken yet', maxHeight: '280px', cards: true })}`;
     }
 
     if (_profileTab === 'payslips') {
@@ -437,9 +447,9 @@ window.Pages['hr-employees'] = (() => {
         `<a href="/api/hr/payslip/${encodeURIComponent(s.id)}/print" target="_blank" rel="noopener"
             class="btn-ghost btn-xs" style="text-decoration:none;">Print</a>`,
       ]);
-      return H.table(['Slip No', 'Period', { label: 'Gross', align: 'right' }, { label: 'Deductions', align: 'right' },
-        { label: 'LOP', align: 'right' }, { label: 'Net', align: 'right' }, 'Slip'], rows,
-        { empty: 'No payslips generated for this employee yet', maxHeight: '400px' });
+      return H.table([{ label: 'Slip No', m: 'title' }, 'Period', { label: 'Gross', align: 'right' }, { label: 'Deductions', align: 'right' },
+        { label: 'LOP', align: 'right' }, { label: 'Net', align: 'right' }, { label: 'Slip', m: 'actions' }], rows,
+        { empty: 'No payslips generated for this employee yet', maxHeight: '400px', cards: true });
     }
 
     if (_profileTab === 'documents') {
@@ -462,8 +472,8 @@ window.Pages['hr-employees'] = (() => {
       ]);
       return `
         ${admin ? '<div style="margin-bottom:12px;"><button id="hrep-add-doc" class="btn-primary btn-sm">+ Add Document</button></div>' : ''}
-        ${H.table(['Type', 'Number', 'File', 'Issued', 'Expires', 'Remarks', ''], rows,
-          { empty: 'No documents on file — not even an Aadhar or PAN on the employee record' })}`;
+        ${H.table([{ label: 'Type', m: 'title' }, 'Number', 'File', 'Issued', 'Expires', 'Remarks', { label: '', m: 'actions' }], rows,
+          { empty: 'No documents on file — not even an Aadhar or PAN on the employee record', cards: true })}`;
     }
 
     if (_profileTab === 'joining') {
@@ -493,7 +503,7 @@ window.Pages['hr-employees'] = (() => {
             <div style="height:100%;width:${pct}%;background:${pct === 100 ? '#16a34a' : 'var(--color-primary)'};transition:width .3s;"></div></div>
         </div>
         ${admin ? '<div style="margin-bottom:12px;"><button id="hrep-add-onb" class="btn-secondary btn-sm">+ Add Item</button></div>' : ''}
-        ${H.table(['Item', 'Due', 'Completed', 'Status', ''], rows)}`;
+        ${H.table([{ label: 'Item', m: 'title' }, 'Due', 'Completed', 'Status', { label: '', m: 'actions' }], rows, { cards: true })}`;
     }
 
     if (_profileTab === 'exit') {
@@ -503,7 +513,7 @@ window.Pages['hr-employees'] = (() => {
           ${admin ? '<div style="text-align:center;margin-top:14px;"><button id="hrep-exit" class="btn-primary btn-sm">Record Exit</button></div>' : ''}`;
       }
       return `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+        <div class="m-grid-1" style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
           <div>
             ${H.readout('Exit Type', x.exit_type)}
             ${H.readout('Resignation Date', H.fmtDate(x.resign_date))}
@@ -629,7 +639,7 @@ window.Pages['hr-employees'] = (() => {
       ${H.sectionTitle('Deductions')}
       ${D.map((x) => H.field('hrs-' + x.key, x.label, cur ? cur[x.key] : 0, { type: 'number', step: '0.01' })).join('')}
       ${H.field('hrs-remarks', 'Remarks', '', { span: 2, placeholder: 'e.g. Annual increment 2026' })}
-      <div style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:12px;
+      <div class="m-wrap" style="grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:12px;
            background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:11px 14px;">
         <button type="button" id="hrs-suggest" class="btn-secondary btn-sm">Suggest PF / ESIC / PT</button>
         <div style="text-align:right;font-size:12.5px;color:#475569;">

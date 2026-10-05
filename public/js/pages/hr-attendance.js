@@ -52,6 +52,32 @@ window.Pages['hr-attendance'] = (() => {
 
     el.innerHTML = `
       <div class="animate-fade-in">
+        <style>
+          /* Phone: punch card stacks with a big full-width button, the month
+             log reads as compact day cards, filter bars go two-up */
+          @media (max-width: 767px) {
+            .hra-punch { padding:16px !important; gap:14px !important; }
+            .hra-punch-side { width:100%; justify-content:space-between; gap:14px !important; }
+            .hra-punch-side > button { flex:1 1 auto; min-height:46px; justify-content:center; }
+            .hra-punch-side > div:not([style*="text-align:center"]) { flex:1 1 100%; }
+            .hra-month table.m-cards tr { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px 10px; }
+            .hra-month table.m-cards td { flex-direction:column; align-items:flex-start; gap:2px; }
+            .hra-month table.m-cards td::before { flex:none !important; font-size:10.5px !important; }
+            .hra-month table.m-cards td.m-card-title { grid-column:1 / 3; grid-row:1; }
+            .hra-month table.m-cards td.hra-st { grid-column:3; grid-row:1; align-items:flex-end; }
+            .hra-month table.m-cards td.hra-st::before { display:none; }
+            .hra-month table.m-cards td:has(.hra-nolate) { display:none; }
+            .hra-month table.m-cards td[colspan] { grid-column:1 / -1; }
+            .hra-filt { grid-template-columns:repeat(2,minmax(0,1fr)) !important; padding:12px !important; gap:10px !important; }
+            .hra-mark-filt > div:last-child { grid-column:1 / -1; }
+            .hra-filt button { min-height:40px; }
+            .hra-mark-filt > div:first-child { grid-column:1 / -1 !important; }
+            .hra-muster th:first-child, .hra-muster td:first-child { min-width:128px !important; max-width:150px; white-space:normal !important; }
+            .hra-marks table.m-cards td.hra-mark-cell { flex-direction:column; align-items:stretch; gap:4px; margin-top:4px; }
+            .hra-marks table.m-cards td.hra-mark-cell select { min-height:40px; width:100%; }
+            .hra-marks table.m-cards td.hra-mark-cell::before { flex:none !important; }
+          }
+        </style>
         ${H.header('Attendance', 'Daily punches, the monthly muster roll, and corrections')}
         ${TABS.length > 1 ? H.tabs('hra', TABS, _tab) : ''}
         <div id="hra-body">${body(admin)}</div>
@@ -99,12 +125,12 @@ window.Pages['hr-attendance'] = (() => {
     const rows = (_me.month || []).map((a) => [
       H.fmtDate(a.att_date), H.fmtTime(a.check_in), H.fmtTime(a.check_out),
       H.num(a.working_hours) || '—',
-      a.late_mark ? H.pill('Late', 'warning') : '—',
+      a.late_mark ? H.pill('Late', 'warning') : '<span class="hra-nolate">—</span>',
       H.statusPill(a.status),
     ]);
 
     return `
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:22px;margin-bottom:16px;
+      <div class="hra-punch" style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:22px;margin-bottom:16px;
            display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
         ${UI.avatar(_me.employee.name, { size: 54, shape: 'square' })}
         <div style="flex:1;min-width:180px;">
@@ -115,7 +141,7 @@ window.Pages['hr-attendance'] = (() => {
             ${H.esc(s.hr_grace_minutes || '15')} min grace
           </div>
         </div>
-        <div style="display:flex;gap:22px;align-items:center;">
+        <div class="hra-punch-side m-wrap" style="display:flex;gap:22px;align-items:center;">
           <div style="text-align:center;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;">In</div>
             <div style="font-size:16px;font-weight:700;color:${inAt ? '#0f172a' : '#cbd5e1'};margin-top:2px;">${inAt || '—'}</div>
@@ -132,8 +158,10 @@ window.Pages['hr-attendance'] = (() => {
            ${H.esc(s.hr_shift_start || '09:00')} plus the ${H.esc(s.hr_grace_minutes || '15')} minute grace.</div>` : ''}
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--color-primary);margin-bottom:9px;">
         This Month</div>
-      ${H.table(['Date', 'Check In', 'Check Out', { label: 'Hours', align: 'right' }, 'Late', 'Status'], rows,
-        { empty: 'No punches recorded this month yet' })}`;
+      <div class="hra-month">
+      ${H.table([{ label: 'Date', m: 'title' }, 'Check In', 'Check Out', { label: 'Hours', align: 'right' }, 'Late', { label: 'Status', cls: 'hra-st' }], rows,
+        { empty: 'No punches recorded this month yet', cards: true })}
+      </div>`;
   }
 
   /* Location is a courtesy, never a gate: if the browser refuses or the
@@ -223,7 +251,7 @@ window.Pages['hr-attendance'] = (() => {
       </tr>`).join('');
 
     return `
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
+      <div class="hra-filt" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:11px;align-items:end;">
         ${H.monthYearPicker('hra', _month, _year)}
         ${H.select('hra-branch', 'Branch', _branch, ['All', ...(_masters.branches || [])])}
@@ -238,7 +266,7 @@ window.Pages['hr-attendance'] = (() => {
       ])}
       <div style="margin-bottom:11px;">${legend}
         <span style="font-size:11.5px;color:#94a3b8;">· click any cell to correct it</span></div>
-      <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
+      <div class="hra-muster" style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
         <div style="overflow:auto;max-height:65vh;">
           <table style="border-collapse:collapse;">
             <thead><tr>
@@ -273,7 +301,7 @@ window.Pages['hr-attendance'] = (() => {
     const picked = Object.values(_marks).filter(Boolean).length;
 
     return `
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
+      <div class="hra-filt hra-mark-filt" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;align-items:end;">
         ${H.field('hra-mark-date', 'Date', _markDate, { type: 'date' })}
         <div><button id="hra-mark-all-present" class="btn-secondary btn-sm" style="width:100%;">Mark everyone Present</button></div>
@@ -284,8 +312,10 @@ window.Pages['hr-attendance'] = (() => {
       <div style="font-size:12px;color:#94a3b8;margin-bottom:11px;">
         Only the rows you set are written — anything left as “leave as is” keeps whatever the muster roll already shows for that day.
       </div>
-      ${H.table(['Employee', 'Department', 'Branch', { label: 'Status for ' + H.fmtDate(_markDate) }], rows,
-        { empty: 'No active employees', maxHeight: '60vh' })}`;
+      <div class="hra-marks">
+      ${H.table([{ label: 'Employee', m: 'title' }, 'Department', 'Branch', { label: 'Status for ' + H.fmtDate(_markDate), cls: 'hra-mark-cell' }], rows,
+        { empty: 'No active employees', maxHeight: '60vh', cards: true })}
+      </div>`;
   }
 
   /* ── Events ───────────────────────────────────────────────────────── */

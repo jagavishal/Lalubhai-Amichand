@@ -552,7 +552,7 @@ window.Pages.fms = (() => {
   ];
 
   function renderTopTabs() {
-    return `<div style="display:flex;gap:8px;flex-wrap:wrap;">${FMS_TOP_TABS.map(t => {
+    return `<div class="fms-top-tabs" style="display:flex;gap:8px;flex-wrap:wrap;">${FMS_TOP_TABS.map(t => {
       const on = t.key === _topTab;
       return `<button class="fms-top-tab" data-tab="${t.key}" style="
         padding:8px 16px;border-radius:10px;font-size:12.5px;font-weight:${on ? '600' : '500'};cursor:pointer;
@@ -569,7 +569,7 @@ window.Pages.fms = (() => {
     const on = !!_notify.enabled;
     const track = on ? '#16a34a' : '#cbd5e1';
     return `
-      <div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border:1px solid var(--border-light);border-radius:10px;background:var(--surface);">
+      <div class="fms-notify" style="display:flex;align-items:center;gap:10px;padding:7px 12px;border:1px solid var(--border-light);border-radius:10px;background:var(--surface);">
         <div style="line-height:1.2;">
           <div style="font-size:12.5px;font-weight:600;color:#0f172a;">Email Notifications</div>
           <div style="font-size:10.5px;color:${on ? '#16a34a' : '#94a3b8'};font-weight:600;">
@@ -588,17 +588,50 @@ window.Pages.fms = (() => {
       ${!_notify.smtpConfigured ? `<div style="font-size:10.5px;color:#dc2626;font-weight:600;">SMTP not configured on server</div>` : ''}`;
   }
 
+  /* Phone (<768px) only: header stacks, tabs scroll sideways, step tables
+     become cards, and the add/edit/intake modals go single-column. */
+  const FMS_MOBILE_CSS = `
+    @media (max-width: 767px) {
+      .fms-page.space-y-6 > * + * { margin-top: 16px !important; }
+      .fms-head { flex-direction: column; align-items: stretch !important; gap: 12px !important; }
+      .fms-head h1 { font-size: 18px !important; }
+      .fms-head-actions { width: 100%; }
+      .fms-head-actions > * { flex: 1 1 auto; }
+      .fms-notify { justify-content: space-between; min-height: 44px; flex-basis: 100% !important; }
+      #fms-add-btn, #fms-new-entry-btn { width: 100%; justify-content: center; min-height: 42px; }
+      .fms-top-tabs { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; margin-left: -12px; margin-right: -12px; padding: 0 12px; }
+      .fms-top-tabs::-webkit-scrollbar { display: none; }
+      .fms-top-tabs > button { flex-shrink: 0; white-space: nowrap; min-height: 38px; }
+      .fms-tab-btn { min-height: 34px; }
+      .fms-step-tbl .fms-done-btn { width: 100%; justify-content: center; min-height: 40px; }
+      .fms-step-tbl td.m-card-actions { display: block; }
+      .fms-g2, .fms-g3 { grid-template-columns: minmax(0, 1fr) !important; padding-right: 0 !important; }
+      .fms-g3 > label { padding-bottom: 0 !important; }
+      .fms-doercol { max-width: none !important; }
+      .fms-step-block { padding: 12px !important; }
+      .fms-icfg-row { grid-template-columns: 1fr 1fr !important; gap: 8px !important; padding: 10px; border: 1px solid var(--border-light); border-radius: 10px; margin-bottom: 10px !important; }
+      .fms-icfg-row > :first-child, .fms-icfg-row > input[data-k="dropdownOptions"], .fms-icfg-row > input[data-k="autoFillValue"] { grid-column: 1 / -1; }
+      .fms-icfg-row > button { justify-self: end; }
+      #fms-modal-overlay .modal-header { flex-wrap: wrap; }
+      .fms-addstep-top { order: 5; width: 100%; margin: 8px 0 0 !important; justify-content: center; }
+      #fms-modal-overlay .modal-body, #fms-icfg-overlay .modal-body { max-height: none !important; }
+      .fms-m-foot { flex-wrap: wrap; gap: 8px; }
+      .fms-m-foot > div { flex: 1 1 100%; }
+      .fms-m-foot > div > button { flex: 1; }
+    }`;
+
   function renderList(el, user, admin) {
     const onWorkflows = _topTab === 'workflows';
     el.innerHTML = `
-      <div class="space-y-6 animate-fade-in">
-        <div class="flex flex-wrap items-center justify-between gap-3">
+      <style>${FMS_MOBILE_CSS}</style>
+      <div class="space-y-6 animate-fade-in fms-page">
+        <div class="flex flex-wrap items-center justify-between gap-3 fms-head">
           <div>
             <h1 class="text-xl font-bold text-slate-900">FMS — Flow Management System</h1>
             <p class="text-[13px] text-slate-500 mt-0.5">Recurring workflows tracked live in Google Sheets</p>
           </div>
           ${admin && onWorkflows ? `
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div class="fms-head-actions" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
             ${renderNotifyToggle()}
             <button id="fms-add-btn" class="btn-primary flex items-center gap-1.5">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -659,8 +692,8 @@ window.Pages.fms = (() => {
     const sheet = _detail.sheet;
     const hasIntake = _intake && _intake.fields && _intake.fields.length > 0;
     return `
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <div style="display:flex;align-items:center;gap:10px;">
+      <div class="flex flex-wrap items-center justify-between gap-3 fms-head">
+        <div style="display:flex;align-items:center;gap:10px;min-width:0;">
           <button id="fms-back-btn" class="icon-btn" title="Back">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
           </button>
@@ -669,7 +702,7 @@ window.Pages.fms = (() => {
             <p class="text-[12.5px] text-slate-500 mt-0.5">${esc(sheet.sheet_name)}</p>
           </div>
         </div>
-        <div style="display:flex;gap:8px;">
+        <div class="fms-head-actions" style="display:flex;gap:8px;">
           ${hasIntake ? `<button id="fms-new-entry-btn" class="btn-secondary">+ New Entry</button>` : ''}
         </div>
       </div>
@@ -693,7 +726,7 @@ window.Pages.fms = (() => {
         </div>
         ${rows.length === 0 ? `<div style="padding:22px;text-align:center;font-size:12.5px;color:#94a3b8;">All caught up — nothing pending for this step.</div>` : `
         <div style="overflow-x:auto;">
-          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <table class="m-cards fms-step-tbl" style="width:100%;border-collapse:collapse;font-size:12px;">
             <thead><tr>
               ${Object.keys(rows[0].data || {}).map(h => `<th class="table-th" style="text-align:left;">${esc(h)}</th>`).join('')}
               <th class="table-th"></th>
@@ -701,8 +734,8 @@ window.Pages.fms = (() => {
             <tbody>
               ${rows.map(r => `
                 <tr>
-                  ${Object.values(r.data || {}).map(v => `<td class="table-td">${esc(v) || '—'}</td>`).join('')}
-                  <td class="table-td" style="text-align:right;white-space:nowrap;">
+                  ${Object.values(r.data || {}).map((v, vi) => `<td class="table-td${vi === 0 ? ' m-card-title' : ''}">${esc(v) || '—'}</td>`).join('')}
+                  <td class="table-td m-card-actions" style="text-align:right;white-space:nowrap;">
                     <button class="btn-primary btn-sm fms-done-btn" data-step="${esc(step.id)}" data-row="${r.sheetRowNumber}">✓ Done</button>
                   </td>
                 </tr>`).join('')}
@@ -726,7 +759,7 @@ window.Pages.fms = (() => {
     return `
       <div class="card" style="overflow:hidden;">
         <div style="overflow-x:auto;">
-          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <table class="m-cards" style="width:100%;border-collapse:collapse;font-size:12px;">
             <thead><tr>
               <th class="table-th" style="text-align:left;">Step</th>
               <th class="table-th" style="text-align:left;">Doer</th>
@@ -736,7 +769,7 @@ window.Pages.fms = (() => {
             <tbody>
               ${rows.map(r => `
                 <tr>
-                  <td class="table-td">${esc(r.stepName)}</td>
+                  <td class="table-td m-card-title">${esc(r.stepName)}</td>
                   <td class="table-td">${esc(r.doer) || '—'}</td>
                   <td class="table-td">${esc(r.planValue) || '—'}</td>
                   ${dataKeys.map(k => `<td class="table-td">${esc((r.data || {})[k]) || '—'}</td>`).join('')}
@@ -753,7 +786,8 @@ window.Pages.fms = (() => {
       return;
     }
     el.innerHTML = `
-      <div class="space-y-4 animate-fade-in">
+      <style>${FMS_MOBILE_CSS}</style>
+      <div class="space-y-4 animate-fade-in fms-page">
         ${renderDetailHeader(admin)}
         <div id="fms-detail-body">${_detailTab === 'pc' ? renderPcTab() : renderTasksTab(admin)}</div>
       </div>`;
@@ -1074,11 +1108,11 @@ window.Pages.fms = (() => {
         <button type="button" class="icon-btn danger fms-extra-remove" data-step="${i}" data-row="${j}" title="Remove field" style="position:absolute;top:8px;right:8px;">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;padding-right:26px;">
+        <div class="fms-g2" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;padding-right:26px;">
           <div><label class="label">Field Label</label><input class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="rowLabel" placeholder="e.g. PR No." value="${esc(er.rowLabel)}" /></div>
           <div><label class="label">Column</label>${extraColSelectHTML(j, er.colLetter)}</div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1.4fr auto;gap:8px;align-items:end;">
+        <div class="fms-g3" style="display:grid;grid-template-columns:1fr 1.4fr auto;gap:8px;align-items:end;">
           <div>
             <label class="label">Field Type</label>
             <select class="input fms-extra-field" data-step="${i}" data-row="${j}" data-k="fieldType">
@@ -1111,7 +1145,7 @@ window.Pages.fms = (() => {
             ${iconBtn('fms-step-remove danger', 'Remove step', false, '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/>')}
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        <div class="fms-g2" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
           <div><label class="label">Step Name</label><input class="input fms-step-field" data-step="${i}" data-k="stepName" placeholder="Step Name" value="${esc(step.stepName)}" /></div>
           <div>
             <label class="label">Step Doer(s)</label>
@@ -1132,7 +1166,7 @@ window.Pages.fms = (() => {
           </div>` : ''}
         </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        <div class="fms-g2" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
           <div><label class="label" id="fms-collabel-${i}-planCol" data-base="Plan Column">${colLabelHTML('Plan Column', step.planCol)}</label>${colSelectHTML(i, 'planCol', step.planCol, 'Select or type column…')}</div>
           <div><label class="label" id="fms-collabel-${i}-actualCol" data-base="Actual Column">${colLabelHTML('Actual Column', step.actualCol)}</label>${colSelectHTML(i, 'actualCol', step.actualCol, 'Select or type column…')}</div>
         </div>
@@ -1143,7 +1177,7 @@ window.Pages.fms = (() => {
           <div style="display:flex;flex-wrap:wrap;gap:6px;max-height:110px;overflow-y:auto;border:1px solid #f1f5f9;border-radius:8px;padding:8px;">${showColChecks || '<span style="font-size:11.5px;color:#94a3b8;">Fetch headers above to pick columns.</span>'}</div>
         </div>
 
-        <div style="display:flex;gap:8px;align-items:flex-end;max-width:calc(50% - 4px);margin-bottom:10px;">
+        <div class="fms-doercol" style="display:flex;gap:8px;align-items:flex-end;max-width:calc(50% - 4px);margin-bottom:10px;">
           <div style="flex:1;">
             <label class="label">Doer Name Column <span style="font-weight:400;color:#94a3b8;">(auto-saved on completion)</span></label>
             ${colSelectHTML(i, 'doerNameCol', step.doerNameCol, 'None — select or type column…')}
@@ -1169,11 +1203,11 @@ window.Pages.fms = (() => {
       : `<button type="button" id="fms-m-refetch" class="btn-secondary" style="width:100%;justify-content:center;">🔍 Fetch Column Headers</button>`;
     return `
       <div style="display:flex;flex-direction:column;gap:12px;">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div class="fms-g2" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
           <div><label class="label">FMS Name <span style="font-weight:400;color:#94a3b8;">(display name)</span></label><input id="fms-m-name" class="input" placeholder="e.g. Factory O2O, Recruitment FMS…" value="${esc(f.fmsName)}" /></div>
           <div><label class="label">Google Sheet Tab Name</label><input id="fms-m-tabname" class="input" placeholder="e.g. Sheet1" value="${esc(f.sheetName)}" /></div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div class="fms-g2" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
           <div><label class="label">Google Sheet ID <span style="font-weight:400;color:#94a3b8;">(or full URL)</span></label><input id="fms-m-sheetid" class="input" placeholder="Sheet ID or full URL" value="${esc(f.sheetId)}" /></div>
           <div><label class="label">Header Row</label><input id="fms-m-headerrow" class="input" type="number" min="1" value="${esc(f.headerRow)}" /></div>
         </div>
@@ -1208,13 +1242,13 @@ window.Pages.fms = (() => {
               <div class="modal-title">${_modalMode === 'edit' ? 'Edit FMS Flow' : 'New FMS Flow'}</div>
               <div class="modal-subtitle">Point at a Google Sheet, then configure each step's columns</div>
             </div>
-            <button type="button" id="fms-m-addstep-top" class="btn-secondary btn-sm" style="margin-right:4px;">+ Add Step</button>
+            <button type="button" id="fms-m-addstep-top" class="btn-secondary btn-sm fms-addstep-top" style="margin-right:4px;">+ Add Step</button>
             <button id="fms-modal-close" class="icon-btn" type="button" aria-label="Close">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </div>
           <div class="modal-body" style="max-height:60vh;overflow-y:auto;">${modalBodyHTML()}</div>
-          <div class="modal-footer" style="display:flex;align-items:center;justify-content:space-between;">
+          <div class="modal-footer fms-m-foot" style="display:flex;align-items:center;justify-content:space-between;">
             <span id="fms-m-stepcount" style="font-size:11.5px;color:#94a3b8;">${_modalForm.steps.length} step${_modalForm.steps.length === 1 ? '' : 's'}</span>
             <div style="display:flex;gap:8px;">
               <button id="fms-modal-cancel" class="btn-secondary">Cancel</button>
@@ -1531,7 +1565,7 @@ window.Pages.fms = (() => {
   /* ── Intake Form config modal (admin) ─────────────────────────────── */
   function intakeConfigFieldHTML(field, j) {
     return `
-      <div style="display:grid;grid-template-columns:1.4fr 0.7fr 0.9fr 1.2fr 0.9fr 0.9fr 0.5fr auto;gap:6px;align-items:center;margin-bottom:6px;">
+      <div class="fms-icfg-row" style="display:grid;grid-template-columns:1.4fr 0.7fr 0.9fr 1.2fr 0.9fr 0.9fr 0.5fr auto;gap:6px;align-items:center;margin-bottom:6px;">
         <input class="input fms-icfg-field" data-row="${j}" data-k="fieldLabel" placeholder="Label" value="${esc(field.fieldLabel)}" />
         <input class="input fms-icfg-field" data-row="${j}" data-k="colLetter" placeholder="Col" value="${esc(field.colLetter)}" style="text-transform:uppercase;" />
         <select class="input fms-icfg-field" data-row="${j}" data-k="fieldType">
@@ -1558,7 +1592,7 @@ window.Pages.fms = (() => {
       <div style="display:flex;flex-direction:column;gap:12px;">
         <div style="font-size:11.5px;color:#94a3b8;">Leave the sheet fields below empty to use the FMS's own tracking sheet for new entries.</div>
         <div><label class="label">Form Display Name</label><input id="fms-icfg-formname" class="input" value="${esc(f.intakeFormName)}" placeholder="New Entry" /></div>
-        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;">
+        <div class="fms-g2" style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;">
           <div><label class="label">Intake Sheet URL/ID (optional)</label><input id="fms-icfg-sheetid" class="input" value="${esc(f.intakeSheetId)}" /></div>
           <div><label class="label">Intake Tab Name (optional)</label><input id="fms-icfg-sheetname" class="input" value="${esc(f.intakeSheetName)}" /></div>
           <div><label class="label">Header Row (optional)</label><input id="fms-icfg-headerrow" class="input" type="number" min="1" value="${esc(f.intakeHeaderRow || '')}" /></div>

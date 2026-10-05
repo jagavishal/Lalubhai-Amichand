@@ -51,9 +51,19 @@ window.Pages['hr-reports'] = (() => {
 
     el.innerHTML = `
       <div class="animate-fade-in">
+        <style>
+          /* Phone: report picker full width, month/year two-up, report rows as cards */
+          @media (max-width: 767px) {
+            .hrr-filt { grid-template-columns:repeat(2,minmax(0,1fr)) !important; padding:12px !important; gap:10px !important; }
+            .hrr-filt > div:first-child { grid-column:1 / -1 !important; }
+            .hrr-chart { padding:14px !important; }
+            .hrr-chart > div[style*="repeat(12"] { gap:3px !important; }
+            .hrr-overview { grid-template-columns:minmax(0,1fr) !important; gap:10px !important; }
+          }
+        </style>
         ${H.header('HR Reports', 'Headcount, attrition, attendance, leave and payroll — as at today',
           '<button id="hrr-export" class="btn-secondary btn-sm">Export CSV</button>')}
-        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:16px;
+        <div class="hrr-filt" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:16px;
              display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:11px;align-items:end;">
           ${H.select('hrr-type', 'Report', _type, REPORTS.map((r) => ({ value: r.key, label: r.label })),
             { hint: current().hint })}
@@ -70,20 +80,21 @@ window.Pages['hr-reports'] = (() => {
     if (!_data) return H.spinner();
     if (_type === 'summary') return overview();
 
-    const cols = (_data.columns || []).map((c, i) => (i < 3 ? c : { label: c, align: 'right' }));
+    // The first column names the row, so it heads each card on a phone.
+    const cols = (_data.columns || []).map((c, i) => (i === 0 ? { label: c, m: 'title' } : (i < 3 ? c : { label: c, align: 'right' })));
     return `
       <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:12px;">${H.esc(_data.title || '')}</div>
       ${H.stats(_data.summary || {})}
       ${_data.chart ? monthChart(_data.chart) : ''}
       ${H.table(cols, (_data.rows || []).map((r) => r.map((c) => H.esc(c))),
-        { empty: 'Nothing to report for this period', maxHeight: '62vh' })}`;
+        { empty: 'Nothing to report for this period', maxHeight: '62vh', cards: true })}`;
   }
 
   /* A joiners-vs-leavers bar per month. Two flat bars scaled to the busiest
      month — enough to see the shape of a year without a charting library. */
   function monthChart(rows) {
     const max = Math.max(1, ...rows.map((r) => Math.max(r.joined, r.left)));
-    return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
+    return `<div class="hrr-chart" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px 18px;margin-bottom:16px;">
       <div style="display:flex;gap:16px;font-size:11.5px;color:#64748b;margin-bottom:12px;">
         <span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:3px;background:#16a34a;"></span>Joined</span>
         <span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:3px;background:#dc2626;"></span>Left</span>
@@ -156,7 +167,7 @@ window.Pages['hr-reports'] = (() => {
     return `
       <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:12px;">${H.esc(d.title || 'HR Overview')}</div>
       ${H.stats(d.summary || {})}
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:13px;">
+      <div class="hrr-overview" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:13px;">
         ${breakdown('By Department', d.byDepartment, 'var(--color-primary)')}
         ${breakdown('By Branch', d.byBranch, '#7c3aed')}
         ${breakdown('By Gender', d.byGender, '#0891b2')}

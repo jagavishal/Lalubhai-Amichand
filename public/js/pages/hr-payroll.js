@@ -57,6 +57,17 @@ window.Pages['hr-payroll'] = (() => {
 
     el.innerHTML = `
       <div class="animate-fade-in">
+        <style>
+          /* Phone: month/year two-up, run buttons share a full-width row,
+             the register scrolls sideways with the employee column pinned */
+          @media (max-width: 767px) {
+            .hrp-filt { grid-template-columns:repeat(2,minmax(0,1fr)) !important; padding:12px !important; gap:10px !important; }
+            .hrp-btns > button { flex:1 1 calc(50% - 4px); min-height:40px; justify-content:center; }
+            .hrp-btns > button:only-child, .hrp-btns > button:last-child:nth-child(odd) { flex-basis:100%; }
+            .hrp-register td:first-child:not([colspan]), .hrp-register th:first-child { min-width:140px; max-width:170px; white-space:normal !important; }
+            .hrp-sum { text-align:left !important; line-height:1.7; }
+          }
+        </style>
         ${H.header('Payroll', admin
           ? 'Generate the month, check the register, then finalise'
           : 'Your salary slips')}
@@ -146,10 +157,10 @@ window.Pages['hr-payroll'] = (() => {
       { label: 'Net Salary', align: 'right' }, { label: '', nowrap: true }];
 
     return `
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
+      <div class="hrp-filt" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px;align-items:end;">
         ${H.monthYearPicker('hrp', _month, _year)}
-        <div style="grid-column:span 2;display:flex;gap:8px;flex-wrap:wrap;align-items:end;">${buttons}</div>
+        <div class="hrp-btns" style="grid-column:span 2;display:flex;gap:8px;flex-wrap:wrap;align-items:end;">${buttons}</div>
       </div>
       ${stateBanner}
       ${missing ? `<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:10px;padding:11px 14px;
@@ -163,10 +174,13 @@ window.Pages['hr-payroll'] = (() => {
         { label: 'Loss of Pay', value: '₹ ' + H.inr0(t.lop), color: '#b45309' },
         { label: 'Net Payable', value: '₹ ' + H.inr0(t.net), color: '#15803d' },
       ])}
+      <div class="hrp-register">
       ${H.table(cols, rows, {
         empty: 'No employees on the rolls for this month',
         maxHeight: '58vh',
-      })}`;
+        sticky: true,
+      })}
+      </div>`;
   }
 
   /* ── History ──────────────────────────────────────────────────────── */
@@ -181,9 +195,9 @@ window.Pages['hr-payroll'] = (() => {
       H.esc(r.generated_by || '—'),
       `<button class="btn-ghost btn-xs hrp-open" data-m="${r.month}" data-y="${r.year}">Open</button>`,
     ]);
-    return H.table(['Period', 'Status', { label: 'Employees', align: 'right' }, { label: 'Gross', align: 'right' },
-      { label: 'Net Paid', align: 'right' }, 'Generated', 'By', { label: '', nowrap: true }], rows,
-      { empty: 'No payroll has been run yet' });
+    return H.table([{ label: 'Period', m: 'title' }, 'Status', { label: 'Employees', align: 'right' }, { label: 'Gross', align: 'right' },
+      { label: 'Net Paid', align: 'right' }, 'Generated', 'By', { label: '', nowrap: true, m: 'actions' }], rows,
+      { empty: 'No payroll has been run yet', cards: true });
   }
 
   /* ── An employee's own slips ──────────────────────────────────────── */
@@ -199,9 +213,9 @@ window.Pages['hr-payroll'] = (() => {
           class="btn-secondary btn-xs" style="text-decoration:none;">View / Save PDF</a>`,
     ]);
     return `
-      ${H.table(['Period', 'Slip No', { label: 'Gross', align: 'right' }, { label: 'Deductions', align: 'right' },
-        { label: 'LOP Days', align: 'right' }, { label: 'Net Paid', align: 'right' }, { label: '', nowrap: true }], rows,
-        { empty: 'No finalised payslips yet' })}
+      ${H.table([{ label: 'Period', m: 'title' }, 'Slip No', { label: 'Gross', align: 'right' }, { label: 'Deductions', align: 'right' },
+        { label: 'LOP Days', align: 'right' }, { label: 'Net Paid', align: 'right' }, { label: '', nowrap: true, m: 'actions' }], rows,
+        { empty: 'No finalised payslips yet', cards: true })}
       <div style="font-size:12px;color:#94a3b8;margin-top:11px;">
         Slips appear here once the month has been finalised by HR.
       </div>`;
@@ -308,7 +322,7 @@ window.Pages['hr-payroll'] = (() => {
       ${H.field('hrpe-lop_days', 'Loss of Pay Days', H.num(s.lop_days), { type: 'number', step: '0.5',
         hint: `Out of ${H.num(s.month_days)} days in the month` })}
       ${H.field('hrpe-note', 'Note on the slip', s.note || '')}
-      <div style="grid-column:1/-1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:11px 14px;
+      <div class="hrp-sum" style="grid-column:1/-1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:11px 14px;
            text-align:right;font-size:12.5px;color:#475569;">
         Gross <b id="hrpe-gross" style="color:#0f172a;"></b> &nbsp;·&nbsp;
         Deductions <b id="hrpe-ded" style="color:#b91c1c;"></b> &nbsp;·&nbsp;

@@ -53,6 +53,49 @@ window.Pages['bulk-email'] = (() => {
   const isSheet = (n) => /\.(xlsx|xls|csv)$/i.test(n);
   const CARD = 'background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px;';
 
+  /* Phone (<768px) only — desktop keeps its inline styles. The header, tabs,
+     tables (cards: true) and H.openModal sheets get their phone layout from
+     hr-common.js; this covers the page's own blocks. */
+  const MOBILE_CSS = `<style>@media (max-width: 767px) {
+    #bm-batch { width:100% !important; min-width:0 !important; }
+    #bm-drop { padding:22px 16px !important; }
+    .bm-pick-btns > button { min-height:42px; flex:1 1 40%; }
+    .bm-pick-btns > #bm-pick-files { flex-basis:100%; }
+    .bm-pick-row { width:100%; }
+    .bm-pick-row > button { flex:1; min-height:42px; justify-content:center; }
+    .bm-strip { padding:12px 14px !important; }
+    .bm-strip-btns { width:100%; }
+    .bm-strip-btns > button { flex:1; min-height:40px; }
+    .bm-stats { grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:8px !important; margin-bottom:12px !important; }
+    .bm-stats > button { padding:11px 12px !important; min-width:0; }
+    .bm-stats > button > div:last-child { font-size:18px !important; }
+    .bm-fix input { min-width:0 !important; flex:1; }
+    .bm-fix > div { min-width:0 !important; width:100%; }
+    .bm-fix .btn-primary { min-height:40px; }
+    .bm-selbar { width:100%; }
+    .bm-selbar .bm-seg { flex:1; display:flex; }
+    .bm-selbar .bm-seg button { flex:1; padding:9px 6px; min-height:40px; }
+    .bm-selhint { display:none; }
+    #bm-rsearch, #bm-msearch { width:100% !important; }
+    .bm-send-scroll { max-height:none !important; overflow:visible !important; }
+    .bm-send-tbl, .bm-send-tbl thead, .bm-send-tbl tbody { display:block; width:100%; }
+    .bm-send-tbl thead tr { display:flex; }
+    .bm-send-tbl thead th { display:none; }
+    .bm-send-tbl thead th:first-child { display:flex; align-items:center; gap:10px; flex:1; width:auto !important; position:static !important; }
+    .bm-send-tbl thead th:first-child::after { content:'Tick everything shown'; }
+    .bm-send-tbl tr.bm-row { display:grid; grid-template-columns:28px minmax(0,1fr); gap:3px 8px; padding:11px 14px; border-bottom:1px solid var(--border-light); }
+    .bm-send-tbl tr.bm-row[hidden] { display:none; }
+    .bm-send-tbl tr.bm-row td { display:block; padding:0 !important; border:none !important; white-space:normal !important; overflow-wrap:anywhere; min-width:0; }
+    .bm-send-tbl tr.bm-row td:first-child { grid-row:1 / span 4; width:auto !important; padding-top:2px !important; }
+    .bm-send-tbl tr.bm-row td:first-child input { width:18px !important; height:18px !important; }
+    .bm-send-tbl tr.bm-row td:nth-child(2) { font-size:13.5px; }
+    .bm-send-tbl tr.bm-row td:nth-child(3), .bm-send-tbl tr.bm-row td:nth-child(4) { font-size:12.5px; }
+    .bm-mbar { padding:12px 14px !important; }
+    .bm-mbar > div { width:100%; }
+    .bm-mbar-btns > button { flex:1 1 auto; min-height:40px; }
+    .bm-mact button { min-height:36px; padding:6px 16px !important; border:1px solid var(--border-light) !important; }
+  }</style>`;
+
   /* ── Data ─────────────────────────────────────────────────────────── */
 
   async function load() {
@@ -101,6 +144,7 @@ window.Pages['bulk-email'] = (() => {
     const files = _detail?.files || [];
     const sendable = files.filter((f) => f.email).length;
     el.innerHTML = `<div class="animate-fade-in" data-bm-page>
+      ${MOBILE_CSS}
       ${H.header('Bulk Email', 'Upload PDFs (ZIP, files or a folder) and mail each one to its person', headerActions())}
       ${H.tabs('bm', [
         { key: 'upload', label: 'Upload & Match', count: files.length || null },
@@ -136,7 +180,7 @@ window.Pages['bulk-email'] = (() => {
                   display:flex;align-items:center;justify-content:center;margin:0 auto 12px;">${ICON_UP}</div>
       <div style="font-size:14.5px;font-weight:700;color:#0f172a;">Drag &amp; drop the PDFs here</div>
       <div style="font-size:12.5px;color:#64748b;margin-top:4px;">A ZIP, the loose PDF files, or the whole folder — with or without the Excel/CSV list.</div>
-      <div style="display:flex;gap:8px;justify-content:center;margin-top:16px;flex-wrap:wrap;">
+      <div class="bm-pick-btns" style="display:flex;gap:8px;justify-content:center;margin-top:16px;flex-wrap:wrap;">
         <button id="bm-pick-files" class="btn-primary">Choose files</button>
         <button id="bm-pick-folder" class="btn-secondary">Choose folder</button>
         <button id="bm-pick-zip" class="btn-secondary">Choose ZIP</button>
@@ -165,7 +209,7 @@ window.Pages['bulk-email'] = (() => {
             ${chip(sheets, sheets === 1 ? 'Excel/CSV list' : 'Excel/CSV lists', 'success')}${chip(other, 'other (ignored)', 'neutral')}
           </div>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;">
+        <div class="bm-pick-row" style="display:flex;gap:8px;align-items:center;">
           <button id="bm-pick-clear" class="btn-secondary">Clear</button>
           <button id="bm-upload" class="btn-primary" style="padding:9px 20px;font-size:13.5px;">
             ${sheetOnly ? 'Update master list' : 'Upload & match'}</button>
@@ -198,14 +242,14 @@ window.Pages['bulk-email'] = (() => {
   function masterStrip() {
     const m = _master || { count: 0, withEmail: 0 };
     const ok = m.withEmail > 0;
-    return `<div style="${CARD}padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+    return `<div class="bm-strip" style="${CARD}padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
                 ${ok ? '' : 'background:#fffbeb;border-color:#fde68a;'}">
       <div style="font-size:12.5px;color:${ok ? '#334155' : '#92400e'};">
         <b>Master list:</b> ${ok
           ? `${m.withEmail} email id${m.withEmail === 1 ? '' : 's'} saved${m.count > m.withEmail ? ` (${m.count - m.withEmail} without email)` : ''}${m.lastUpdated ? ` · updated ${H.esc(H.fmtDate(m.lastUpdated))}` : ''}. Every upload is matched against it — no need to send the Excel again.`
           : 'nothing saved yet. Upload the Excel/CSV once (with the PDFs or here) and the addresses are kept for every future upload.'}
       </div>
-      <div style="display:flex;gap:8px;">
+      <div class="bm-strip-btns" style="display:flex;gap:8px;">
         <button id="bm-master-up" class="btn-secondary" style="font-size:12px;">Upload Excel/CSV</button>
         <button id="bm-master-open" class="btn-ghost" style="font-size:12px;">Open list</button>
         <input type="file" id="bm-in-master" accept=".xlsx,.xls,.csv" style="display:none;" />
@@ -223,7 +267,7 @@ window.Pages['bulk-email'] = (() => {
     failed:  (f) => f.send_status === 'Failed',
   };
   function statCards(items) {
-    return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">
+    return `<div class="bm-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">
       ${items.map((s) => {
         const on = (_matchFilter || '') === (s.key || '');
         return `<button type="button" data-bm-stat="${H.esc(s.key || '')}" title="${on && s.key ? 'Show everything' : 'Show only these'}"
@@ -268,15 +312,15 @@ window.Pages['bulk-email'] = (() => {
           <div style="font-size:13px;font-weight:700;color:#b45309;">Missing email ids — fill them in here (${noEmail.length})</div>
           <button id="bm-csv" class="btn-secondary" style="font-size:12px;">Download list (CSV)</button>
         </div>
-        ${H.table(['File', 'PAN', 'Name', 'Email id'], noEmail.map(fixRow))}
+        ${H.table([{ label: 'File', m: 'title' }, 'PAN', { label: 'Name', cls: 'bm-fix' }, { label: 'Email id', cls: 'bm-fix' }], noEmail.map(fixRow), { cards: true })}
         <div style="font-size:11.5px;color:#94a3b8;margin:6px 0 16px;">An email saved here goes into the master list too, so the same PAN needs no typing next year.</div>
       ` : filtering ? '' : `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 16px;font-size:13px;color:#166534;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
              <span>Every PDF has an email id.</span>
              <button id="bm-go-send" class="btn-primary" style="font-size:12.5px;">Go to Send Emails →</button></div>`}
       ${(!filtering || ready.length) ? `<div style="font-size:13px;font-weight:700;color:#334155;margin:4px 0 8px;">Matched &amp; ready (${ready.length})</div>` : ''}
-      ${H.table(['File', 'PAN', 'Name', 'Email id', 'Status'],
+      ${H.table([{ label: 'File', m: 'title' }, 'PAN', 'Name', 'Email id', 'Status'],
         ready.map((f) => [H.esc(f.file_name), H.esc(f.pan || '—'), H.esc(f.person_name || '—'), H.esc(f.email), statusCell(f)]),
-        { maxHeight: '420px' })}`;
+        { maxHeight: '420px', cards: true })}`;
   }
 
   function statusCell(f) {
@@ -357,7 +401,7 @@ window.Pages['bulk-email'] = (() => {
       ${_job ? progressCard() : ''}
 
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="bm-selbar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <span style="font-size:12px;color:#64748b;font-weight:600;">Select:</span>
           <div class="bm-seg">
             <button data-sel="all" ${running ? 'disabled' : ''}>All</button>
@@ -365,13 +409,13 @@ window.Pages['bulk-email'] = (() => {
             <button data-sel="failed" ${running ? 'disabled' : ''}>Failed</button>
             <button data-sel="none" ${running ? 'disabled' : ''}>None</button>
           </div>
-          <span style="font-size:11.5px;color:#94a3b8;">Click a row to tick it · Shift+click for a range</span>
+          <span class="bm-selhint" style="font-size:11.5px;color:#94a3b8;">Click a row to tick it · Shift+click for a range</span>
         </div>
         <input id="bm-rsearch" type="search" placeholder="Filter by file, name or email…" style="${H.CONTROL}width:250px;" />
       </div>
       <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
-        <div style="overflow:auto;max-height:520px;">
-          <table style="width:100%;border-collapse:collapse;">
+        <div class="bm-send-scroll" style="overflow:auto;max-height:520px;">
+          <table class="bm-send-tbl" style="width:100%;border-collapse:collapse;">
             <thead><tr>
               <th style="${H.TH}width:36px;"><input type="checkbox" id="bm-check-all" ${running ? 'disabled' : ''} style="width:15px;height:15px;cursor:pointer;" title="Tick / untick everything shown" /></th>
               <th style="${H.TH}">File</th><th style="${H.TH}">Name</th><th style="${H.TH}">Email id</th><th style="${H.TH}">Status</th>
@@ -586,12 +630,12 @@ window.Pages['bulk-email'] = (() => {
     const rows = (m.rows || []).filter((r) => !needle ||
       [r.pan, r.file_key, r.person_name, r.email].some((v) => String(v || '').toLowerCase().includes(needle)));
     return `
-      <div style="${CARD}display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 18px;">
+      <div class="bm-mbar" style="${CARD}display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 18px;">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <input id="bm-msearch" type="search" value="${H.esc(_masterSearch)}" placeholder="Search PAN, name, email…" style="${H.CONTROL}width:260px;" />
           <span style="font-size:12.5px;color:#64748b;">${m.withEmail} with email · ${m.count - m.withEmail} without${m.lastUpdated ? ` · updated ${H.esc(H.fmtDate(m.lastUpdated))}` : ''}</span>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <div class="bm-mbar-btns" style="display:flex;gap:8px;flex-wrap:wrap;">
           <button id="bm-master-up" class="btn-primary" style="font-size:12.5px;">Upload Excel/CSV</button>
           <button id="bm-master-add" class="btn-secondary" style="font-size:12.5px;">Add entry</button>
           <button id="bm-master-csv" class="btn-ghost" style="font-size:12.5px;">Download CSV</button>
@@ -599,17 +643,17 @@ window.Pages['bulk-email'] = (() => {
         </div>
       </div>
       <div style="font-size:11.5px;color:#94a3b8;margin:-8px 0 12px;">A sheet uploaded here is merged in: new PANs are added, existing ones get the sheet's email unless the sheet's cell is blank. Matching uses the PAN in the file name, so next year's PDFs need no new sheet.</div>
-      ${H.table(['PAN', 'File name', 'Name', 'Email id', 'Source', 'Updated', { label: '' }],
+      ${H.table(['PAN', 'File name', { label: 'Name', m: 'title' }, 'Email id', 'Source', 'Updated', { label: '', m: 'actions' }],
         rows.map((r) => [
           H.esc(r.pan || '—'), H.esc(r.file_key || '—'), H.esc(r.person_name || '—'),
           r.email ? H.esc(r.email) : `<span style="color:#d97706;font-weight:600;">missing</span>`,
           `<span style="font-size:11.5px;color:#94a3b8;">${H.esc(r.source || '')}</span>`,
           `<span style="font-size:11.5px;color:#94a3b8;">${H.esc(H.fmtDate(r.updated_at))}${r.updated_by ? ` · ${H.esc(r.updated_by)}` : ''}</span>`,
-          `<div style="display:flex;gap:4px;white-space:nowrap;">
+          `<div class="bm-mact" style="display:flex;gap:4px;white-space:nowrap;">
              <button class="btn-ghost" data-medit="${H.esc(r.mkey)}" style="font-size:12px;padding:4px 9px;">Edit</button>
              <button class="btn-ghost" data-mdel="${H.esc(r.mkey)}" style="font-size:12px;padding:4px 9px;color:#dc2626;">Delete</button>
            </div>`,
-        ]), { maxHeight: '560px', empty: needle ? 'No entry matches that search' : 'No addresses saved yet — upload the Excel/CSV list' })}`;
+        ]), { maxHeight: '560px', cards: true, empty: needle ? 'No entry matches that search' : 'No addresses saved yet — upload the Excel/CSV list' })}`;
   }
 
   /* ── Upload actions ───────────────────────────────────────────────── */

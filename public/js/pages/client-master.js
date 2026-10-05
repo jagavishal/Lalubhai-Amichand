@@ -166,8 +166,8 @@ window.Pages['client-master'] = (() => {
     if (!modal) return;
     if (!_open) { modal.innerHTML = ''; return; }
     const title = _editing !== null ? 'Edit Vendor' : 'Add Vendor';
-    modal.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="cm-backdrop">'
-      + '<div style="background:#fff;border-radius:18px;width:100%;max-width:600px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
+    modal.innerHTML = '<div class="vm-sheet-ov" style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="cm-backdrop">'
+      + '<div class="vm-sheet" style="background:#fff;border-radius:18px;width:100%;max-width:600px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
       + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;">'
         + '<div style="width:38px;height:38px;border-radius:10px;background:var(--color-primary-light);display:grid;place-items:center;flex-shrink:0;">'
           + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary-strong)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'
@@ -177,7 +177,7 @@ window.Pages['client-master'] = (() => {
           + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
         + '</button>'
       + '</div>'
-      + '<div style="padding:22px 24px;max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:20px;">'
+      + '<div class="vm-sheet-body" style="padding:22px 24px;max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:20px;">'
         + '<div>'
           + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">'
             + '<div style="width:26px;height:26px;border-radius:7px;background:#eff6ff;display:grid;place-items:center;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>'
@@ -212,7 +212,7 @@ window.Pages['client-master'] = (() => {
           + '</div>'
         + '</div>'
       + '</div>'
-      + '<div style="padding:14px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;background:#fafafa;">'
+      + '<div class="vm-sheet-foot" style="padding:14px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;background:#fafafa;">'
         + '<button id="cm-modal-cancel" style="padding:9px 22px;border-radius:9px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
         + '<button id="cm-modal-save" style="padding:9px 24px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;" ' + (_saving ? 'disabled' : '') + '>'
           + (_saving ? 'Saving…' : (_editing !== null ? 'Update Vendor' : 'Add Vendor'))
@@ -259,7 +259,7 @@ window.Pages['client-master'] = (() => {
     const thS = 'padding:10px 16px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;background:#f8fafc;text-align:left;white-space:nowrap;';
     const actionTh = _canEdit ? '<th style="' + thS + 'text-align:right;">Actions</th>' : '';
 
-    return '<div class="overflow-x-auto"><table style="width:100%;border-collapse:collapse;">'
+    return '<div class="overflow-x-auto"><table class="m-cards vm-tbl" style="width:100%;border-collapse:collapse;">'
       + '<thead><tr style="border-bottom:2px solid #e2e8f0;">'
         + '<th style="' + thS + 'text-align:center;width:44px;">#</th>'
         + '<th style="' + thS + '">Name</th>'
@@ -279,18 +279,18 @@ window.Pages['client-master'] = (() => {
             : '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;"><span style="width:5px;height:5px;border-radius:50%;background:#94a3b8;"></span>Inactive</span>';
           const tdS = 'padding:12px 16px;font-size:13px;color:#374151;border-bottom:1px solid #f1f5f9;';
           const actionTd = _canEdit
-            ? '<td style="' + tdS + '"><div style="display:flex;gap:6px;justify-content:flex-end;">'
+            ? '<td class="m-card-actions" style="' + tdS + '"><div class="vm-act" style="display:flex;gap:6px;justify-content:flex-end;">'
               + '<button class="js-edit" data-id="' + c.id + '" style="padding:4px 12px;border-radius:6px;border:1.5px solid #e2e8f0;background:#fff;color:#475569;font-size:11px;font-weight:600;cursor:pointer;">Edit</button>'
               + '<button class="js-delete" data-id="' + c.id + '" style="padding:4px 12px;border-radius:6px;border:1.5px solid #fecaca;background:#fff5f5;color:#ef4444;font-size:11px;font-weight:600;cursor:pointer;">Delete</button>'
               + '</div></td>' : '';
           return '<tr style="' + (i % 2 === 1 ? 'background:#fafafa;' : '') + '" onmouseenter="this.style.background=\'#fffbeb\'" onmouseleave="this.style.background=\'' + (i % 2 === 1 ? '#fafafa' : 'transparent') + '\'">'
-            + '<td style="' + tdS + 'text-align:center;color:#94a3b8;font-weight:600;">' + (i+1) + '</td>'
-            + '<td style="' + tdS + '">'
+            + '<td class="m-card-hide" style="' + tdS + 'text-align:center;color:#94a3b8;font-weight:600;">' + (i+1) + '</td>'
+            + '<td class="m-card-title" style="' + tdS + '">'
               + '<div style="font-weight:600;color:#1e293b;">' + esc(c.name) + '</div>'
               + (c.email ? '<div style="font-size:11px;color:#94a3b8;margin-top:1px;">' + esc(c.email) + '</div>' : '')
             + '</td>'
             + '<td style="' + tdS + '">' + esc(c.mobile||c.contact_number||'—') + '</td>'
-            + '<td style="' + tdS + '">' + esc(c.email||'—') + '</td>'
+            + '<td class="m-card-hide" style="' + tdS + '">' + esc(c.email||'—') + '</td>'
             + '<td style="' + tdS + '">' + esc(c.state||'—') + '</td>'
             + '<td style="' + tdS + '">' + esc(c.district||'—') + '</td>'
             + '<td style="' + tdS + '">' + esc(c.division||'—') + '</td>'
@@ -309,7 +309,7 @@ window.Pages['client-master'] = (() => {
 
     return '<div style="display:flex;flex-direction:column;gap:16px;">'
       // Stat chips
-      + '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+      + '<div class="vm-stats" style="display:flex;gap:10px;flex-wrap:wrap;">'
         + '<div style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;background:#fff;border:1px solid #e2e8f0;box-shadow:0 1px 2px rgba(0,0,0,.04);">'
           + '<div style="width:32px;height:32px;border-radius:8px;background:#f8fafc;display:grid;place-items:center;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>'
           + '<div><div style="font-size:18px;font-weight:800;color:#1e293b;line-height:1;">' + _list.length + '</div><div style="font-size:10.5px;color:#94a3b8;margin-top:1px;">Total</div></div>'
@@ -325,8 +325,8 @@ window.Pages['client-master'] = (() => {
       + '</div>'
       // Table card
       + '<div style="background:#fff;border-radius:14px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.05);">'
-        + '<div style="padding:14px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-          + '<div style="position:relative;flex:1;min-width:200px;">'
+        + '<div class="vm-toolbar" style="padding:14px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+          + '<div class="vm-search" style="position:relative;flex:1;min-width:200px;">'
             + '<svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#94a3b8;" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'
             + '<input id="cm-search" placeholder="Search name, mobile, email…" value="' + esc(_q) + '" style="width:100%;box-sizing:border-box;padding:8px 12px 8px 32px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:13px;outline:none;background:#f8fafc;" onfocus="this.style.borderColor=\'var(--color-primary)\';this.style.background=\'#fff\'" onblur="this.style.borderColor=\'#e2e8f0\';this.style.background=\'#f8fafc\'" />'
           + '</div>'
@@ -363,16 +363,16 @@ window.Pages['client-master'] = (() => {
     const rowBg   = chkd ? 'background:#f0fff8;' : (i % 2 === 1 ? 'background:#fafbfc;' : '');
 
     return '<tr data-ri="' + i + '" style="border-bottom:1px solid #eef2f7;' + rowBg + '">'
-      // Checkbox
-      + '<td style="' + cellS + 'text-align:center;width:36px;padding:5px 4px;">'
+      // Checkbox (pm-c-* classes only drive the phone card layout in _mobileCss)
+      + '<td class="pm-c-chk" style="' + cellS + 'text-align:center;width:36px;padding:5px 4px;">'
         + (hasData
           ? '<input type="checkbox" class="pm-row-chk" data-ri="' + i + '" ' + (chkd ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;accent-color:var(--color-primary);" />'
           : '<span style="display:block;width:15px;height:15px;border:1.5px solid #e2e8f0;border-radius:3px;margin:auto;background:#f8fafc;"></span>')
       + '</td>'
       // S.No
-      + '<td style="' + cellS + 'text-align:center;width:32px;color:#94a3b8;font-size:12px;font-weight:600;padding:5px 4px;">' + (i+1) + '</td>'
+      + '<td class="pm-c-no" style="' + cellS + 'text-align:center;width:32px;color:#94a3b8;font-size:12px;font-weight:600;padding:5px 4px;">' + (i+1) + '</td>'
       // Txn Type - N / R / I
-      + '<td style="' + cellS + 'min-width:80px;padding:4px 5px;">'
+      + '<td class="pm-c-txn" style="' + cellS + 'min-width:80px;padding:4px 5px;">'
         + '<select class="pm-txn-inp" data-ri="' + i + '" style="width:100%;padding:6px 2px;border:1.5px solid #e9ecef;border-radius:7px;font-size:13px;font-weight:700;color:#1e293b;outline:none;background:#fff;cursor:pointer;text-align:center;">'
           + '<option value="N" ' + (txn==='N'?'selected':'') + '>N</option>'
           + '<option value="R" ' + (txn==='R'?'selected':'') + '>R</option>'
@@ -380,7 +380,7 @@ window.Pages['client-master'] = (() => {
         + '</select>'
       + '</td>'
       // Name - editable with search
-      + '<td style="' + cellS + 'min-width:180px;padding:4px 5px;">'
+      + '<td class="pm-c-name" style="' + cellS + 'min-width:180px;padding:4px 5px;">'
         + '<div style="position:relative;">'
           + '<input class="pm-name-inp" data-ri="' + i + '" type="text" placeholder="Search vendor…" autocomplete="off" value="' + esc(row.vendorSearch) + '" '
             + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (v ? 'var(--color-primary)' : '#e9ecef') + ';border-radius:7px;font-size:13px;font-weight:' + (v?'600':'400') + ';color:#1e293b;outline:none;background:' + (v?'var(--color-primary-light)':'#fff') + ';transition:border-color .15s;" />'
@@ -388,7 +388,7 @@ window.Pages['client-master'] = (() => {
         + '</div>'
       + '</td>'
       // Amount - editable
-      + '<td style="' + cellS + 'min-width:120px;padding:4px 5px;">'
+      + '<td class="pm-c-amt" style="' + cellS + 'min-width:120px;padding:4px 5px;">'
         + '<div style="display:flex;align-items:center;gap:4px;border:1.5px solid #e9ecef;border-radius:7px;padding:6px 9px;background:' + (row.amount?'#f8fff9':'#fff') + ';transition:border-color .15s;" onfocusin="this.style.borderColor=\'#059669\';this.style.background=\'#f0fdf4\'" onfocusout="this.style.borderColor=\'#e9ecef\';this.style.background=\'' + (row.amount?'#f8fff9':'#fff') + '\'">'
           + '<span style="color:#94a3b8;font-size:12px;font-weight:600;">₹</span>'
           + '<input class="pm-amount-inp" data-ri="' + i + '" type="number" min="0" step="0.01" max="99999999999999999.99" maxlength="20" placeholder="0.00" value="' + esc(row.amount) + '" '
@@ -396,20 +396,20 @@ window.Pages['client-master'] = (() => {
         + '</div>'
       + '</td>'
       // Narration
-      + '<td style="' + cellS + 'min-width:150px;padding:4px 5px;">'
+      + '<td class="pm-c-narr" style="' + cellS + 'min-width:150px;padding:4px 5px;">'
         + '<input class="pm-narr-inp" data-ri="' + i + '" type="text" maxlength="20" placeholder="Bill no / narration…" value="' + esc(row.narration) + '" '
           + 'style="width:100%;box-sizing:border-box;padding:6px 10px;border:1.5px solid ' + (row.narration?'#0150AA':'#e9ecef') + ';border-radius:7px;font-size:12px;color:#374151;outline:none;background:' + (row.narration?'#EEF4FB':'#fff') + ';transition:border-color .15s;" '
           + 'onfocus="this.style.borderColor=\'#0150AA\';this.style.background=\'#EEF4FB\'" onblur="this.style.borderColor=\'' + (row.narration?'#0150AA':'#e9ecef') + '\';this.style.background=\'' + (row.narration?'#EEF4FB':'#fff') + '\'" />'
       + '</td>'
       // Auto-filled cells
-      + '<td style="' + cellS + 'min-width:110px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.division||'—') + '</span></td>'
-      + '<td style="' + cellS + 'min-width:100px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.bank_name||'—') + '</span></td>'
-      + '<td style="' + cellS + 'min-width:120px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.account_holder||'—') + '</span></td>'
-      + '<td style="' + cellS + 'min-width:140px;"><span class="pm-auto-span" style="' + monoS + '">' + esc(v?.account_no||'—') + '</span></td>'
-      + '<td style="' + cellS + 'min-width:100px;"><span class="pm-auto-span" style="' + monoS + '">' + esc(v?.ifsc_code||'—') + '</span></td>'
-      + '<td style="' + cellS + 'min-width:100px;border-right:none;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.branch_name||'—') + '</span></td>'
+      + '<td class="pm-c-auto" data-l="Division" style="' + cellS + 'min-width:110px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.division||'—') + '</span></td>'
+      + '<td class="pm-c-auto" data-l="Bank" style="' + cellS + 'min-width:100px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.bank_name||'—') + '</span></td>'
+      + '<td class="pm-c-auto" data-l="Holder" style="' + cellS + 'min-width:120px;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.account_holder||'—') + '</span></td>'
+      + '<td class="pm-c-auto" data-l="A/c No." style="' + cellS + 'min-width:140px;"><span class="pm-auto-span" style="' + monoS + '">' + esc(v?.account_no||'—') + '</span></td>'
+      + '<td class="pm-c-auto" data-l="IFSC" style="' + cellS + 'min-width:100px;"><span class="pm-auto-span" style="' + monoS + '">' + esc(v?.ifsc_code||'—') + '</span></td>'
+      + '<td class="pm-c-auto" data-l="Branch" style="' + cellS + 'min-width:100px;border-right:none;"><span class="pm-auto-span" style="' + autoS + '">' + esc(v?.branch_name||'—') + '</span></td>'
       // Clear
-      + '<td style="padding:5px 6px;text-align:center;width:32px;">'
+      + '<td class="pm-c-clr" style="padding:5px 6px;text-align:center;width:32px;">'
         + (hasData
           ? '<button class="pm-clear-row" data-ri="' + i + '" title="Clear row" style="background:transparent;border:none;cursor:pointer;color:#d1d5db;padding:3px;line-height:1;" onmouseenter="this.style.color=\'#ef4444\'" onmouseleave="this.style.color=\'#d1d5db\'">'
               + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
@@ -432,7 +432,7 @@ window.Pages['client-master'] = (() => {
 
     return '<div style="background:#fff;border-radius:14px;border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.06);">'
       // Header
-      + '<div style="padding:14px 20px;border-bottom:1px solid #f0f4f8;background:linear-gradient(to right,#fafbfc,#f8fafc);">'
+      + '<div class="pm-head" style="padding:14px 20px;border-bottom:1px solid #f0f4f8;background:linear-gradient(to right,#fafbfc,#f8fafc);">'
         + '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
           + '<div>'
             + '<div style="font-size:14px;font-weight:700;color:#1e293b;">Payment Entries</div>'
@@ -441,7 +441,7 @@ window.Pages['client-master'] = (() => {
               + (checkedRows.length ? ' &nbsp;·&nbsp; <span style="color:#059669;font-weight:600;">' + checkedRows.length + ' selected ₹' + selTotal.toLocaleString('en-IN', {minimumFractionDigits:2}) + '</span>' : '')
             + '</div>'
           + '</div>'
-          + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+          + '<div class="pm-btns" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
             + '<button id="pm-save-btn" style="display:flex;align-items:center;gap:6px;padding:7px 16px;font-size:12px;font-weight:600;border:1.5px solid var(--color-primary);border-radius:8px;background:#fff;color:var(--color-primary);cursor:pointer;" ' + (_pmSaving ? 'disabled' : '') + ' onmouseenter="this.style.background=\'var(--color-primary-light)\'" onmouseleave="this.style.background=\'#fff\'">'
               + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>' + saveLabel
             + '</button>'
@@ -456,8 +456,8 @@ window.Pages['client-master'] = (() => {
           : '')
       + '</div>'
       // Table
-      + '<div style="overflow-x:auto;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:960px;">'
+      + '<div class="pm-scroll" style="overflow-x:auto;">'
+        + '<table class="pm-tbl" style="width:100%;border-collapse:collapse;min-width:960px;">'
           + '<thead><tr>'
             + '<th style="' + thS + 'text-align:center;width:36px;">'
               + '<input type="checkbox" id="pm-chk-all" ' + (allChk ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;accent-color:var(--color-primary);" />'
@@ -481,7 +481,7 @@ window.Pages['client-master'] = (() => {
         + '</table>'
       + '</div>'
       // Footer
-      + '<div style="padding:10px 14px;border-top:1px solid #f0f4f8;background:#fafbfc;display:flex;align-items:center;gap:12px;">'
+      + '<div class="pm-foot" style="padding:10px 14px;border-top:1px solid #f0f4f8;background:#fafbfc;display:flex;align-items:center;gap:12px;">'
         + '<button id="pm-add-rows-btn" style="display:flex;align-items:center;gap:6px;padding:6px 14px;font-size:12px;font-weight:600;border:1.5px dashed #d1d5db;border-radius:7px;background:transparent;color:#64748b;cursor:pointer;" onmouseenter="this.style.borderColor=\'var(--color-primary)\';this.style.color=\'var(--color-primary)\'" onmouseleave="this.style.borderColor=\'#d1d5db\';this.style.color=\'#64748b\'">'
           + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>'
           + 'Add 5 more rows'
@@ -957,7 +957,7 @@ window.Pages['client-master'] = (() => {
       + (sub ? '<div style="font-size:11px;color:#94a3b8;margin-top:2px;">' + sub + '</div>' : '')
       + '</div>';
 
-    const statsHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">'
+    const statsHtml = '<div class="m-grid-2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">'
       + statCard('Total Payments', _phRows.length, 'all time', 'var(--color-primary)')
       + statCard('Total Amount', _phAmt(allAmt), 'all time', '#1e293b')
       + statCard('This Month', thisM.length + ' entries', _phAmt(mAmt), '#059669')
@@ -1028,7 +1028,7 @@ window.Pages['client-master'] = (() => {
           let detailHtml = '';
           if (isOpen) {
             detailHtml = '<div style="border-top:1px solid #f1f5f9;overflow-x:auto;">'
-              + '<table style="width:100%;border-collapse:collapse;min-width:600px;">'
+              + '<table class="m-cards vm-min0" style="width:100%;border-collapse:collapse;min-width:600px;">'
               + '<thead><tr>'
                 + '<th style="' + thS + '">#</th>'
                 + '<th style="' + thS + '">Vendor</th>'
@@ -1040,8 +1040,8 @@ window.Pages['client-master'] = (() => {
               + '</tr></thead>'
               + '<tbody>' + batch.entries.map((e, i) =>
                   '<tr style="' + (i%2===1?'background:#fafbfc;':'') + 'border-bottom:1px solid #f1f5f9;">'
-                  + '<td style="' + tdS + 'color:#94a3b8;">' + (i+1) + '</td>'
-                  + '<td style="' + tdS + 'font-weight:600;color:#1e293b;">' + esc(e.vendor_name || '—') + '</td>'
+                  + '<td class="m-card-hide" style="' + tdS + 'color:#94a3b8;">' + (i+1) + '</td>'
+                  + '<td class="m-card-title" style="' + tdS + 'font-weight:600;color:#1e293b;">' + esc(e.vendor_name || '—') + '</td>'
                   + '<td style="' + tdS + '">' + esc(e.bank_name || '—') + '</td>'
                   + '<td style="' + tdS + 'font-family:monospace;">' + esc(e.account_no || '—') + '</td>'
                   + '<td style="' + tdS + 'font-family:monospace;">' + esc(e.ifsc_code || '—') + '</td>'
@@ -1051,11 +1051,11 @@ window.Pages['client-master'] = (() => {
                 ).join('')
               + '<tr style="border-top:2px solid #e2e8f0;background:#f8fafc;">'
                 + '<td colspan="6" style="' + tdS + 'font-weight:700;">Total</td>'
-                + '<td style="' + tdS + 'font-weight:800;color:#059669;font-size:14px;text-align:right;">' + _phAmt(bTotal) + '</td>'
+                + '<td data-label="" style="' + tdS + 'font-weight:800;color:#059669;font-size:14px;text-align:right;">' + _phAmt(bTotal) + '</td>'
               + '</tr></tbody></table></div>';
           }
           return '<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;margin-bottom:10px;">'
-            + '<div class="ph-batch-hdr" data-batch="' + esc(batch.label) + '" style="display:flex;align-items:center;justify-content:space-between;padding:13px 18px;cursor:pointer;" onmouseenter="this.style.background=\'#f8fafc\'" onmouseleave="this.style.background=\'\'">'
+            + '<div class="ph-batch-hdr" data-batch="' + esc(batch.label) + '" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 18px;cursor:pointer;" onmouseenter="this.style.background=\'#f8fafc\'" onmouseleave="this.style.background=\'\'">'
               + '<div style="display:flex;align-items:center;gap:12px;">'
                 + '<div style="width:34px;height:34px;border-radius:9px;background:var(--color-primary-light);display:grid;place-items:center;flex-shrink:0;">'
                   + '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>'
@@ -1085,7 +1085,7 @@ window.Pages['client-master'] = (() => {
 
     return '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">'
       + '<div style="font-size:13px;font-weight:700;color:#1e293b;">Payment History</div>'
-      + '<div style="display:flex;gap:8px;align-items:center;">'
+      + '<div class="ph-tools" style="display:flex;gap:8px;align-items:center;">'
         + monthSel
         + '<button id="ph-refresh-btn" style="display:flex;align-items:center;gap:5px;padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:9px;background:#fff;font-size:12px;font-weight:600;color:#64748b;cursor:pointer;" onmouseenter="this.style.background=\'#f8fafc\'" onmouseleave="this.style.background=\'#fff\'">'
           + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>Refresh'
@@ -1093,7 +1093,7 @@ window.Pages['client-master'] = (() => {
       + '</div>'
     + '</div>'
     + statsHtml
-    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">' + trendHtml + vendorHtml + '</div>'
+    + '<div class="m-grid-1" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">' + trendHtml + vendorHtml + '</div>'
     + batchesHtml;
   }
 
@@ -1148,7 +1148,7 @@ window.Pages['client-master'] = (() => {
       ? '<tr><td colspan="5" style="' + tdS + 'text-align:center;color:#94a3b8;padding:24px;">No bills found for this vendor.</td></tr>'
       : rows.map((r, i) =>
           '<tr style="' + (i%2===1?'background:#fafbfc;':'') + '">'
-          + '<td style="' + tdS + 'color:#94a3b8;">' + (i+1) + '</td>'
+          + '<td class="m-card-hide" style="' + tdS + 'color:#94a3b8;">' + (i+1) + '</td>'
           + '<td style="' + tdS + 'white-space:nowrap;">' + _phFmt(r.exported_at) + '</td>'
           + '<td style="' + tdS + '">' + esc(r.narration || '—') + '</td>'
           + '<td style="' + tdS + '">' + esc(r.txn_type || 'N') + '</td>'
@@ -1156,8 +1156,8 @@ window.Pages['client-master'] = (() => {
           + '</tr>'
         ).join('');
 
-    modal.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="cm-bills-backdrop">'
-      + '<div style="background:#fff;border-radius:18px;width:100%;max-width:640px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
+    modal.innerHTML = '<div class="vm-sheet-ov" style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="cm-bills-backdrop">'
+      + '<div class="vm-sheet" style="background:#fff;border-radius:18px;width:100%;max-width:640px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
         + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;flex-shrink:0;">'
           + '<div style="width:38px;height:38px;border-radius:10px;background:var(--color-primary-light);display:grid;place-items:center;flex-shrink:0;">'
             + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary-strong)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/></svg>'
@@ -1168,7 +1168,7 @@ window.Pages['client-master'] = (() => {
           + '</button>'
         + '</div>'
         + '<div style="overflow-y:auto;flex:1;">'
-          + '<table style="width:100%;border-collapse:collapse;">'
+          + '<table class="m-cards" style="width:100%;border-collapse:collapse;">'
             + '<thead><tr><th style="' + thS + '">#</th><th style="' + thS + '">Date</th><th style="' + thS + '">Bill No / Narration</th><th style="' + thS + '">Txn</th><th style="' + thS + 'text-align:right;">Amount</th></tr></thead>'
             + '<tbody>' + rowsHtml + '</tbody>'
           + '</table>'
@@ -1197,6 +1197,78 @@ window.Pages['client-master'] = (() => {
       + '</button>';
   }
 
+  // Phone (<768px) only — desktop keeps its inline styles untouched. The
+  // modals render inside .vm-page, so the bottom-sheet rules ride along here.
+  function _mobileCss() {
+    return '<style>@media (max-width: 767px) {'
+      + '.vm-page { gap:14px !important; }'
+      + '.vm-addrow { padding:12px 12px 0 !important; }'
+      + '.vm-addrow #cm-add-btn { width:100%; justify-content:center; min-height:42px; }'
+      + '.vm-tabs { overflow-x:auto; scrollbar-width:none; padding:0 4px !important; }'
+      + '.vm-tabs::-webkit-scrollbar { display:none; }'
+      + '.vm-tabs > button { flex-shrink:0; padding:12px 14px !important; }'
+      + '.vm-stats { display:grid !important; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px !important; }'
+      + '.vm-stats > div { padding:10px 12px !important; }'
+      + '.vm-stats > div > div:first-child { display:none !important; }'
+      + '.vm-toolbar { padding:12px !important; gap:8px !important; }'
+      + '.vm-search { flex:1 1 100% !important; min-width:0 !important; }'
+      + '.vm-search input { height:42px; }'
+      + '#cm-status-filter { flex:1; min-height:40px; }'
+      + '#cm-export-btn { min-height:40px; }'
+      + '.vm-tbl tr { background:none !important; }'
+      + '.vm-tbl td.m-card-title { display:block; }'
+      + '.vm-act { justify-content:flex-start !important; width:100%; }'
+      + '.vm-act button { flex:1; min-height:38px; font-size:12.5px !important; }'
+      + '.vm-min0 { min-width:0 !important; }'
+      + '.ph-tools { width:100%; }'
+      + '.ph-tools #ph-month-sel { flex:1; min-width:0; min-height:40px; }'
+      + '.ph-tools #ph-refresh-btn { min-height:40px; }'
+      + '.ph-batch-hdr { padding:12px 14px !important; }'
+      + '.ph-batch-hdr > div:first-child { min-width:0; }'
+      + '.ph-batch-hdr > div:last-child { gap:8px !important; flex-shrink:0; }'
+      + '.ph-batch-hdr > div:last-child > div { font-size:14px !important; }'
+      /* Payment entry grid — each row restacks into a compact card */
+      + '.pm-head { padding:12px 14px !important; }'
+      + '.pm-btns { width:100%; }'
+      + '.pm-btns button { flex:1; justify-content:center; min-height:40px; }'
+      + '.pm-scroll { overflow:visible !important; }'
+      + '.pm-tbl { min-width:0 !important; display:block; }'
+      + '.pm-tbl thead, .pm-tbl tbody { display:block; }'
+      + '.pm-tbl thead tr { display:flex; align-items:center; border-bottom:1px solid var(--border-light); }'
+      + '.pm-tbl thead th { display:none; }'
+      + '.pm-tbl thead th:first-child { display:flex; align-items:center; gap:10px; width:auto !important; border:none !important; padding:10px 14px !important; flex:1; }'
+      + '.pm-tbl thead th:first-child::after { content:"Select all filled rows"; }'
+      + '.pm-tbl tbody tr { display:grid; grid-template-columns:24px 20px minmax(0,1fr) 32px; gap:6px; padding:10px 12px; align-items:center; }'
+      + '.pm-tbl tbody td { display:block; padding:0 !important; border:none !important; min-width:0 !important; width:auto !important; }'
+      + '.pm-c-chk { grid-column:1; grid-row:1; }'
+      + '.pm-c-no { grid-column:2; grid-row:1; text-align:left !important; }'
+      + '.pm-c-name { grid-column:3; grid-row:1; }'
+      + '.pm-c-clr { grid-column:4; grid-row:1; }'
+      + '.pm-c-clr button { width:32px; height:32px; }'
+      + '.pm-c-txn { grid-column:1 / 3; grid-row:2; }'
+      + '.pm-c-amt { grid-column:3 / 5; grid-row:2; }'
+      + '.pm-c-narr { grid-column:1 / -1; grid-row:3; }'
+      + '.pm-c-auto { grid-column:1 / -1; display:flex !important; gap:8px; }'
+      + '.pm-c-auto::before { content:attr(data-l); flex:0 0 74px; padding-top:2px; font-size:11.5px; font-weight:600; color:var(--text-muted); }'
+      + '.pm-c-auto .pm-auto-span { padding:2px 0 !important; font-size:12px !important; overflow-wrap:anywhere; }'
+      + '.pm-tbl tbody tr:not(:has(.pm-row-chk)) .pm-c-auto { display:none !important; }'
+      + '.pm-tbl input:not([type="checkbox"]), .pm-tbl select { min-height:38px; }'
+      + '.pm-c-amt input { min-height:0 !important; }'
+      + '.pm-dd { min-width:0 !important; }'
+      + '.pm-foot { flex-wrap:wrap; }'
+      + '.pm-foot #pm-add-rows-btn { width:100%; justify-content:center; min-height:40px; }'
+      + '.pm-foot span { margin-left:0 !important; width:100%; text-align:center; }'
+      /* custom modals open as bottom sheets, single-column forms */
+      + '.vm-sheet-ov { place-items:end center !important; padding:0 !important; }'
+      + '.vm-sheet { max-width:100% !important; max-height:92vh !important; border-radius:16px 16px 0 0 !important; display:flex !important; flex-direction:column; }'
+      + '.vm-sheet-body { max-height:none !important; flex:1; min-height:0; padding:16px !important; gap:16px !important; }'
+      + '.vm-sheet-body > * { flex-shrink:0; }'
+      + '.vm-sheet-body [style*="grid-template-columns"] { grid-template-columns:minmax(0,1fr) !important; }'
+      + '.vm-sheet-foot { padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px)) !important; }'
+      + '.vm-sheet-foot button { flex:1; min-height:44px; }'
+    + '}</style>';
+  }
+
   function _render() {
     const el = document.getElementById('main-content');
     if (!el) return;
@@ -1221,19 +1293,20 @@ window.Pages['client-master'] = (() => {
     const iconHistory = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 16 4-6 4 4 4-8"/></svg>';
 
     el.innerHTML =
-      '<div style="display:flex;flex-direction:column;gap:20px;">'
+      '<div class="vm-page" style="display:flex;flex-direction:column;gap:20px;">'
+      + _mobileCss()
 
       + '<div style="background:#fff;border-radius:16px;border:1px solid #e2e8f0;box-shadow:0 1px 4px rgba(0,0,0,.05);overflow:hidden;">'
 
         + (_tab === 'vendors' && _canEdit
-          ? '<div style="display:flex;align-items:center;justify-content:flex-end;padding:14px 22px 0;">'
+          ? '<div class="vm-addrow" style="display:flex;align-items:center;justify-content:flex-end;padding:14px 22px 0;">'
               + '<button id="cm-add-btn" style="display:flex;align-items:center;gap:7px;padding:9px 20px;border-radius:10px;background:var(--color-primary);color:#fff;border:none;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px var(--color-primary-ring);" onmouseenter="this.style.filter=\'brightness(.9)\'" onmouseleave="this.style.filter=\'none\'">'
                 + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>Add Vendor'
               + '</button>'
             + '</div>'
           : '')
 
-        + '<div style="display:flex;gap:0;border-top:1px solid #f1f5f9;padding:0 10px;">'
+        + '<div class="vm-tabs" style="display:flex;gap:0;border-top:1px solid #f1f5f9;padding:0 10px;">'
           + _tabBtn('tab-vendors',  'Vendor List',        iconVendor,  _tab === 'vendors')
           + (canPaymentMgmt ? _tabBtn('tab-payments', 'Payment Management', iconPayment, _tab === 'payments') : '')
           + (canPaymentHist ? _tabBtn('tab-history',  'Payment History',    iconHistory, _tab === 'history') : '')

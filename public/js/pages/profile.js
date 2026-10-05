@@ -102,7 +102,7 @@ window.Pages.profile = {
                gradient banner and stacked 96px avatar cost about 150px of
                height and said nothing the name and role do not. -->
           <div class="card p-4">
-            <div class="flex items-center gap-4">
+            <div class="pf-ident flex items-center gap-4">
               <div class="relative w-16 h-16 shrink-0" id="profile-avatar-wrap">
                 ${avatarHtml}
               </div>
@@ -118,7 +118,7 @@ window.Pages.profile = {
                   <span class="text-[11px] text-slate-400" id="profile-display-phone">${this._esc(f.phone || '—')}</span>
                 </div>
               </div>
-              <div class="flex flex-col gap-1.5 shrink-0">
+              <div class="pf-photo-btns flex flex-col gap-1.5 shrink-0">
                 <button id="profile-change-photo-btn" class="btn-secondary !py-1 text-[11px]" ${this._picSaving ? 'disabled' : ''}>
                   ${this._picSaving ? 'Saving…' : 'Change Photo'}
                 </button>
@@ -161,7 +161,7 @@ window.Pages.profile = {
             </div>
           </div>
 
-          <div class="flex justify-end gap-2">
+          <div class="pf-save-row flex justify-end gap-2">
             <button id="profile-cancel-btn" class="btn-secondary">Cancel</button>
             <button id="profile-save-btn" class="btn-primary" ${this._saving ? 'disabled' : ''}>
               ${this._saving ? 'Saving…' : 'Save Changes'}
@@ -173,6 +173,21 @@ window.Pages.profile = {
              sits opposite the editable half rather than underneath it. -->
         <div id="profile-hr">${this._hrHtml()}</div>
       </div>
+      <style>
+        /* Phone: photo buttons drop under the name, Save/Cancel and the HR
+           shortcuts go full width, attendance tiles wrap to 3-up. */
+        @media (max-width: 767px) {
+          #profile-root .pf-ident { flex-wrap: wrap; gap: 12px 14px; }
+          #profile-root .pf-photo-btns { flex-direction: row; width: 100%; }
+          #profile-root .pf-photo-btns > button { flex: 1 1 0; justify-content: center; min-height: 38px; font-size: 12.5px; }
+          #profile-root .pf-save-row > button { flex: 1 1 0; justify-content: center; min-height: 44px; }
+          #profile-root .pf-att-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+          #profile-root .pf-sal-grid > div > div:last-child { font-size: 15px; }
+          #profile-root .pf-hr-links > .flex-1 { flex-basis: 100%; height: 0; }
+          #profile-root .pf-hr-links > button { flex: 1 1 0; justify-content: center; min-height: 40px; }
+          #profile-root .pf-slips a.btn-ghost { padding: 6px 12px; }
+        }
+      </style>
     `;
 
     this._bindEvents();
@@ -256,7 +271,7 @@ window.Pages.profile = {
     const salary = hr.salary;
     const salaryBlock = salary ? `
       ${heading('Salary')}
-      <div class="grid grid-cols-3 gap-2 mb-1">
+      <div class="pf-sal-grid grid grid-cols-3 gap-2 mb-1">
         <div class="rounded-lg border border-slate-200 px-2.5 py-2.5">
           <div class="text-[10.5px] uppercase tracking-wide text-slate-500 font-semibold">Gross</div>
           <div class="text-[17px] font-bold text-slate-900 mt-0.5">₹ ${money(salary.gross)}</div>
@@ -326,7 +341,7 @@ window.Pages.profile = {
           </div>
           <div>
             ${heading(`Attendance — ${esc(hr.monthName)}`)}
-            <div class="grid grid-cols-6 gap-1.5">
+            <div class="pf-att-grid grid grid-cols-6 gap-1.5">
               ${[['Present', a.present, 'text-green-700'], ['Remote', a.remote, 'text-sky-700'],
                  ['Half', a.halfDay, 'text-amber-700'], ['Absent', a.absent, 'text-red-700'],
                  ['Late', a.late, 'text-amber-700'], ['Hours', a.hours, 'text-slate-800']]
@@ -344,7 +359,7 @@ window.Pages.profile = {
           <div>${salaryBlock}</div>
           <div>
             ${heading('Payslips')}
-            ${payslipRows ? `<div class="overflow-x-auto"><table class="w-full">
+            ${payslipRows ? `<div class="pf-slips overflow-x-auto"><table class="w-full">
                 <thead><tr class="border-b border-slate-200">
                   <th class="py-1.5 text-left text-[10.5px] uppercase tracking-wider text-slate-500 font-bold">Period</th>
                   <th class="py-1.5 text-right text-[10.5px] uppercase tracking-wider text-slate-500 font-bold">Gross</th>
@@ -363,7 +378,7 @@ window.Pages.profile = {
         </div>
 
         <!-- Documents and the shortcuts share the last line. -->
-        <div class="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-slate-100">
+        <div class="pf-hr-links flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-slate-100">
           ${(hr.documents || []).map((d) => (d.url
             ? `<a href="${esc(Utils.safeUrl(d.url))}" target="_blank" rel="noopener" class="pill pill-neutral pill-sm no-underline">${esc(d.doc_type)}</a>`
             : `<span class="pill pill-neutral pill-sm">${esc(d.doc_type)}</span>`)).join('')}

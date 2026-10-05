@@ -181,10 +181,10 @@ window.Pages['company-overview'] = (() => {
   function _team(t) {
     const pending = t.byAssignee.filter(r => r.pending > 0);
     const list = _showAllTeam ? pending : pending.slice(0, 8);
-    const body = list.length ? `<div class="ceo-tablewrap"><table class="ceo-table">
+    const body = list.length ? `<div class="ceo-tablewrap"><table class="ceo-table ceo-team-tbl m-cards">
       <thead><tr><th>Employee</th><th class="r">Pending</th><th class="r">Overdue</th><th class="r">Revise</th><th>Given By</th></tr></thead>
       <tbody>${list.map(r => `<tr>
-          <td><div class="ceo-person"><span class="ceo-av">${esc(initials(r.name))}</span><b>${esc(r.name)}</b></div></td>
+          <td class="m-card-title"><div class="ceo-person"><span class="ceo-av">${esc(initials(r.name))}</span><b>${esc(r.name)}</b></div></td>
           <td class="r num">${r.pending}</td>
           <td class="r num">${r.overdue ? `<span class="ceo-badge ceo-badge-crit">${r.overdue}</span>` : '<span class="ceo-dim">0</span>'}</td>
           <td class="r num">${r.revise ? `<span class="ceo-badge ceo-badge-warn">${r.revise}</span>` : '<span class="ceo-dim">0</span>'}</td>
@@ -226,7 +226,7 @@ window.Pages['company-overview'] = (() => {
           </div>`;
         }).join('')}</div>`).join('')}</div>`
       : empty('No meetings scheduled in the next 7 days.');
-    const right = `<div style="display:flex;align-items:center;gap:10px;">
+    const right = `<div class="ceo-mtg-right" style="display:flex;align-items:center;gap:10px;">
         <button type="button" id="ceo-add-meeting" class="ceo-mini-btn ceo-mini-btn-primary">+ Add Meeting</button>
         ${link('#scheduler', 'Scheduler')}
       </div>`;
@@ -319,7 +319,7 @@ window.Pages['company-overview'] = (() => {
     const DURATIONS = [['15', '15 min'], ['30', '30 min'], ['45', '45 min'], ['60', '1 hour'], ['90', '1.5 hours'], ['120', '2 hours'], ['', 'Custom']];
     const FREQUENCIES = [['', 'Does not repeat'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']];
     const bodyHTML = `<div class="ceo" style="max-width:none;padding:0;"><div style="display:flex;flex-direction:column;gap:14px;">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div class="ceo-mtg-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
           <div><label style="${labelStyle}">Title <span style="color:var(--ceo-crit);">*</span></label>
             <input id="ceo-mtg-title" style="${inputStyle}" placeholder="e.g. Vendor review call" /></div>
           <div><label style="${labelStyle}">Client</label>
@@ -594,6 +594,43 @@ window.Pages['company-overview'] = (() => {
       padding:7px 10px; border-radius:8px; white-space:pre; box-shadow:0 6px 18px rgba(0,0,0,.18); display:none; }
     .ceo-tip b { font-weight:700; }
     .ceo-updated { font-size:11.5px; color:var(--ceo-muted); text-align:right; margin-top:14px; }
+    /* Phone (<768px): KPI tiles in a 2-up grid, tighter cards, team table as cards */
+    @media (max-width:767px) {
+      .ceo { padding-bottom:16px; }
+      .ceo-top { align-items:center; margin-bottom:14px; flex-wrap:nowrap; }
+      .ceo-top > div { min-width:0; }
+      .ceo-top h1 { font-size:19px; }
+      .ceo-top p { font-size:12px; }
+      .ceo-top .ceo-btn { flex-shrink:0; min-height:38px; }
+      .ceo-tiles { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:12px; }
+      .ceo-tile { flex-direction:column; gap:8px; padding:12px; border-radius:12px; }
+      .ceo-tile:last-child:nth-child(odd) { grid-column:1 / -1; flex-direction:row; align-items:center; }
+      .ceo-tile-ic { width:32px; height:32px; border-radius:9px; }
+      .ceo-tile-v { font-size:24px; }
+      .ceo-tile-s { font-size:11.5px; }
+      .ceo-grid { gap:12px; }
+      .ceo-col { gap:12px; }
+      .ceo-card { padding:14px; border-radius:12px; }
+      .ceo-card-h { flex-wrap:wrap; margin-bottom:12px; }
+      .ceo-card-h > div:first-child { flex:1 1 150px; min-width:0; }
+      .ceo-mtg-right { gap:12px !important; }
+      #ceo-add-meeting { white-space:nowrap; padding:7px 12px; font-size:12px; }
+      .ceo-donut-wrap { justify-content:center; }
+      .ceo-srows { flex-basis:100%; }
+      .ceo-seg button { padding:8px 12px; }
+      .ceo-misrow { grid-template-columns:minmax(70px,104px) 1fr auto; gap:8px; }
+      .ceo-misscore { white-space:nowrap; }
+      .ceo-minis { gap:6px; }
+      .ceo-mini { padding:9px 10px; }
+      .ceo-mini-v { font-size:18px; }
+      .ceo-mini-l { font-size:11px; line-height:1.3; }
+      .ceo-tev-b b { white-space:normal; }
+      .ceo-team-tbl tr { padding:10px 0 !important; border-bottom:1px solid var(--ceo-grid) !important; }
+      .ceo-team-tbl tr:last-child { border-bottom:none !important; }
+      .ceo-team-tbl tbody tr:hover td { background:none; }
+      .ceo-team-tbl td[data-label]::before { color:var(--ceo-muted) !important; }
+      .ceo-mtg-grid { grid-template-columns:minmax(0,1fr) !important; }
+    }
   </style>`;
 
   function _render() {

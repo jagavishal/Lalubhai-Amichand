@@ -149,9 +149,9 @@ window.Pages['pr-creation'] = (() => {
   function _fmtMoney(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
   /* ── Helpers (Creation/Summary views) ──────────────────────────────────── */
-  function _fieldWrap(label, innerHtml, extra) {
-    return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
-      + '<div style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">' + esc(label) + '</div>'
+  function _fieldWrap(label, innerHtml, extra, cls) {
+    return '<div class="pcr-fw' + (cls ? ' ' + cls : '') + '" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
+      + '<div class="pcr-fl" style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">' + esc(label) + '</div>'
       + innerHtml
       + '</div>';
   }
@@ -199,7 +199,7 @@ window.Pages['pr-creation'] = (() => {
   function _partyField() {
     return _fieldWrap(PARTY_LABEL[_format], ''
       + '<input type="text" id="pcr-party" autocomplete="off" placeholder="Type to search…" style="' + _inputStyle + '" />'
-      + '<div id="pcr-party-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>');
+      + '<div id="pcr-party-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>', '', 'pcr-wide');
   }
 
   function _bindPartyField() {
@@ -404,21 +404,21 @@ window.Pages['pr-creation'] = (() => {
     const fields = ITEM_FIELDS[_format];
     const computed = ITEM_COMPUTED[_format];
     const fieldCells = fields.map(f => ''
-      + '<td style="padding:6px;"><input type="' + (f.type || 'text') + '" inputmode="' + (f.numeric ? 'decimal' : 'text') + '" data-field="' + f.key + '" class="pcr-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + '<td data-label="' + esc(f.label) + '" style="padding:6px;"><input type="' + (f.type || 'text') + '" inputmode="' + (f.numeric ? 'decimal' : 'text') + '" data-field="' + f.key + '" class="pcr-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
     ).join('');
-    const computedCells = computed.map(c => '<td class="pcr-item-computed" data-key="' + c.key + '" style="padding:6px 10px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;">0.00</td>').join('');
+    const computedCells = computed.map(c => '<td class="pcr-item-computed" data-label="' + esc(c.label) + '" data-key="' + c.key + '" style="padding:6px 10px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;">0.00</td>').join('');
     return '<tr class="pcr-item-row" style="border-bottom:1px solid #f1f5f9;">'
-      + '<td style="padding:6px;min-width:150px;position:relative;">'
+      + '<td class="pcr-c-code" data-label="Item No." style="padding:6px;min-width:150px;position:relative;">'
         + '<input type="text" class="pcr-item-code" autocomplete="off" placeholder="Item No.…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
         + '<div class="pcr-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
       + '</td>'
-      + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="pcr-item-desc">—</td>'
-      + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="pcr-item-size">—</td>'
-      + (_hasStickerSize() ? '<td style="padding:6px;min-width:120px;font-size:12px;color:#64748b;white-space:nowrap;" class="pcr-item-sticker">—</td>' : '')
-      + (_hasBoxSize() ? '<td style="padding:6px;min-width:130px;font-size:12px;color:#64748b;white-space:nowrap;" class="pcr-item-boxsize">—</td>' : '')
+      + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="pcr-item-desc pcr-c-wide" data-label="Description">—</td>'
+      + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="pcr-item-size" data-label="Size">—</td>'
+      + (_hasStickerSize() ? '<td style="padding:6px;min-width:120px;font-size:12px;color:#64748b;white-space:nowrap;" class="pcr-item-sticker" data-label="Sticker Size">—</td>' : '')
+      + (_hasBoxSize() ? '<td style="padding:6px;min-width:130px;font-size:12px;color:#64748b;white-space:nowrap;" class="pcr-item-boxsize" data-label="Box Size">—</td>' : '')
       + fieldCells
       + computedCells
-      + '<td style="padding:6px;text-align:center;"><button type="button" class="pcr-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
+      + '<td class="pcr-c-rm" style="padding:6px;text-align:center;"><button type="button" class="pcr-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
     + '</tr>';
   }
 
@@ -427,8 +427,8 @@ window.Pages['pr-creation'] = (() => {
     const computed = ITEM_COMPUTED[_format];
     const headCells = fields.map(f => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(f.label) + '</th>').join('');
     const computedHeadCells = computed.map(c => '<th style="padding:8px 6px;text-align:right;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">' + esc(c.label) + '</th>').join('');
-    return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:900px;">'
+    return '<div class="pcr-items-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+      + '<table class="pcr-items" style="width:100%;border-collapse:collapse;min-width:900px;">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
           + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Item No.</th>'
           + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Description</th>'
@@ -470,7 +470,7 @@ window.Pages['pr-creation'] = (() => {
             + Utils.deptOptionsHtml(deptDefault, { extra: PR_DEPARTMENT_EXTRAS }) + '</select>'
           + '<input type="text" id="pcr-department-other" placeholder="Enter department…" autocomplete="off" style="' + _inputStyle + 'margin-top:8px;display:none;" />')
       : '';
-    return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
+    return '<div class="pcr-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
       + _readonlyField('pcr-next-no', 'PR NO (auto-assigned)', _nextPrNumber != null ? _nextPrNumber : 'Loading…')
       + _partyField()
       + common
@@ -560,10 +560,10 @@ window.Pages['pr-creation'] = (() => {
       + _headerFieldsHtml()
       + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Items</div>'
       + _itemsTableHtml()
-      + '<div>'
+      + '<div class="pcr-addrow">'
         + '<button type="button" id="pcr-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item</button>'
       + '</div>'
-      + '<div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
+      + '<div class="pcr-total" style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
         + '<span style="font-size:12.5px;font-weight:700;color:#64748b;">Estimated Total</span>'
         + '<span id="pcr-grand-total" style="font-size:17px;font-weight:800;color:#0f172a;">₹0.00</span>'
       + '</div>'
@@ -653,7 +653,7 @@ window.Pages['pr-creation'] = (() => {
     }
     body.innerHTML = rows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
-        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.prNo) + '</td>'
+        + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.prNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:600;">' + esc(FORMAT_LABEL[r.format] || r.format) + '</span></td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.party) + '</td>'
@@ -662,7 +662,7 @@ window.Pages['pr-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.department) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+        + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           + _sumStatusPill(r)
           + (r.status === 'Cancelled' || r.status === 'Rejected'
             ? ''
@@ -727,12 +727,12 @@ window.Pages['pr-creation'] = (() => {
 
   function _sumFilterBarHtml() {
     const formatOptions = '<option value="">All Formats</option>' + FORMATS.map(f => '<option value="' + esc(f) + '">' + esc(FORMAT_LABEL[f]) + '</option>').join('');
-    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+    return '<div class="pcr-fbar" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
       + '<select id="sum-format" style="' + _inputStyle + 'min-width:160px;width:auto;background:#fff;">' + formatOptions + '</select>'
       + '<select id="sum-dept" style="' + _inputStyle + 'min-width:160px;width:auto;background:#fff;"><option value="">All Departments</option></select>'
       + '<input type="text" id="sum-party" placeholder="Search vendor/party…" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
       + '<input type="date" id="sum-from" style="' + _inputStyle + 'width:auto;" />'
-      + '<span style="color:#94a3b8;font-size:12px;">to</span>'
+      + '<span class="pcr-fbar-to" style="color:#94a3b8;font-size:12px;">to</span>'
       + '<input type="date" id="sum-to" style="' + _inputStyle + 'width:auto;" />'
       + '<button type="button" id="sum-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
       + '<button type="button" id="sum-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
@@ -763,8 +763,8 @@ window.Pages['pr-creation'] = (() => {
         + '<span id="sum-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
       + '</div>'
       + _sumFilterBarHtml()
-      + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
+      + '<div class="pcr-list-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+        + '<table class="m-cards pcr-list" style="width:100%;border-collapse:collapse;min-width:920px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
             + ['PR No','Format','Date','Party','Requested By','Order No','Department','Total (INR)','PDF','Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + h + '</th>').join('')
           + '</tr></thead>'
@@ -775,7 +775,7 @@ window.Pages['pr-creation'] = (() => {
 
   /* ── Tabs ───────────────────────────────────────────────────────────── */
   function _tabTab(label, active, extraAttrs) {
-    return '<button type="button" ' + extraAttrs + ' style="'
+    return '<button type="button" ' + extraAttrs + (active ? ' data-active="1"' : '') + ' style="'
       + 'padding:9px 16px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:700;'
       + 'color:' + (active ? 'var(--color-primary)' : '#94a3b8') + ';'
       + 'border-bottom:2px solid ' + (active ? 'var(--color-primary)' : 'transparent') + ';margin-bottom:-1px;'
@@ -785,8 +785,49 @@ window.Pages['pr-creation'] = (() => {
   function _tabsHtml() {
     const formatTabs = FORMATS.map(f => _tabTab(FORMAT_LABEL[f], _view === 'create' && f === _format, 'class="pcr-format-tab" data-format="' + esc(f) + '"')).join('');
     const summaryTab = _tabTab('PR Summary', _view === 'list', 'class="pcr-summary-tab"');
-    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;flex-wrap:wrap;">' + formatTabs + summaryTab + '</div>';
+    return '<div class="pcr-tabs" style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;flex-wrap:wrap;">' + formatTabs + summaryTab + '</div>';
   }
+
+  /* ── Phone layout (< 768px only; desktop untouched). Tabs scroll sideways,
+     the header fields share one card in two columns, each item line becomes
+     a compact card, PR Summary rows become cards (shared .m-cards). ─────── */
+  const MOBILE_CSS = `@media (max-width: 767px) {
+    .pcr-page { padding-bottom: 16px !important; }
+    .pcr-tabs { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; gap: 0 !important; border-bottom: none !important; box-shadow: inset 0 -1px 0 var(--border-light); margin-bottom: 14px !important; }
+    .pcr-tabs::-webkit-scrollbar { display: none; }
+    .pcr-tabs > button { flex-shrink: 0; white-space: nowrap; margin-bottom: 0 !important; padding: 10px 12px !important; }
+    .pcr-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; grid-auto-flow: dense; gap: 12px 10px !important; background: var(--surface); border: 1px solid var(--border-light); border-radius: 12px; padding: 14px 12px; }
+    .pcr-grid > .pcr-fw { background: transparent !important; border: none !important; border-radius: 0 !important; padding: 0 !important; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; }
+    .pcr-grid > .pcr-wide { grid-column: 1 / -1; }
+    .pcr-grid .pcr-fl { font-size: 11.5px !important; font-weight: 600 !important; color: var(--text-secondary) !important; margin-bottom: 5px !important; }
+    .pcr-grid input, .pcr-grid select, .pcr-grid #pcr-next-no { min-height: 40px; }
+    .pcr-items-wrap { overflow: visible !important; border: none !important; border-radius: 0 !important; }
+    table.pcr-items { min-width: 0 !important; display: block; }
+    table.pcr-items thead { display: none; }
+    table.pcr-items tbody { display: flex; flex-direction: column; gap: 10px; }
+    table.pcr-items tr.pcr-item-row { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px; background: var(--surface); border: 1px solid var(--border-light) !important; border-radius: 12px; }
+    table.pcr-items td { display: block; padding: 0 !important; min-width: 0 !important; white-space: normal !important; text-align: left !important; overflow-wrap: anywhere; }
+    table.pcr-items td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+    table.pcr-items td.pcr-c-code { grid-column: 1 / -1; padding-right: 46px !important; }
+    table.pcr-items td.pcr-c-wide { grid-column: 1 / -1; }
+    table.pcr-items td.pcr-item-computed { font-weight: 700; color: var(--text-primary) !important; }
+    table.pcr-items td.pcr-c-rm { position: absolute; top: 29px; right: 12px; }
+    table.pcr-items .pcr-item-remove { width: 38px; height: 40px; border-radius: 8px !important; background: var(--color-danger-bg) !important; font-size: 20px !important; }
+    table.pcr-items input { min-height: 40px; }
+    .pcr-addrow > button { width: 100%; min-height: 42px; border-style: dashed !important; }
+    .pcr-total { justify-content: space-between !important; }
+    #pcr-submit-btn { align-self: stretch !important; min-height: 46px; font-size: 14.5px !important; }
+    .pcr-fbar { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
+    .pcr-fbar > * { width: 100% !important; min-width: 0 !important; min-height: 40px; }
+    .pcr-fbar > #sum-party { grid-column: 1 / -1; order: -1; }
+    .pcr-fbar > .pcr-fbar-to { display: none; }
+    .pcr-list-wrap { overflow: visible !important; background: var(--surface); }
+    table.pcr-list { min-width: 0 !important; }
+    table.pcr-list td.m-card-title { font-size: 14.5px !important; gap: 0; }
+    table.pcr-list td.m-card-title::before { display: inline !important; content: "PR #" !important; flex: none !important; font-size: inherit !important; font-weight: inherit !important; color: inherit !important; }
+    table.pcr-list td.m-card-actions { align-items: center; gap: 6px; }
+    table.pcr-list td.m-card-actions button { min-height: 34px; }
+  }`;
 
   /* ── Render ─────────────────────────────────────────────────────────── */
   function renderPage() {
@@ -796,7 +837,8 @@ window.Pages['pr-creation'] = (() => {
     const bodyHtml = _view === 'list' ? _summaryViewHtml() : _createViewHtml();
     const maxWidth = _view === 'list' ? '1200px' : '1080px';
 
-    el.innerHTML = '<div style="max-width:' + maxWidth + ';margin:0 auto;padding:4px 0 40px;">'
+    el.innerHTML = '<style>' + MOBILE_CSS + '</style>'
+      + '<div class="pcr-page" style="max-width:' + maxWidth + ';margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">PR</h1>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fill the store team\'s live PR Google Sheet directly, or browse everything already created. Every PR goes to the approver by email; its decision shows in PR Summary.</p>'
@@ -805,6 +847,10 @@ window.Pages['pr-creation'] = (() => {
       + bodyHtml
     + '</div>';
 
+    // Phone: the tab strip scrolls sideways — bring the active tab into view.
+    const tabStrip = el.querySelector('.pcr-tabs');
+    const activeTab = tabStrip && tabStrip.querySelector('[data-active]');
+    if (activeTab && tabStrip.scrollWidth > tabStrip.clientWidth) tabStrip.scrollLeft = activeTab.offsetLeft - tabStrip.offsetLeft - 24;
     document.querySelectorAll('.pcr-format-tab').forEach(btn => {
       btn.addEventListener('click', () => { _view = 'create'; _format = btn.dataset.format; renderPage(); });
     });

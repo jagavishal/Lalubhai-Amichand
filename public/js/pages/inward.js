@@ -66,8 +66,8 @@ window.Pages['inward'] = (() => {
 
   /* ── Helpers (styled like PO/GRN Creation, for a consistent look) ─────── */
   function _fieldWrap(label, innerHtml, extra) {
-    return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
-      + '<div style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">' + esc(label) + '</div>'
+    return '<div class="inw-fw" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
+      + '<div class="inw-fl" style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">' + esc(label) + '</div>'
       + innerHtml
       + '</div>';
   }
@@ -220,21 +220,21 @@ window.Pages['inward'] = (() => {
   /* ── Item rows (multi-entry) ────────────────────────────────────────── */
   function _itemRowHtml() {
     return '<tr class="inw-item-row" style="border-bottom:1px solid #f1f5f9;">'
-      + '<td style="padding:6px;min-width:170px;position:relative;">'
+      + '<td class="inw-c-code" data-label="Item Code" style="padding:6px;min-width:170px;position:relative;">'
         + '<input type="text" class="inw-row-code" autocomplete="off" placeholder="Click or type an item code…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
         + '<div class="inw-row-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
       + '</td>'
-      + '<td style="padding:6px;min-width:170px;"><input type="text" class="inw-row-desc" placeholder="Description" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
-      + (_showSize() ? '<td style="padding:6px;min-width:120px;"><input type="text" class="inw-row-size" placeholder="Size" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>' : '')
-      + '<td style="padding:6px;min-width:130px;">' + _uomFieldHtml('row-uom') + '</td>'
-      + '<td style="padding:6px;min-width:100px;"><input type="text" inputmode="decimal" class="inw-row-qty" placeholder="Qty" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" /></td>'
-      + '<td style="padding:6px;text-align:center;"><button type="button" class="inw-row-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
+      + '<td class="inw-c-wide" data-label="Description" style="padding:6px;min-width:170px;"><input type="text" class="inw-row-desc" placeholder="Description" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + (_showSize() ? '<td data-label="Size" style="padding:6px;min-width:120px;"><input type="text" class="inw-row-size" placeholder="Size" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>' : '')
+      + '<td data-label="UOM" style="padding:6px;min-width:130px;">' + _uomFieldHtml('row-uom') + '</td>'
+      + '<td data-label="Quantity" style="padding:6px;min-width:100px;"><input type="text" inputmode="decimal" class="inw-row-qty" placeholder="Qty" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" /></td>'
+      + '<td class="inw-c-rm" style="padding:6px;text-align:center;"><button type="button" class="inw-row-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
     + '</tr>';
   }
 
   function _itemsTableHtml() {
-    return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:' + (_showSize() ? 900 : 780) + 'px;">'
+    return '<div class="inw-items-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+      + '<table class="inw-items" style="width:100%;border-collapse:collapse;min-width:' + (_showSize() ? 900 : 780) + 'px;">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
           + ['Item Code', 'Description'].concat(_showSize() ? ['Size'] : []).concat(['UOM', 'Quantity', '']).map(h => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
         + '</tr></thead>'
@@ -281,7 +281,7 @@ window.Pages['inward'] = (() => {
     const overlay = document.createElement('div');
     overlay.id = 'inw-newitem-overlay';
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10000;display:grid;place-items:center;padding:16px;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
-    overlay.innerHTML = '<div style="background:#fff;border-radius:18px;width:100%;max-width:440px;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.2);animation:pop-in 200ms cubic-bezier(.16,1,.3,1);">'
+    overlay.innerHTML = '<div class="inw-sheet" style="background:#fff;border-radius:18px;width:100%;max-width:440px;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.2);animation:pop-in 200ms cubic-bezier(.16,1,.3,1);">'
       + '<div style="padding:22px 24px 4px;">'
         + '<div style="font-size:15px;font-weight:700;color:#0f172a;">New ' + esc(_categoryLabel) + ' Item</div>'
         + '<div style="font-size:12px;color:#64748b;margin:2px 0 14px;">Adds a new item to the ' + esc(_categoryLabel) + ' catalog with 0 opening stock.</div>'
@@ -294,7 +294,7 @@ window.Pages['inward'] = (() => {
         + _textField('inw-ni-moq', 'MOQ (Min Order Qty)')
         + _textField('inw-ni-maxlevel', 'Max Level')
         + _textField('inw-ni-vendor', 'Vendor Name')
-        + '<div style="display:flex;gap:10px;margin-top:4px;">'
+        + '<div class="inw-ni-actions" style="display:flex;gap:10px;margin-top:4px;">'
           + '<button type="submit" id="inw-ni-submit" style="padding:9px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">Add Item</button>'
           + '<button type="button" id="inw-ni-cancel" style="padding:9px 22px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
         + '</div>'
@@ -417,7 +417,7 @@ window.Pages['inward'] = (() => {
       + (s.cancelled ? ' (' + s.cancelled + ' cancelled excluded)' : '');
     const cell = 'padding:' + (grand ? '10px' : '7px 10px') + ';font-size:12.5px;background:#f8fafc;'
       + (grand ? 'font-weight:700;color:#0f172a;' : 'font-weight:600;color:#475569;');
-    return '<tr style="border-top:' + (grand ? '2px solid #e2e8f0' : '1px solid #e2e8f0') + ';">'
+    return '<tr class="inwl-sum" style="border-top:' + (grand ? '2px solid #e2e8f0' : '1px solid #e2e8f0') + ';">'
       + '<td colspan="' + _leadSpan() + '" style="' + cell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;">' + esc(label) + '</td>'
       + '<td style="' + cell + 'text-align:right;">' + esc(_fmtQty(s.total)) + '</td>'
       + '<td style="' + cell + 'font-weight:600;color:#64748b;font-size:11.5px;">' + s.uomCell + '</td>'
@@ -475,7 +475,7 @@ window.Pages['inward'] = (() => {
     const rowHtml = (r) => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
+        + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.itemName) + '</td>'
         + (_showSize() ? '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.size) + '</td>' : '')
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.quantity) + '</td>'
@@ -483,7 +483,7 @@ window.Pages['inward'] = (() => {
         + (_showDepartment() ? '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.department) + '</td>' : '')
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.source) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;color:#64748b;">' + esc(r.remarks) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+        + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
             : '<button type="button" class="inw-cancel-btn" data-id="' + esc(r.id) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
@@ -532,10 +532,10 @@ window.Pages['inward'] = (() => {
   }
 
   function _filterBarHtml() {
-    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+    return '<div class="inwl-fbar" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
       + '<input type="text" id="inwl-item" placeholder="Search item code / name…" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
       + '<input type="date" id="inwl-from" style="' + _inputStyle + 'width:auto;" />'
-      + '<span style="color:#94a3b8;font-size:12px;">to</span>'
+      + '<span class="inwl-fbar-to" style="color:#94a3b8;font-size:12px;">to</span>'
       + '<input type="date" id="inwl-to" style="' + _inputStyle + 'width:auto;" />'
       + '<button type="button" id="inwl-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
       + '<button type="button" id="inwl-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
@@ -562,8 +562,8 @@ window.Pages['inward'] = (() => {
         + '<span id="inwl-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
       + '</div>'
       + _filterBarHtml()
-      + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:' + (_showSize() ? 1020 : 920) + 'px;">'
+      + '<div class="inwl-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+        + '<table class="m-cards inwl-tbl" style="width:100%;border-collapse:collapse;min-width:' + (_showSize() ? 1020 : 920) + 'px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
             + ['Date', 'Item Code', 'Description'].concat(_showSize() ? ['Size'] : []).concat(['Quantity', 'UOM']).concat(_showDepartment() ? ['Department'] : []).concat(['Source', 'Remarks', 'Actions']).map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
@@ -582,7 +582,7 @@ window.Pages['inward'] = (() => {
   }
 
   function _tabsHtml() {
-    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
+    return '<div class="inw-tabs" style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
       + _tabTab('Log Inward', _view === 'create', 'class="inw-create-tab"')
       + _tabTab('Inward List', _view === 'list', 'class="inw-list-tab"')
     + '</div>';
@@ -600,14 +600,14 @@ window.Pages['inward'] = (() => {
 
   function _formHtml() {
     return '<form id="inw-form" style="display:flex;flex-direction:column;gap:16px;">'
-      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
+      + '<div class="inw-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
         + _textField('inw-date', 'Date', { type: 'date', value: _today() })
         + (_showDepartment() ? _fieldWrap('Department', '<select id="inw-department" style="' + _inputStyle + '"><option value="">Select…</option></select>') : '')
         + (_category === 'Trading' ? _sourceFieldHtml() : '')
       + '</div>'
       + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">' + esc(_categoryLabel) + ' Items</div>'
       + _itemsTableHtml()
-      + '<div style="display:flex;gap:8px;">'
+      + '<div class="inw-btnrow" style="display:flex;gap:8px;">'
         + '<button type="button" id="inw-add-row" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item Row</button>'
         + '<button type="button" id="inw-new-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ New Item…</button>'
       + '</div>'
@@ -661,6 +661,56 @@ window.Pages['inward'] = (() => {
     btn.disabled = false; btn.textContent = 'Log Inward';
   }
 
+  /* ── Phone layout (< 768px only; desktop untouched). Date/Department share
+     one card, each item line becomes a compact card, the list rows become
+     cards (shared .m-cards) with the day totals as slim strips, and the
+     "+ New Item" popup opens as a bottom sheet. ──────────────────────────── */
+  const MOBILE_CSS = `@media (max-width: 767px) {
+    .inw-page { padding-bottom: 16px !important; }
+    .inw-tabs { gap: 0 !important; margin-bottom: 14px !important; }
+    .inw-tabs > button { flex: 1 1 0; padding: 10px 12px !important; white-space: nowrap; }
+    .inw-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 12px 10px !important; background: var(--surface); border: 1px solid var(--border-light); border-radius: 12px; padding: 14px 12px; }
+    .inw-grid > .inw-fw { background: transparent !important; border: none !important; border-radius: 0 !important; padding: 0 !important; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; }
+    .inw-page .inw-fl, .inw-sheet .inw-fl { font-size: 11.5px !important; font-weight: 600 !important; color: var(--text-secondary) !important; margin-bottom: 5px !important; }
+    .inw-grid input, .inw-grid select { min-height: 40px; }
+    .inw-page form > .inw-fw { padding: 14px 12px !important; }
+    .inw-items-wrap { overflow: visible !important; border: none !important; border-radius: 0 !important; }
+    table.inw-items { min-width: 0 !important; display: block; }
+    table.inw-items thead { display: none; }
+    table.inw-items tbody { display: flex; flex-direction: column; gap: 10px; }
+    table.inw-items tr.inw-item-row { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px; background: var(--surface); border: 1px solid var(--border-light) !important; border-radius: 12px; }
+    table.inw-items td { display: block; padding: 0 !important; min-width: 0 !important; }
+    table.inw-items td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+    table.inw-items td.inw-c-code { grid-column: 1 / -1; padding-right: 46px !important; }
+    table.inw-items td.inw-c-wide { grid-column: 1 / -1; }
+    table.inw-items td.inw-c-rm { position: absolute; top: 29px; right: 12px; }
+    table.inw-items .inw-row-remove { width: 38px; height: 40px; border-radius: 8px !important; background: var(--color-danger-bg) !important; font-size: 20px !important; }
+    table.inw-items input, table.inw-items select { min-height: 40px; }
+    table.inw-items .inw-row-qty { text-align: left !important; }
+    .inw-btnrow > button { flex: 1 1 0; min-height: 42px; }
+    .inw-btnrow > #inw-add-row { border-style: dashed !important; }
+    #inw-submit-btn { align-self: stretch !important; min-height: 46px; font-size: 14.5px !important; }
+    .inwl-fbar { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
+    .inwl-fbar > * { width: 100% !important; min-width: 0 !important; min-height: 40px; }
+    .inwl-fbar > #inwl-item { grid-column: 1 / -1; }
+    .inwl-fbar > .inwl-fbar-to { display: none; }
+    .inwl-wrap { overflow: visible !important; background: var(--surface); }
+    table.inwl-tbl { min-width: 0 !important; }
+    table.inwl-tbl td.m-card-title { font-size: 14.5px !important; }
+    table.inwl-tbl td.m-card-actions { align-items: center; gap: 6px; }
+    table.inwl-tbl td.m-card-actions button { min-height: 34px; }
+    table.inwl-tbl tr.inwl-sum { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 9px 14px; background: var(--surface-alt); }
+    table.inwl-tbl tr.inwl-sum td { background: transparent !important; }
+    table.inwl-tbl tr.inwl-sum td[colspan]:first-child { flex: 1 1 100%; }
+    table.inwl-tbl tr.inwl-sum td::before { display: none !important; }
+    #inw-newitem-overlay { place-items: end stretch !important; padding: 0 !important; }
+    #inw-newitem-overlay .inw-sheet { max-width: 100% !important; max-height: 92vh !important; border-radius: 16px 16px 0 0 !important; padding-bottom: env(safe-area-inset-bottom, 0px); }
+    .inw-sheet form { gap: 10px !important; }
+    .inw-sheet .inw-fw { padding: 0 !important; border: none !important; border-radius: 0 !important; background: transparent !important; }
+    .inw-sheet .inw-fw input, .inw-sheet .inw-fw select { min-height: 42px; font-size: 16px !important; }
+    .inw-ni-actions > button { flex: 1 1 0; min-height: 44px; padding: 9px 10px !important; white-space: nowrap; }
+  }`;
+
   /* ── Render ─────────────────────────────────────────────────────────── */
   // opts.containerId / opts.embedded let the IMS page (see ims.js) mount this
   // whole module inside one book's "Inward" tab instead of #main-content, and
@@ -692,7 +742,8 @@ window.Pages['inward'] = (() => {
     const isList = _view === 'list';
     const bodyHtml = isList ? _listViewHtml() : _formHtml();
 
-    el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '980px') + ';margin:0 auto;padding:4px 0 40px;">'
+    el.innerHTML = '<style>' + MOBILE_CSS + '</style>'
+      + '<div class="inw-page" style="max-width:' + (isList ? '1200px' : '980px') + ';margin:0 auto;padding:4px 0 40px;">'
       + (embedded ? '' : '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Inward</h1>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Log stock received into the Store — updates each item\'s current stock on the IMS dashboard.</p>'

@@ -74,7 +74,19 @@ window.Pages['hr-assets'] = (() => {
   function render() {
     const el = document.getElementById('main-content');
     if (!el) return;
-    el.innerHTML = `<div class="animate-fade-in">${_mine ? myView() : adminView()}</div>`;
+    el.innerHTML = `<div class="animate-fade-in">
+      <style>
+        /* Phone: search full width, filters two-up, register rows as cards */
+        @media (max-width: 767px) {
+          .hrast-filt { display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px !important; }
+          .hrast-filt > input, .hrast-filt > select { max-width:none !important; min-height:40px; }
+          .hrast-filt > input { grid-column:1 / -1; }
+          .hrast-filt > button { min-height:40px; justify-content:center; }
+          .hr-tbl-cards .m-card-actions .btn-sm { min-height:36px; flex:1 1 auto; justify-content:center; }
+          .hr-tbl-cards .m-card-actions > div { width:100%; gap:6px !important; flex-wrap:wrap; }
+        }
+      </style>
+      ${_mine ? myView() : adminView()}</div>`;
     bind();
   }
 
@@ -92,13 +104,13 @@ window.Pages['hr-assets'] = (() => {
         { label: 'Under Repair', value: repair, color: repair ? '#d97706' : undefined },
       ])}
       ${H.table(
-        ['Code', 'Category', 'Type', 'Asset', 'Serial No', 'Since', 'Status', ''],
+        ['Code', 'Category', 'Type', { label: 'Asset', m: 'title' }, 'Serial No', 'Since', 'Status', { label: '', m: 'actions' }],
         _assets.map((a) => [
           `<b>${H.esc(a.id)}</b>`, H.esc(a.category), H.esc(a.asset_type), H.esc(a.name),
           H.esc(a.serial_no || '—'), H.fmtDate(a.assigned_on), pill(a.status),
           `<button class="btn-secondary btn-sm" data-view="${H.esc(a.id)}">View</button>`,
         ]),
-        { empty: 'Nothing is assigned to you yet — Add Asset to record what you are holding' },
+        { empty: 'Nothing is assigned to you yet — Add Asset to record what you are holding', cards: true },
       )}`;
   }
 
@@ -128,7 +140,7 @@ window.Pages['hr-assets'] = (() => {
         { label: 'Under Repair', value: count('Under Repair'), color: count('Under Repair') ? '#d97706' : undefined },
         { label: 'Good Condition', value: _assets.filter((a) => GOOD.has(a.asset_condition)).length },
       ])}
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <div class="hrast-filt" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
         <input id="hra-q" value="${H.esc(_filter.q)}" placeholder="Search code, name, serial, holder…"
           style="${H.CONTROL}max-width:240px;" />
         ${['category', 'type', 'status'].map((k) => `
@@ -140,7 +152,8 @@ window.Pages['hr-assets'] = (() => {
         <button id="hra-clear" class="btn-secondary btn-sm">Clear</button>
       </div>
       ${H.table(
-        ['Code', 'Category', 'Type', 'Asset', 'Serial No', 'Assigned To', 'Condition', 'Status', 'Actions'],
+        ['Code', 'Category', 'Type', { label: 'Asset', m: 'title' }, 'Serial No', 'Assigned To', 'Condition', 'Status',
+          { label: 'Actions', m: 'actions' }],
         rows.map((a) => [
           `<b>${H.esc(a.id)}</b>`, H.esc(a.category), H.esc(a.asset_type), H.esc(a.name),
           H.esc(a.serial_no || '—'), H.esc(holderOf(a) || '—'),
@@ -153,13 +166,14 @@ window.Pages['hr-assets'] = (() => {
             ${H.isOwner() ? `<button class="btn-secondary btn-sm" data-del="${H.esc(a.id)}" style="color:#dc2626;">Delete</button>` : ''}
           </div>`,
         ]),
-        { empty: _assets.length ? 'No assets match these filters' : 'No assets yet — add one, or run the sheet import from Employee Master' },
+        { empty: _assets.length ? 'No assets match these filters' : 'No assets yet — add one, or run the sheet import from Employee Master', cards: true },
       )}`;
   }
 
   function repairsTab() {
     return H.table(
-      ['Asset', 'Issue', 'Reported', 'Vendor', { label: 'Cost', align: 'right' }, 'Status', 'Resolved', ''],
+      [{ label: 'Asset', m: 'title' }, 'Issue', 'Reported', 'Vendor', { label: 'Cost', align: 'right' }, 'Status', 'Resolved',
+        { label: '', m: 'actions' }],
       _repairs.map((r) => [
         `<b>${H.esc(r.asset_id)}</b><div style="font-size:11px;color:#94a3b8;">${H.esc(r.asset_name || '')}</div>`,
         H.esc(r.issue),
@@ -170,7 +184,7 @@ window.Pages['hr-assets'] = (() => {
              <button class="btn-primary btn-sm" data-rep-done="${H.esc(r.id)}">Mark Done</button></div>`
           : '',
       ]),
-      { empty: 'No repairs on record' },
+      { empty: 'No repairs on record', cards: true },
     );
   }
 
@@ -306,7 +320,7 @@ window.Pages['hr-assets'] = (() => {
       hideConfirm: true,
       cancelText: 'Close',
       bodyHTML: `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px;">
+        <div class="m-grid-1" style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px;">
           ${H.readout('Category', a.category)}${H.readout('Asset Type', a.asset_type)}
           ${H.readout('Serial No', a.serial_no)}${H.readout('Condition', a.asset_condition)}
           ${H.readout('Status', a.status)}${H.readout('Assigned To', holderOf(a))}

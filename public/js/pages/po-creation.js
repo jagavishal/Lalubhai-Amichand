@@ -212,9 +212,9 @@ window.Pages['po-creation'] = (() => {
   function _fmtMoney(n) { return (n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 
   /* ── Helpers (styled like the PR Form tab, for a consistent look) ─────── */
-  function _fieldWrap(label, innerHtml, extra) {
-    return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
-      + '<div style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">' + esc(label) + '</div>'
+  function _fieldWrap(label, innerHtml, extra, cls) {
+    return '<div class="poc-fw' + (cls ? ' ' + cls : '') + '" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
+      + '<div class="poc-fl" style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">' + esc(label) + '</div>'
       + innerHtml
       + '</div>';
   }
@@ -302,7 +302,7 @@ window.Pages['po-creation'] = (() => {
       + '<div id="poc-prno-box" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:38px;box-sizing:border-box;padding:5px 8px;border:1.5px solid #e2e8f0;border-radius:8px;background:#fff;cursor:text;">'
       + '<input type="text" id="poc-pr-no" autocomplete="off" placeholder="Pick pending PR(s) — required" style="flex:1;min-width:140px;border:none;outline:none;font-size:12.5px;background:transparent;color:#1e293b;" />'
       + '</div>'
-      + '<div id="poc-prno-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>');
+      + '<div id="poc-prno-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>', '', 'poc-wide');
   }
 
   function _prNoChipHtml(pr) {
@@ -478,7 +478,7 @@ window.Pages['po-creation'] = (() => {
   function _partyField() {
     return _fieldWrap(PARTY_LABEL[_format], ''
       + '<input type="text" id="poc-party" autocomplete="off" placeholder="Type to search…" style="' + _inputStyle + '" />'
-      + '<div id="poc-party-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>');
+      + '<div id="poc-party-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>', '', 'poc-wide');
   }
 
   function _bindPartyField() {
@@ -678,32 +678,32 @@ window.Pages['po-creation'] = (() => {
   // Both carry .poc-item-code so everything downstream reads them the same way.
   function _itemKeyCellHtml() {
     if (_isManual()) {
-      return '<td style="padding:6px;min-width:320px;">'
+      return '<td class="poc-c-code" data-label="' + esc(ITEM_CODE_LABEL[_format]) + '" style="padding:6px;min-width:320px;">'
         + '<textarea class="poc-item-code" rows="2" placeholder="' + esc(ITEM_CODE_LABEL[_format]) + '…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;resize:vertical;font-family:inherit;"></textarea>'
       + '</td>';
     }
-    return '<td style="padding:6px;min-width:150px;position:relative;">'
+    return '<td class="poc-c-code" data-label="' + esc(ITEM_CODE_LABEL[_format]) + '" style="padding:6px;min-width:150px;position:relative;">'
         + '<input type="text" class="poc-item-code" autocomplete="off" placeholder="' + esc(ITEM_CODE_LABEL[_format]) + '…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
         + '<div class="poc-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
       + '</td>'
-      + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="poc-item-desc">—</td>'
-      + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="poc-item-size">—</td>';
+      + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="poc-item-desc poc-c-wide" data-label="Description">—</td>'
+      + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="poc-item-size" data-label="Size">—</td>';
   }
 
   function _itemRowHtml() {
     const fields = ITEM_FIELDS[_format];
     const computed = ITEM_COMPUTED[_format];
     const fieldCells = fields.map(f => ''
-      + '<td style="padding:6px;"><input type="text" inputmode="' + (f.numeric ? 'decimal' : 'text') + '" data-field="' + f.key + '" class="poc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
+      + '<td data-label="' + esc(f.label) + '" style="padding:6px;"><input type="text" inputmode="' + (f.numeric ? 'decimal' : 'text') + '" data-field="' + f.key + '" class="poc-item-field" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
     ).join('');
     const computedCells = computed.map(c => c.editable
-      ? '<td style="padding:6px;min-width:110px;"><input type="text" inputmode="decimal" class="poc-item-amount" data-key="' + c.key + '" placeholder="0.00" title="Type the line total — Unit Price is worked out from it (Amount ÷ Qty)" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" /></td>'
-      : '<td class="poc-item-computed" data-key="' + c.key + '" style="padding:6px 10px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;">0.00</td>').join('');
+      ? '<td data-label="' + esc(c.label) + '" style="padding:6px;min-width:110px;"><input type="text" inputmode="decimal" class="poc-item-amount" data-key="' + c.key + '" placeholder="0.00" title="Type the line total — Unit Price is worked out from it (Amount ÷ Qty)" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" /></td>'
+      : '<td class="poc-item-computed" data-label="' + esc(c.label) + '" data-key="' + c.key + '" style="padding:6px 10px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;">0.00</td>').join('');
     return '<tr class="poc-item-row" style="border-bottom:1px solid #f1f5f9;">'
       + _itemKeyCellHtml()
       + fieldCells
       + computedCells
-      + '<td style="padding:6px;text-align:center;"><button type="button" class="poc-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
+      + '<td class="poc-c-rm" style="padding:6px;text-align:center;"><button type="button" class="poc-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
     + '</tr>';
   }
 
@@ -718,8 +718,8 @@ window.Pages['po-creation'] = (() => {
     const keyHeadCells = _isManual()
       ? th('left', ITEM_CODE_LABEL[_format])
       : th('left', ITEM_CODE_LABEL[_format]) + th('left', 'Description') + th('left', 'Size');
-    return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:' + (_isManual() ? '720px' : '960px') + ';">'
+    return '<div class="poc-items-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+      + '<table class="poc-items" style="width:100%;border-collapse:collapse;min-width:' + (_isManual() ? '720px' : '960px') + ';">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
           + keyHeadCells
           + headCells
@@ -811,7 +811,7 @@ window.Pages['po-creation'] = (() => {
     }
     body.innerHTML = rows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
-        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.poNo) + '</td>'
+        + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.poNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:600;">' + esc(FORMAT_LABEL[r.format] || r.format) + '</span></td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.party) + '</td>'
@@ -819,7 +819,7 @@ window.Pages['po-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+        + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           + _polStatusPill(r)
           + (r.status === 'Cancelled' || r.status === 'Rejected'
             ? ''
@@ -895,12 +895,12 @@ window.Pages['po-creation'] = (() => {
 
   function _polFilterBarHtml() {
     const formatOptions = '<option value="">All Formats</option>' + FORMATS.map(f => '<option value="' + esc(f) + '">' + esc(FORMAT_LABEL[f]) + '</option>').join('');
-    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+    return '<div class="poc-fbar" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
       + '<select id="pol-format" style="' + _inputStyle + 'min-width:140px;width:auto;background:#fff;">' + formatOptions + '</select>'
       + '<select id="pol-dept" style="' + _inputStyle + 'min-width:160px;width:auto;background:#fff;"><option value="">All Departments</option></select>'
       + '<input type="text" id="pol-party" placeholder="Search customer/vendor…" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
       + '<input type="date" id="pol-from" style="' + _inputStyle + 'width:auto;" />'
-      + '<span style="color:#94a3b8;font-size:12px;">to</span>'
+      + '<span class="poc-fbar-to" style="color:#94a3b8;font-size:12px;">to</span>'
       + '<input type="date" id="pol-to" style="' + _inputStyle + 'width:auto;" />'
       + '<button type="button" id="pol-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
       + '<button type="button" id="pol-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
@@ -931,8 +931,8 @@ window.Pages['po-creation'] = (() => {
         + '<span id="pol-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
       + '</div>'
       + _polFilterBarHtml()
-      + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
+      + '<div class="poc-list-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+        + '<table class="m-cards poc-list" style="width:100%;border-collapse:collapse;min-width:920px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
             + ['PO No','Format','Date','Party','Department','Total (INR)','Created By','PDF','Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + h + '</th>').join('')
           + '</tr></thead>'
@@ -968,7 +968,7 @@ window.Pages['po-creation'] = (() => {
       + _partyField();
 
     const shipTo = SHIP_TO_FORMATS.includes(_format)
-      ? _fieldWrap('Ship To', '<select id="poc-ship-to" style="' + _inputStyle + 'background:#fff;">' + shipToOptions + '</select>')
+      ? _fieldWrap('Ship To', '<select id="poc-ship-to" style="' + _inputStyle + 'background:#fff;">' + shipToOptions + '</select>', '', 'poc-wide')
       : '';
 
     const terms = ''
@@ -977,7 +977,7 @@ window.Pages['po-creation'] = (() => {
       + _textField('poc-payment-terms', 'Payment Terms', { placeholder: '30 days', value: '30 days' })
       + _textField('poc-po-made-by', 'PO Made By', { value: (window.currentUser && window.currentUser.name) || '' });
 
-    return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">' + common + shipTo + terms + '</div>';
+    return '<div class="poc-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">' + common + shipTo + terms + '</div>';
   }
 
   /* ── Additional Details — Terms & Conditions / Comments / Test Certificate
@@ -988,7 +988,7 @@ window.Pages['po-creation'] = (() => {
   function _extraFieldsHtml() {
     if (!EXTRA_FORMATS.includes(_format)) return '';
     return '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Additional Details</div>'
-      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
+      + '<div class="poc-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
         + _textareaField('poc-terms', 'Terms and Conditions', { rows: 4, placeholder: 'One line per row (up to 5 lines)…' })
         + _textField('poc-comments', 'Any Comments')
         // Test certificates are a goods-inspection thing — the Service PO
@@ -999,7 +999,7 @@ window.Pages['po-creation'] = (() => {
 
   /* ── Format tabs (+ the PO List tab, alongside the 3 create formats) ──── */
   function _tabTab(label, active, extraAttrs) {
-    return '<button type="button" ' + extraAttrs + ' style="'
+    return '<button type="button" ' + extraAttrs + (active ? ' data-active="1"' : '') + ' style="'
       + 'padding:9px 16px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:700;'
       + 'color:' + (active ? 'var(--color-primary)' : '#94a3b8') + ';'
       + 'border-bottom:2px solid ' + (active ? 'var(--color-primary)' : 'transparent') + ';margin-bottom:-1px;'
@@ -1009,7 +1009,7 @@ window.Pages['po-creation'] = (() => {
   function _tabsHtml() {
     const formatTabs = FORMATS.map(f => _tabTab(FORMAT_LABEL[f], _view === 'create' && f === _format, 'class="poc-format-tab" data-format="' + esc(f) + '"')).join('');
     const listTab = _tabTab('PO List', _view === 'list', 'class="poc-list-tab"');
-    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">' + formatTabs + listTab + '</div>';
+    return '<div class="poc-tabs" style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">' + formatTabs + listTab + '</div>';
   }
 
   /* ── Submit ─────────────────────────────────────────────────────────── */
@@ -1119,6 +1119,49 @@ window.Pages['po-creation'] = (() => {
     }
   }
 
+  /* ── Phone layout (< 768px only; desktop untouched). Tabs scroll sideways,
+     each field group shares one card in two columns, each item line becomes
+     a compact card, PO List rows become cards (shared .m-cards). ────────── */
+  const MOBILE_CSS = `@media (max-width: 767px) {
+    .poc-page { padding-bottom: 16px !important; }
+    .poc-tabs { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; gap: 0 !important; border-bottom: none !important; box-shadow: inset 0 -1px 0 var(--border-light); margin-bottom: 14px !important; }
+    .poc-tabs::-webkit-scrollbar { display: none; }
+    .poc-tabs > button { flex-shrink: 0; white-space: nowrap; margin-bottom: 0 !important; padding: 10px 12px !important; }
+    .poc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; grid-auto-flow: dense; gap: 12px 10px !important; background: var(--surface); border: 1px solid var(--border-light); border-radius: 12px; padding: 14px 12px; }
+    .poc-grid > .poc-fw { background: transparent !important; border: none !important; border-radius: 0 !important; padding: 0 !important; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; }
+    .poc-grid > .poc-wide, .poc-grid > .poc-fw:has(textarea) { grid-column: 1 / -1; }
+    .poc-grid .poc-fl { font-size: 11.5px !important; font-weight: 600 !important; color: var(--text-secondary) !important; margin-bottom: 5px !important; }
+    .poc-grid input, .poc-grid select, .poc-grid #poc-next-no { min-height: 40px; }
+    .poc-grid #poc-prno-box { min-height: 42px !important; }
+    .poc-items-wrap { overflow: visible !important; border: none !important; border-radius: 0 !important; }
+    table.poc-items { min-width: 0 !important; display: block; }
+    table.poc-items thead { display: none; }
+    table.poc-items tbody { display: flex; flex-direction: column; gap: 10px; }
+    table.poc-items tr.poc-item-row { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px; background: var(--surface); border: 1px solid var(--border-light) !important; border-radius: 12px; }
+    table.poc-items td { display: block; padding: 0 !important; min-width: 0 !important; white-space: normal !important; text-align: left !important; overflow-wrap: anywhere; }
+    table.poc-items td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+    table.poc-items td.poc-c-code { grid-column: 1 / -1; padding-right: 46px !important; }
+    table.poc-items td.poc-c-wide { grid-column: 1 / -1; }
+    table.poc-items td.poc-item-computed { font-weight: 700; color: var(--text-primary) !important; }
+    table.poc-items td.poc-c-rm { position: absolute; top: 29px; right: 12px; }
+    table.poc-items .poc-item-remove { width: 38px; height: 40px; border-radius: 8px !important; background: var(--color-danger-bg) !important; font-size: 20px !important; }
+    table.poc-items input { min-height: 40px; }
+    table.poc-items .poc-item-amount { text-align: left !important; }
+    .poc-addrow > button { width: 100%; min-height: 42px; border-style: dashed !important; }
+    .poc-total { justify-content: space-between !important; }
+    #poc-submit-btn { align-self: stretch !important; min-height: 46px; font-size: 14.5px !important; }
+    .poc-fbar { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
+    .poc-fbar > * { width: 100% !important; min-width: 0 !important; min-height: 40px; }
+    .poc-fbar > #pol-party { grid-column: 1 / -1; order: -1; }
+    .poc-fbar > .poc-fbar-to { display: none; }
+    .poc-list-wrap { overflow: visible !important; background: var(--surface); }
+    table.poc-list { min-width: 0 !important; }
+    table.poc-list td.m-card-title { font-size: 14.5px !important; gap: 0; }
+    table.poc-list td.m-card-title::before { display: inline !important; content: "PO #" !important; flex: none !important; font-size: inherit !important; font-weight: inherit !important; color: inherit !important; }
+    table.poc-list td.m-card-actions { align-items: center; gap: 6px; }
+    table.poc-list td.m-card-actions button { min-height: 34px; }
+  }`;
+
   /* ── Render ─────────────────────────────────────────────────────────── */
   function renderPage() {
     const el = document.getElementById('main-content');
@@ -1136,18 +1179,19 @@ window.Pages['po-creation'] = (() => {
         // the store team needs to add lines below the PR's own — a PO raised
         // without a PR, or an extra line the PR missed — so the button is
         // always there now; rows a PR prefilled stay locked either way.
-        + '<div><button type="button" id="poc-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">' + (_isManual() ? '+ Add Service' : '+ Add Item') + '</button></div>'
+        + '<div class="poc-addrow"><button type="button" id="poc-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">' + (_isManual() ? '+ Add Service' : '+ Add Item') + '</button></div>'
         + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#94a3b8;margin:4px 2px -4px;">Charges</div>'
-        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">' + _summaryFieldsHtml() + '</div>'
+        + '<div class="poc-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;">' + _summaryFieldsHtml() + '</div>'
         + _extraFieldsHtml()
-        + '<div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
+        + '<div class="poc-total" style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">'
           + '<span style="font-size:12.5px;font-weight:700;color:#64748b;">Estimated Total</span>'
           + '<span id="poc-grand-total" style="font-size:17px;font-weight:800;color:#0f172a;">₹0.00</span>'
         + '</div>'
         + '<button type="submit" id="poc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Purchase Order</button>'
       + '</form>';
 
-    el.innerHTML = '<div style="max-width:' + (isList ? '1200px' : '1080px') + ';margin:0 auto;padding:4px 0 40px;">'
+    el.innerHTML = '<style>' + MOBILE_CSS + '</style>'
+      + '<div class="poc-page" style="max-width:' + (isList ? '1200px' : '1080px') + ';margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">PO Creation</h1>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Fills the same live PO Google Sheet the store team already uses, then saves a PDF of it to Drive.</p>'
@@ -1155,6 +1199,11 @@ window.Pages['po-creation'] = (() => {
       + _tabsHtml()
       + bodyHtml
     + '</div>';
+
+    // Phone: the tab strip scrolls sideways — bring the active tab into view.
+    const tabStrip = el.querySelector('.poc-tabs');
+    const activeTab = tabStrip && tabStrip.querySelector('[data-active]');
+    if (activeTab && tabStrip.scrollWidth > tabStrip.clientWidth) tabStrip.scrollLeft = activeTab.offsetLeft - tabStrip.offsetLeft - 24;
 
     document.querySelectorAll('.poc-format-tab').forEach(btn => {
       btn.addEventListener('click', () => { _view = 'create'; _format = btn.dataset.format; _appliedPrs = []; renderPage(); });

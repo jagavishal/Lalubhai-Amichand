@@ -429,13 +429,13 @@ window.Pages['all-tasks'] = (function () {
 
     return `
       <tr class="at-table-row" data-id="${esc(t.id)}">
-        <td class="at-td" style="font-size:11px;color:#94a3b8;font-family:monospace;padding-right:4px">${serial}</td>
-        <td class="at-td">
+        <td class="at-td at-c-num" style="font-size:11px;color:#94a3b8;font-family:monospace;padding-right:4px">${serial}</td>
+        <td class="at-td at-c-act">
           <div style="display:flex;align-items:center;gap:3px;flex-wrap:wrap">
             ${editBtn}${delBtn}${doneBtn}${reviseBtn}
           </div>
         </td>
-        <td class="at-td" style="max-width:280px">
+        <td class="at-td at-c-desc" style="max-width:280px">
           <div style="display:flex;align-items:flex-start;gap:4px">
             <span style="font-weight:500;color:#1e293b">${esc(t.description)}</span>
             ${urlLink}
@@ -443,12 +443,12 @@ window.Pages['all-tasks'] = (function () {
           ${t.type === 'FMS' && Array.isArray(t.details) && t.details.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${t.details.map(d => `<span style="font-size:10px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:1px 6px;white-space:nowrap;"><b>${esc(d.header)}:</b> ${esc(d.value) || '—'}</span>`).join('')}</div>` : ''}
           ${transferredBadge}
         </td>
-        <td class="at-td" style="color:#475569;white-space:nowrap">${esc(t.doer || '—')}</td>
-        <td class="at-td" style="color:#64748b;white-space:nowrap">${esc(getUserName(t.delegatedBy))}</td>
-        <td class="at-td" style="white-space:nowrap;font-size:12px;${t.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#64748b;'}">${fmt(t.dueDate)}</td>
-        <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${esc(t.frequency ? t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1) : '—')}</td>
-        <td class="at-td" style="color:#94a3b8;max-width:160px;font-size:12px">${esc(t.remarks || '—')}</td>
-        <td class="at-td">${statusPill(t.status)}</td>
+        <td class="at-td at-c-doer" data-label="Doer" style="color:#475569;white-space:nowrap">${esc(t.doer || '—')}</td>
+        <td class="at-td${t.delegatedBy ? '' : ' at-c-empty'}" data-label="Assignee" style="color:#64748b;white-space:nowrap">${esc(getUserName(t.delegatedBy))}</td>
+        <td class="at-td" data-label="Due" style="white-space:nowrap;font-size:12px;${t.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#64748b;'}">${fmt(t.dueDate)}</td>
+        <td class="at-td${t.frequency ? '' : ' at-c-empty'}" data-label="Frequency" style="color:#64748b;white-space:nowrap;font-size:12px">${esc(t.frequency ? t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1) : '—')}</td>
+        <td class="at-td${t.remarks ? '' : ' at-c-empty'}" data-label="Remarks" style="color:#94a3b8;max-width:160px;font-size:12px">${esc(t.remarks || '—')}</td>
+        <td class="at-td at-c-status">${statusPill(t.status)}</td>
       </tr>`;
   }
 
@@ -473,7 +473,7 @@ window.Pages['all-tasks'] = (function () {
 
     const tableHTML = open ? `
       <div style="border-top:1px solid #f1f5f9;overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <table class="at-tbl" style="width:100%;border-collapse:collapse;font-size:13px">
           <thead>
             <tr style="background:#f8fafc">
               <th class="at-th">#</th>
@@ -498,16 +498,16 @@ window.Pages['all-tasks'] = (function () {
         <button class="at-group-btn" onclick="window._atToggleGroup('${esc(g.doer)}')"
           style="width:100%;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;background:none;border:none;cursor:pointer;text-align:left;transition:background 0.15s"
           onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='none'">
-          <span style="display:flex;align-items:center;gap:12px">
+          <span class="at-g-left" style="display:flex;align-items:center;gap:12px">
             <span style="color:#94a3b8;transition:transform 0.2s;transform:rotate(${open ? 90 : 0}deg);display:inline-flex">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
             </span>
-            <span style="font-size:12px;font-family:monospace;color:#94a3b8;min-width:20px;text-align:right">${groupIdx + 1}.</span>
+            <span class="at-g-serial" style="font-size:12px;font-family:monospace;color:#94a3b8;min-width:20px;text-align:right">${groupIdx + 1}.</span>
             ${avatarHTML(g.doer)}
             <span style="font-weight:500;color:#1e293b;font-size:14px">${esc(g.doer)}</span>
-            <span style="font-size:12px;color:#94a3b8">(${g.tasks.length} task${g.tasks.length === 1 ? '' : 's'} · #${startSerial}–#${endSerial})</span>
+            <span class="at-g-meta" style="font-size:12px;color:#94a3b8">(${g.tasks.length} task${g.tasks.length === 1 ? '' : 's'} · #${startSerial}–#${endSerial})</span>
           </span>
-          <div style="display:flex;gap:6px;align-items:center">${pills}</div>
+          <div class="at-g-pills" style="display:flex;gap:6px;align-items:center">${pills}</div>
         </button>
         ${tableHTML}
       </li>`;
@@ -624,7 +624,7 @@ window.Pages['all-tasks'] = (function () {
 
     const tableHTML = open ? `
       <div style="border-top:1px solid #f1f5f9;overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <table class="at-tbl" style="width:100%;border-collapse:collapse;font-size:13px">
           <thead>
             <tr style="background:#f8fafc">
               <th class="at-th">#</th>
@@ -640,18 +640,18 @@ window.Pages['all-tasks'] = (function () {
           <tbody>
             ${g.rows.map((r, i) => `
               <tr class="at-table-row">
-                <td class="at-td" style="font-size:11px;color:#94a3b8;font-family:monospace">${startSerial + i}</td>
-                ${canManageMasters() ? `<td class="at-td">${masterActionsHTML(r)}</td>` : ''}
-                <td class="at-td" style="max-width:320px;font-weight:500;color:#1e293b">${esc(r.task)}</td>
-                <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${esc(cap(r.frequency))}</td>
-                <td class="at-td" style="white-space:nowrap;font-size:12px;${r.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#1e293b;font-weight:600;'}">
+                <td class="at-td at-c-num" style="font-size:11px;color:#94a3b8;font-family:monospace">${startSerial + i}</td>
+                ${canManageMasters() ? `<td class="at-td at-c-act">${masterActionsHTML(r)}</td>` : ''}
+                <td class="at-td at-c-desc" style="max-width:320px;font-weight:500;color:#1e293b">${esc(r.task)}</td>
+                <td class="at-td${r.frequency ? '' : ' at-c-empty'}" data-label="Frequency" style="color:#64748b;white-space:nowrap;font-size:12px">${esc(cap(r.frequency))}</td>
+                <td class="at-td" data-label="Next Due" style="white-space:nowrap;font-size:12px;${r.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#1e293b;font-weight:600;'}">
                   ${r.nextDue ? fmt(r.nextDue) + (r.overdue ? ' <span style="font-size:10px;font-weight:600;">(overdue)</span>' : '') : '<span style="color:#94a3b8;font-weight:400;">All done</span>'}
                 </td>
-                <td class="at-td" style="color:#64748b;white-space:nowrap;font-size:12px">${r.lastDone ? fmt(r.lastDone) : '—'}</td>
-                <td class="at-td" style="white-space:nowrap;font-size:12px">
+                <td class="at-td${r.lastDone ? '' : ' at-c-empty'}" data-label="Last Done" style="color:#64748b;white-space:nowrap;font-size:12px">${r.lastDone ? fmt(r.lastDone) : '—'}</td>
+                <td class="at-td" data-label="Occurrences" style="white-space:nowrap;font-size:12px">
                   ${window.UI.pill(`${r.done} done`, { variant: 'success' })} ${r.total - r.done > 0 ? window.UI.pill(`${r.total - r.done} pending`, { variant: 'danger' }) : ''} ${r.leave > 0 ? window.UI.pill(`${r.leave} on leave`, { variant: 'info' }) : ''}
                 </td>
-                <td class="at-td" style="color:#94a3b8;max-width:180px;font-size:12px">${esc(r.remarks || '—')}</td>
+                <td class="at-td${r.remarks ? '' : ' at-c-empty'}" data-label="Remarks" style="color:#94a3b8;max-width:180px;font-size:12px">${esc(r.remarks || '—')}</td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -662,16 +662,16 @@ window.Pages['all-tasks'] = (function () {
         <button class="at-group-btn" onclick="window._atToggleGroup('${esc(g.doer)}')"
           style="width:100%;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;background:none;border:none;cursor:pointer;text-align:left;transition:background 0.15s"
           onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='none'">
-          <span style="display:flex;align-items:center;gap:12px">
+          <span class="at-g-left" style="display:flex;align-items:center;gap:12px">
             <span style="color:#94a3b8;transition:transform 0.2s;transform:rotate(${open ? 90 : 0}deg);display:inline-flex">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
             </span>
-            <span style="font-size:12px;font-family:monospace;color:#94a3b8;min-width:20px;text-align:right">${groupIdx + 1}.</span>
+            <span class="at-g-serial" style="font-size:12px;font-family:monospace;color:#94a3b8;min-width:20px;text-align:right">${groupIdx + 1}.</span>
             ${avatarHTML(g.doer)}
             <span style="font-weight:500;color:#1e293b;font-size:14px">${esc(g.doer)}</span>
-            <span style="font-size:12px;color:#94a3b8">(${g.rows.length} master task${g.rows.length === 1 ? '' : 's'} · #${startSerial}–#${endSerial})</span>
+            <span class="at-g-meta" style="font-size:12px;color:#94a3b8">(${g.rows.length} master task${g.rows.length === 1 ? '' : 's'} · #${startSerial}–#${endSerial})</span>
           </span>
-          <div style="display:flex;gap:6px;align-items:center">${pills}</div>
+          <div class="at-g-pills" style="display:flex;gap:6px;align-items:center">${pills}</div>
         </button>
         ${tableHTML}
       </li>`;
@@ -702,7 +702,7 @@ window.Pages['all-tasks'] = (function () {
 
     /* top action buttons */
     const actionBtns = admin
-      ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      ? `<div class="at-actions" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
            ${hasFeature('transfer') ? `<button id="at-transfer-btn" class="at-btn at-btn-secondary">
              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 3 4 4-4 4"/><path d="M21 7H4"/><path d="m7 21-4-4 4-4"/><path d="M3 17h17"/></svg>
              Transfer
@@ -715,7 +715,7 @@ window.Pages['all-tasks'] = (function () {
              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
              Delete All Checklist
            </button>
-           <div style="display:flex;align-items:center;gap:4px;background:#fff5f5;border:1px solid #fecaca;border-radius:8px;padding:3px 3px 3px 10px;">
+           <div class="at-del-date" style="display:flex;align-items:center;gap:4px;background:#fff5f5;border:1px solid #fecaca;border-radius:8px;padding:3px 3px 3px 10px;">
              <input id="at-delete-by-date-input" type="date" style="border:none;background:transparent;font-size:12.5px;color:#ef4444;outline:none;" />
              <button id="at-delete-by-date-btn" class="at-btn" style="background:#ef4444;color:#fff;border-color:#ef4444;padding:5px 10px;">
                Delete by Due Date
@@ -812,6 +812,49 @@ window.Pages['all-tasks'] = (function () {
         .at-card { background:var(--surface);border:1px solid var(--border-base);border-radius:12px;overflow:hidden }
         .at-input { height:34px;padding:0 10px;border:1px solid var(--border-base);border-radius:6px;font-size:13px;background:var(--surface);outline:none;color:var(--text-primary) }
         .at-input:focus { border-color:var(--color-primary) }
+
+        /* Phone: rows become cards, filter bar stacks, modals open as bottom sheets */
+        @media (max-width: 767px) {
+          .at-actions { width:100% }
+          .at-actions > .at-btn { flex:1 1 auto; justify-content:center }
+          .at-del-date { flex:1 1 100% }
+          .at-del-date input { flex:1; min-width:0 }
+
+          .at-filterbar { padding:12px !important; gap:10px !important }
+          .at-filterbar .at-divider, .at-filterbar .at-spacer { display:none }
+          .at-seg { max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none }
+          .at-seg::-webkit-scrollbar { display:none }
+          .at-seg-btn { white-space:nowrap; flex-shrink:0; padding:8px 12px }
+          #at-tab-seg, #at-emp-filter, .at-dates, .at-search-wrap { width:100% }
+          #at-emp-filter { height:38px !important }
+          .at-dates input { flex:1; min-width:0; width:auto }
+          .at-search-wrap input { width:100% !important; height:38px }
+          .at-status-row > div:nth-child(2) { order:3; width:100% }
+
+          .at-group-btn { flex-wrap:wrap; gap:6px; padding:12px 14px !important }
+          .at-g-left { gap:10px !important; min-width:0; flex:1 1 100% }
+          .at-g-serial { display:none }
+          .at-g-meta { font-size:11px !important }
+          .at-g-pills { flex-wrap:wrap; padding-left:26px }
+
+          .at-tbl thead { display:none }
+          .at-tbl, .at-tbl tbody { display:block; width:100% }
+          .at-tbl tr.at-table-row { display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:10px; row-gap:5px; padding:12px 14px; border-bottom:1px solid var(--border-light) }
+          .at-tbl tr.at-table-row:hover { background:none }
+          .at-tbl td.at-td { display:block; padding:0; border:none; max-width:none !important; white-space:normal !important }
+          .at-tbl td.at-c-num, .at-tbl td.at-c-doer, .at-tbl td.at-c-empty { display:none !important }
+          .at-tbl td.at-c-desc { grid-column:1; grid-row:1; font-size:13.5px }
+          .at-tbl td.at-c-status { grid-column:2; grid-row:1; align-self:start }
+          .at-tbl td[data-label] { grid-column:1 / -1; display:flex; gap:8px; font-size:12px }
+          .at-tbl td[data-label]::before { content:attr(data-label); flex:0 0 84px; color:#94a3b8; font-weight:500 }
+          .at-tbl td.at-c-act { grid-column:1 / -1; order:1; margin-top:6px }
+          .at-tbl td.at-c-act .at-pill-btn { padding:7px 16px; font-size:12px }
+          .at-tbl td.at-c-act .at-action-btn { width:36px; height:36px }
+
+          .at-modal-overlay { align-items:flex-end !important; padding:0 !important }
+          .at-modal-box { max-width:100% !important; max-height:92vh !important; border-radius:16px 16px 0 0 !important }
+          .at-modal-box [style*="grid-template-columns:1fr 1fr"] { grid-template-columns:1fr !important }
+        }
       </style>
 
       <div style="display:flex;flex-direction:column;gap:20px">
@@ -822,17 +865,19 @@ window.Pages['all-tasks'] = (function () {
         </div>
 
         <!-- Filter bar -->
-        <div class="at-card" style="padding:12px 16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <div class="at-card at-filterbar" style="padding:12px 16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div class="at-seg" id="at-tab-seg">${tabBtns}</div>
-          <div style="width:1px;height:24px;background:#e2e8f0;margin:0 4px"></div>
+          <div class="at-divider" style="width:1px;height:24px;background:#e2e8f0;margin:0 4px"></div>
           ${empFilter}
           ${masterMode ? '' : `
-          <input type="date" id="at-from-date" value="${_fromDate}" class="at-input" style="width:auto" />
-          <span style="font-size:12px;color:#94a3b8">to</span>
-          <input type="date" id="at-to-date" value="${_toDate}" class="at-input" style="width:auto" />`}
+          <div class="at-dates" style="display:flex;align-items:center;gap:8px">
+            <input type="date" id="at-from-date" value="${_fromDate}" class="at-input" style="width:auto" />
+            <span style="font-size:12px;color:#94a3b8">to</span>
+            <input type="date" id="at-to-date" value="${_toDate}" class="at-input" style="width:auto" />
+          </div>`}
           ${clearBtn}
-          <div style="flex:1"></div>
-          <div style="position:relative">
+          <div class="at-spacer" style="flex:1"></div>
+          <div class="at-search-wrap" style="position:relative">
             <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);pointer-events:none" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
             <input id="at-search" type="text" placeholder="Search description, client…" value="${esc(_search)}"
               class="at-input" style="padding-left:34px;width:220px" />
@@ -840,7 +885,7 @@ window.Pages['all-tasks'] = (function () {
         </div>
 
         <!-- Status tabs + summary + expand controls -->
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div class="at-status-row" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
           <div class="at-seg" id="at-status-seg">${statusBtns}</div>
           <div style="font-size:13px;color:#475569">
             ${masterMode
@@ -978,7 +1023,8 @@ window.Pages['all-tasks'] = (function () {
     const div = document.createElement('div');
     div.id = id;
     div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);backdrop-filter:blur(2px);z-index:9000;display:flex;align-items:center;justify-content:center;padding:16px';
-    div.innerHTML = `<div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.2);width:100%;max-width:520px;overflow:hidden;display:flex;flex-direction:column;max-height:90vh">${contentHTML}</div>`;
+    div.className = 'at-modal-overlay';
+    div.innerHTML = `<div class="at-modal-box" style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.2);width:100%;max-width:520px;overflow:hidden;display:flex;flex-direction:column;max-height:90vh">${contentHTML}</div>`;
     div.addEventListener('click', e => { if (e.target === div) div.remove(); });
     document.body.appendChild(div);
     return div;

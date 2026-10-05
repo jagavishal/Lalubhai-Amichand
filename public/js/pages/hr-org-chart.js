@@ -456,8 +456,58 @@ window.Pages['hr-org-chart'] = (() => {
     });
   }
 
+  /* Two-finger pinch on the chart, for phones. While the fingers move only the
+     pane's size and the scale transform change (what a zoom repaint would
+     write anyway), so the gesture never loses its target to a redraw; the
+     settled zoom is kept for the next repaint. One finger still pans the pane
+     natively. */
+  function bindPinch() {
+    const wrap = document.querySelector('#oc-body .ocs-wrap');
+    const pan = wrap?.querySelector('.ocs-pan');
+    const scale = wrap?.querySelector('.ocs-scale');
+    if (!wrap || !pan || !scale) return;
+    const baseW = pan.offsetWidth / _zoom;
+    const baseH = pan.offsetHeight / _zoom;
+    const gap = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    // Where the drawing starts inside the scrolled pane (margin:auto centres a small one).
+    const origin = () => {
+      const w = wrap.getBoundingClientRect(), p = pan.getBoundingClientRect();
+      return { x: p.left - w.left + wrap.scrollLeft, y: p.top - w.top + wrap.scrollTop };
+    };
+    let start = null;
+    wrap.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 2) return;
+      const r = wrap.getBoundingClientRect();
+      const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left;
+      const my = (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top;
+      const o = origin();
+      start = { d: gap(e.touches), z: _zoom, mx, my,
+        // The chart point under the fingers, in unscaled chart units.
+        cx: (wrap.scrollLeft + mx - o.x) / _zoom, cy: (wrap.scrollTop + my - o.y) / _zoom };
+    }, { passive: true });
+    wrap.addEventListener('touchmove', (e) => {
+      if (!start || e.touches.length !== 2) return;
+      e.preventDefault();
+      const z = Math.max(0.15, Math.min(2, start.z * (gap(e.touches) / start.d)));
+      _zoom = z;
+      pan.style.width = Math.round(baseW * z) + 'px';
+      pan.style.height = Math.round(baseH * z) + 'px';
+      scale.style.transform = `scale(${z})`;
+      // origin() reads the pane after a reset to 0 scroll, so it is the
+      // drawing's resting offset rather than one still moving with the scroll.
+      wrap.scrollLeft = 0; wrap.scrollTop = 0;
+      const o = origin();
+      wrap.scrollLeft = start.cx * z + o.x - start.mx;
+      wrap.scrollTop = start.cy * z + o.y - start.my;
+    }, { passive: false });
+    const end = (e) => { if (start && e.touches.length < 2) start = null; };
+    wrap.addEventListener('touchend', end);
+    wrap.addEventListener('touchcancel', end);
+  }
+
   function bindTree() {
     bindHover();
+    bindPinch();
     document.querySelectorAll('#oc-body [data-toggle]').forEach((node) => {
       const hit = (e) => {
         e.stopPropagation();
@@ -692,6 +742,17 @@ window.Pages['hr-org-chart'] = (() => {
                 background:#f1f5f9; border-radius:99px; padding:2px 9px; }
     .oc-count i { font-style:normal; font-weight:600; color:#94a3b8; }
 
+    /* Phone: header buttons share a row, bigger zoom targets, the chart pane
+       fills what is left above the bottom nav (pinch to zoom, drag to pan) */
+    @media (max-width: 767px) {
+      .oc-bar { padding:10px !important; gap:8px !important; }
+      .ocv-tab { padding:8px 14px; }
+      .oc-zoom button { min-width:40px; padding:8px 10px; font-size:14px; }
+      .oc-total { margin-left:auto; }
+      .ocs-wrap { height:calc(100vh - 380px); height:calc(100dvh - 380px); min-height:340px;
+                  touch-action:pan-x pan-y; overscroll-behavior:contain; }
+      .oc-node[data-toggle] { min-height:40px; }
+    }
     @media (max-width: 640px) {
       .oc-bar input { order:9; flex-basis:100%; }
       .oc-wrap { padding:10px 12px 14px; }

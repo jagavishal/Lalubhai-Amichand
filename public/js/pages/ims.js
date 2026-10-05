@@ -58,6 +58,64 @@ window.Pages = window.Pages || {};
   // right rows without re-fetching).
   let _mountedRoute = null;
 
+  /* ── Phone layout (< 768px only; desktop untouched). Injected by every IMS
+     book page, so it also covers the Report / Series Chart tabs mounted into
+     #ims-tabbody (Inward/Outward carry their own). Tabs scroll sideways,
+     filter bars stack, Item List + Physical Stock Log rows become cards
+     (shared .m-cards), the Day-wise matrix and SKU table keep a deliberate
+     sideways scroll, the Physical Stock popup opens as a bottom sheet, and
+     the Series charts drop to one column. ─────────────────────────────── */
+  const IMS_MOBILE_CSS = `@media (max-width: 767px) {
+    .ims-page { padding-bottom: 16px !important; }
+    .ims-tabs { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; gap: 0 !important; border-bottom: none !important; box-shadow: inset 0 -1px 0 var(--border-light); margin-bottom: 14px !important; }
+    .ims-tabs::-webkit-scrollbar { display: none; }
+    .ims-tabs > button { flex-shrink: 0; white-space: nowrap; margin-bottom: 0 !important; padding: 10px 12px !important; }
+    .ims-vt { width: 100% !important; overflow-x: auto; scrollbar-width: none; box-sizing: border-box; }
+    .ims-vt::-webkit-scrollbar { display: none; }
+    .ims-vt > button { flex: 1 0 auto; white-space: nowrap; min-height: 36px; }
+    .ims-page .ims-to { display: none; }
+    .ims-fbar1 { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
+    .ims-fbar1 > input { width: 100% !important; min-width: 0 !important; min-height: 40px; }
+    .ims-fbar2 { gap: 8px !important; }
+    .ims-fbar2 > label { flex: 1 1 40%; min-height: 32px; }
+    .ims-fbar2 > select { flex: 1 1 100%; width: 100% !important; min-height: 40px; }
+    .ims-fbar2 > button { flex: 1 1 0; min-height: 40px; white-space: nowrap; padding: 8px 8px !important; }
+    .ims-fbar2 > #ims-add-btn { flex: 1 1 100%; order: -1; }
+    .ims-fbar { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
+    .ims-fbar > input, .ims-fbar > button { width: 100% !important; min-width: 0 !important; min-height: 40px; }
+    .ims-fbar > input[type="text"], .ims-fbar > .ims-serbar-label { grid-column: 1 / -1; }
+    .ims-htool { gap: 8px !important; }
+    .ims-htool > input { flex: 1 1 100% !important; min-width: 0 !important; min-height: 40px; }
+    .ims-htool > .ims-hrange { flex: 1 1 100%; }
+    .ims-htool > .ims-hrange > button { flex: 1 1 0; min-height: 34px; white-space: nowrap; padding: 6px 4px !important; }
+    .ims-htool > button { flex: 1 1 0; min-height: 40px; }
+    .ims-cards-wrap { overflow: visible !important; background: var(--surface); }
+    table.ims-cards { min-width: 0 !important; }
+    table.ims-cards td.m-card-title { font-size: 14.5px !important; }
+    table.ims-cards td.ims-stock-cell { padding: 3px 6px !important; margin: 0 -6px; border-radius: 6px; flex-wrap: wrap; }
+    table.ims-cards td.m-card-actions { gap: 6px; }
+    table.ims-cards td.m-card-actions button { min-height: 36px; border: 1.5px solid var(--border-light) !important; border-radius: 8px; padding: 6px 12px !important; }
+    table.ims-cards tr.ims-total-row { flex-direction: row; flex-wrap: wrap; gap: 4px 14px; background: var(--surface-alt); }
+    table.ims-cards tr.ims-total-row td[colspan]:first-child { flex: 1 1 100%; }
+    .ims-ifgrid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 12px 10px !important; }
+    .ims-ifgrid > .ims-fw { padding: 0 !important; border: none !important; border-radius: 0 !important; background: transparent !important; display: flex; flex-direction: column; justify-content: flex-end; min-width: 0; }
+    .ims-ifgrid input, .ims-ifgrid select { min-height: 40px; }
+    .ims-page .ims-fl, .ims-sheet .ims-fl { font-size: 11.5px !important; font-weight: 600 !important; color: var(--text-secondary) !important; margin-bottom: 5px !important; }
+    .ims-sheet-actions > button { flex: 1 1 0; min-height: 44px; padding: 9px 10px !important; white-space: nowrap; }
+    #ims-phys-overlay { place-items: end stretch !important; padding: 0 !important; }
+    #ims-phys-overlay .ims-sheet { max-width: 100% !important; max-height: 92vh !important; border-radius: 16px 16px 0 0 !important; padding-bottom: env(safe-area-inset-bottom, 0px); }
+    .ims-sheet form { gap: 10px !important; }
+    .ims-sheet .ims-fw { padding: 0 !important; border: none !important; border-radius: 0 !important; background: transparent !important; }
+    .ims-sheet input, .ims-sheet select, .ims-sheet textarea { min-height: 42px; font-size: 16px !important; }
+    .ims-sku-tools { width: 100%; }
+    .ims-sku-tools > input { flex: 1 1 auto; width: auto !important; min-width: 0; min-height: 40px; }
+    .ims-sku-tools > button { min-height: 40px; }
+    .ims-ser-grid { grid-template-columns: minmax(0, 1fr) !important; }
+    .ims-ser-grid svg { max-width: 100%; height: auto; }
+    table.ims-ser-tbl { min-width: 0 !important; }
+    table.ims-ser-tbl th, table.ims-ser-tbl td { padding-left: 8px !important; padding-right: 8px !important; }
+  }`;
+
   function createPage(book) {
     /* ── state ──────────────────────────────────────────────────── */
     let _rows = [];
@@ -232,8 +290,8 @@ window.Pages = window.Pages || {};
 
     /* ── Helpers (styled like PO/GRN Creation, for a consistent look) ─────── */
     function _fieldWrap(label, innerHtml, extra) {
-      return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
-        + '<div style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">' + esc(label) + '</div>'
+      return '<div class="ims-fw" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
+        + '<div class="ims-fl" style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">' + esc(label) + '</div>'
         + innerHtml
         + '</div>';
     }
@@ -328,11 +386,11 @@ window.Pages = window.Pages || {};
         const low = !negative && _num(r.currentStock) <= _num(r.moq);
         const stockColor = _stockLevelColor(r.currentStock, r.maxLevel);
         return '<tr style="border-bottom:1px solid #f1f5f9;' + (negative ? 'background:#fff7ed;' : (low ? 'background:#fef2f2;' : '')) + '">'
-          + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
+          + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.description) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.size) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.uom) + '</td>'
-          + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;font-weight:700;' + (stockColor ? 'background:' + stockColor + ';' : '') + '">' + esc(r.currentStock)
+          + '<td class="ims-stock-cell" style="padding:8px 10px;font-size:12.5px;text-align:right;font-weight:700;' + (stockColor ? 'background:' + stockColor + ';' : '') + '">' + esc(r.currentStock)
             + (negative ? ' <span style="display:inline-flex;padding:2px 7px;border-radius:10px;background:#ffedd5;color:#c2410c;font-size:10.5px;font-weight:700;margin-left:4px;">NEGATIVE STOCK</span>' : '')
             + (low ? ' <span style="display:inline-flex;padding:2px 7px;border-radius:10px;background:#fee2e2;color:#dc2626;font-size:10.5px;font-weight:700;margin-left:4px;">LOW STOCK</span>' : '')
           + '</td>'
@@ -340,7 +398,7 @@ window.Pages = window.Pages || {};
           + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.maxLevel) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.onOrderQty) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.vendorName) + '</td>'
-          + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+          + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
             + '<button type="button" class="ims-edit-btn" data-code="' + esc(r.itemCode) + '" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Edit</button>'
             + '<button type="button" class="ims-phys-btn" data-code="' + esc(r.itemCode) + '" style="border:none;background:transparent;color:#7c3aed;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Physical Stock</button>'
           + '</td>'
@@ -359,7 +417,7 @@ window.Pages = window.Pages || {};
       const stock = rows.reduce((s, r) => s + _num(r.currentStock), 0);
       const onOrder = rows.reduce((s, r) => s + _num(r.onOrderQty), 0);
       const cell = 'padding:10px;font-size:12.5px;font-weight:700;color:#0f172a;background:#f8fafc;';
-      return '<tr style="border-top:2px solid #e2e8f0;">'
+      return '<tr class="ims-total-row" style="border-top:2px solid #e2e8f0;">'
         + '<td colspan="4" style="' + cell + 'text-transform:uppercase;letter-spacing:.04em;font-size:11px;color:#64748b;">' + esc('Total · ' + rows.length + ' item' + (rows.length === 1 ? '' : 's')) + '</td>'
         + '<td style="' + cell + 'text-align:right;' + (stock < 0 ? 'color:#c2410c;' : '') + '">' + esc(_fmtQty(stock)) + '</td>'
         + '<td style="' + cell + '"></td>'
@@ -491,12 +549,12 @@ window.Pages = window.Pages || {};
         const vColor = v === 0 ? '#16a34a' : (v > 0 ? '#2563eb' : '#dc2626');
         return '<tr style="border-bottom:1px solid #f1f5f9;">'
           + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
-          + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
+          + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.itemCode) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.itemName) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;font-weight:700;color:' + vColor + ';">' + (v > 0 ? '+' : '') + esc(r.variance) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;color:#64748b;">' + esc(r.remarks) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
-          + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+          + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
             + (r.status === 'Cancelled'
               ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
               : '<button type="button" class="ims-phys-cancel-btn" data-id="' + esc(r.id) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
@@ -526,10 +584,10 @@ window.Pages = window.Pages || {};
     }
 
     function _physicalFilterBarHtml() {
-      return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+      return '<div class="ims-fbar ims-fbar-dates" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
         + '<input type="text" id="ims-phys-f-item" placeholder="Search item code / name…" value="' + esc(_physFItem) + '" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
         + '<input type="date" id="ims-phys-f-from" value="' + esc(_physFFrom) + '" style="' + _inputStyle + 'width:auto;" />'
-        + '<span style="color:#94a3b8;font-size:12px;">to</span>'
+        + '<span class="ims-to" style="color:#94a3b8;font-size:12px;">to</span>'
         + '<input type="date" id="ims-phys-f-to" value="' + esc(_physFTo) + '" style="' + _inputStyle + 'width:auto;" />'
         + '<button type="button" id="ims-phys-f-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
         + '<button type="button" id="ims-phys-f-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
@@ -561,7 +619,7 @@ window.Pages = window.Pages || {};
       const overlay = document.createElement('div');
       overlay.id = 'ims-phys-overlay';
       overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:10000;display:grid;place-items:center;padding:16px;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
-      overlay.innerHTML = '<div style="background:#fff;border-radius:18px;width:100%;max-width:420px;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.2);animation:pop-in 200ms cubic-bezier(.16,1,.3,1);">'
+      overlay.innerHTML = '<div class="ims-sheet" style="background:#fff;border-radius:18px;width:100%;max-width:420px;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.2);animation:pop-in 200ms cubic-bezier(.16,1,.3,1);">'
         + '<div style="padding:22px 24px 4px;">'
           + '<div style="font-size:15px;font-weight:700;color:#0f172a;">Physical Stock — ' + esc(row.itemCode) + '</div>'
           + '<div style="font-size:12px;color:#64748b;margin:2px 0 14px;">' + esc(row.description) + '</div>'
@@ -572,7 +630,7 @@ window.Pages = window.Pages || {};
           + _textField('ims-phys-count', 'Physical Stock Count')
           + _fieldWrap('Variance', '<div id="ims-phys-variance" style="font-size:13px;font-weight:700;color:#94a3b8;">Enter a count to see the variance</div>')
           + _fieldWrap('Remarks', '<textarea id="ims-phys-remarks" rows="2" style="' + _inputStyle + 'resize:vertical;"></textarea>')
-          + '<div style="display:flex;gap:10px;margin-top:4px;">'
+          + '<div class="ims-sheet-actions" style="display:flex;gap:10px;margin-top:4px;">'
             + '<button type="submit" id="ims-phys-submit" style="padding:9px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">Save Physical Count</button>'
             + '<button type="button" id="ims-phys-cancel-modal" style="padding:9px 22px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
           + '</div>'
@@ -625,14 +683,14 @@ window.Pages = window.Pages || {};
     /* ── Filter bar — no category control: the active book tab already fixes
        it (see _book). ───────────────────────────────────────────────────── */
     function _filterBarHtml() {
-      return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;">'
+      return '<div class="ims-fbar1" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;">'
         + '<input type="text" id="ims-f-code" placeholder="Item Code…" value="' + esc(_fItemCode) + '" style="' + _inputStyle + 'min-width:130px;width:auto;" />'
         + '<input type="text" id="ims-f-name" placeholder="Item Name…" value="' + esc(_fItemName) + '" style="' + _inputStyle + 'min-width:180px;width:auto;flex:1;" />'
         + '<input type="number" id="ims-f-minstock" placeholder="Min Stock" value="' + esc(_fMinStock) + '" style="' + _inputStyle + 'width:110px;" />'
-        + '<span style="color:#94a3b8;font-size:12px;">to</span>'
+        + '<span class="ims-to" style="color:#94a3b8;font-size:12px;">to</span>'
         + '<input type="number" id="ims-f-maxstock" placeholder="Max Stock" value="' + esc(_fMaxStock) + '" style="' + _inputStyle + 'width:110px;" />'
       + '</div>'
-      + '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+      + '<div class="ims-fbar2" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
         + '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#475569;cursor:pointer;">'
           + '<input type="checkbox" id="ims-lowstock" ' + (_lowStockOnly ? 'checked' : '') + ' /> Low stock only'
         + '</label>'
@@ -693,9 +751,9 @@ window.Pages = window.Pages || {};
     function _dayOptionLabel(n) { return n >= 60 ? '3 Months' : n + ' Days'; }
 
     function _historyToolbarHtml() {
-      return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+      return '<div class="ims-htool" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
         + '<input type="text" id="ims-h-search" placeholder="Search item code / description…" value="' + esc(_search) + '" style="' + _inputStyle + 'min-width:220px;width:auto;flex:1;" />'
-        + '<div style="display:flex;gap:4px;background:#f1f5f9;padding:3px;border-radius:8px;">'
+        + '<div class="ims-hrange" style="display:flex;gap:4px;background:#f1f5f9;padding:3px;border-radius:8px;">'
           + _historyDayOptions.map(n => '<button type="button" class="ims-h-range" data-days="' + n + '" style="padding:6px 12px;border-radius:6px;border:none;cursor:pointer;font-size:12px;font-weight:600;'
             + (n === _historyDays ? 'background:var(--color-primary);color:var(--color-primary-text);' : 'background:transparent;color:#475569;') + '">' + _dayOptionLabel(n) + '</button>').join('')
         + '</div>'
@@ -754,7 +812,7 @@ window.Pages = window.Pages || {};
         + '<div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:2px;">' + (isEdit ? 'Edit Item — ' + esc(row.itemCode) : 'Add New Item') + '</div>'
         + '<div style="font-size:11.5px;color:#64748b;margin-bottom:12px;">Goes into the <b>' + esc(_bookName) + '</b> catalog.</div>'
         + '<form id="ims-item-form" style="display:flex;flex-direction:column;gap:14px;">'
-          + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">'
+          + '<div class="ims-ifgrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">'
             + _textField('ims-if-code', 'Item Code', { value: isEdit ? row.itemCode : '', disabled: isEdit })
             + _textField('ims-if-desc', 'Description', { value: isEdit ? row.description : '' })
             + _textField('ims-if-size', 'Size', { value: isEdit ? row.size : '' })
@@ -765,7 +823,7 @@ window.Pages = window.Pages || {};
             + _textField('ims-if-vendor', 'Vendor Name', { value: isEdit ? row.vendorName : '' })
             + (isEdit ? '' : _textField('ims-if-opening', 'Opening Stock', { value: '0' }))
           + '</div>'
-          + '<div style="display:flex;gap:10px;">'
+          + '<div class="ims-sheet-actions" style="display:flex;gap:10px;">'
             + '<button type="submit" id="ims-if-submit" style="padding:9px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">' + (isEdit ? 'Save Changes' : 'Add Item') + '</button>'
             + '<button type="button" id="ims-if-cancel" style="padding:9px 22px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
           + '</div>'
@@ -1036,7 +1094,7 @@ window.Pages = window.Pages || {};
         ['Inward', sum('inward'), '#0f172a'],
         ['Outward', sum('outward'), '#0f172a'],
       ];
-      return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px;">'
+      return '<div class="m-grid-2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px;">'
         + tiles.map(([label, value, color]) => '<div style="border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:12px 14px;">'
           + '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;font-weight:700;">' + esc(label) + '</div>'
           + '<div style="font-size:18px;font-weight:700;color:' + color + ';margin-top:2px;">' + esc(_fmtQty(value)) + '</div>'
@@ -1052,7 +1110,7 @@ window.Pages = window.Pages || {};
       const total = (k) => rows.reduce((s, r) => s + _num(r[k]), 0);
       const totalCell = 'padding:10px;font-size:12.5px;font-weight:700;color:#0f172a;background:#f8fafc;';
       return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:560px;">'
+        + '<table class="ims-ser-tbl" style="width:100%;border-collapse:collapse;min-width:560px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
             + head.map((h, i) => '<th style="padding:8px 10px;text-align:' + (i ? 'right' : 'left') + ';font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
@@ -1203,7 +1261,7 @@ window.Pages = window.Pages || {};
         + '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:10px;">'
           + '<div><div style="font-size:13.5px;font-weight:700;color:#0f172a;">SKU-wise stock &amp; movement</div>'
           + '<div style="font-size:11.5px;color:#64748b;margin-top:2px;">Inward / Outward ' + esc(_seriesRangeLabel()) + '; current stock is live as of today.</div></div>'
-          + '<div style="display:flex;gap:8px;align-items:center;">'
+          + '<div class="ims-sku-tools" style="display:flex;gap:8px;align-items:center;">'
             + '<input type="text" id="ims-sku-search" placeholder="Search SKU, description, size…" value="' + esc(_skuSearch) + '" style="' + _inputStyle + 'width:240px;" />'
             + '<button type="button" id="ims-sku-export" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">SKU CSV</button>'
           + '</div>'
@@ -1288,14 +1346,14 @@ window.Pages = window.Pages || {};
         + _skuSectionHtml()
         + topChart
         + '<div style="margin:20px 0 10px;font-size:13.5px;font-weight:700;color:#0f172a;">Alloy series summary</div>'
-        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;align-items:start;">'
+        + '<div class="ims-ser-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;align-items:start;">'
           + _chartCardHtml('Current stock by series', 'Live balance as of today — bars below the line are items issued past what was received.', '', stockChart)
           + _chartCardHtml('Inward vs Outward by series', 'Stock movement logged ' + _seriesRangeLabel() + ', cancelled entries excluded.',
               _legendHtml([[_CHART_INWARD, 'Inward'], [_CHART_OUTWARD, 'Outward']]), moveChart)
         + '</div>'
         // Second row, same two-up grid: the monthly chart next to the numbers
         // it is drawn from.
-        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;align-items:start;margin-top:14px;">'
+        + '<div class="ims-ser-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px;align-items:start;margin-top:14px;">'
           + _monthlySalesCardHtml(rows)
           + _seriesTableHtml(rows)
         + '</div>';
@@ -1307,10 +1365,10 @@ window.Pages = window.Pages || {};
     }
 
     function _seriesFilterBarHtml() {
-      return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
-        + '<span style="font-size:12px;color:#64748b;font-weight:600;">Movement dates</span>'
+      return '<div class="ims-fbar ims-serbar" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+        + '<span class="ims-serbar-label" style="font-size:12px;color:#64748b;font-weight:600;">Movement dates</span>'
         + '<input type="date" id="ims-ser-from" value="' + esc(_seriesFrom) + '" style="' + _inputStyle + 'width:auto;" />'
-        + '<span style="color:#94a3b8;font-size:12px;">to</span>'
+        + '<span class="ims-to" style="color:#94a3b8;font-size:12px;">to</span>'
         + '<input type="date" id="ims-ser-to" value="' + esc(_seriesTo) + '" style="' + _inputStyle + 'width:auto;" />'
         + '<button type="button" id="ims-ser-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
         + '<button type="button" id="ims-ser-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
@@ -1354,7 +1412,7 @@ window.Pages = window.Pages || {};
         return '<button type="button" class="ims-view-tab" data-mode="' + mode + '" style="padding:7px 14px;border-radius:7px;border:none;cursor:pointer;font-size:12.5px;font-weight:700;'
           + (active ? 'background:var(--color-primary);color:var(--color-primary-text);' : 'background:transparent;color:#64748b;') + '">' + label + '</button>';
       }
-      return '<div style="display:flex;gap:4px;background:#f1f5f9;padding:3px;border-radius:9px;width:fit-content;margin-bottom:14px;">'
+      return '<div class="ims-vt" style="display:flex;gap:4px;background:#f1f5f9;padding:3px;border-radius:9px;width:fit-content;margin-bottom:14px;">'
         + tab('list', 'Item List') + tab('daywise', 'Day-wise Stock') + tab('physical', 'Physical Stock Log')
       + '</div>';
     }
@@ -1392,8 +1450,8 @@ window.Pages = window.Pages || {};
           + '</div>';
       } else if (isPhysical) {
         bodyHtml = _physicalFilterBarHtml()
-          + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-            + '<table style="width:100%;border-collapse:collapse;min-width:920px;">'
+          + '<div class="ims-cards-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+            + '<table class="m-cards ims-cards" style="width:100%;border-collapse:collapse;min-width:920px;">'
               + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
                 + ['Date', 'Item Code', 'Description', 'Variance', 'Remarks', 'Logged By', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
               + '</tr></thead>'
@@ -1403,8 +1461,8 @@ window.Pages = window.Pages || {};
       } else {
         bodyHtml = _filterBarHtml()
           + _colorLegendHtml()
-          + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-            + '<table style="width:100%;border-collapse:collapse;min-width:1080px;">'
+          + '<div class="ims-cards-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+            + '<table class="m-cards ims-cards" style="width:100%;border-collapse:collapse;min-width:1080px;">'
               + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
                 + ['Item Code', 'Description', 'Size', 'UOM', 'Current Stock', 'MOQ', 'Max Level', 'On Order', 'Vendor', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
               + '</tr></thead>'
@@ -1460,8 +1518,8 @@ window.Pages = window.Pages || {};
     function _topTabsHtml() {
       const tabs = [['inward', 'Inward'], ['outward', 'Outward'], ['report', 'Report']]
         .concat(_isTrading ? [['series', 'Series Chart']] : []);
-      return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
-        + tabs.map(([key, label]) => '<button type="button" class="ims-top-tab" data-tab="' + key + '" style="'
+      return '<div class="ims-tabs" style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
+        + tabs.map(([key, label]) => '<button type="button" class="ims-top-tab" data-tab="' + key + '"' + (_topTab === key ? ' data-active="1"' : '') + ' style="'
           + 'padding:9px 16px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:700;'
           + 'color:' + (_topTab === key ? 'var(--color-primary)' : '#94a3b8') + ';'
           + 'border-bottom:2px solid ' + (_topTab === key ? 'var(--color-primary)' : 'transparent') + ';margin-bottom:-1px;'
@@ -1477,7 +1535,8 @@ window.Pages = window.Pages || {};
       // in flight from the book we're leaving stops painting (see _isActive).
       _mountedRoute = book.route;
 
-      el.innerHTML = '<div style="max-width:1300px;margin:0 auto;padding:4px 0 40px;">'
+      el.innerHTML = '<style>' + IMS_MOBILE_CSS + '</style>'
+        + '<div class="ims-page" style="max-width:1300px;margin:0 auto;padding:4px 0 40px;">'
         + '<div style="margin-bottom:14px;">'
           + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">' + esc(_bookLabel) + '</h1>'
           + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Inventory Management — log stock movement and track the live ' + esc(_bookName) + ' catalog.</p>'
@@ -1485,6 +1544,11 @@ window.Pages = window.Pages || {};
         + _topTabsHtml()
         + '<div id="ims-tabbody"></div>'
       + '</div>';
+
+      // Phone: the tab strip scrolls sideways — bring the active tab into view.
+      const tabStrip = el.querySelector('.ims-tabs');
+      const activeTab = tabStrip && tabStrip.querySelector('[data-active]');
+      if (activeTab && tabStrip.scrollWidth > tabStrip.clientWidth) tabStrip.scrollLeft = activeTab.offsetLeft - tabStrip.offsetLeft - 24;
 
       document.querySelectorAll('.ims-top-tab').forEach(btn => {
         btn.addEventListener('click', () => {

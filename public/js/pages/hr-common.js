@@ -18,6 +18,67 @@ window.HR = (function () {
 
   const esc = Utils.esc;
 
+  /* ── Phone layout (under 768px) ───────────────────────────────────
+     One stylesheet for every HR page, injected once. Each rule targets a
+     class the helpers below put on their markup (hr-head, hr-tabs, hr-stats,
+     hr-tbl, hr-modal, hr-grid), and lives entirely inside the media query,
+     so desktop is untouched. The helpers style themselves inline, hence the
+     !important. ── */
+  const MOBILE_CSS = `
+  @media (max-width: 767px) {
+    .hr-head { flex-direction:column; align-items:stretch !important; gap:12px !important; margin-bottom:14px !important; }
+    .hr-head h1 { font-size:18px !important; }
+    .hr-head-actions { width:100%; }
+    .hr-head-actions:empty { display:none !important; }
+    .hr-head-actions > button, .hr-head-actions > a { flex:1 1 auto; justify-content:center; min-height:40px; }
+
+    .hr-tabs { flex-wrap:nowrap; scrollbar-width:none; margin-left:-12px !important; margin-right:-12px !important; padding:0 12px; }
+    .hr-tabs::-webkit-scrollbar { display:none; }
+    .hr-tabs > button { flex-shrink:0; padding:11px 13px !important; }
+    .hr-modal .hr-tabs { margin-left:-16px !important; margin-right:-16px !important; padding:0 16px; }
+
+    .hr-stats { grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:8px !important; margin-bottom:12px !important; }
+    .hr-stats > div { padding:11px 12px !important; min-width:0; }
+    .hr-stats > div > div:nth-child(2) { font-size:18px !important; overflow-wrap:anywhere; }
+    .hr-stats > div:last-child:nth-child(odd) { grid-column:1 / -1; }
+
+    /* One field per row, except plain number fields (salary heads, days),
+       which pair up two to a row so a long salary form stays scannable. */
+    .hr-grid:not(.hr-grid-3) { grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px 10px !important; }
+    .hr-grid:not(.hr-grid-3) > * { grid-column:1 / -1 !important; }
+    .hr-grid:not(.hr-grid-3) > div:has(> input[type="number"]) { grid-column:auto !important; }
+    .hr-grid-3 { gap:10px !important; }
+
+    .hr-tbl-cards .hr-tbl-scroll { max-height:none !important; overflow:visible !important; }
+    .hr-tbl-cards table.m-cards td[colspan] { padding:26px 6px !important; text-align:center !important; line-height:1.55; }
+    .hr-tbl-cards table.m-cards td .btn-xs, .hr-tbl-cards table.m-cards td a.btn-xs { min-height:34px; padding:6px 14px; display:inline-flex; align-items:center; }
+    .hr-tbl:not(.hr-tbl-cards) th, .hr-tbl:not(.hr-tbl-cards) td { padding:9px 10px !important; }
+    .hr-tbl-sticky th:first-child, .hr-tbl-sticky td:first-child:not([colspan]) {
+      position:sticky; left:0; z-index:2; background:var(--surface, #fff); box-shadow:1px 0 0 var(--border-light, #e2e8f0);
+    }
+    .hr-tbl-sticky th:first-child { z-index:3; background:var(--surface-alt, #f8fafc); }
+    .hr-tbl-sticky td[colspan] { position:sticky; left:0; max-width:calc(100vw - 26px); white-space:normal; }
+
+    .hr-modal:not(.hr-drawer) { align-items:flex-end !important; padding:0 !important; overflow:hidden !important; }
+    .hr-modal:not(.hr-drawer) > .hr-modal-box {
+      margin:0 !important; max-width:100% !important; max-height:92vh; max-height:92dvh;
+      border-radius:16px 16px 0 0 !important; display:flex; flex-direction:column;
+    }
+    .hr-modal:not(.hr-drawer) .hr-modal-body { overflow-y:auto; flex:1 1 auto; min-height:0; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+    .hr-drawer > .hr-modal-box { max-width:100% !important; }
+    .hr-modal-head { padding:14px 16px !important; flex-shrink:0; gap:10px; }
+    .hr-modal-body { padding:16px !important; }
+    .hr-modal-foot { padding:12px 16px calc(12px + env(safe-area-inset-bottom, 0px)) !important; }
+    .hr-modal-foot > button { flex:1 1 0; min-height:42px; justify-content:center; }
+    .hr-modal-x { width:36px !important; height:36px !important; }
+  }`;
+  if (typeof document !== 'undefined' && !document.getElementById('hr-mobile-css')) {
+    const st = document.createElement('style');
+    st.id = 'hr-mobile-css';
+    st.textContent = MOBILE_CSS;
+    (document.head || document.documentElement).appendChild(st);
+  }
+
   const num = (v) => {
     const n = Number(String(v ?? '').replace(/,/g, ''));
     return Number.isFinite(n) ? n : 0;
@@ -77,18 +138,18 @@ window.HR = (function () {
 
   function header(title, subtitle, actionsHtml = '') {
     return `
-      <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
-        <div>
+      <div class="hr-head" style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
+        <div class="hr-head-text">
           <h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">${esc(title)}</h1>
           <p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">${esc(subtitle)}</p>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">${actionsHtml}</div>
+        <div class="hr-head-actions" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">${actionsHtml}</div>
       </div>`;
   }
 
   // Horizontal tab strip. `id` prefixes the data attribute the page binds to.
   function tabs(id, items, active) {
-    return `<div style="display:flex;gap:2px;border-bottom:1.5px solid #e2e8f0;margin-bottom:16px;overflow-x:auto;">
+    return `<div class="hr-tabs" style="display:flex;gap:2px;border-bottom:1.5px solid #e2e8f0;margin-bottom:16px;overflow-x:auto;">
       ${items.map((t) => {
         const on = t.key === active;
         return `<button data-${id}-tab="${esc(t.key)}" style="border:none;background:none;cursor:pointer;padding:9px 15px;
@@ -104,7 +165,7 @@ window.HR = (function () {
   function stats(pairs, { accent = 'var(--color-primary)' } = {}) {
     const entries = Array.isArray(pairs) ? pairs : Object.entries(pairs).map(([label, value]) => ({ label, value }));
     if (!entries.length) return '';
-    return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">
+    return `<div class="hr-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">
       ${entries.map((s) => `
         <div style="background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:13px 15px;">
           <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;">${esc(s.label)}</div>
@@ -124,17 +185,29 @@ window.HR = (function () {
   const TD = 'padding:10px 12px;font-size:12.5px;color:#334155;border-bottom:1px solid #f1f5f9;';
 
   /* A table inside the app's standard card. `columns` may be plain strings or
-     { label, align } objects; `rows` is an array of arrays of ready HTML. */
-  function table(columns, rows, { empty = 'Nothing to show yet', maxHeight = '' } = {}) {
+     { label, align, m, cls } objects; `rows` is an array of arrays of ready HTML.
+
+     Phones (under 768px) only — desktop renders identically either way:
+       cards: true   each row becomes a card (table.m-cards, style.css). A
+                     column's `m` is 'title' (card heading), 'actions' (buttons,
+                     at the card's foot) or 'hide' (dropped on phone).
+       sticky: true  for wide figure grids that must stay a grid — the table
+                     scrolls sideways with the first (name) column pinned. */
+  function table(columns, rows, { empty = 'Nothing to show yet', maxHeight = '', cards = false, sticky = false } = {}) {
     const cols = columns.map((c) => (typeof c === 'string' ? { label: c } : c));
+    const mCls = (c) => {
+      const list = [cards && c?.m ? `m-card-${c.m}` : '', c?.cls || ''].filter(Boolean);
+      return list.length ? ` class="${list.join(' ')}"` : '';
+    };
     const body = rows.length
       ? rows.map((r) => `<tr style="transition:background .1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
-          ${r.map((cell, i) => `<td style="${TD}${cols[i]?.align === 'right' ? 'text-align:right;' : ''}${cols[i]?.nowrap ? 'white-space:nowrap;' : ''}">${cell == null ? '—' : cell}</td>`).join('')}
+          ${r.map((cell, i) => `<td${mCls(cols[i])} style="${TD}${cols[i]?.align === 'right' ? 'text-align:right;' : ''}${cols[i]?.nowrap ? 'white-space:nowrap;' : ''}">${cell == null ? '—' : cell}</td>`).join('')}
         </tr>`).join('')
       : `<tr><td colspan="${cols.length}" style="padding:44px;text-align:center;color:#94a3b8;font-size:13px;">${esc(empty)}</td></tr>`;
-    return `<div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
-      <div style="overflow:auto;${maxHeight ? `max-height:${maxHeight};` : ''}">
-        <table style="width:100%;border-collapse:collapse;">
+    const wrapCls = ['hr-tbl', cards ? 'hr-tbl-cards' : '', sticky ? 'hr-tbl-sticky' : ''].filter(Boolean).join(' ');
+    return `<div class="${wrapCls}" style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
+      <div class="hr-tbl-scroll" style="overflow:auto;${maxHeight ? `max-height:${maxHeight};` : ''}">
+        <table${cards ? ' class="m-cards"' : ''} style="width:100%;border-collapse:collapse;">
           <thead><tr>${cols.map((c) => `<th style="${TH}${c.align === 'right' ? 'text-align:right;' : ''}">${esc(c.label)}</th>`).join('')}</tr></thead>
           <tbody>${body}</tbody>
         </table>
@@ -175,7 +248,8 @@ window.HR = (function () {
 
   function select(id, label, value, options, opts = {}) {
     const { required = false, span = 1, placeholder = null, hint = '' } = opts;
-    const list = options.map((o) => (typeof o === 'string' ? { value: o, label: o } : o));
+    // Plain numbers (the year pickers) are options too, not objects.
+    const list = options.map((o) => (o === null || typeof o !== 'object' ? { value: o, label: o } : o));
     return `<div style="grid-column:span ${span};">
       <label style="${LABEL}">${esc(label)}${required ? ' <span style="color:#ef4444">*</span>' : ''}</label>
       <select id="${esc(id)}" style="${CONTROL}">
@@ -221,44 +295,44 @@ window.HR = (function () {
     // side panel instead of a centered dialog — same header/body/footer shape
     // and the same ids, so callers (onOpen/onConfirm) don't need to change.
     const isDrawer = variant === 'drawer';
-    const closeBtn = `<button id="${id}-x" aria-label="Close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;
+    const closeBtn = `<button id="${id}-x" class="hr-modal-x" aria-label="Close" style="width:28px;height:28px;border-radius:8px;border:none;background:#f1f5f9;
               color:#64748b;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
                 stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>`;
-    const footer = `<div style="padding:15px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
+    const footer = `<div class="hr-modal-foot" style="padding:15px 22px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0;">
             <button id="${id}-cancel" class="btn-secondary">${esc(cancelText)}</button>
             ${hideConfirm ? '' : `<button id="${id}-ok" class="btn-primary" ${saving ? 'disabled' : ''}>${esc(saving ? 'Saving…' : confirmText)}</button>`}
           </div>`;
     const html = isDrawer ? `
-      <div id="${id}" style="position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(2px);
+      <div id="${id}" class="hr-modal hr-drawer" style="position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(2px);
            z-index:9999;display:flex;align-items:stretch;justify-content:flex-end;">
-        <div id="${id}-box" style="background:#fff;box-shadow:-16px 0 44px rgba(0,0,0,.18);
+        <div id="${id}-box" class="hr-modal-box" style="background:#fff;box-shadow:-16px 0 44px rgba(0,0,0,.18);
              width:100%;max-width:${width}px;height:100%;display:flex;flex-direction:column;
              transform:translateX(100%);transition:transform .22s ease-out;">
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:17px 22px;border-bottom:1px solid #f1f5f9;flex-shrink:0;">
+          <div class="hr-modal-head" style="display:flex;align-items:center;justify-content:space-between;padding:17px 22px;border-bottom:1px solid #f1f5f9;flex-shrink:0;">
             <div>
               <div style="font-size:15px;font-weight:700;color:#0f172a;">${esc(title)}</div>
               ${subtitle ? `<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">${esc(subtitle)}</div>` : ''}
             </div>
             ${closeBtn}
           </div>
-          <div style="padding:20px 22px;overflow-y:auto;flex:1;">${bodyHTML}</div>
+          <div class="hr-modal-body" style="padding:20px 22px;overflow-y:auto;flex:1;">${bodyHTML}</div>
           ${footer}
         </div>
       </div>` : `
-      <div id="${id}" style="position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(4px);
+      <div id="${id}" class="hr-modal" style="position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(4px);
            z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;overflow:auto;">
-        <div id="${id}-box" style="background:#fff;border-radius:18px;box-shadow:0 22px 52px rgba(0,0,0,.16);
+        <div id="${id}-box" class="hr-modal-box" style="background:#fff;border-radius:18px;box-shadow:0 22px 52px rgba(0,0,0,.16);
              width:100%;max-width:${width}px;overflow:hidden;margin:auto;">
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:17px 22px;border-bottom:1px solid #f1f5f9;">
+          <div class="hr-modal-head" style="display:flex;align-items:center;justify-content:space-between;padding:17px 22px;border-bottom:1px solid #f1f5f9;">
             <div>
               <div style="font-size:15px;font-weight:700;color:#0f172a;">${esc(title)}</div>
               ${subtitle ? `<div style="font-size:11.5px;color:#94a3b8;margin-top:2px;">${esc(subtitle)}</div>` : ''}
             </div>
             ${closeBtn}
           </div>
-          <div style="padding:20px 22px;">${bodyHTML}</div>
+          <div class="hr-modal-body" style="padding:20px 22px;">${bodyHTML}</div>
           ${footer}
         </div>
       </div>`;
@@ -288,7 +362,7 @@ window.HR = (function () {
   function closeModal(id) { document.getElementById(id)?.remove(); }
 
   const grid = (inner, cols = 2) =>
-    `<div style="display:grid;grid-template-columns:repeat(${cols},minmax(0,1fr));gap:13px;">${inner}</div>`;
+    `<div class="hr-grid${cols === 3 ? ' hr-grid-3' : ''}" style="display:grid;grid-template-columns:repeat(${cols},minmax(0,1fr));gap:13px;">${inner}</div>`;
 
   const sectionTitle = (t) =>
     `<div style="grid-column:1/-1;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;

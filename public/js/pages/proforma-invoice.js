@@ -160,7 +160,7 @@ window.Pages['proforma-invoice'] = (() => {
 
   /* ── field helpers (styled like PO/GRN Creation, for a consistent look) ── */
   function _fieldWrap(label, innerHtml, extra) {
-    return '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
+    return '<div class="pi-fw" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;' + (extra || '') + '">'
       + '<div style="font-size:12px;font-weight:700;color:#1e293b;margin-bottom:8px;">' + esc(label) + '</div>'
       + innerHtml
       + '</div>';
@@ -721,26 +721,26 @@ window.Pages['proforma-invoice'] = (() => {
     return '<tr class="pic-item-row" style="border-bottom:1px solid #f1f5f9;">'
       // Photo cell — filled in once a model is picked; also the visual
       // confirmation that the image the PDF will use actually loads.
-      + '<td style="padding:6px;width:56px;text-align:center;">'
+      + '<td class="pic-c-photo" style="padding:6px;width:56px;text-align:center;">'
         + '<div class="pic-item-thumb" style="width:46px;height:42px;display:grid;place-items:center;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">'
           + '<span style="font-size:10px;color:#cbd5e1;">—</span>'
         + '</div>'
         + '<input type="hidden" data-field="imageUrl" />'
       + '</td>'
-      + _ITEM_COLS.map(c => '<td style="padding:6px;min-width:' + c.width + 'px;' + (c.typeahead ? 'position:relative;' : '') + '">'
+      + _ITEM_COLS.map(c => '<td class="pic-c-' + c.field + '" data-l="' + esc(c.label) + '" style="padding:6px;min-width:' + c.width + 'px;' + (c.typeahead ? 'position:relative;' : '') + '">'
           + '<input type="text" ' + (c.typeahead ? 'class="pic-item-code" autocomplete="off" ' : '') + (c.numeric ? 'inputmode="decimal" ' : '')
             + (c.derived ? 'class="pic-derived" ' : '')
             + 'data-field="' + c.field + '" placeholder="' + esc(c.label) + '" style="' + _cellInput + (c.numeric ? 'text-align:right;' : '') + '" />'
           + (c.typeahead ? '<div class="pic-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:260px;overflow-y:auto;"></div>' : '')
         + '</td>').join('')
-      + '<td style="padding:6px;text-align:center;"><button type="button" class="pic-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
+      + '<td class="pic-c-rm" style="padding:6px;text-align:center;"><button type="button" class="pic-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
     + '</tr>';
   }
 
   function _itemsTableHtml() {
     const minWidth = _ITEM_COLS.reduce((sum, c) => sum + c.width, 0) + 120;
-    return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:' + minWidth + 'px;">'
+    return '<div class="pic-items-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
+      + '<table class="pic-items-tbl" style="width:100%;border-collapse:collapse;min-width:' + minWidth + 'px;">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
           + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Photo</th>'
           + _ITEM_COLS.map(c => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(c.label) + '</th>').join('')
@@ -801,8 +801,8 @@ window.Pages['proforma-invoice'] = (() => {
     if (!host) return;
     if (!_newProductOpen) { host.innerHTML = ''; return; }
 
-    host.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:60;padding:16px;overflow-y:auto;" id="np-backdrop">'
-      + '<div style="background:#fff;border-radius:18px;width:100%;max-width:640px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
+    host.innerHTML = '<div class="pi-sheet-ov" style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:60;padding:16px;overflow-y:auto;" id="np-backdrop">'
+      + '<div class="pi-sheet" style="background:#fff;border-radius:18px;width:100%;max-width:640px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
         + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;">'
           + '<div style="flex:1;"><div style="font-size:15px;font-weight:700;color:#1e293b;">New Product</div>'
             + '<div style="font-size:12px;color:#94a3b8;margin-top:1px;">Saved to the shared product master — available on every PI from now on.</div></div>'
@@ -813,7 +813,7 @@ window.Pages['proforma-invoice'] = (() => {
             + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
           + '</button>'
         + '</div>'
-        + '<div style="padding:22px 24px;max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px;">'
+        + '<div class="pi-sheet-body" style="padding:22px 24px;max-height:65vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px;">'
           + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;">'
             + _NP_FIELDS.map(f => _fieldWrap(f.label + (f.required ? ' *' : ''),
                 '<input type="text" id="' + f.id + '" placeholder="' + esc(f.placeholder || '') + '" style="' + _inputStyle + '" />')).join('')
@@ -831,7 +831,7 @@ window.Pages['proforma-invoice'] = (() => {
                 + '</div>'
               + '</div>')
         + '</div>'
-        + '<div style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;">'
+        + '<div class="pi-sheet-foot" style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;">'
           + '<button type="button" id="np-cancel" style="padding:9px 18px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:700;cursor:pointer;">Cancel</button>'
           + '<button type="button" id="np-save" style="padding:9px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">Save Product</button>'
         + '</div>'
@@ -985,7 +985,7 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _reviseBannerHtml() {
     if (!_reviseOf) return '';
-    return '<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;">'
+    return '<div class="pi-banner" style="display:flex;align-items:flex-start;gap:12px;padding:12px 16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;">'
       + '<div style="flex:1;">'
         + '<div style="font-size:13px;font-weight:700;color:#1e40af;">Revising ' + esc(_reviseOf.piNo) + '</div>'
         + '<div style="font-size:12px;color:#3b6fc4;margin-top:2px;">Saving issues the next revision of this same number. '
@@ -1070,7 +1070,7 @@ window.Pages['proforma-invoice'] = (() => {
       // One-off terms for THIS PI only — they go into the textarea above (so
       // they print like any other term) without touching the standard list,
       // which comes back untouched on the next PI.
-      + '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center;">'
+      + '<div class="pi-btnrow" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center;">'
         + '<input type="text" id="pic-new-term" autocomplete="off" placeholder="Add a temporary term / condition for this PI only…" style="' + _inputStyle + 'flex:1;min-width:220px;width:auto;" />'
         + '<button type="button" id="pic-add-term" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid var(--color-primary);color:var(--color-primary);font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add Term</button>'
         + '<button type="button" id="pic-reset-terms" title="Put the standard terms back, dropping any added or edited lines" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;">Reset to standard terms</button>'
@@ -1109,7 +1109,7 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   function _tabsHtml() {
-    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
+    return '<div class="pi-tabs" style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
       + _tabTab('Create PI', _view === 'create', 'class="pic-create-tab"')
       + _tabTab('PI List', _view === 'list', 'class="pic-list-tab"')
       + _tabTab('Order Sheets', _view === 'orders', 'class="pic-orders-tab"')
@@ -1315,7 +1315,7 @@ window.Pages['proforma-invoice'] = (() => {
       + '<tr style="border-bottom:1px solid #f1f5f9;' + (v.child ? 'background:#fafbfd;' : '') + '">'
         // The number is the fold handle: click the PI in force to see the ones
         // it replaced. Rows with nothing folded under them stay plain text.
-        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;' + (v.child ? 'padding-left:30px;' : '') + '">'
+        + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;' + (v.child ? 'padding-left:30px;' : '') + '">'
           + (v.kids
             ? '<span class="pic-fam-toggle" data-fam="' + esc(v.fam) + '" role="button" tabindex="0"'
               + ' title="' + (open ? 'Hide the' : 'Show the') + ' ' + v.kids + ' earlier ' + (v.kids === 1 ? 'version' : 'versions') + ' of this PI"'
@@ -1337,7 +1337,7 @@ window.Pages['proforma-invoice'] = (() => {
             : '<span style="color:#cbd5e1;">—</span>')
         + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+        + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           + (r.status !== 'Cancelled' && r.canSetPrice
             ? '<button type="button" class="pic-price-btn" data-pi="' + esc(r.piNo) + '" style="border:1.5px solid var(--color-primary);background:#fff;color:var(--color-primary);cursor:pointer;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:7px;margin-right:6px;">' + (r.status === 'Priced' ? 'Edit Price' : 'Add Price') + '</button>'
             : '')
@@ -1439,7 +1439,7 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   function _pilFilterBarHtml() {
-    return '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+    return '<div class="pi-fbar" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
       + '<input type="text" id="pil-buyer" placeholder="Search consignee…" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
       + '<input type="date" id="pil-from" style="' + _inputStyle + 'width:auto;" />'
       + '<span style="color:#94a3b8;font-size:12px;">to</span>'
@@ -1470,7 +1470,7 @@ window.Pages['proforma-invoice'] = (() => {
       + '</div>'
       + _pilFilterBarHtml()
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:880px;">'
+        + '<table class="m-cards pi-mtbl" style="width:100%;border-collapse:collapse;min-width:880px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
             + ['Pro. Invoice No', 'Date', 'Consignee', 'Status', 'Total', 'PDF', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
@@ -1639,15 +1639,15 @@ window.Pages['proforma-invoice'] = (() => {
     const priceType = form.priceType || _priceDefault.priceType;
     const currency = form.currency || _priceDefault.currency;
 
-    modal.innerHTML = '<div style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="pipm-backdrop">'
-      + '<div style="background:#fff;border-radius:18px;width:100%;max-width:1040px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
+    modal.innerHTML = '<div class="pi-sheet-ov" style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="pipm-backdrop">'
+      + '<div class="pi-sheet" style="background:#fff;border-radius:18px;width:100%;max-width:1040px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
         + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;">'
           + '<div style="flex:1;"><div style="font-size:15px;font-weight:700;color:#1e293b;">' + (row.status === 'Priced' ? 'Edit Price' : 'Add Price') + ' — PI ' + esc(row.piNo) + '</div><div style="font-size:12px;color:#94a3b8;margin-top:1px;">' + esc(row.buyer) + '</div></div>'
           + '<button type="button" id="pipm-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;">'
             + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>'
           + '</button>'
         + '</div>'
-        + '<div style="padding:22px 24px;max-height:82vh;overflow-y:auto;display:flex;flex-direction:column;gap:16px;">'
+        + '<div class="pi-sheet-body" style="padding:22px 24px;max-height:82vh;overflow-y:auto;display:flex;flex-direction:column;gap:16px;">'
           // Basis and currency come first because everything under them is
           // read in those terms — and because they relabel the PI itself, not
           // just this screen.
@@ -1671,7 +1671,7 @@ window.Pages['proforma-invoice'] = (() => {
             + (_rateSheetUrl ? '<a href="' + esc(_rateSheetUrl) + '" target="_blank" rel="noopener" style="font-size:12px;color:var(--color-primary);font-weight:700;white-space:nowrap;">Open the CBM / rate sheet ↗</a>' : '')
           + '</div>'
           + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-            + '<table style="width:100%;border-collapse:collapse;min-width:900px;">'
+            + '<table class="m-cards pi-mtbl pipm-tbl" style="width:100%;border-collapse:collapse;min-width:900px;">'
               + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
                 // Weight per pc and Total Weight ride along for reference —
                 // neither is printed on the PI (see printHiddenCols in
@@ -1687,19 +1687,19 @@ window.Pages['proforma-invoice'] = (() => {
                   const weightPc = _num(it.weightPerPc) || (qty > 0 && weight > 0 ? Math.round((weight / qty) * 1000) / 1000 : 0);
                   return ''
                 + '<tr class="pipm-item-row" data-index="' + i + '" data-qty="' + esc(it.qty || 0) + '" data-weight-pc="' + esc(weightPc || '') + '" style="border-bottom:1px solid #f1f5f9;">'
-                  + '<td style="padding:6px 8px;">' + (it.imageUrl
+                  + '<td class="m-card-hide" style="padding:6px 8px;">' + (it.imageUrl
                       ? '<img src="' + esc(it.imageUrl) + '" alt="" onerror="this.remove()" style="width:34px;height:34px;object-fit:contain;" />'
                       : '<span style="color:#cbd5e1;font-size:11px;">—</span>') + '</td>'
                   // itemCode/description are the pre-export-format field names —
                   // a Draft raised before the switch still has to be priceable.
-                  + '<td style="padding:6px 8px;font-size:12.5px;">' + esc(it.modelNo || it.itemCode || '—') + '</td>'
+                  + '<td class="m-card-title" style="padding:6px 8px;font-size:12.5px;">' + esc(it.modelNo || it.itemCode || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.clientCode || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.itemName || it.description || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.size || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;text-align:right;">' + esc(it.qty || '') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;">' + (weightPc ? esc(weightPc) : '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;">' + esc(it.weight || '—') + '</td>'
-                  + '<td style="padding:6px 8px;"><input type="text" inputmode="decimal" class="pipm-rate" value="' + esc(it.rate || '') + '" placeholder="0.000" style="width:110px;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" />'
+                  + '<td class="pipm-rate-td" data-label="Rate / Pc" style="padding:6px 8px;"><input type="text" inputmode="decimal" class="pipm-rate" value="' + esc(it.rate || '') + '" placeholder="0.000" style="width:110px;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;text-align:right;" />'
                     // Filled in by _loadLastPrices once the log and the CBM
                     // sheet have been read: the last rate this buyer was
                     // quoted for this item on an earlier PI, what the export
@@ -1709,7 +1709,7 @@ window.Pages['proforma-invoice'] = (() => {
                     + '<div class="pipm-sheet" style="font-size:10.5px;color:#94a3b8;margin-top:2px;max-width:190px;"></div>'
                     + '<div class="pipm-kg" style="font-size:10.5px;color:#92400e;margin-top:2px;max-width:190px;"></div>'
                   + '</td>'
-                  + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;"><span class="pipm-amount">0.00</span>'
+                  + '<td data-label="Amount" style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;white-space:nowrap;"><span class="pipm-amount">0.00</span>'
                     + '<div class="pipm-perkg" style="font-size:10.5px;color:#94a3b8;margin-top:3px;"></div></td>'
                 + '</tr>';
                 }).join('')
@@ -1719,7 +1719,7 @@ window.Pages['proforma-invoice'] = (() => {
           // Extra Charges / Special Discount — whole-PI, not per item, and
           // each can hold more than one line (freight, handling, a loyalty
           // discount, ...). Printed on the PI just above its Grand Total.
-          + '<div style="display:flex;flex-wrap:wrap;gap:20px;padding:14px 16px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;">'
+          + '<div class="pipm-charges" style="display:flex;flex-wrap:wrap;gap:20px;padding:14px 16px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;">'
             + _chargeSectionHtml('extra', 'Extra Charges', Array.isArray(form.extraCharges) ? form.extraCharges : [], '#b45309')
             + _chargeSectionHtml('discount', 'Special Discount', Array.isArray(form.specialDiscounts) ? form.specialDiscounts : [], '#b91c1c')
           + '</div>'
@@ -1732,7 +1732,7 @@ window.Pages['proforma-invoice'] = (() => {
             + '<div style="font-size:11.5px;color:#94a3b8;">Shown for confirmation — the printed total is the sheet\'s own formula.</div>'
           + '</div>'
         + '</div>'
-        + '<div style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;">'
+        + '<div class="pi-sheet-foot" style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:10px;">'
           + '<button type="button" id="pipm-cancel" style="padding:9px 18px;border-radius:9px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:700;cursor:pointer;">Cancel</button>'
           + '<button type="button" id="pipm-save" style="padding:9px 22px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13px;font-weight:700;cursor:pointer;">Save Price</button>'
         + '</div>'
@@ -1936,7 +1936,7 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   function _osFilterBarHtml() {
-    return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
+    return '<div class="pi-fbar" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
       + '<input type="text" id="osl-q" value="' + esc(_oslFBuyer) + '" placeholder="Search order no, PI no or customer…" style="flex:1;min-width:220px;' + _inputStyle + '" />'
       + '<input type="date" id="osl-from" value="' + esc(_oslFFrom) + '" style="' + _inputStyle + 'width:auto;" />'
       + '<span style="align-self:center;font-size:12px;color:#94a3b8;">to</span>'
@@ -1953,7 +1953,7 @@ window.Pages['proforma-invoice'] = (() => {
       + '</div>'
       + _osFilterBarHtml()
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:860px;">'
+        + '<table class="m-cards pi-mtbl" style="width:100%;border-collapse:collapse;min-width:860px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
             + ['Order No', 'Order Date', 'Against PI', 'Customer', 'Status', 'Total Qty', 'PDF', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
@@ -1985,7 +1985,7 @@ window.Pages['proforma-invoice'] = (() => {
     }
     body.innerHTML = rows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
-        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.orderNo) + '</td>'
+        + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.orderNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.orderDate) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + esc(r.piNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
@@ -1997,7 +1997,7 @@ window.Pages['proforma-invoice'] = (() => {
           // lines — the factory and the loading team work it in Excel.
           + (r.form ? ' <span style="color:#cbd5e1;">·</span> <a href="/api/order-sheet/xlsx?orderNo=' + encodeURIComponent(r.orderNo) + '" style="color:#15803d;font-weight:600;" title="Download this order as an Excel workbook">Excel</a>' : '')
         + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+        + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           // Straight into a new Packing List with this order already ticked —
           // the common case is shipping one order, and the picker is still
           // there for the times it is two or three.
@@ -2137,7 +2137,7 @@ window.Pages['proforma-invoice'] = (() => {
     const notes = (_orderDefaults && _orderDefaults.notes) || [];
     const noteSlots = 5;
     return '<form id="os-form" style="display:flex;flex-direction:column;gap:16px;">'
-      + '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
+      + '<div class="pi-banner" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
         + '<div>'
           + '<div style="font-size:13px;font-weight:700;color:#1e40af;">Order against ' + esc(_osOf.piNo) + '</div>'
           + '<div style="font-size:11.5px;color:#1e40af;opacity:.85;margin-top:2px;">The customer, the shipping terms and the lines come across from that PI. No pricing appears on an Order Sheet.</div>'
@@ -2286,7 +2286,7 @@ window.Pages['proforma-invoice'] = (() => {
   const _PKL_COLS = ['Packing List No', 'Date', 'Invoice No', 'Orders Shipped', 'Party', 'Status', 'Approval', 'Packed Qty', 'Cartons', 'PDF', 'Actions'];
 
   function _pklFilterBarHtml() {
-    return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
+    return '<div class="pi-fbar" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
       + '<input type="text" id="pkl-q" value="' + esc(_pklFBuyer) + '" placeholder="Search packing list no, invoice no, order no or party…" style="flex:1;min-width:220px;' + _inputStyle + '" />'
       + '<input type="date" id="pkl-from" value="' + esc(_pklFFrom) + '" style="' + _inputStyle + 'width:auto;" />'
       + '<span style="align-self:center;font-size:12px;color:#94a3b8;">to</span>'
@@ -2299,14 +2299,14 @@ window.Pages['proforma-invoice'] = (() => {
   function _pklListHtml() {
     return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;">'
         + '<p style="font-size:12.5px;color:#64748b;margin:0;">The export department’s own packing list. One list can ship several orders for the same party, and a line can go part-shipped — the balance stays on the order for the next one.</p>'
-        + '<div style="display:flex;align-items:center;gap:10px;">'
+        + '<div class="pi-pkl-head" style="display:flex;align-items:center;gap:10px;">'
           + '<span id="pkl-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
           + '<button type="button" id="pkl-new" style="padding:8px 16px;border-radius:8px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;">+ New Packing List</button>'
         + '</div>'
       + '</div>'
       + _pklFilterBarHtml()
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:1020px;">'
+        + '<table class="m-cards pi-mtbl" style="width:100%;border-collapse:collapse;min-width:1020px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
             + _PKL_COLS.map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
@@ -2337,7 +2337,7 @@ window.Pages['proforma-invoice'] = (() => {
     const num = (v) => v ? esc(v) : '<span style="color:#cbd5e1;">—</span>';
     body.innerHTML = rows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
-        + '<td style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.plNo) + '</td>'
+        + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.plNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + esc(r.plDate) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;font-weight:600;white-space:nowrap;">' + num(r.invoiceNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12px;line-height:1.5;">' + esc(r.orderNos || '—') + '</td>'
@@ -2347,7 +2347,7 @@ window.Pages['proforma-invoice'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">' + num(r.totalQty) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">' + num(r.totalCartons) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+        + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
             : '<button type="button" class="pkl-cancel-btn" data-pl="' + esc(r.plNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
@@ -2799,7 +2799,7 @@ window.Pages['proforma-invoice'] = (() => {
     const lead = _plPickedOrders()[0];
     const D = _packingDefaults || {};
     return '<form id="pl-form" style="display:flex;flex-direction:column;gap:16px;">'
-      + '<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
+      + '<div class="pi-banner" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
         + '<div>'
           + '<div style="font-size:13px;font-weight:700;color:#1e40af;">New Packing List</div>'
           + '<div style="font-size:11.5px;color:#1e40af;opacity:.85;margin-top:2px;">Pick every order going in this container — they must all be for one party. Then count the cartons; the quantities, weights, CBM and carton numbers follow from that.</div>'
@@ -2991,6 +2991,70 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   /* ── Render ─────────────────────────────────────────────────────────── */
+  /* ── Phone layout (under 768px) — on-screen app only. Desktop keeps its
+     inline styles; the printed PI / order sheet / packing list are built
+     server-side and are not touched by any of this. The PI item rows restack
+     into a card each; the wider order-sheet and packing line grids keep their
+     deliberate sideways scroll. ── */
+  const _PI_MOBILE_CSS = '<style>@media (max-width: 767px) {'
+    + '.pi-page { padding-bottom:24px !important; }'
+    + '.pi-page h1 { font-size:18px !important; }'
+    + '.pi-tabs { overflow-x:auto; scrollbar-width:none; gap:0 !important; margin-bottom:14px !important; }'
+    + '.pi-tabs::-webkit-scrollbar { display:none; }'
+    + '.pi-tabs > button { flex-shrink:0; white-space:nowrap; min-height:42px; padding:9px 12px !important; }'
+    + '.pi-page form { gap:12px !important; }'
+    + '.pi-page [style*="minmax(220px,1fr)"] { gap:10px !important; }'
+    + '.pi-fw { padding:11px 12px !important; }'
+    + '.pi-fw > div:first-child { margin-bottom:6px !important; }'
+    + '.pi-banner { flex-direction:column; align-items:stretch !important; gap:10px !important; }'
+    + '.pi-banner > button { min-height:38px; }'
+    + '.pi-btnrow > button { flex:1 1 auto; min-height:40px; }'
+    + '.pi-btnrow > #pic-new-term { flex:1 1 100% !important; min-width:0 !important; }'
+    + '#pic-submit-btn, #os-submit-btn, #pl-submit-btn { align-self:stretch !important; width:100%; min-height:46px; }'
+    /* PI item lines: one card per row */
+    + '.pic-items-wrap { overflow:visible !important; border:none !important; }'
+    + '.pic-items-tbl { min-width:0 !important; display:block; }'
+    + '.pic-items-tbl thead { display:none; }'
+    + '.pic-items-tbl tbody { display:flex; flex-direction:column; gap:10px; }'
+    + '.pic-items-tbl tr.pic-item-row { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; padding:12px; background:var(--surface,#fff); border:1px solid var(--border-light,#e2e8f0) !important; border-radius:12px; }'
+    + '.pic-items-tbl tr.pic-item-row td { display:block; padding:0 !important; min-width:0 !important; width:auto !important; grid-column:span 2; }'
+    + '.pic-items-tbl td[data-l]::before { content:attr(data-l); display:block; font-size:10.5px; font-weight:600; color:var(--text-muted,#64748b); margin:0 0 3px 1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }'
+    + '.pic-items-tbl tr.pic-item-row td.pic-c-photo { grid-column:1; grid-row:1 / span 2; align-self:start; }'
+    + '.pic-items-tbl tr.pic-item-row td.pic-c-photo .pic-item-thumb { width:100% !important; height:72px !important; }'
+    + '.pic-items-tbl tr.pic-item-row td.pic-c-modelNo { grid-column:2 / 4; grid-row:1; }'
+    + '.pic-items-tbl tr.pic-item-row td.pic-c-rm { grid-column:4; grid-row:1; text-align:right !important; }'
+    + '.pic-items-tbl tr.pic-item-row td.pic-c-rm button { width:36px; height:36px; font-size:20px !important; border-radius:8px; background:#fef2f2 !important; }'
+    + '.pic-items-tbl tr.pic-item-row td.pic-c-itemName { grid-column:2 / 5; grid-row:2; }'
+    + '.pic-items-tbl tr.pic-item-row td.pic-c-remarks { grid-column:1 / -1; }'
+    + '.pic-items-tbl input[type="text"] { min-height:38px; }'
+    /* list filter bars + list tables (m-cards) */
+    + '.pi-fbar { gap:8px !important; }'
+    + '.pi-fbar > input[type="text"] { flex:1 1 100% !important; min-width:0 !important; }'
+    + '.pi-fbar > input[type="date"] { flex:1 1 38%; min-width:0; }'
+    + '.pi-fbar > button { flex:1 1 38%; min-height:40px; }'
+    + '.pi-pkl-head { width:100%; justify-content:space-between; }'
+    + '.pi-pkl-head #pkl-new { min-height:40px; }'
+    + '.pi-page table.pi-mtbl { min-width:0 !important; }'
+    + '.pi-page table.pi-mtbl td.m-card-title { white-space:normal !important; }'
+    + '.pi-page table.pi-mtbl td.m-card-actions { gap:6px; align-items:center; }'
+    + '.pi-page table.pi-mtbl td.m-card-actions button { min-height:36px; margin-right:0 !important; }'
+    + '.pi-page table.pi-mtbl td.m-card-actions button[style*="border:none"] { border:1px solid var(--border-base,#e2e8f0) !important; padding:6px 12px !important; border-radius:7px !important; }'
+    /* price modal: rate cell stacks its helper lines under the input */
+    + '.pipm-tbl td.pipm-rate-td { flex-wrap:wrap; }'
+    + '.pipm-tbl td.pipm-rate-td > div { flex-basis:100%; max-width:none !important; padding-left:106px; }'
+    + '.pipm-tbl td.pipm-rate-td input { flex:1; width:auto !important; min-width:0; min-height:38px; }'
+    + '.pipm-charges > div { min-width:0 !important; flex-basis:100% !important; }'
+    /* custom modals open as bottom sheets */
+    + '.pi-sheet-ov { place-items:end center !important; padding:0 !important; }'
+    + '.pi-sheet { max-width:100% !important; max-height:92vh; border-radius:16px 16px 0 0 !important; display:flex !important; flex-direction:column; }'
+    + '.pi-sheet > div:first-child { padding:16px !important; }'
+    + '.pi-sheet-body { max-height:none !important; flex:1; min-height:0; padding:14px 16px !important; }'
+    + '.pi-sheet-body > * { flex-shrink:0; }'
+    + '.pi-sheet-body [style*="grid-template-columns"] { grid-template-columns:minmax(0,1fr) !important; }'
+    + '.pi-sheet-foot { padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px)) !important; }'
+    + '.pi-sheet-foot > button { flex:1; min-height:44px; }'
+  + '}</style>';
+
   function renderPage() {
     const el = document.getElementById('main-content');
     if (!el) return;
@@ -3018,7 +3082,7 @@ window.Pages['proforma-invoice'] = (() => {
         + _shippingFieldsHtml()
         + _sectionTitle('Items')
         + _itemsTableHtml()
-        + '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+        + '<div class="pi-btnrow" style="display:flex;gap:10px;flex-wrap:wrap;">'
           + '<button type="button" id="pic-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item</button>'
           + (_hasFeature('add_product')
             ? '<button type="button" id="pic-new-product" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px dashed var(--color-primary);color:var(--color-primary);font-size:12.5px;font-weight:700;cursor:pointer;">+ New Product</button>'
@@ -3033,7 +3097,8 @@ window.Pages['proforma-invoice'] = (() => {
     // The packing form's line table is the widest thing on this page — it
     // carries the order number, the ordered/packed/balance trio and both
     // weights on every row — so it gets more room than the other views.
-    el.innerHTML = '<div style="max-width:' + (isPacking ? '1360px' : isList || isOrders ? '1200px' : '1180px') + ';margin:0 auto;padding:4px 0 40px;">'
+    el.innerHTML = '<div class="pi-page" style="max-width:' + (isPacking ? '1360px' : isList || isOrders ? '1200px' : '1180px') + ';margin:0 auto;padding:4px 0 40px;">'
+      + _PI_MOBILE_CSS
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Proforma Invoice / OCS</h1>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Export PI. Create captures consignee, shipping &amp; items only — the rate, its basis and its currency are added afterward by an authorized user.</p>'

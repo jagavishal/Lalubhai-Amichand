@@ -103,7 +103,7 @@ window.Pages['po-pending'] = (() => {
     const s = _data.summary;
     const bn = s.bottleneck;
     return `
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;">
+      <div class="m-grid-2 pop-tiles" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;">
         ${window.UI.statTile({ label: 'PRs Pending', value: s.pending, sub: `${s.tracked} tracked in FMS`, color: 'brand' })}
         ${window.UI.statTile({ label: 'Overdue', value: s.overdue, sub: 'past planned date', color: 'danger' })}
         ${window.UI.statTile({ label: 'Stuck at PO Stage', value: s.atPoSteps, sub: 'Create PO / Issue PO to Vendor', color: 'warning' })}
@@ -160,37 +160,37 @@ window.Pages['po-pending'] = (() => {
 
       return `
         <tr class="table-row" style="border-top:1px solid var(--border-light);">
-          <td style="${td}">
+          <td class="m-card-title" style="${td}"><div class="pop-cell">
             <div style="font-weight:700;">${esc(r.prNo)}</div>
             <div style="font-size:11px;color:var(--text-secondary);">${esc(r.raisedOn)}</div>
-          </td>
-          <td style="${td}">
+          </div></td>
+          <td style="${td}"><div class="pop-cell">
             <div style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.vendor) || '<span style="color:var(--text-muted);">—</span>'}</div>
             <div style="font-size:11px;color:var(--text-secondary);">${esc(r.department)}${r.requestedBy ? ' &middot; ' + esc(r.requestedBy) : ''}</div>
-          </td>
-          <td style="${td}">
+          </div></td>
+          <td data-label="Progress" style="${td}"><div class="pop-cell">
             <div style="display:flex;align-items:center;gap:0;">${stepTrack(r)}</div>
-          </td>
-          <td style="${td}">
+          </div></td>
+          <td style="${td}"><div class="pop-cell">
             ${r.pendingAt
               ? `<div style="font-weight:600;">${esc(r.pendingAt.label)}</div>
                  <div style="font-size:11px;color:var(--text-secondary);">${esc(r.pendingAt.owner)}</div>`
               : '<span style="color:var(--color-success);font-weight:600;">Chain poori</span>'}
-          </td>
-          <td style="${td};white-space:nowrap;">
+          </div></td>
+          <td style="${td};white-space:nowrap;"><div class="pop-cell">
             ${r.pendingAt && r.pendingAt.planned ? `<div style="font-size:11.5px;color:var(--text-secondary);margin-bottom:3px;">plan ${esc(r.pendingAt.planned)}</div>` : ''}
             ${lateBadge(r.pendingAt)}
-          </td>
-          <td style="${td};white-space:nowrap;">
+          </div></td>
+          <td style="${td};white-space:nowrap;"><div class="pop-cell">
             ${r.erpPoNo ? `<span style="font-weight:600;">${esc(r.erpPoNo)}</span><div style="font-size:11px;color:var(--text-secondary);">${esc(r.erpPoDate)}</div>` : '<span style="color:var(--text-muted);">—</span>'}
-          </td>
-          <td style="${td}">${flags || '<span style="color:var(--text-muted);">—</span>'}</td>
+          </div></td>
+          <td style="${td}"><div class="pop-cell">${flags || '<span style="color:var(--text-muted);">—</span>'}</div></td>
         </tr>`;
     }).join('');
 
     return `
       <div class="card" style="padding:0;overflow:hidden;">
-        <div style="padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+        <div class="pop-card-head" style="padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
           <div>
             <div style="font-size:13.5px;font-weight:700;color:var(--text-primary);">PR-wise status</div>
             <div style="font-size:11.5px;color:var(--text-secondary);">Har dot ek step hai — hover karke detail dekhein.</div>
@@ -200,8 +200,8 @@ window.Pages['po-pending'] = (() => {
             Sirf pending dikhao
           </label>
         </div>
-        <div style="overflow-x:auto;">
-          <table style="width:100%;border-collapse:collapse;min-width:960px;">
+        <div class="pop-tbl-wrap" style="overflow-x:auto;">
+          <table class="m-cards pop-tbl" style="width:100%;border-collapse:collapse;min-width:960px;">
             <thead style="background:var(--surface-alt);">
               <tr>
                 <th style="${th}">PR</th><th style="${th}">Vendor / Dept</th>
@@ -212,7 +212,7 @@ window.Pages['po-pending'] = (() => {
             <tbody>${body || `<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--text-muted);font-size:13px;">Kuch pending nahi hai.</td></tr>`}</tbody>
           </table>
         </div>
-        <div style="padding:12px 20px;border-top:1px solid var(--border-light);display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--text-secondary);">
+        <div class="pop-legend" style="padding:12px 20px;border-top:1px solid var(--border-light);display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--text-secondary);">
           <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--color-success);margin-right:5px;"></span>Done</span>
           <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--color-warning);margin-right:5px;"></span>Pending yahin</span>
           <span><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--color-danger);margin-right:5px;"></span>Skip ho gaya</span>
@@ -223,18 +223,35 @@ window.Pages['po-pending'] = (() => {
 
   function header() {
     return `
-      <div class="card" style="padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
+      <div class="card pop-head" style="padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;">
         <div>
           <div style="font-size:15px;font-weight:700;color:var(--text-primary);">PO Pending — Stores Approval FMS</div>
           <div style="font-size:11.5px;color:var(--text-secondary);margin-top:2px;">
             Source: FMS (Stores) 2026-2027 &rsaquo; Monitoring &middot; read-only
           </div>
         </div>
-        <div style="display:flex;align-items:center;gap:12px;">
+        <div class="pop-head-actions" style="display:flex;align-items:center;gap:12px;">
           <span id="pop-status" style="font-size:11.5px;color:var(--text-secondary);"></span>
           <button id="pop-refresh" class="btn-secondary" style="font-size:12px;">Refresh</button>
         </div>
-      </div>`;
+      </div>
+      <!-- after the card, not before: as the first child of the page's
+           spaced stack it pushed the header down 14px on desktop -->
+      <style>
+        @media (max-width: 767px) {
+          .pop-head { padding: 14px 16px !important; }
+          .pop-head-actions { width: 100%; justify-content: space-between; }
+          .pop-head-actions .btn-secondary { min-height: 36px; }
+          .pop-tiles { gap: 10px !important; }
+          .pop-card-head { padding: 14px 16px !important; }
+          table.pop-tbl { min-width: 0 !important; }
+          table.pop-tbl td .pop-cell { min-width: 0; }
+          table.pop-tbl td .pop-cell > div[style*="max-width:220px"] { max-width: none !important; white-space: normal !important; }
+          table.pop-tbl td.m-card-title .pop-cell { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; width: 100%; }
+          table.pop-tbl td.m-card-title .pop-cell > div:last-child { font-weight: 500; }
+          .pop-legend { padding: 12px 16px !important; gap: 8px 14px !important; }
+        }
+      </style>`;
   }
 
   function paint() {

@@ -544,6 +544,25 @@ window.Pages.users = (() => {
     if (caret != null) { try { inp.setSelectionRange(caret, caret); } catch {} }
   }
 
+  /* Phone: users table becomes cards, top bar stacks, access grid scrolls */
+  const USR_MOBILE_CSS = `
+    @media (max-width: 767px) {
+      .usr-topbar { gap:10px !important; }
+      .usr-tabs { width:100%; }
+      .usr-tabs > button { flex:1 1 0; min-height:38px; }
+      .usr-search { flex:1 1 100%; width:100% !important; min-height:40px; }
+      #users-add-btn, #users-signout-everyone-btn { flex:1 1 0; justify-content:center; min-height:40px; }
+      table.m-cards tr.table-row { gap:6px; padding:14px; }
+      table.m-cards td.m-card-actions > div { gap:8px !important; }
+      table.m-cards td.m-card-actions .pill { padding:7px 12px; font-size:12px; }
+      .usr-acc-head { padding:14px !important; }
+      #acc-search { width:100% !important; min-height:40px; }
+      .usr-acc-scroll { max-height:70vh !important; }
+      .usr-acc-scroll td:first-child, .usr-acc-scroll th:first-child { min-width:140px !important; max-width:150px !important; padding-left:12px !important; padding-right:10px !important; }
+      .usr-perm-row { flex-wrap:wrap; }
+      .usr-perm-row > div { padding-left:22px; }
+    }`;
+
   function renderPage() {
     const el = document.getElementById('main-content');
     if (!el) return;
@@ -554,10 +573,10 @@ window.Pages.users = (() => {
     }).join('');
 
     const topBar = `
-      <div class="flex items-center gap-3 flex-wrap">
-        <div class="flex items-center gap-1 bg-slate-100 rounded-lg p-1">${tabBtns}</div>
+      <div class="flex items-center gap-3 flex-wrap usr-topbar">
+        <div class="flex items-center gap-1 bg-slate-100 rounded-lg p-1 usr-tabs">${tabBtns}</div>
         ${_tab === 'Users' ? `
-          <div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 w-64 shadow-sm">
+          <div class="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 w-64 shadow-sm usr-search">
             <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
             <input id="users-search" type="text" value="${esc(_search)}" placeholder="Search…"
               class="bg-transparent border-none outline-none text-[13px] text-slate-700 placeholder:text-slate-400 w-full" />
@@ -574,7 +593,7 @@ window.Pages.users = (() => {
         ` : ''}
       </div>`;
 
-    el.innerHTML = `<div class="space-y-4 animate-fade-in">${topBar}${_tab === 'Users' ? renderUsersTab() : renderAccessTab()}</div>`;
+    el.innerHTML = `<style>${USR_MOBILE_CSS}</style><div class="space-y-4 animate-fade-in">${topBar}${_tab === 'Users' ? renderUsersTab() : renderAccessTab()}</div>`;
 
     /* tab switch */
     el.querySelectorAll('[data-tab]').forEach(btn => {
@@ -751,7 +770,7 @@ window.Pages.users = (() => {
             ? `<button data-action="access" data-id="${esc(u.id)}" class="pill bg-indigo-50 text-indigo-700 hover:bg-indigo-100 cursor-pointer">${_expandedUserId === u.id ? 'Close' : 'Access'}</button>`
             : '';
           const actionCells = _isAdmin ? `
-            <td class="table-td">
+            <td class="table-td m-card-actions">
               <div class="flex gap-1.5 flex-wrap">
                 <button data-action="edit"   data-id="${esc(u.id)}" class="pill pill-brand cursor-pointer" style="border:none;" onmouseenter="this.style.opacity='0.8'" onmouseleave="this.style.opacity='1'">Edit</button>
                 <button data-action="setpwd" data-id="${esc(u.id)}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer">Set Password</button>
@@ -762,7 +781,7 @@ window.Pages.users = (() => {
             </td>` : '';
           const mainRow = `
             <tr class="table-row">
-              <td class="table-td">
+              <td class="table-td m-card-title">
                 <div class="flex items-center gap-2.5">
                   ${avatarHtml(u.name, u.picture)}
                   <div>
@@ -772,9 +791,9 @@ window.Pages.users = (() => {
                 </div>
               </td>
               <td class="table-td text-slate-600">${esc(u.email || '—')}</td>
-              <td class="table-td text-slate-600">${esc(u.phone || '—')}</td>
-              <td class="table-td text-slate-600">${esc(u.department || '—')}</td>
-              <td class="table-td text-slate-600">${esc(u.branch || '—')}</td>
+              <td class="table-td text-slate-600${u.phone ? '' : ' m-card-hide'}">${esc(u.phone || '—')}</td>
+              <td class="table-td text-slate-600 m-card-hide">${esc(u.department || '—')}</td>
+              <td class="table-td text-slate-600${u.branch ? '' : ' m-card-hide'}">${esc(u.branch || '—')}</td>
               <td class="table-td">${employeeCellHtml(u)}</td>
               <td class="table-td"><div class="flex flex-wrap gap-1">${rolePillsHtml(u.roles)}</div></td>
               ${actionCells}
@@ -802,7 +821,7 @@ window.Pages.users = (() => {
     return `
       <div class="card overflow-hidden">
         <div class="overflow-x-auto">
-          <table class="w-full text-sm">
+          <table class="w-full text-sm m-cards">
             <thead class="bg-slate-50/80">
               <tr>
                 <th class="table-th">User</th>
@@ -850,7 +869,7 @@ window.Pages.users = (() => {
           ${esc(f.label)}
         </label>`;
       }).join('');
-      return `${catHtml}<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9;">
+      return `${catHtml}<div class="usr-perm-row" style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9;">
         <label style="display:flex;align-items:center;gap:6px;min-width:130px;cursor:pointer;font-size:13px;font-weight:600;color:#1e293b;">
           <input type="checkbox" class="pi-page" data-page="${esc(p.key)}" ${checked ? 'checked' : ''} style="width:14px;height:14px;accent-color:#0150AA;" />
           ${esc(p.label)}
@@ -955,7 +974,7 @@ window.Pages.users = (() => {
 
     return `
       <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:16px 20px;border-bottom:1px solid #f1f5f9;">
+        <div class="usr-acc-head" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:16px 20px;border-bottom:1px solid #f1f5f9;">
           <div>
             <div style="font-size:15px;font-weight:700;color:#0f172a;">Page Access</div>
             <div style="font-size:12px;color:#64748b;margin-top:2px;">Tick the pages each user can open. Admin always has full access; HOD is set per page here, same as any other user. ${_users.length} users</div>
@@ -963,7 +982,7 @@ window.Pages.users = (() => {
           <input id="acc-search" type="text" placeholder="Search user..." value="${esc(_searchAccess)}"
             style="padding:7px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;outline:none;width:200px;" />
         </div>
-        <div style="overflow:auto;max-height:65vh;">
+        <div class="usr-acc-scroll" style="overflow:auto;max-height:65vh;">
           <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
             <thead>
               <tr style="background:#f1f5f9;">
@@ -1076,19 +1095,19 @@ window.Pages.users = (() => {
             </div>
 
             <!-- Row 1: Name + Email -->
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-2 gap-3 m-grid-1">
               ${uFieldHtml('um-name', 'Full Name', 'Enter full name', _form.name || '', 'text')}
               ${uFieldHtml('um-email', 'Email', 'Enter login email', _form.email || '', 'email', 'Login')}
             </div>
 
             <!-- Row 2: Notification Email + Phone -->
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-2 gap-3 m-grid-1">
               ${uFieldHtml('um-notifEmail', 'Notification Email', 'real email for notifications', _form.notifEmail || '', 'text', 'Real Gmail for task notifications')}
               ${uFieldHtml('um-phone', 'Phone Number', 'Enter phone number', _form.phone || '', 'text')}
             </div>
 
             <!-- Row 3: Department + Branch -->
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-2 gap-3 m-grid-1">
               <div>
                 <div class="mb-1.5">
                   <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Department</label>
@@ -1127,7 +1146,7 @@ window.Pages.users = (() => {
             </div>
 
             <!-- Row 4: Leave approver -->
-            <div class="grid grid-cols-2 gap-3">
+            <div class="grid grid-cols-2 gap-3 m-grid-1">
               <div>
                 <div class="mb-1.5">
                   <label class="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Leave Approver</label>

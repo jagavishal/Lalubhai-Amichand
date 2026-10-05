@@ -331,17 +331,43 @@ window.Pages.dashboard = (function () {
         .db-th-sort:hover { color: var(--color-primary) !important; }
         /* Mobile responsive */
         @media (max-width: 767px) {
-          #db-topbar { flex-direction: column; gap: 10px; }
-          #db-title-row { display: flex !important; align-items: center; justify-content: space-between; width: 100%; }
-          #db-btn-row { display: flex !important; width: 100%; gap: 8px; }
-          #db-btn-row button { flex: 1; font-size: 11.5px !important; padding: 8px 6px !important; }
-          #db-emp-picker { width: 100% !important; }
-          #db-emp-trigger { width: 100% !important; min-width: unset !important; }
-          #db-stat-cards { display: flex !important; overflow-x: auto; gap: 10px; padding-bottom: 4px; scroll-snap-type: x mandatory; }
-          #db-stat-cards .db-stat-card { min-width: 130px !important; flex-shrink: 0; scroll-snap-align: start; }
-          #db-main-grid { grid-template-columns: 1fr !important; }
-          #db-stat-cards::-webkit-scrollbar { height: 3px; }
-          #db-stat-cards::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 2px; }
+          #db-topbar { flex-direction: column; align-items: stretch !important; gap: 12px !important; margin-bottom: 14px !important; }
+          #db-title-row { display: flex !important; align-items: center; justify-content: space-between; gap: 10px; width: 100%; order: -1; }
+          #db-title-row h2 { font-size: 20px !important; color: var(--text-primary) !important; }
+          #db-emp-picker-mobile { min-width: 0; flex: 0 1 auto; }
+          /* Quick actions: a tidy 4-up grid of icon tiles */
+          #db-btn-row { display: grid !important; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: 1fr; width: 100%; gap: 8px !important; }
+          #db-btn-row button { flex-direction: column; justify-content: center; align-items: center; gap: 4px !important;
+            min-height: 56px; padding: 8px 2px !important; font-size: 10.5px !important; line-height: 1.2; text-align: center; letter-spacing: -.01em;
+            border-radius: 12px !important; white-space: normal; display: inline-flex !important; }
+          #db-btn-row button svg { width: 16px; height: 16px; }
+          #db-emp-picker { width: auto !important; max-width: 100%; }
+          #db-emp-trigger { width: 100% !important; min-width: unset !important; min-height: 38px; }
+          #db-emp-dropdown { left: auto !important; right: 0; width: min(280px, calc(100vw - 24px)) !important; }
+          /* Stat tiles: 2-up grid, the 5th (Meetings) spans the row */
+          #db-stat-cards { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 10px !important; margin-bottom: 14px !important; }
+          #db-stat-cards .db-stat-card { padding: 14px 14px !important; min-width: 0; border-radius: 14px; }
+          #db-stat-cards .db-stat-card:last-child { grid-column: 1 / -1; }
+          #db-stat-cards .db-stat-card > div:nth-child(2) { font-size: 1.75rem !important; line-height: 1.15; }
+          #db-main-grid { grid-template-columns: 1fr !important; gap: 12px !important; margin-bottom: 12px !important; }
+          /* Recent Activity: header stacks, tabs scroll sideways, rows become cards */
+          .db-act-head { padding: 12px 14px !important; }
+          .db-act-tabs { width: 100%; overflow-x: auto; scrollbar-width: none; }
+          .db-act-tabs::-webkit-scrollbar { display: none; }
+          .db-act-tabs .db-tab-btn { flex: 1 0 auto; white-space: nowrap; padding: 8px 12px !important; }
+          .db-act-scroll { max-height: none !important; overflow: visible !important; }
+          #db-tasks-table tr td .db-desc { white-space: normal !important; overflow: visible !important; }
+          #db-tasks-table td.db-c-type { order: -2; }
+          #db-tasks-table td[colspan] { padding: 2.5rem 1rem !important; text-align: center !important; }
+          #db-tasks-table td.m-card-actions .pill-act { padding: 8px 16px; font-size: 12px; }
+          /* Inline modals open as bottom sheets with single-column forms */
+          #db-ht-modal, #db-up-modal, #db-ann-modal { align-items: flex-end !important; padding: 0 !important; }
+          #db-ht-modal > div, #db-up-modal > div, #db-ann-modal > div { max-width: 100% !important; border-radius: 18px 18px 0 0 !important; max-height: 92vh !important; }
+          #db-ht-modal > div, #db-ann-modal > div { overflow-y: auto !important; }
+          #db-ht-modal > div > div:last-child > button, #db-up-modal > div > div:last-child > button,
+          #db-ann-modal > div > div:last-child > button { flex: 1 1 0; justify-content: center; min-height: 42px; }
+          #db-ht-modal [style*="grid-template-columns:1fr 1fr"], #db-up-modal [style*="grid-template-columns:1fr 1fr"],
+          #db-ann-modal [style*="grid-template-columns:1fr 1fr"], #db-wrap ~ .modal-overlay [style*="grid-template-columns:1fr 1fr"] { grid-template-columns: 1fr !important; }
         }
         /* Modal shell, .input, .label, and .btn-* now come from the shared style.css design system (no local duplicates). */
         .pill-act { display:inline-flex;align-items:center;padding:2px 8px;font-size:10.5px;font-weight:600;border-radius:9999px;cursor:pointer;border:none;transition:background .12s; }
@@ -496,19 +522,19 @@ window.Pages.dashboard = (function () {
 
         <!-- Recent Activity -->
         <div class="card" style="overflow:hidden;margin-bottom:20px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:12px 20px;border-bottom:1px solid #f1f5f9;">
+          <div class="db-act-head" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:12px 20px;border-bottom:1px solid #f1f5f9;">
             <div>
               <h2 style="font-size:13.5px;font-weight:700;color:#0f172a;margin:0;">Recent Activity</h2>
               <p id="db-tasks-count" style="font-size:11.5px;color:#64748b;margin:2px 0 0;"></p>
             </div>
-            <div style="display:flex;align-items:center;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px;">
+            <div class="db-act-tabs" style="display:flex;align-items:center;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px;">
               ${['All','Delegation','Checklist', ...(window.currentUser?.featureFlags?.fms ? ['FMS'] : []), 'Upcoming'].map(t =>
                 `<button class="db-tab-btn" data-tab="${t}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">${t}</button>`
               ).join('')}
             </div>
           </div>
-          <div style="overflow-x:auto;max-height:420px;overflow-y:auto;">
-            <table id="db-tasks-table" style="width:100%;border-collapse:collapse;font-size:12.5px;"></table>
+          <div class="db-act-scroll" style="overflow-x:auto;max-height:420px;overflow-y:auto;">
+            <table id="db-tasks-table" class="m-cards" style="width:100%;border-collapse:collapse;font-size:12.5px;"></table>
           </div>
         </div>
 
@@ -980,26 +1006,26 @@ window.Pages.dashboard = (function () {
       }
 
       return `<tr style="transition:background .1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
-        <td style="${tdStyle}">${typePillHTML(t.type)}</td>
-        <td style="${tdStyle}max-width:260px;">
+        <td class="db-c-type" data-label="" style="${tdStyle}">${typePillHTML(t.type)}</td>
+        <td class="m-card-title" style="${tdStyle}max-width:260px;">
           <div style="display:flex;align-items:flex-start;gap:4px;">
-            <span style="font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;" title="${esc(t.description)}">${esc(t.description)}</span>
+            <span class="db-desc" style="font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;" title="${esc(t.description)}">${esc(t.description)}</span>
             ${urlLink}
           </div>
           ${t.type === 'Checklist' && t.department ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${esc(t.department)}</div>` : ''}
           ${(t.type === 'FMS' || t.type === 'PI') && Array.isArray(t.details) && t.details.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${t.details.map(d => `<span style="font-size:10px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:1px 6px;white-space:nowrap;"><b>${esc(d.header)}:</b> ${esc(d.value) || '—'}</span>`).join('')}</div>` : ''}
           ${transferred}
         </td>
-        <td style="${tdStyle}">
+        <td data-label="Doer" style="${tdStyle}">
           <div style="display:flex;align-items:center;gap:6px;">
             ${avatarHTML(t.doer)}
             <span style="color:#334155;">${esc(t.doer) || '—'}</span>
           </div>
         </td>
-        <td style="${tdStyle}">${t.frequency ? t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1) : '—'}</td>
-        <td style="${tdStyle}">${priorityHTML(t.type, t.priority)}</td>
-        <td style="${tdStyle}white-space:nowrap;font-size:12px;${dateStyle}">${fmt(t.date)}</td>
-        <td style="${tdStyle}">
+        <td data-label="Frequency" style="${tdStyle}">${t.frequency ? t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1) : '—'}</td>
+        <td data-label="Priority" style="${tdStyle}">${priorityHTML(t.type, t.priority)}</td>
+        <td data-label="Date" style="${tdStyle}white-space:nowrap;font-size:12px;${dateStyle}">${fmt(t.date)}</td>
+        <td class="m-card-actions" style="${tdStyle}">
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
             ${actionHTML}
           </div>

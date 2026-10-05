@@ -80,7 +80,7 @@ window.Pages['consignee-master'] = (() => {
 
   function _tabsHtml() {
     const canAdd = _hasFeature('add');
-    return '<div style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
+    return '<div class="cm-tabs" style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
       + (canAdd ? _tabBtn('Add Consignee', _view === 'add', 'cm-add-tab') : '')
       + _tabBtn('Consignee List' + (_loaded ? ' (' + _rows.length + ')' : ''), _view === 'list', 'cm-list-tab')
     + '</div>';
@@ -100,7 +100,7 @@ window.Pages['consignee-master'] = (() => {
         + _fieldWrap('Address', '<input type="text" id="cm-address" autocomplete="off" placeholder="P.O. Box, street, city, country" style="' + _inputStyle + '" />'
             + '<div style="font-size:11px;color:#94a3b8;margin-top:5px;">Printed on the PI. A long address is split across the invoice’s two address lines automatically.</div>')
       + '</div>'
-      + '<div style="display:flex;align-items:center;gap:12px;margin-top:18px;">'
+      + '<div class="cm-submit-row" style="display:flex;align-items:center;gap:12px;margin-top:18px;">'
         + '<button type="submit" id="cm-submit" style="padding:10px 22px;border:none;border-radius:9px;background:var(--color-primary);color:#fff;font-size:13px;font-weight:700;cursor:pointer;">' + (_saving ? 'Saving…' : 'Add Consignee') + '</button>'
         + '<span style="font-size:12px;color:#94a3b8;">Saves into the export team’s fetch_consignee sheet, and is pickable on the very next PI.</span>'
       + '</div>'
@@ -122,18 +122,18 @@ window.Pages['consignee-master'] = (() => {
 
     const body = rows.length
       ? rows.map(r => '<tr style="border-top:1px solid #f1f5f9;">'
-          + '<td style="padding:8px 10px;font-size:12.5px;color:#1e293b;">' + esc(r.name) + '</td>'
+          + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;color:#1e293b;">' + esc(r.name) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;white-space:nowrap;">' + esc(r.placeOfDelivery) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;white-space:nowrap;">' + esc(r.portOfLoading) + '</td>'
           + '<td style="padding:8px 10px;font-size:12.5px;color:#475569;white-space:nowrap;">' + esc(r.portOfDischarge) + '</td>'
           + '<td style="padding:8px 10px;font-size:12px;color:#64748b;">' + esc([r.address1, r.address2].filter(Boolean).join(', ')) + '</td>'
           + '<td style="padding:8px 10px;font-size:12px;color:#64748b;">' + esc(r.contact) + '</td>'
-          + (owner ? '<td style="padding:8px 10px;white-space:nowrap;">' + Utils.ownerDeleteBtn('cm-delete-btn', 'name', r.name) + '</td>' : '')
+          + (owner ? '<td class="m-card-actions" style="padding:8px 10px;white-space:nowrap;">' + Utils.ownerDeleteBtn('cm-delete-btn', 'name', r.name) + '</td>' : '')
         + '</tr>').join('')
       : '<tr><td colspan="' + (owner ? 7 : 6) + '" style="padding:26px;text-align:center;font-size:13px;color:#94a3b8;">No consignee matches “' + esc(_q) + '”.</td></tr>';
 
     return '<div id="cm-table" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;">'
-        + '<table style="width:100%;border-collapse:collapse;min-width:900px;"><thead><tr style="background:#f8fafc;">' + head + '</tr></thead>'
+        + '<table class="m-cards cm-tbl" style="width:100%;border-collapse:collapse;min-width:900px;"><thead><tr style="background:#f8fafc;">' + head + '</tr></thead>'
         + '<tbody>' + body + '</tbody></table>'
       + '</div>';
   }
@@ -141,7 +141,7 @@ window.Pages['consignee-master'] = (() => {
   function _listHtml() {
     if (!_loaded) return '<div style="padding:26px;text-align:center;font-size:13px;color:#94a3b8;">Loading…</div>';
     if (_loadError) return '<div style="padding:16px;border:1px solid #fecaca;background:#fef2f2;border-radius:10px;font-size:13px;color:#b91c1c;">' + esc(_loadError) + '</div>';
-    return '<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;">'
+    return '<div class="cm-searchbar" style="display:flex;gap:10px;align-items:center;margin-bottom:12px;">'
         + '<input type="text" id="cm-search" value="' + esc(_q) + '" placeholder="Search consignee, port, address…" style="' + _inputStyle + 'max-width:340px;" />'
         + '<span id="cm-count" style="font-size:12px;color:#94a3b8;">' + _filtered().length + ' of ' + _rows.length + '</span>'
       + '</div>'
@@ -197,7 +197,24 @@ window.Pages['consignee-master'] = (() => {
 
     const mc = document.getElementById('main-content');
     if (!mc) return;
-    mc.innerHTML = '<div style="padding:22px 24px 40px;">'
+    mc.innerHTML = '<div class="cm-page" style="padding:22px 24px 40px;">'
+      // Phone: page padding comes from #main-content, tabs scroll, list rows become cards
+      + '<style>@media (max-width: 767px) {'
+        + '.cm-page { padding:10px 0 24px !important; }'
+        + '.cm-tabs { overflow-x:auto; scrollbar-width:none; }'
+        + '.cm-tabs::-webkit-scrollbar { display:none; }'
+        + '.cm-tabs > button { flex-shrink:0; white-space:nowrap; min-height:40px; }'
+        + '#cm-form > div:first-child { gap:10px !important; }'
+        + '#cm-form > div:nth-child(2) { margin-top:10px !important; }'
+        + '.cm-submit-row { flex-direction:column; align-items:stretch !important; gap:8px !important; }'
+        + '.cm-submit-row #cm-submit { width:100%; min-height:44px; }'
+        + '.cm-submit-row span { text-align:center; }'
+        + '.cm-searchbar #cm-search { max-width:none !important; flex:1; min-width:0; }'
+        + '.cm-searchbar #cm-count { white-space:nowrap; }'
+        + '.cm-tbl { min-width:0 !important; }'
+        + '.cm-tbl tr { border-top:none !important; }'
+        + '.cm-tbl td::before { flex-basis:112px !important; }'
+      + '}</style>'
       + '<div style="margin-bottom:16px;">'
         + '<h2 style="margin:0;font-size:20px;font-weight:800;color:#0f172a;">Consignee Master</h2>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">The export buyer list behind the Proforma Invoice consignee field. Contact No. and Email ID are maintained in the source sheet, so they are shown here but not editable.</p>'

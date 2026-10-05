@@ -143,7 +143,7 @@ window.Pages.developer = {
           </button>
 
           <!-- Delete buttons row -->
-          <div style="display:flex;gap:8px;margin-top:10px;">
+          <div class="dev-del-row" style="display:flex;gap:8px;margin-top:10px;">
             <button id="dev-reset-tasks-btn" style="
               flex:1;padding:12px;border-radius:12px;
               border:1.5px solid #fecaca;background:#fff5f5;
@@ -505,6 +505,27 @@ window.Pages.developer = {
           #dev-page-wrap { min-height: 100%; background: #f8fafc; display: flex; align-items: flex-start; justify-content: center; padding: 24px; font-family: system-ui, sans-serif; }
           #dev-card { background: #fff; border-radius: 20px; padding: 48px 40px; max-width: 400px; width: 100%; box-shadow: 0 4px 24px rgba(0,0,0,0.08); border: 1px solid #f1f5f9; }
           #dev-card input:focus { outline: none; border-color: #93c5fd !important; box-shadow: 0 0 0 3px rgba(59,130,246,0.12) !important; }
+          /* Phone (<768px): roomier card, stacked delete buttons, and the
+             confirm dialogs open as bottom sheets above the bottom nav. */
+          @media (max-width: 767px) {
+            #dev-page-wrap { padding: 4px 0 16px; background: transparent; }
+            #dev-card { padding: 28px 18px; border-radius: 16px; }
+            #dev-card button { min-height: 44px; }
+            #dev-card .dev-restore-btn { min-height: 36px; }
+            #dev-toggle-pass { min-height: 0 !important; }
+            #dev-logout-btn { min-height: 40px; padding: 0 16px; }
+            .dev-del-row { flex-direction: column; }
+            #dev-confirm-overlay, #dev-reset-overlay, #dev-crestore-overlay, #dev-users-overlay {
+              align-items: flex-end !important; padding: 0 !important; z-index: 1000 !important;
+            }
+            #dev-confirm-dialog, #dev-reset-dialog, #dev-crestore-dialog, #dev-users-dialog {
+              max-width: none !important; border-radius: 18px 18px 0 0 !important;
+              padding: 24px 18px calc(18px + env(safe-area-inset-bottom, 0px)) !important;
+              max-height: 92vh; overflow-y: auto;
+            }
+            #dev-confirm-dialog button, #dev-reset-dialog button, #dev-crestore-dialog button, #dev-users-cancel { min-height: 44px; }
+            .dev-delete-users-btn { min-height: 38px; }
+          }
         </style>
 
         <div id="dev-page-wrap">
