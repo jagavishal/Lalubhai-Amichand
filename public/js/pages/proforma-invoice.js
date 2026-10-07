@@ -2996,7 +2996,13 @@ window.Pages['proforma-invoice'] = (() => {
      server-side and are not touched by any of this. The PI item rows restack
      into a card each; the wider order-sheet and packing line grids keep their
      deliberate sideways scroll. ── */
-  const _PI_MOBILE_CSS = '<style>@media (max-width: 767px) {'
+  const _PI_MOBILE_CSS = '<style>'
+    // Every width, not just phones: the modal body is a height-capped flex
+    // column, and a child with overflow (the Add Price item table's sideways
+    // scroller) has no min-height — so a long PI on a short laptop screen
+    // squeezed the whole item table down to nothing.
+    + '.pi-sheet-body > * { flex-shrink:0; }'
+    + '@media (max-width: 767px) {'
     + '.pi-page { padding-bottom:24px !important; }'
     + '.pi-page h1 { font-size:18px !important; }'
     + '.pi-tabs { overflow-x:auto; scrollbar-width:none; gap:0 !important; margin-bottom:14px !important; }'
@@ -3049,7 +3055,6 @@ window.Pages['proforma-invoice'] = (() => {
     + '.pi-sheet { max-width:100% !important; max-height:92vh; border-radius:16px 16px 0 0 !important; display:flex !important; flex-direction:column; }'
     + '.pi-sheet > div:first-child { padding:16px !important; }'
     + '.pi-sheet-body { max-height:none !important; flex:1; min-height:0; padding:14px 16px !important; }'
-    + '.pi-sheet-body > * { flex-shrink:0; }'
     + '.pi-sheet-body [style*="grid-template-columns"] { grid-template-columns:minmax(0,1fr) !important; }'
     + '.pi-sheet-foot { padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px)) !important; }'
     + '.pi-sheet-foot > button { flex:1; min-height:44px; }'
