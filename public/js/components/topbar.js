@@ -55,7 +55,7 @@ window.Topbar = {
 
         <!-- Page title -->
         <h1 style="
-          font-size:var(--text-md);font-weight:700;letter-spacing:-0.025em;
+          font-size:var(--text-lg);font-weight:700;letter-spacing:-0.025em;
           color:var(--text-primary);margin:0;
           white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0;
         " id="topbar-title">${title}</h1>

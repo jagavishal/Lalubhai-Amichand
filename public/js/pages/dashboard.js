@@ -235,9 +235,10 @@ window.Pages.dashboard = (function () {
 
     if (!meetings.length) {
       bodyEl.innerHTML = `
-        <div style="text-align:center;padding:28px 12px;color:#94a3b8;">
-          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:8px;"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
-          <div style="font-size:12.5px;">No meetings in this window</div>
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;padding:20px 12px;color:var(--text-muted);">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
+          <div style="font-size:12.5px;">No meetings in the next 7 days</div>
+          <a href="#scheduler" class="btn-secondary btn-sm" style="margin-top:4px;">Schedule a meeting</a>
         </div>`;
       return;
     }
@@ -356,10 +357,10 @@ window.Pages.dashboard = (function () {
           .db-act-tabs::-webkit-scrollbar { display: none; }
           .db-act-tabs .db-tab-btn { flex: 1 0 auto; white-space: nowrap; padding: 8px 12px !important; }
           .db-act-scroll { max-height: none !important; overflow: visible !important; }
-          #db-tasks-table tr td .db-desc { white-space: normal !important; overflow: visible !important; }
+          #db-tasks-table tr td .db-desc { -webkit-line-clamp: unset; display: block; overflow: visible; }
           #db-tasks-table td.db-c-type { order: -2; }
           #db-tasks-table td[colspan] { padding: 2.5rem 1rem !important; text-align: center !important; }
-          #db-tasks-table td.m-card-actions .pill-act { padding: 8px 16px; font-size: 12px; }
+          #db-tasks-table td.m-card-actions .pill-act { min-height: 36px; padding: 0 16px; }
           /* Inline modals open as bottom sheets with single-column forms */
           #db-ht-modal, #db-up-modal, #db-ann-modal { align-items: flex-end !important; padding: 0 !important; }
           #db-ht-modal > div, #db-up-modal > div, #db-ann-modal > div { max-width: 100% !important; border-radius: 18px 18px 0 0 !important; max-height: 92vh !important; }
@@ -370,12 +371,18 @@ window.Pages.dashboard = (function () {
           #db-ann-modal [style*="grid-template-columns:1fr 1fr"], #db-wrap ~ .modal-overlay [style*="grid-template-columns:1fr 1fr"] { grid-template-columns: 1fr !important; }
         }
         /* Modal shell, .input, .label, and .btn-* now come from the shared style.css design system (no local duplicates). */
-        .pill-act { display:inline-flex;align-items:center;padding:2px 8px;font-size:10.5px;font-weight:600;border-radius:9999px;cursor:pointer;border:none;transition:background .12s; }
+        .db-card-title { font-size:var(--text-md);font-weight:700;color:var(--text-primary);margin:0; }
+        .db-card-sub { font-size:var(--text-sm);color:var(--text-secondary);margin:3px 0 0; }
+        .db-qa svg { flex-shrink:0; }
+        #db-tasks-table .db-desc { font-weight:600;color:var(--text-primary);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;white-space:normal;line-height:1.4;overflow-wrap:anywhere; }
+        /* Row actions: 32px tall so they're a comfortable click/tap target */
+        .pill-act { display:inline-flex;align-items:center;justify-content:center;min-height:32px;padding:0 12px;font-size:12px;font-weight:600;border-radius:9999px;cursor:pointer;border:none;transition:background .12s;font-family:inherit; }
+        .pill-act:focus-visible { outline:2px solid var(--color-primary);outline-offset:2px; }
         .pill-done { background:var(--color-success-bg);color:var(--color-success-text); } .pill-done:hover { background:var(--color-success-border); }
         .pill-revise { background:var(--color-danger-bg);color:var(--color-danger-text); } .pill-revise:hover { background:var(--color-danger-border); }
         .pill-grant { background:var(--color-success-bg);color:var(--color-success-text); } .pill-grant:hover { background:var(--color-success-border); }
         .pill-deny  { background:var(--color-neutral-bg);color:var(--color-neutral-text); } .pill-deny:hover  { background:var(--border-base); }
-        .pill-pending-wait { background:var(--color-warning-bg);color:var(--color-warning-text);display:inline-flex;align-items:center;padding:2px 8px;font-size:10.5px;font-weight:600;border-radius:9999px; }
+        .pill-pending-wait { background:var(--color-warning-bg);color:var(--color-warning-text);display:inline-flex;align-items:center;padding:0 12px;min-height:32px;font-size:12px;font-weight:600;border-radius:9999px; }
         @media (max-width:1200px) and (min-width:768px) { #db-stat-cards { grid-template-columns:repeat(3,1fr) !important; } }
       </style>
 
@@ -415,33 +422,33 @@ window.Pages.dashboard = (function () {
             <!-- Shown to everyone: which days the company is closed is something
                  all staff need, and it was behind an admin-only button. What the
                  modal contains still depends on who opened it. -->
-            <button id="db-btn-holidays" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#f59e0b;color:#fff;border:none;cursor:pointer;">
+            <button id="db-btn-holidays" class="btn-secondary db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
               ${admin ? 'Holidays' : 'Holiday List'}
             </button>
-            <button id="db-btn-checklist" style="padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#059669;color:#fff;border:none;cursor:pointer;">
+            <button id="db-btn-checklist" class="btn-secondary db-qa">
               Checklist
             </button>
-            <button id="db-btn-delegate" style="padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:var(--color-primary);color:var(--color-primary-text);border:none;cursor:pointer;">
+            <button id="db-btn-delegate" class="btn-primary db-qa">
               Delegate
             </button>
-            <button id="db-btn-help-ticket" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#0ea5e9;color:#fff;border:none;cursor:pointer;">
+            <button id="db-btn-help-ticket" class="btn-secondary db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               Help Ticket
             </button>
-            <button id="db-btn-urgent-payment" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:#dc2626;color:#fff;border:none;cursor:pointer;">
+            <button id="db-btn-urgent-payment" class="btn-danger db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 8h12M6 13l6 8M6 13h4a4 4 0 0 0 0-8"/></svg>
               Urgent Payment
             </button>
-            <button id="db-btn-announcement" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#8b5cf6;color:#fff;border:none;cursor:pointer;">
+            <button id="db-btn-announcement" class="btn-secondary db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
               Announcement
             </button>
-            <button id="db-btn-leave" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:600;background:#0d9488;color:#fff;border:none;cursor:pointer;">
+            <button id="db-btn-leave" class="btn-secondary db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M12 14v4M10 16h4"/></svg>
               Apply Leave
             </button>
-            ${admin ? `<button id="db-btn-transfer" style="display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:8px;font-size:12.5px;font-weight:700;background:#7c3aed;color:#fff;border:none;cursor:pointer;">
+            ${admin ? `<button id="db-btn-transfer" class="btn-secondary db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
               Transfer
             </button>` : ''}
@@ -497,8 +504,8 @@ window.Pages.dashboard = (function () {
           <!-- Task status donut card -->
           <div class="card" style="padding:1.1rem;display:flex;flex-direction:column;">
             <div>
-              <h3 style="font-size:13px;font-weight:700;color:#0f172a;margin:0;">Task Status</h3>
-              <p style="font-size:11.5px;color:#64748b;margin:3px 0 0;">Completed, pending &amp; revised</p>
+              <h2 class="db-card-title">Task Status</h2>
+              <p class="db-card-sub">Completed, pending &amp; revised</p>
             </div>
             <div id="db-pie-container" style="flex:1;display:flex;align-items:center;justify-content:center;padding-top:10px;">
               ${renderPieSVG(data.completed, data.pending, data.revised, data.upcoming || 0)}
@@ -509,12 +516,12 @@ window.Pages.dashboard = (function () {
           <div class="card" style="padding:1.1rem;display:flex;flex-direction:column;">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
               <div>
-                <h3 style="font-size:13px;font-weight:700;color:#0f172a;margin:0;">Meetings</h3>
-                <p style="font-size:11.5px;color:#64748b;margin:3px 0 0;">Next 7 days</p>
+                <h2 class="db-card-title">Meetings</h2>
+                <p class="db-card-sub">Next 7 days</p>
               </div>
               <a href="#scheduler" style="font-size:11.5px;font-weight:600;color:var(--color-primary);text-decoration:none;white-space:nowrap;">Scheduler →</a>
             </div>
-            <div id="db-meetings-body" style="margin-top:6px;">
+            <div id="db-meetings-body" style="margin-top:6px;flex:1;display:flex;flex-direction:column;">
               <div style="text-align:center;padding:28px 12px;color:#94a3b8;font-size:12.5px;">Loading…</div>
             </div>
           </div>
@@ -524,8 +531,8 @@ window.Pages.dashboard = (function () {
         <div class="card" style="overflow:hidden;margin-bottom:20px;">
           <div class="db-act-head" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:12px 20px;border-bottom:1px solid #f1f5f9;">
             <div>
-              <h2 style="font-size:13.5px;font-weight:700;color:#0f172a;margin:0;">Recent Activity</h2>
-              <p id="db-tasks-count" style="font-size:11.5px;color:#64748b;margin:2px 0 0;"></p>
+              <h2 class="db-card-title">Recent Activity</h2>
+              <p id="db-tasks-count" class="db-card-sub"></p>
             </div>
             <div class="db-act-tabs" style="display:flex;align-items:center;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px;">
               ${['All','Delegation','Checklist', ...(window.currentUser?.featureFlags?.fms ? ['FMS'] : []), 'Upcoming'].map(t =>
@@ -981,14 +988,14 @@ window.Pages.dashboard = (function () {
       return;
     }
 
-    const thStyle = 'text-align:left;padding:10px 12px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;background:rgba(248,250,252,.97);position:sticky;top:0;';
+    const thStyle = 'text-align:left;padding:10px 12px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;background:rgba(248,250,252,.97);position:sticky;top:0;';
     const tdStyle = 'padding:10px 12px;font-size:12.5px;color:#475569;border-top:1px solid #f1f5f9;';
 
     const rows = sortDashTasks(filtered).map(t => {
       const dateStyle = t.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#475569;';
       const urlLink = t.url ? `<a href="${esc(Utils.safeUrl(t.url))}" target="_blank" rel="noopener noreferrer" title="${esc(t.url)}" style="color:var(--color-primary-strong);flex-shrink:0;display:inline-flex;margin-left:4px;">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>` : '';
-      const transferred = t.transferredFrom ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 6px;border-radius:5px;background:#fffbeb;color:#b45309;border:1px solid #fde68a;font-weight:600;" title="${t.transferredBy ? 'Transferred by ' + esc(t.transferredBy) : ''}">🔄 from ${esc(t.transferredFrom)}</span>` : '';
+      const transferred = t.transferredFrom ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 6px;border-radius:var(--radius-sm);background:var(--color-warning-bg);color:var(--color-warning-text);border:1px solid var(--color-warning-border, #fde68a);font-weight:600;" title="${t.transferredBy ? 'Transferred by ' + esc(t.transferredBy) : ''}">🔄 from ${esc(t.transferredFrom)}</span>` : '';
 
       let actionHTML;
       if (t.status === 'done') {
@@ -1007,13 +1014,13 @@ window.Pages.dashboard = (function () {
 
       return `<tr style="transition:background .1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
         <td class="db-c-type" data-label="" style="${tdStyle}">${typePillHTML(t.type)}</td>
-        <td class="m-card-title" style="${tdStyle}max-width:260px;">
+        <td class="m-card-title" style="${tdStyle}min-width:240px;max-width:380px;">
           <div style="display:flex;align-items:flex-start;gap:4px;">
-            <span class="db-desc" style="font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;" title="${esc(t.description)}">${esc(t.description)}</span>
+            <span class="db-desc" title="${esc(t.description)}">${esc(t.description)}</span>
             ${urlLink}
           </div>
           ${t.type === 'Checklist' && t.department ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${esc(t.department)}</div>` : ''}
-          ${(t.type === 'FMS' || t.type === 'PI') && Array.isArray(t.details) && t.details.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${t.details.map(d => `<span style="font-size:10px;background:#f8fafc;border:1px solid #e2e8f0;color:#475569;border-radius:5px;padding:1px 6px;white-space:nowrap;"><b>${esc(d.header)}:</b> ${esc(d.value) || '—'}</span>`).join('')}</div>` : ''}
+          ${(t.type === 'FMS' || t.type === 'PI') && Array.isArray(t.details) && t.details.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${t.details.map(d => `<span style="font-size:11px;background:var(--surface-alt);border:1px solid var(--border-base);color:var(--color-neutral-text);border-radius:var(--radius-sm);padding:1px 6px;white-space:nowrap;"><b>${esc(d.header)}:</b> ${esc(d.value) || '—'}</span>`).join('')}</div>` : ''}
           ${transferred}
         </td>
         <td data-label="Doer" style="${tdStyle}">

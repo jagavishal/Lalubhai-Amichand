@@ -160,6 +160,7 @@ html[data-theme="dark"] {
   --color-success-bg: rgba(5,150,105,.15);  --color-success-text: #34d399;
   --color-warning-bg: rgba(217,119,6,.15);  --color-warning-text: #fbbf24;
   --color-danger-bg:  rgba(220,38,38,.15);  --color-danger-text:  #f87171;
+  --color-danger-border: rgba(248,113,113,.38);
   --color-info-bg:    rgba(37,99,235,.15);  --color-info-text:    #60a5fa;
   --color-neutral-bg: rgba(255,255,255,.06); --color-neutral-text: #cbd5e1;
   --color-purple-bg:  rgba(124,58,237,.18); --color-purple-text: #a78bfa;
@@ -235,7 +236,7 @@ html, body {
 /* ── Buttons — shared base ───────────────────────────────────────── */
 
 .btn, .btn-primary, .btn-secondary, .btn-ghost,
-.btn-danger, .btn-success, .btn-warn {
+.btn-danger, .btn-outline-danger, .btn-success, .btn-warn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -256,8 +257,8 @@ html, body {
 }
 
 .btn:disabled, .btn-primary:disabled, .btn-secondary:disabled,
-.btn-ghost:disabled, .btn-danger:disabled, .btn-success:disabled,
-.btn-warn:disabled {
+.btn-ghost:disabled, .btn-danger:disabled, .btn-outline-danger:disabled,
+.btn-success:disabled, .btn-warn:disabled {
   opacity: 0.52;
   cursor: not-allowed;
   pointer-events: none;
@@ -265,8 +266,8 @@ html, body {
 
 /* Focus visible — keyboard navigation */
 .btn:focus-visible, .btn-primary:focus-visible, .btn-secondary:focus-visible,
-.btn-ghost:focus-visible, .btn-danger:focus-visible, .btn-success:focus-visible,
-.btn-warn:focus-visible {
+.btn-ghost:focus-visible, .btn-danger:focus-visible, .btn-outline-danger:focus-visible,
+.btn-success:focus-visible, .btn-warn:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
@@ -318,6 +319,19 @@ html, body {
   filter: brightness(0.92);
   box-shadow: 0 4px 12px rgba(220,38,38,0.35);
   transform: translateY(-1px);
+}
+
+/* Outline danger — a destructive action that sits beside other actions
+   (row-level Cancel / Delete). Bordered so it reads as a button, but quieter
+   than the solid .btn-danger reserved for confirm dialogs. */
+.btn-outline-danger {
+  background: var(--surface);
+  color: var(--color-danger-text);
+  border: 1.5px solid var(--color-danger-border);
+}
+.btn-outline-danger:hover:not(:disabled) {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-text);
 }
 
 /* Success */
@@ -742,7 +756,7 @@ html[data-theme="dark"] .card img[data-zoom] { background: var(--surface-alt); }
   .table-th, .table-td { padding: 9px 10px; font-size: 12px; }
 
   /* Buttons on mobile — minimum touch target */
-  .btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-success, .btn-warn {
+  .btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-danger, .btn-outline-danger, .btn-success, .btn-warn {
     min-height: 40px;
   }
 

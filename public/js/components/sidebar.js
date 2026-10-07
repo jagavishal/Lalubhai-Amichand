@@ -65,29 +65,58 @@ window.Sidebar = {
   },
 
   /* ── Section open/closed state ─────────────────────────────────────────
-     Each category can be folded away by its arrow, so only the section being
-     worked in has to be on screen. The choice is remembered per browser; on a
+     Sections work as an accordion — opening one folds the others — so only
+     the section being worked in is on screen. The choice is remembered per browser; on a
      first visit only the section holding the current page is open. ─────── */
   _SECTIONS_KEY: 'sb-open-sections',
   _openSections: null,
 
   _loadOpenSections(activeRoute) {
+    const sec = this._sections.find(s => s.items.some(i => i.route === activeRoute));
     try {
       const raw = localStorage.getItem(this._SECTIONS_KEY);
       const arr = raw ? JSON.parse(raw) : null;
-      if (Array.isArray(arr)) return new Set(arr);
+      // One section at a time (see toggleSection) — a set saved before that
+      // rule may hold several, so keep the current page's, else the first.
+      if (Array.isArray(arr) && arr.length) return new Set([sec && arr.includes(sec.title) ? sec.title : arr[0]]);
     } catch {}
-    const sec = this._sections.find(s => s.items.some(i => i.route === activeRoute));
     return new Set([(sec || this._sections[0]).title]);
+  },
+
+  /* ── Pinned (always-expanded) rail ─────────────────────────────────────
+     The collapsed rail is icons only; pinning keeps the labels on screen and
+     pushes the page over, for people who'd rather not hover to read them. */
+  _PINNED_KEY: 'sb-pinned',
+
+  _isPinned() {
+    try { return localStorage.getItem(this._PINNED_KEY) === '1'; } catch { return false; }
+  },
+
+  togglePinned() {
+    const pinned = !document.documentElement.classList.contains('sb-pinned');
+    document.documentElement.classList.toggle('sb-pinned', pinned);
+    try { localStorage.setItem(this._PINNED_KEY, pinned ? '1' : '0'); } catch {}
+    const btn = document.getElementById('sb-pin-btn');
+    if (btn) {
+      btn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+      btn.title = pinned ? 'Collapse sidebar' : 'Keep sidebar open';
+      btn.setAttribute('aria-label', btn.title);
+    }
   },
 
   toggleSection(title) {
     if (!this._openSections) this._openSections = new Set();
     const open = !this._openSections.has(title);
+    // Accordion: opening one section folds the rest, so the rail never lists
+    // every module at once.
+    if (open) [...this._openSections].forEach(t => { this._openSections.delete(t); this._paintSection(t, false); });
     if (open) this._openSections.add(title);
     else      this._openSections.delete(title);
     try { localStorage.setItem(this._SECTIONS_KEY, JSON.stringify([...this._openSections])); } catch {}
+    this._paintSection(title, open);
+  },
 
+  _paintSection(title, open) {
     const items = document.querySelector(`#sidebar [data-section-items="${title}"]`);
     const arrow = document.querySelector(`#sidebar [data-section-arrow="${title}"]`);
     const head  = document.querySelector(`#sidebar [data-section-head="${title}"]`);
@@ -407,6 +436,8 @@ window.Sidebar = {
     const featureFlags = user?.featureFlags || {};
 
     if (!this._openSections) this._openSections = this._loadOpenSections(activeRoute);
+    const pinned = this._isPinned();
+    document.documentElement.classList.toggle('sb-pinned', pinned);
 
     const sectionsHTML = this._sections.map(sec => {
       // A `group` on an item opens a sub-heading (Factory / Marketing / …)
@@ -419,7 +450,7 @@ window.Sidebar = {
           if (!html.trim()) return '';
           const head = item.group && item.group !== lastGroup
             ? `<div class="sb-label" style="display:flex;align-items:center;gap:7px;padding:9px 8px 3px;opacity:0;transition:opacity .22s;">
-                 <span style="font-size:9px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--sidebar-group-label);white-space:nowrap;">${item.group}</span>
+                 <span style="font-size:11px;font-weight:600;color:var(--sidebar-group-label);white-space:nowrap;">${item.group}</span>
                  <span style="flex:1;height:1px;background:rgba(255,255,255,.08);"></span>
                </div>`
             : '';
@@ -435,23 +466,23 @@ window.Sidebar = {
       return `
         <div style="margin-bottom:4px;${sec !== this._sections[0] ? 'border-top:1px solid rgba(255,255,255,.07);margin-top:4px;padding-top:2px;' : ''}">
           <button
-            class="sb-label"
+            class="sb-sec-head"
             data-section-head="${sec.title}"
             aria-expanded="${open ? 'true' : 'false'}"
             onclick="window.Sidebar.toggleSection('${sec.title}')"
             title="${sec.title}"
             style="
-              display:flex;align-items:center;justify-content:space-between;gap:6px;
+              position:relative;display:flex;align-items:center;justify-content:space-between;gap:6px;
               width:calc(100% - 12px);margin:6px 6px 2px;padding:6px 8px;border-radius:7px;
               background:${open ? 'rgba(255,255,255,.05)' : 'transparent'};border:none;cursor:pointer;font-family:inherit;
-              opacity:0;transition:opacity .22s,background .15s;
+              transition:background .15s;
             "
             onmouseover="this.style.background='rgba(255,255,255,.08)'"
             onmouseout="this.style.background='${open ? 'rgba(255,255,255,.05)' : 'transparent'}'"
           >
-            <span style="font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--sidebar-section-label);">${sec.title}</span>
-            <span data-section-arrow="${sec.title}"
-                  style="display:flex;flex-shrink:0;color:var(--sidebar-section-label);opacity:.8;transform:rotate(${open ? 90 : 0}deg);transition:transform .18s;">
+            <span class="sb-label" style="font-size:12px;font-weight:700;color:var(--sidebar-section-label);">${sec.title}</span>
+            <span class="sb-label" data-section-arrow="${sec.title}"
+                  style="display:flex;flex-shrink:0;color:var(--sidebar-section-label);transform:rotate(${open ? 90 : 0}deg);transition:transform .18s;">
               ${this._icons.chevron}
             </span>
           </button>
@@ -476,10 +507,31 @@ window.Sidebar = {
           width: calc(100vw - var(--sidebar-w-expanded, 228px));
         }
         #sidebar:hover .sb-label    { opacity: 1 !important; }
+        /* Collapsed rail: a section head shows as a short centred rule, not an
+           empty hit-area that looks like one more nav icon. */
+        #sidebar .sb-sec-head::before {
+          content: ''; position: absolute; left: 50%; top: 50%;
+          width: 16px; height: 2px; margin: -1px 0 0 -8px; border-radius: 2px;
+          background: var(--sidebar-section-label); opacity: .35;
+          transition: opacity .22s; pointer-events: none;
+        }
+        #sidebar:hover .sb-sec-head::before { opacity: 0; }
         #sidebar:hover .sb-brand-name { opacity: 1 !important; }
         #sidebar:hover .sb-user-info  { opacity: 1 !important; }
         #sidebar:hover .sb-signout    { opacity: 1 !important; }
         #sidebar nav::-webkit-scrollbar { width: 0; }
+        /* Pinned: the hover state, held open. No !important on #shell-body so
+           the mobile rules (rail hidden) still win. */
+        html.sb-pinned #sidebar { width: var(--sidebar-w-expanded, 228px) !important; }
+        html.sb-pinned #sidebar ~ #shell-body {
+          margin-left: var(--sidebar-w-expanded, 228px);
+          width: calc(100vw - var(--sidebar-w-expanded, 228px));
+        }
+        html.sb-pinned #sidebar :is(.sb-label, .sb-brand-name, .sb-user-info, .sb-signout) { opacity: 1 !important; }
+        html.sb-pinned #sidebar .sb-sec-head::before { opacity: 0; }
+        #sb-pin-btn { margin-left:auto;flex-shrink:0;display:flex;padding:5px;border-radius:6px;background:transparent;border:none;cursor:pointer;color:var(--sidebar-icon-muted); }
+        #sb-pin-btn:hover, #sb-pin-btn[aria-pressed="true"] { color:var(--sidebar-text);background:rgba(255,255,255,.08); }
+        #sb-pin-btn:focus-visible { outline:2px solid var(--sidebar-accent);outline-offset:1px;opacity:1 !important; }
       </style>
 
       <!-- Brand -->
@@ -493,6 +545,11 @@ window.Sidebar = {
         <div class="sb-brand-name" style="opacity:0;transition:opacity 0.22s;white-space:nowrap;overflow:hidden;min-width:0;">
           <div style="font-size:13px;font-weight:600;letter-spacing:-0.02em;color:var(--sidebar-text);white-space:nowrap;">Lallubhai Amichand</div>
         </div>
+        <button id="sb-pin-btn" class="sb-label" type="button" onclick="window.Sidebar.togglePinned()"
+                aria-pressed="${pinned ? 'true' : 'false'}"
+                title="${pinned ? 'Collapse sidebar' : 'Keep sidebar open'}" aria-label="${pinned ? 'Collapse sidebar' : 'Keep sidebar open'}">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
+        </button>
       </div>
 
       <!-- Nav -->

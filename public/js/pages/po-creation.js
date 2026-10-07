@@ -794,19 +794,19 @@ window.Pages['po-creation'] = (() => {
     if (!body) return;
 
     if (!_polLoaded) {
-      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_polLoadError) {
-      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_polLoadError) + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_polLoadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     const rows = _polFilteredRows();
-    if (countEl) countEl.textContent = rows.length + ' of ' + _polRows.length;
+    if (countEl) countEl.textContent = 'Showing ' + rows.length + ' of ' + _polRows.length + ' POs';
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_polRows.length ? 'No POs match these filters' : 'No POs created yet') + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_polRows.length ? 'No POs match these filters' : 'No POs created yet') + '</td></tr>';
       return;
     }
     body.innerHTML = rows.map(r => ''
@@ -819,14 +819,14 @@ window.Pages['po-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + _polStatusPill(r) + '</td>'
         + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
-          + _polStatusPill(r)
-          + (r.status === 'Cancelled' || r.status === 'Rejected'
-            ? ''
-            : '<button type="button" class="poc-cancel-btn" data-po="' + esc(r.poNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
           + (r.status === 'Approved' || r.status === 'Rejected' || r.status === 'Cancelled'
             ? ''
-            : '<button type="button" class="poc-resend-btn" data-po="' + esc(r.poNo) + '" title="Email the approver again with Approve / Reject buttons" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Resend mail</button>')
+            : '<button type="button" class="poc-resend-btn btn-secondary btn-sm" data-po="' + esc(r.poNo) + '" title="Email the approver again with Approve / Reject buttons">Resend mail</button>')
+          + (r.status === 'Cancelled' || r.status === 'Rejected'
+            ? ''
+            : '<button type="button" class="poc-cancel-btn btn-outline-danger btn-sm" data-po="' + esc(r.poNo) + '">Cancel PO</button>')
           + Utils.ownerDeleteBtn('poc-delete-btn', 'po', r.poNo)
         + '</td>'
       + '</tr>').join('');
@@ -836,12 +836,12 @@ window.Pages['po-creation'] = (() => {
   // server.js). "Active" is the plain not-yet-decided state — shown as
   // "Awaiting approval" so the store team can tell it apart at a glance.
   function _polStatusPill(r) {
-    const pill = (label, bg, fg, title) => '<span title="' + esc(title || '') + '" style="display:inline-flex;margin-right:6px;padding:2px 8px;border-radius:10px;background:' + bg + ';color:' + fg + ';font-size:11px;font-weight:600;">' + esc(label) + '</span>';
+    const pill = (label, bg, fg, title) => '<span title="' + esc(title || '') + '" style="display:inline-flex;padding:2px 8px;border-radius:10px;background:' + bg + ';color:' + fg + ';font-size:11px;font-weight:600;">' + esc(label) + '</span>';
     const who = r.decidedBy ? 'by ' + r.decidedBy + (r.decidedAt ? ' on ' + r.decidedAt : '') : '';
-    if (r.status === 'Cancelled') return pill('Cancelled', '#f1f5f9', '#64748b');
-    if (r.status === 'Approved')  return pill('Approved', '#dcfce7', '#15803d', who);
-    if (r.status === 'Rejected')  return pill('Rejected', '#fee2e2', '#b91c1c', who);
-    return pill('Awaiting approval', '#fef3c7', '#b45309');
+    if (r.status === 'Cancelled') return pill('Cancelled', 'var(--color-neutral-bg)', 'var(--color-neutral-text)');
+    if (r.status === 'Approved')  return pill('Approved', 'var(--color-success-bg)', 'var(--color-success-text)', who);
+    if (r.status === 'Rejected')  return pill('Rejected', 'var(--color-danger-bg)', 'var(--color-danger-text)', who);
+    return pill('Awaiting approval', 'var(--color-warning-bg)', 'var(--color-warning-text)');
   }
 
   function _polBindRowActions() {
@@ -899,11 +899,13 @@ window.Pages['po-creation'] = (() => {
       + '<select id="pol-format" style="' + _inputStyle + 'min-width:140px;width:auto;background:#fff;">' + formatOptions + '</select>'
       + '<select id="pol-dept" style="' + _inputStyle + 'min-width:160px;width:auto;background:#fff;"><option value="">All Departments</option></select>'
       + '<input type="text" id="pol-party" placeholder="Search customer/vendor…" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
-      + '<input type="date" id="pol-from" style="' + _inputStyle + 'width:auto;" />'
-      + '<span class="poc-fbar-to" style="color:#94a3b8;font-size:12px;">to</span>'
-      + '<input type="date" id="pol-to" style="' + _inputStyle + 'width:auto;" />'
-      + '<button type="button" id="pol-clear" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#64748b;font-size:12.5px;font-weight:600;cursor:pointer;">Clear</button>'
-      + '<button type="button" id="pol-refresh" style="padding:8px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">Refresh</button>'
+      + '<div class="poc-fbar-dates" role="group" aria-label="PO date range">'
+        + '<input type="date" id="pol-from" aria-label="From date" />'
+        + '<span class="poc-fbar-to" aria-hidden="true">to</span>'
+        + '<input type="date" id="pol-to" aria-label="To date" />'
+      + '</div>'
+      + '<button type="button" id="pol-clear" class="btn-secondary">Clear</button>'
+      + '<button type="button" id="pol-refresh" class="btn-secondary">Refresh</button>'
     + '</div>';
   }
 
@@ -926,18 +928,16 @@ window.Pages['po-creation'] = (() => {
   }
 
   function _polViewHtml() {
-    return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;">'
-        + '<p style="font-size:12.5px;color:#64748b;margin:0;">Every PO created here, read live from the sheet\'s ERP PO Log.</p>'
-        + '<span id="pol-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
-      + '</div>'
+    return '<p style="font-size:12.5px;color:var(--text-secondary);margin:0 0 14px;">Every PO created here, read live from the sheet\'s ERP PO Log.</p>'
       + _polFilterBarHtml()
       + '<div class="poc-list-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table class="m-cards poc-list" style="width:100%;border-collapse:collapse;min-width:920px;">'
+        + '<table class="m-cards poc-list" style="width:100%;border-collapse:collapse;min-width:1020px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['PO No','Format','Date','Party','Department','Total (INR)','Created By','PDF','Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + h + '</th>').join('')
+            + ['PO No','Format','Date','Party','Department','Total (INR)','Created By','PDF','Status','Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + h + '</th>').join('')
           + '</tr></thead>'
-          + '<tbody id="pol-body"><tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '<tbody id="pol-body"><tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
+        + '<div class="poc-list-foot"><span id="pol-count" aria-live="polite"></span></div>'
       + '</div>';
   }
 
@@ -1122,7 +1122,17 @@ window.Pages['po-creation'] = (() => {
   /* ── Phone layout (< 768px only; desktop untouched). Tabs scroll sideways,
      each field group shares one card in two columns, each item line becomes
      a compact card, PO List rows become cards (shared .m-cards). ────────── */
-  const MOBILE_CSS = `@media (max-width: 767px) {
+  const MOBILE_CSS = `
+  .poc-fbar-dates { display: inline-flex; align-items: center; gap: 6px; padding: 0 4px; border: 1.5px solid #e2e8f0; border-radius: 8px; background: var(--surface); }
+  .poc-fbar-dates input { border: none; outline: none; background: transparent; padding: 7px 6px; font-size: 13px; color: var(--text-primary); font-family: inherit; }
+  .poc-fbar-dates:focus-within { border-color: var(--color-primary); }
+  .poc-fbar-to { font-size: 12px; color: var(--text-muted); line-height: 1; }
+  table.poc-list td.m-card-actions > button + button { margin-left: 6px; }
+  table.poc-list .poc-delete-btn { border: 1.5px solid var(--color-danger-border) !important; background: var(--surface) !important; border-radius: var(--radius-sm); padding: 5px 11px !important; font-size: 12px !important; font-weight: 600 !important; margin-left: 6px !important; line-height: 1; }
+  table.poc-list .poc-delete-btn:hover { background: var(--color-danger-bg) !important; }
+  .poc-list-foot { display: flex; justify-content: flex-end; padding: 8px 12px; border-top: 1px solid #e2e8f0; background: #f8fafc; font-size: 12px; font-weight: 600; color: var(--text-muted); }
+  .poc-list-foot:has(#pol-count:empty) { display: none; }
+  @media (max-width: 767px) {
     .poc-page { padding-bottom: 16px !important; }
     .poc-tabs { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; gap: 0 !important; border-bottom: none !important; box-shadow: inset 0 -1px 0 var(--border-light); margin-bottom: 14px !important; }
     .poc-tabs::-webkit-scrollbar { display: none; }
@@ -1153,7 +1163,9 @@ window.Pages['po-creation'] = (() => {
     .poc-fbar { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
     .poc-fbar > * { width: 100% !important; min-width: 0 !important; min-height: 40px; }
     .poc-fbar > #pol-party { grid-column: 1 / -1; order: -1; }
-    .poc-fbar > .poc-fbar-to { display: none; }
+    .poc-fbar > .poc-fbar-dates { grid-column: 1 / -1; padding: 0 6px; }
+    .poc-fbar-dates input { flex: 1; min-width: 0; min-height: 38px; }
+    table.poc-list td.m-card-actions > button + button, table.poc-list .poc-delete-btn { margin-left: 0 !important; }
     .poc-list-wrap { overflow: visible !important; background: var(--surface); }
     table.poc-list { min-width: 0 !important; }
     table.poc-list td.m-card-title { font-size: 14.5px !important; gap: 0; }
