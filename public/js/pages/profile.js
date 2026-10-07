@@ -93,7 +93,7 @@ window.Pages.profile = {
            reads on one screen instead of the HR half sitting below the fold.
            items-start stops the shorter column being stretched to match the
            taller one. -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+      <div id="pf-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
 
         <!-- LEFT: who you are, and the two things you can edit -->
         <div class="space-y-4">
@@ -119,10 +119,10 @@ window.Pages.profile = {
                 </div>
               </div>
               <div class="pf-photo-btns flex flex-col gap-1.5 shrink-0">
-                <button id="profile-change-photo-btn" class="btn-secondary !py-1 text-[11px]" ${this._picSaving ? 'disabled' : ''}>
+                <button type="button" id="profile-change-photo-btn" class="btn-secondary btn-sm" ${this._picSaving ? 'disabled' : ''}>
                   ${this._picSaving ? 'Saving…' : 'Change Photo'}
                 </button>
-                <button id="profile-remove-photo-btn" class="btn-ghost !py-1 text-[11px] text-red-600 hover:bg-red-50" ${this._picSaving ? 'disabled' : ''}>
+                <button type="button" id="profile-remove-photo-btn" class="btn-outline-danger btn-sm" ${this._picSaving ? 'disabled' : ''}>
                   Remove
                 </button>
                 <input id="profile-file-input" type="file" accept="image/*" class="hidden" />
@@ -133,8 +133,8 @@ window.Pages.profile = {
           <!-- Personal Information -->
           <div class="card p-4">
             <div class="mb-3">
-              <h3 class="text-[15px] font-semibold text-slate-900">Personal Information</h3>
-              <p class="text-xs text-slate-500 mt-0.5">As recorded by the office — ask an Admin (Users → Edit) for any change</p>
+              <h2 class="text-[15px] font-semibold text-slate-900">Personal Information</h2>
+              <p class="text-slate-500 mt-0.5" style="font-size:var(--text-sm);">As recorded by the office — ask an Admin (Users → Edit) for any change</p>
             </div>
             <!-- Read-only since 14 Sep 2026 ("Profile ko editable mat rakho"):
                  name, phone and the notification address are the office's
@@ -151,21 +151,20 @@ window.Pages.profile = {
           <!-- Security -->
           <div class="card p-4">
             <div class="mb-3">
-              <h3 class="text-[15px] font-semibold text-slate-900">Security</h3>
-              <p class="text-xs text-slate-500 mt-0.5">Change your account password</p>
+              <h2 class="text-[15px] font-semibold text-slate-900">Security</h2>
+              <p class="text-slate-500 mt-0.5" style="font-size:var(--text-sm);">Change your account password. Your photo saves as soon as you pick it.</p>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
               ${this._fieldHtml('currentPassword', 'Current Password', '', 'password', '', '••••••')}
               ${this._fieldHtml('newPassword',     'New Password',     '', 'password', '', 'Enter new password')}
               ${this._fieldHtml('confirmPassword', 'Confirm Password', '', 'password', '', 'Confirm new password')}
             </div>
-          </div>
-
-          <div class="pf-save-row flex justify-end gap-2">
-            <button id="profile-cancel-btn" class="btn-secondary">Cancel</button>
-            <button id="profile-save-btn" class="btn-primary" ${this._saving ? 'disabled' : ''}>
-              ${this._saving ? 'Saving…' : 'Save Changes'}
-            </button>
+            <div class="pf-save-row flex justify-end gap-2" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-light);">
+              <button type="button" id="profile-cancel-btn" class="btn-secondary">Clear</button>
+              <button type="button" id="profile-save-btn" class="btn-primary" ${this._saving ? 'disabled' : ''}>
+                ${this._saving ? 'Saving…' : 'Update Password'}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -190,7 +189,18 @@ window.Pages.profile = {
       </style>
     `;
 
+    this._applyLayout();
     this._bindEvents();
+  },
+
+  // Two columns only when the right one has a real employment record to
+  // show; otherwise a single, narrower column so the page is not half empty.
+  _applyLayout() {
+    const grid = document.getElementById('pf-grid');
+    if (!grid) return;
+    const single = this._hr !== undefined && !(this._hr && this._hr.linked);
+    grid.classList.toggle('lg:grid-cols-2', !single);
+    grid.style.maxWidth = single ? '760px' : '';
   },
 
   /* ── Employment ──────────────────────────────────────────
@@ -203,13 +213,13 @@ window.Pages.profile = {
   _hrHtml() {
     const hr = this._hr;
     if (hr === undefined) {
-      return `<div class="card p-5"><div class="text-sm text-slate-400">Loading employment details…</div></div>`;
+      return `<div class="card p-4"><div class="text-sm text-slate-400">Loading employment details…</div></div>`;
     }
     // An account with no employee record is the normal state of a brand-new
     // login, so it explains itself instead of showing a row of dashes.
     if (!hr || !hr.linked) {
-      return `<div class="card p-5">
-        <h3 class="text-[15px] font-semibold text-slate-900">Employment</h3>
+      return `<div class="card p-4">
+        <h2 class="text-[15px] font-semibold text-slate-900">Employment</h2>
         <p class="text-xs text-slate-500 mt-1 leading-relaxed">
           No employee record is linked to this login yet, so there is nothing to show here.
           HR links accounts from Employee Master → Link Logins; once that is done your designation,
@@ -296,10 +306,10 @@ window.Pages.profile = {
     ` : `${heading('Salary')}<div class="text-[13px] text-slate-500">No salary structure has been recorded against your employee record yet.</div>`;
 
     return `
-      <div class="card p-3.5">
+      <div class="card p-4">
         <div class="flex items-start justify-between gap-3 mb-1">
           <div>
-            <h3 class="text-[15px] font-semibold text-slate-900">Employment</h3>
+            <h2 class="text-[15px] font-semibold text-slate-900">Employment</h2>
           </div>
           <span class="pill pill-brand pill-sm">${esc(e.id)}</span>
         </div>
@@ -406,6 +416,7 @@ window.Pages.profile = {
     const box = document.getElementById('profile-hr');
     if (box) {
       box.innerHTML = this._hrHtml();
+      this._applyLayout();
       box.querySelectorAll('[data-profile-go]').forEach((b) =>
         b.addEventListener('click', () => window.Router.navigate(b.dataset.profileGo)));
     }
@@ -428,6 +439,7 @@ window.Pages.profile = {
           value="${val}"
           placeholder="${ph}"
           ${readOnly ? 'readonly' : ''}
+          ${hint ? `aria-describedby="${inputId}-hint"` : ''}
           class="input${isPass ? ' pr-10' : ''}${readOnly ? ' bg-slate-50 text-slate-500 cursor-not-allowed' : ''}"
         />
         ${isPass ? `
@@ -437,12 +449,12 @@ window.Pages.profile = {
           ${this._eyeClosedSvg()}
         </button>` : ''}
       </div>
-      ${hint ? `<div class="text-[11px] text-slate-400 mt-1">${this._esc(hint)}</div>` : ''}
     `;
 
     return `
       <div>
-        <label class="label" for="${inputId}">${this._esc(label)}</label>
+        <label class="label" for="${inputId}"${hint ? ' style="margin-bottom:2px;"' : ''}>${this._esc(label)}</label>
+        ${hint ? `<div id="${inputId}-hint" style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">${this._esc(hint)}</div>` : ''}
         ${inputHtml}
       </div>
     `;
@@ -607,7 +619,12 @@ window.Pages.profile = {
   async _save() {
     const f = this._form;
 
-    if (f.newPassword && f.newPassword !== f.confirmPassword) {
+    if (!f.newPassword) {
+      Utils.showToast('Type a new password first', 'warning');
+      document.getElementById('profile-field-newPassword')?.focus();
+      return;
+    }
+    if (f.newPassword !== f.confirmPassword) {
       Utils.showToast('New passwords do not match', 'error');
       return;
     }
@@ -624,7 +641,7 @@ window.Pages.profile = {
       });
 
       if (res.ok) {
-        window.Utils?.showToast('Profile updated');
+        window.Utils?.showToast('Password updated');
         // Clear password fields
         this._form.currentPassword = '';
         this._form.newPassword     = '';
@@ -645,6 +662,6 @@ window.Pages.profile = {
     }
 
     this._saving = false;
-    if (btn) { btn.disabled = false; btn.textContent = 'Save Changes'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Update Password'; }
   },
 };

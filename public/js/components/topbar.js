@@ -51,7 +51,7 @@ window.Topbar = {
     const themeIcon = window.Theme?.current() === 'dark' ? window.Theme.SUN_ICON : window.Theme.MOON_ICON;
 
     return `
-      <div style="padding:0 28px;height:56px;display:flex;align-items:center;gap:14px;">
+      <div style="padding:0 28px;height:56px;display:flex;align-items:center;gap:12px;">
 
         <!-- Page title -->
         <h1 style="
@@ -77,7 +77,7 @@ window.Topbar = {
         </button>
 
         <!-- Divider -->
-        <div style="width:1px;height:20px;background:var(--border-base);flex-shrink:0;margin:0 2px;"></div>
+        <div aria-hidden="true" style="width:1px;height:20px;background:var(--border-base);flex-shrink:0;"></div>
 
         <!-- Avatar + name + role -->
         <div style="display:flex;align-items:center;gap:9px;flex-shrink:0;">
@@ -89,7 +89,7 @@ window.Topbar = {
         </div>
 
         <!-- Divider -->
-        <div style="width:1px;height:20px;background:var(--border-base);flex-shrink:0;margin:0 2px;"></div>
+        <div aria-hidden="true" style="width:1px;height:20px;background:var(--border-base);flex-shrink:0;"></div>
 
         <!-- Sign out -->
         <button

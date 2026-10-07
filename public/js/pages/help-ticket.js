@@ -485,7 +485,7 @@ window.Pages['help-ticket'] = (() => {
       const filedBy   = t.submitted_by || '';
       const displayDate = t.ticket_date ? fmt(t.ticket_date) : fmt(t.created_at);
       const transferredBadge = t.transferred_to
-        ? `<div style="font-size:10px;color:#3b82f6;margin-top:2px;">→ ${esc(t.transferred_to)}${t.routing === 'inquiry' ? ' (inquiry)' : ''}</div>` : '';
+        ? `<div style="font-size:11px;color:var(--color-info-text);margin-top:2px;">→ ${esc(t.transferred_to)}${t.routing === 'inquiry' ? ' (inquiry)' : ''}</div>` : '';
       const categoryCell = t.category
         ? `<div style="font-size:11.5px;font-weight:600;color:#334155;">${esc(t.category)}</div>${
             money(t.amount) ? `<div style="font-size:13px;font-weight:700;color:#0f172a;margin-top:2px;">${money(t.amount)}</div>` : ''}`
@@ -497,43 +497,51 @@ window.Pages['help-ticket'] = (() => {
            </select>`
         : `<span style="font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;background:${ss.bg};color:${ss.color}">${ss.label}</span>`;
 
-      const transferBtn = admin
-        ? `<button class="ht-transfer-btn" data-id="${esc(t.id)}" style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:600;background:#eff6ff;color:#3b82f6;border:1px solid #bfdbfe;cursor:pointer;">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      const transferBtn = (admin && t.status !== 'resolved')
+        ? `<button type="button" class="ht-act-btn ht-transfer-btn" data-id="${esc(t.id)}" title="Transfer this ticket to someone else">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
             Transfer
            </button>` : '';
 
       const reopenBtn = (admin && t.status === 'resolved')
-        ? `<button class="ht-reopen-btn" data-id="${esc(t.id)}" style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:600;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;cursor:pointer;">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v5h5"/></svg>
+        ? `<button type="button" class="ht-act-btn ht-reopen-btn" data-id="${esc(t.id)}" title="Move this ticket back to Open">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 3v5h5"/></svg>
             Reopen
            </button>` : '';
 
       const rowBg = t.status === 'resolved' ? '#f0fdf4' : '';
 
       return `<tr style="transition:background .1s;background:${rowBg};" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='${rowBg}'">
-        <td class="m-card-title" style="padding:11px 14px;font-size:13px;font-weight:600;color:#0f172a;vertical-align:top;">
+        <td class="m-card-title" style="padding:11px 14px;font-size:13px;font-weight:600;color:var(--text-primary);vertical-align:top;">
           <div>${esc(forName)}${transferredBadge}</div>
         </td>
-        <td style="padding:11px 14px;font-size:12.5px;color:#64748b;vertical-align:top;">${esc(filedBy || '—')}</td>
-        <td class="ht-c-issue" style="padding:11px 14px;font-size:13px;color:#374151;vertical-align:top;min-width:280px;">
+        <td style="padding:11px 14px;font-size:12.5px;color:var(--text-secondary);vertical-align:top;">${esc(filedBy || '—')}</td>
+        <td class="ht-c-issue" style="padding:11px 14px;font-size:13px;color:var(--text-primary);vertical-align:top;min-width:280px;">
           <div style="white-space:pre-wrap;overflow-wrap:anywhere;">${esc(t.subject||'—')}</div>
-          ${t.description ? `<div style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:#64748b;margin-top:3px;">${esc(t.description)}</div>` : ''}
+          ${t.description ? `<div style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:var(--text-secondary);margin-top:3px;">${esc(t.description)}</div>` : ''}
         </td>
         ${pay ? `<td style="padding:11px 14px;white-space:nowrap;vertical-align:top;">${categoryCell}</td>` : ''}
-        <td style="padding:11px 14px;font-size:12px;color:#64748b;white-space:nowrap;">${displayDate}</td>
+        <td style="padding:11px 14px;font-size:12px;color:var(--text-secondary);white-space:nowrap;">${displayDate}</td>
         <td style="padding:11px 14px;">
           <span style="font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;background:${ps.bg};color:${ps.color}">${esc(t.priority||'Medium')}</span>
         </td>
         <td style="padding:11px 14px;">${statusCell}</td>
-        ${admin ? `<td class="m-card-actions" style="padding:11px 14px;"><div style="display:flex;align-items:center;gap:6px;">${transferBtn}${reopenBtn}</div></td>` : ''}
+        ${admin ? `<td class="m-card-actions" style="padding:11px 14px;">${transferBtn}${reopenBtn}</td>` : ''}
       </tr>`;
     }).join('');
 
-    const thStyle = 'padding:10px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:700;color:#64748b;text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;background:#f8fafc;';
+    const thStyle = 'padding:10px 14px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:700;color:var(--text-secondary);text-align:left;white-space:nowrap;border-bottom:1px solid #e2e8f0;background:#f8fafc;';
 
     el.innerHTML = `
       <style>
+        /* Row actions: quiet text buttons that only take colour on hover/focus,
+           so the Action column doesn't read as a wall of buttons. */
+        .ht-act-btn { display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:var(--radius-sm);border:1px solid transparent;
+          background:transparent;color:var(--text-secondary);font:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .12s,color .12s,border-color .12s; }
+        .ht-act-btn:hover { background:var(--color-info-bg);color:var(--color-info-text);border-color:var(--color-info-border); }
+        .ht-act-btn:focus-visible { outline:2px solid var(--color-primary);outline-offset:1px; }
+        .ht-table td.m-card-actions .ht-act-btn { border-color:var(--border-base); }
+        @media (min-width: 768px) { .ht-table td.m-card-actions .ht-act-btn { border-color:transparent; } }
         /* Phone: header buttons share a row, tabs scroll, tickets become cards,
            every dialog opens as a bottom sheet (authority tables scroll sideways). */
         @media (max-width: 767px) {
@@ -561,19 +569,20 @@ window.Pages['help-ticket'] = (() => {
         }
       </style>
       <div style="display:flex;flex-direction:column;gap:16px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+        <div style="display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px;">
           <div>
-            <h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">${pay ? 'Payment Requests' : 'Help Tickets'}</h1>
-            <p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">${pay
+            <h1 style="font-size:19px;font-weight:700;color:var(--text-primary);letter-spacing:-0.02em;margin:0;">${pay ? 'Payment Requests' : 'Help Tickets'}</h1>
+            <p style="font-size:12.5px;color:var(--text-secondary);margin:3px 0 0;">${pay
               ? 'Spend that needs an approval, routed to whoever holds that authority'
               : 'Submit issues or requests to the admin team'}</p>
           </div>
           <div class="ht-head-btns" style="display:flex;align-items:center;gap:8px;">
-          ${admin ? `<button id="ht-authority-btn" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;cursor:pointer;">
+          ${admin ? `<button id="ht-authority-btn" class="btn-secondary">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>
             Approval Authority
           </button>` : ''}
-          <button id="ht-new-btn" style="display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;background:linear-gradient(135deg,#0150AA,#013D82);color:#fff;border:none;cursor:pointer;">
+          <button id="ht-new-btn" class="btn-primary">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
             ${pay ? 'New Payment Request' : 'New Ticket'}
           </button>
@@ -583,12 +592,13 @@ window.Pages['help-ticket'] = (() => {
           ${[['ticket', 'Help Tickets'], ['payment', 'Payment Requests']].map(([k, label]) => {
             const on = _tab === k;
             const n = _tickets.filter(t => kindOf(t) === k).length;
-            return `<button class="ht-tab" data-tab="${k}" style="position:relative;padding:9px 16px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:${on?700:600};color:${on?'#0150AA':'#64748b'};border-bottom:2.5px solid ${on?'#0150AA':'transparent'};margin-bottom:-1px;">
-              ${label}<span style="margin-left:6px;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:${on?'#e0ecfb':'#f1f5f9'};color:${on?'#0150AA':'#94a3b8'};">${n}</span>
+            return `<button class="ht-tab" data-tab="${k}" style="position:relative;padding:9px 16px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:${on?700:600};color:${on?'var(--color-primary-strong)':'var(--text-secondary)'};border-bottom:2.5px solid ${on?'var(--color-primary)':'transparent'};margin-bottom:-1px;">
+              ${label}<span style="margin-left:6px;font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:${on?'var(--color-primary-light)':'var(--color-neutral-bg)'};color:${on?'var(--color-primary-strong)':'var(--text-muted)'};">${n}</span>
             </button>`;
           }).join('')}
         </div>
-        <div style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
+        </div>
+        <div style="background:var(--surface);border-radius:12px;border:1px solid var(--border-base);overflow:hidden;">
           <div style="overflow-x:auto;">
             <table class="m-cards ht-table" style="width:100%;border-collapse:collapse;">
               <thead>

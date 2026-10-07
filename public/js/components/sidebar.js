@@ -93,7 +93,7 @@ window.Sidebar = {
   _isPinned() {
     let saved = null;
     try { saved = localStorage.getItem(this._PINNED_KEY); } catch {}
-    return saved === null ? window.innerWidth >= 1600 : saved === '1';
+    return saved === null ? window.innerWidth >= 1440 : saved === '1';
   },
 
   togglePinned() {
@@ -105,6 +105,8 @@ window.Sidebar = {
       btn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
       btn.title = pinned ? 'Collapse sidebar' : 'Keep sidebar open';
       btn.setAttribute('aria-label', btn.title);
+      const txt = btn.querySelector('.sb-pin-text');
+      if (txt) txt.textContent = btn.title;
     }
   },
 
@@ -454,7 +456,7 @@ window.Sidebar = {
           if (!html.trim()) return '';
           const head = item.group && item.group !== lastGroup
             ? `<div class="sb-label" style="display:flex;align-items:center;gap:7px;padding:9px 8px 3px;opacity:0;transition:opacity .22s;">
-                 <span style="font-size:11px;font-weight:600;color:var(--sidebar-group-label);white-space:nowrap;">${item.group}</span>
+                 <span style="font-size:12px;font-weight:600;color:var(--sidebar-group-label);white-space:nowrap;">${item.group}</span>
                  <span style="flex:1;height:1px;background:rgba(255,255,255,.08);"></span>
                </div>`
             : '';
@@ -533,9 +535,15 @@ window.Sidebar = {
         }
         html.sb-pinned #sidebar :is(.sb-label, .sb-brand-name, .sb-user-info, .sb-signout) { opacity: 1 !important; }
         html.sb-pinned #sidebar .sb-sec-head::before { opacity: 0; }
-        #sb-pin-btn { margin-left:auto;flex-shrink:0;display:flex;padding:5px;border-radius:6px;background:transparent;border:none;cursor:pointer;color:var(--sidebar-icon-muted); }
-        #sb-pin-btn:hover, #sb-pin-btn[aria-pressed="true"] { color:var(--sidebar-text);background:rgba(255,255,255,.08); }
-        #sb-pin-btn:focus-visible { outline:2px solid var(--sidebar-accent);outline-offset:1px;opacity:1 !important; }
+        /* Expand / collapse toggle: its icon stays visible on the collapsed
+           rail (like a nav icon), so keeping labels on is discoverable. */
+        #sb-pin-btn { display:flex;align-items:center;gap:10px;width:calc(100% - 12px);height:34px;margin:6px 6px 0;padding:0 8px;
+          border-radius:7px;background:transparent;border:none;cursor:pointer;font:inherit;font-size:12.5px;font-weight:500;
+          color:var(--sidebar-icon-muted);white-space:nowrap;transition:background .14s,color .14s; }
+        #sb-pin-btn:hover { color:var(--sidebar-text);background:rgba(255,255,255,.06); }
+        #sb-pin-btn:focus-visible { outline:2px solid var(--sidebar-accent);outline-offset:1px; }
+        #sb-pin-btn svg { flex-shrink:0;transition:transform .2s; }
+        html.sb-pinned #sb-pin-btn svg { transform:rotate(180deg); }
       </style>
 
       <!-- Brand -->
@@ -549,11 +557,6 @@ window.Sidebar = {
         <div class="sb-brand-name" style="opacity:0;transition:opacity 0.22s;white-space:nowrap;overflow:hidden;min-width:0;">
           <div style="font-size:13px;font-weight:600;letter-spacing:-0.02em;color:var(--sidebar-text);white-space:nowrap;">Lallubhai Amichand</div>
         </div>
-        <button id="sb-pin-btn" class="sb-label" type="button" onclick="window.Sidebar.togglePinned()"
-                aria-pressed="${pinned ? 'true' : 'false'}"
-                title="${pinned ? 'Collapse sidebar' : 'Keep sidebar open'}" aria-label="${pinned ? 'Collapse sidebar' : 'Keep sidebar open'}">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
-        </button>
       </div>
 
       <!-- Nav -->
@@ -561,8 +564,18 @@ window.Sidebar = {
         ${sectionsHTML}
       </nav>
 
+      <!-- Expand / collapse -->
+      <div style="border-top:1px solid var(--sidebar-border);flex-shrink:0;">
+        <button id="sb-pin-btn" type="button" onclick="window.Sidebar.togglePinned()"
+                aria-pressed="${pinned ? 'true' : 'false'}"
+                title="${pinned ? 'Collapse sidebar' : 'Keep sidebar open'}" aria-label="${pinned ? 'Collapse sidebar' : 'Keep sidebar open'}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/></svg>
+          <span class="sb-label sb-pin-text">${pinned ? 'Collapse sidebar' : 'Keep sidebar open'}</span>
+        </button>
+      </div>
+
       <!-- User card -->
-      <div style="padding:6px 6px 10px;border-top:1px solid var(--sidebar-border);flex-shrink:0;">
+      <div style="padding:6px 6px 10px;flex-shrink:0;">
         <div style="display:flex;align-items:center;gap:8px;padding:6px;border-radius:7px;transition:background .14s;cursor:default;" onmouseenter="this.style.background='rgba(255,255,255,0.05)';" onmouseleave="this.style.background='transparent';">
           ${window.UI.avatar(user?.name, { variant: 'brand', size: 30, shape: 'square' })}
           <div class="sb-user-info" style="opacity:0;transition:opacity 0.22s;min-width:0;flex:1;overflow:hidden;">

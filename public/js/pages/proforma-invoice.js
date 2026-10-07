@@ -698,22 +698,22 @@ window.Pages['proforma-invoice'] = (() => {
      pricing is a separate, permission-gated step done later. The columns
      mirror the printed PI exactly, minus the two priced ones. ──────────── */
   const _ITEM_COLS = [
-    { field: 'modelNo', label: 'Model No.', width: 120, typeahead: true },
-    { field: 'clientCode', label: 'Client Code', width: 96 },
-    { field: 'itemName', label: 'Item Name', width: 170, typeahead: true },
-    { field: 'size', label: 'Size', width: 64 },
-    { field: 'swg', label: 'SWG', width: 56 },
-    { field: 'packing', label: 'Per Box Dozen Packing', width: 84, numeric: true },
-    { field: 'qty', label: 'Total Qty (Pcs/Set)', width: 88, numeric: true },
-    { field: 'boxes', label: 'Total Box', width: 72, numeric: true, derived: true },
+    { field: 'modelNo', label: 'Model No.', width: 120, typeahead: true, group: 'Product' },
+    { field: 'clientCode', label: 'Client Code', width: 96, group: 'Product' },
+    { field: 'itemName', label: 'Item Name', width: 170, typeahead: true, group: 'Product' },
+    { field: 'size', label: 'Size', width: 64, group: 'Product' },
+    { field: 'swg', label: 'SWG', width: 56, group: 'Product' },
+    { field: 'packing', label: 'Per Box Dozen Packing', width: 84, numeric: true, group: 'Packing & Qty' },
+    { field: 'qty', label: 'Total Qty (Pcs/Set)', width: 88, numeric: true, group: 'Packing & Qty' },
+    { field: 'boxes', label: 'Total Box', width: 72, numeric: true, derived: true, group: 'Packing & Qty' },
     // The per-box and per-piece figures the two totals are multiplied from —
     // from the master, but on the line and editable, so a wrong master figure
     // is a one-cell fix here rather than a wrong PI.
-    { field: 'cbmPerBox', label: 'CBM / Box', width: 78, numeric: true, basis: true },
-    { field: 'cbm', label: 'Total CBM', width: 80, numeric: true, derived: true },
-    { field: 'weightPerPc', label: 'Weight / Pc (Kgs)', width: 82, numeric: true, basis: true },
-    { field: 'weight', label: 'Total Weight (Kgs)', width: 88, numeric: true, derived: true },
-    { field: 'remarks', label: 'Remarks', width: 100 },
+    { field: 'cbmPerBox', label: 'CBM / Box', width: 78, numeric: true, basis: true, group: 'Volume' },
+    { field: 'cbm', label: 'Total CBM', width: 80, numeric: true, derived: true, group: 'Volume' },
+    { field: 'weightPerPc', label: 'Weight / Pc (Kgs)', width: 82, numeric: true, basis: true, group: 'Weight' },
+    { field: 'weight', label: 'Total Weight (Kgs)', width: 88, numeric: true, derived: true, group: 'Weight' },
+    { field: 'remarks', label: 'Remarks', width: 100, group: '' },
   ];
   const _cellInput = 'width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;';
 
@@ -730,27 +730,44 @@ window.Pages['proforma-invoice'] = (() => {
       + _ITEM_COLS.map(c => '<td class="pic-c-' + c.field + '" data-l="' + esc(c.label) + '" style="padding:6px;min-width:' + c.width + 'px;' + (c.typeahead ? 'position:relative;' : '') + '">'
           + '<input type="text" ' + (c.typeahead ? 'class="pic-item-code" autocomplete="off" ' : '') + (c.numeric ? 'inputmode="decimal" ' : '')
             + (c.derived ? 'class="pic-derived" ' : '')
-            + 'data-field="' + c.field + '" placeholder="' + esc(c.label) + '" style="' + _cellInput + (c.numeric ? 'text-align:right;' : '') + '" />'
+            + 'data-field="' + c.field + '" aria-label="' + esc(c.label) + '" placeholder="' + esc(c.label) + '" style="' + _cellInput + (c.numeric ? 'text-align:right;' : '') + '" />'
           + (c.typeahead ? '<div class="pic-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:260px;overflow-y:auto;"></div>' : '')
         + '</td>').join('')
       + '<td class="pic-c-rm" style="padding:6px;text-align:center;"><button type="button" class="pic-item-remove" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:16px;line-height:1;" title="Remove row">×</button></td>'
     + '</tr>';
   }
 
+  // One header cell per run of columns sharing a group, so 13 inputs read
+  // as four blocks instead of one long row.
+  function _itemGroupsHeadHtml() {
+    const runs = [];
+    _ITEM_COLS.forEach(c => {
+      const last = runs[runs.length - 1];
+      if (last && last.group === c.group) last.span++;
+      else runs.push({ group: c.group, span: 1 });
+    });
+    return '<th></th>' + runs.map(g => '<th colspan="' + g.span + '" scope="colgroup" class="pic-th-group">' + esc(g.group) + '</th>').join('') + '<th></th>';
+  }
+
   function _itemsTableHtml() {
     const minWidth = _ITEM_COLS.reduce((sum, c) => sum + c.width, 0) + 120;
     return '<div class="pic-items-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
       + '<table class="pic-items-tbl" style="width:100%;border-collapse:collapse;min-width:' + minWidth + 'px;">'
-        + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-          + '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">Photo</th>'
-          + _ITEM_COLS.map(c => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(c.label) + '</th>').join('')
-          + '<th></th>'
+        + '<thead>'
+          + '<tr class="pic-items-groups">' + _itemGroupsHeadHtml() + '</tr>'
+          + '<tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+          + '<th scope="col" class="pic-th">Photo</th>'
+          // th padding = cell padding (6px) + input padding (8px) + border, so
+          // each header starts exactly where its input's text does; numeric
+          // columns are right-aligned like their inputs.
+          + _ITEM_COLS.map(c => '<th scope="col" class="pic-th' + (c.numeric ? ' pic-th-num' : '') + '">' + esc(c.label) + '</th>').join('')
+          + '<th scope="col"><span class="sr-only">Remove</span></th>'
         + '</tr></thead>'
         + '<tbody id="pic-items-tbody">' + _itemRowHtml() + '</tbody>'
       + '</table>'
     + '</div>'
     + _totalsBarHtml('pic-totals')
-    + '<p style="font-size:11.5px;color:#94a3b8;margin:8px 2px 0;">Click into Model No. or Item Name to pick from the product list (type to narrow it down) — the name, size, SWG, packing, CBM per box, weight per piece and photo fill in from the product master; Total Box, CBM and Weight are then worked out from Qty. Type over any of them to override. Client Code is the buyer\'s own code for the line and fills in from their earlier PIs where one is known. The rate, its basis and its currency are added later by an authorized user.</p>';
+    + '<p style="font-size:var(--text-sm);color:var(--text-secondary);margin:8px 2px 0;line-height:1.5;">Click into Model No. or Item Name to pick from the product list (type to narrow it down) — the name, size, SWG, packing, CBM per box, weight per piece and photo fill in from the product master; Total Box, CBM and Weight are then worked out from Qty. Type over any of them to override. Client Code is the buyer\'s own code for the line and fills in from their earlier PIs where one is known. The rate, its basis and its currency are added later by an authorized user.</p>';
   }
 
   function _bindItemRow(rowEl) {
@@ -1101,15 +1118,16 @@ window.Pages['proforma-invoice'] = (() => {
 
   /* ── Tabs (Create + PI List, same in-page-tab pattern as PO/GRN Creation) ── */
   function _tabTab(label, active, extraAttrs) {
-    return '<button type="button" ' + extraAttrs + ' style="'
-      + 'padding:9px 16px;border:none;background:transparent;cursor:pointer;font-size:13px;font-weight:700;'
-      + 'color:' + (active ? 'var(--color-primary)' : '#94a3b8') + ';'
-      + 'border-bottom:2px solid ' + (active ? 'var(--color-primary)' : 'transparent') + ';margin-bottom:-1px;'
+    return '<button type="button" role="tab" aria-selected="' + (active ? 'true' : 'false') + '" ' + extraAttrs + ' style="'
+      + 'padding:9px 16px;border:none;cursor:pointer;font-size:13px;font-weight:' + (active ? 700 : 600) + ';border-radius:8px 8px 0 0;'
+      + 'background:' + (active ? 'var(--color-primary-light)' : 'transparent') + ';'
+      + 'color:' + (active ? 'var(--color-primary-strong)' : 'var(--text-secondary)') + ';'
+      + 'border-bottom:2.5px solid ' + (active ? 'var(--color-primary)' : 'transparent') + ';margin-bottom:-1px;'
       + '">' + esc(label) + '</button>';
   }
 
   function _tabsHtml() {
-    return '<div class="pi-tabs" style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid #e2e8f0;">'
+    return '<div class="pi-tabs" role="tablist" aria-label="Proforma invoice views" style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid var(--border-base);">'
       + _tabTab('Create PI', _view === 'create', 'class="pic-create-tab"')
       + _tabTab('PI List', _view === 'list', 'class="pic-list-tab"')
       + _tabTab('Order Sheets', _view === 'orders', 'class="pic-orders-tab"')
@@ -1311,6 +1329,7 @@ window.Pages['proforma-invoice'] = (() => {
     body.innerHTML = rows.map(v => {
       const r = v.r;
       const open = _pilOpenFamilies.has(v.fam);
+      const isOrdered = r.status === 'Priced' && !!r.form && ordered.has(String(r.piNo).trim());
       return ''
       + '<tr style="border-bottom:1px solid #f1f5f9;' + (v.child ? 'background:#fafbfd;' : '') + '">'
         // The number is the fold handle: click the PI in force to see the ones
@@ -1328,7 +1347,9 @@ window.Pages['proforma-invoice'] = (() => {
         + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;">' + _statusPillHtml(r.status) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + _statusPillHtml(r.status)
+          + (isOrdered ? ' <span title="An Order Sheet has already been raised against this PI" style="display:inline-flex;padding:2px 8px;border-radius:10px;background:var(--color-success-bg);color:var(--color-success-text);font-size:11px;font-weight:600;">Ordered</span>' : '')
+        + '</td>'
         // Not every PI is in the same currency any more, so the column
         // says which one rather than assuming US$ in its header.
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">'
@@ -1336,40 +1357,95 @@ window.Pages['proforma-invoice'] = (() => {
             ? (isNaN(parseFloat(r.total)) ? esc(r.total) : _fmtUsd(parseFloat(r.total))) + ' <span style="color:#94a3b8;font-size:11px;">' + esc(_currencyLabel((r.form && r.form.currency) || _priceDefault.currency)) + '</span>'
             : '<span style="color:#cbd5e1;">—</span>')
         + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" class="pil-pdf">View PDF <span aria-hidden="true">↗</span><span class="sr-only"> (opens in a new tab)</span></a>' : '<span style="color:var(--text-muted);">—</span>') + '</td>'
         + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
-          + (r.status !== 'Cancelled' && r.canSetPrice
-            ? '<button type="button" class="pic-price-btn" data-pi="' + esc(r.piNo) + '" style="border:1.5px solid var(--color-primary);background:#fff;color:var(--color-primary);cursor:pointer;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:7px;margin-right:6px;">' + (r.status === 'Priced' ? 'Edit Price' : 'Add Price') + '</button>'
-            : '')
-          // The buyer came back with changes: re-issue as R1, R2… rather than
-          // editing a PI they already hold a copy of.
-          + (r.canRevise && r.form
-            ? '<button type="button" class="pic-revise-btn" data-pi="' + esc(r.piNo) + '" style="border:1.5px solid #bfdbfe;background:#fff;color:#1e40af;cursor:pointer;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:7px;margin-right:6px;">Revise</button>'
-            : '')
-          // The advance has landed and the order goes into production. Only a
-          // priced PI can be ordered against — an unpriced one is not a deal
-          // yet — and a PI that already has one says so instead.
-          + (r.status === 'Priced' && r.form
-            ? (ordered.has(String(r.piNo).trim())
-              ? '<span title="An Order Sheet has already been raised against this PI" style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f0fdf4;color:#15803d;font-size:11px;font-weight:600;margin-right:6px;">Ordered</span>'
-              : '<button type="button" class="pic-order-btn" data-pi="' + esc(r.piNo) + '" style="border:1.5px solid #86efac;background:#fff;color:#15803d;cursor:pointer;font-size:11.5px;font-weight:700;padding:4px 10px;border-radius:7px;margin-right:6px;">Create Order Sheet</button>')
-            : '')
-          + (r.status === 'Cancelled'
-            ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
-            : r.status === 'Superseded'
-            ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#eff6ff;color:#1e40af;font-size:11px;font-weight:600;">Revised</span>'
-            : '<button type="button" class="pic-cancel-btn" data-pi="' + esc(r.piNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
-          + Utils.ownerDeleteBtn('pic-delete-btn', 'pi', r.piNo)
+          + '<div class="pil-acts">'
+          + _pilActionsHtml(r, isOrdered)
+          + '</div>'
         + '</td>'
       + '</tr>';
     }).join('');
+  }
+
+  // A row's actions: the one next step as the primary button (Add Price on
+  // an unpriced PI, Create Order Sheet on a priced one), Revise beside it,
+  // and everything rarer or destructive behind "More". The classes are the
+  // ones _pilBindRowActions() already listens for.
+  function _pilActionsHtml(r, isOrdered) {
+    const pi = esc(r.piNo);
+    const live = r.status !== 'Cancelled' && r.status !== 'Superseded';
+    const canPrice = r.status !== 'Cancelled' && r.canSetPrice;
+    let primary = '';
+    if (canPrice && r.status !== 'Priced') {
+      primary = '<button type="button" class="pic-price-btn btn-primary btn-sm" data-pi="' + pi + '">Add Price</button>';
+    } else if (r.status === 'Priced' && r.form && !isOrdered) {
+      primary = '<button type="button" class="pic-order-btn btn-primary btn-sm" data-pi="' + pi + '">Create Order Sheet</button>';
+    }
+    // The buyer came back with changes: re-issue as R1, R2… rather than
+    // editing a PI they already hold a copy of.
+    const revise = (r.canRevise && r.form)
+      ? '<button type="button" class="pic-revise-btn btn-secondary btn-sm" data-pi="' + pi + '">Revise</button>' : '';
+    const menu = [
+      (canPrice && r.status === 'Priced') ? '<button type="button" role="menuitem" class="pil-mi pic-price-btn" data-pi="' + pi + '">Edit Price</button>' : '',
+      live ? '<button type="button" role="menuitem" class="pil-mi pic-cancel-btn" data-pi="' + pi + '">Cancel PI</button>' : '',
+      Utils.ownerDeleteBtn('pic-delete-btn pil-mi pil-mi-danger', 'pi', r.piNo).replace('<button ', '<button role="menuitem" '),
+    ].join('');
+    return primary + revise + _moreMenuHtml(menu, 'More actions for PI ' + r.piNo);
+  }
+
+  // A "⋯" button and its menu; '' when there is nothing to put in it.
+  function _moreMenuHtml(itemsHtml, label) {
+    if (!itemsHtml) return '';
+    return '<span class="pil-more">'
+      + '<button type="button" class="pil-more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="' + esc(label) + '" title="More actions">'
+        + '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>'
+      + '</button>'
+      + '<span class="pil-menu" role="menu" hidden>' + itemsHtml + '</span>'
+    + '</span>';
+  }
+
+  // "More" menus are position:fixed so the table's overflow box can't clip
+  // them; any scroll, resize, outside click or Escape closes the open one.
+  function _pilCloseMenus(focusBtn) {
+    document.querySelectorAll('.pi-page .pil-menu:not([hidden])').forEach(m => {
+      m.hidden = true;
+      const b = m.parentElement.querySelector('.pil-more-btn');
+      if (b) { b.setAttribute('aria-expanded', 'false'); if (focusBtn) b.focus(); }
+    });
+  }
+  function _pilToggleMenu(btn) {
+    const menu = btn.parentElement.querySelector('.pil-menu');
+    const wasOpen = !menu.hidden;
+    _pilCloseMenus();
+    if (wasOpen) return;
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    const rect = btn.getBoundingClientRect();
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    const top = rect.bottom + 4 + mh > window.innerHeight ? rect.top - 4 - mh : rect.bottom + 4;
+    menu.style.top = Math.max(8, top) + 'px';
+    menu.style.left = Math.max(8, Math.min(rect.right - mw, window.innerWidth - mw - 8)) + 'px';
+    menu.querySelector('.pil-mi')?.focus();
+  }
+  let _pilMenuDocBound = false;
+  function _pilBindMenuDoc() {
+    if (_pilMenuDocBound) return;
+    _pilMenuDocBound = true;
+    document.addEventListener('click', (e) => { if (!e.target.closest('.pil-more')) _pilCloseMenus(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') _pilCloseMenus(true); });
+    window.addEventListener('resize', () => _pilCloseMenus());
+    document.addEventListener('scroll', () => _pilCloseMenus(), true);
   }
 
   function _pilBindRowActions() {
     const body = document.getElementById('pil-body');
     if (!body || body.dataset.actionsBound) return;
     body.dataset.actionsBound = '1';
+    _pilBindMenuDoc();
     body.addEventListener('click', async (e) => {
+      const moreBtn = e.target.closest('.pil-more-btn');
+      if (moreBtn) { _pilToggleMenu(moreBtn); return; }
+      if (e.target.closest('.pil-mi')) _pilCloseMenus();
       const famToggle = e.target.closest('.pic-fam-toggle');
       if (famToggle) {
         const fam = famToggle.dataset.fam;
@@ -1465,14 +1541,14 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _pilViewHtml() {
     return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;">'
-        + '<p style="font-size:12.5px;color:#64748b;margin:0;">Every Proforma Invoice created here, read live from the sheet\'s ERP PI Log.</p>'
-        + '<span id="pil-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
+        + '<p style="font-size:12.5px;color:var(--text-secondary);margin:0;">Every Proforma Invoice created here, read live from the sheet\'s ERP PI Log.</p>'
+        + '<span id="pil-count" style="font-size:12px;color:var(--text-muted);font-weight:600;"></span>'
       + '</div>'
       + _pilFilterBarHtml()
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
         + '<table class="m-cards pi-mtbl" style="width:100%;border-collapse:collapse;min-width:880px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['Pro. Invoice No', 'Date', 'Consignee', 'Status', 'Total', 'PDF', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + ['Pro. Invoice No', 'Date', 'Consignee', 'Status', 'Total', 'PDF', 'Actions'].map(h => '<th scope="col" style="padding:8px 10px;text-align:' + (h === 'Total' ? 'right' : 'left') + ';font-size:11px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
           + '<tbody id="pil-body"><tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
@@ -1954,14 +2030,14 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _osListHtml() {
     return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;">'
-        + '<p style="font-size:12.5px;color:#64748b;margin:0;">Raised once a PI is final and the advance is in. Start one from the Create Order Sheet button on any priced PI in the PI List.</p>'
-        + '<span id="osl-count" style="font-size:12px;color:#94a3b8;font-weight:600;"></span>'
+        + '<p style="font-size:12.5px;color:var(--text-secondary);margin:0;">Raised once a PI is final and the advance is in. Start one from the Create Order Sheet button on any priced PI in the PI List.</p>'
+        + '<span id="osl-count" style="font-size:12px;color:var(--text-muted);font-weight:600;"></span>'
       + '</div>'
       + _osFilterBarHtml()
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
         + '<table class="m-cards pi-mtbl" style="width:100%;border-collapse:collapse;min-width:860px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['Order No', 'Order Date', 'Against PI', 'Customer', 'Status', 'Total Qty', 'PDF', 'Actions'].map(h => '<th style="padding:8px 10px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + ['Order No', 'Order Date', 'Against PI', 'Customer', 'Status', 'Total Qty', 'PDF', 'Actions'].map(h => '<th scope="col" style="padding:8px 10px;text-align:' + (h === 'Total Qty' ? 'right' : 'left') + ';font-size:11px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
           + '<tbody id="osl-body"><tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
@@ -1998,22 +2074,24 @@ window.Pages['proforma-invoice'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;">' + _osStatusPillHtml(r.status) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;white-space:nowrap;">' + (r.totalQty ? esc(r.totalQty) : '<span style="color:#cbd5e1;">—</span>') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
-          + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>')
+          + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" class="pil-pdf">View PDF <span aria-hidden="true">↗</span><span class="sr-only"> (opens in a new tab)</span></a>' : '<span style="color:var(--text-muted);">—</span>')
           // The same order as a workbook, built server-side from its stored
           // lines — the factory and the loading team work it in Excel.
-          + (r.form ? ' <span style="color:#cbd5e1;">·</span> <a href="/api/order-sheet/xlsx?orderNo=' + encodeURIComponent(r.orderNo) + '" style="color:#15803d;font-weight:600;" title="Download this order as an Excel workbook">Excel</a>' : '')
+          + (r.form ? ' <span style="color:var(--text-muted);" aria-hidden="true">·</span> <a href="/api/order-sheet/xlsx?orderNo=' + encodeURIComponent(r.orderNo) + '" class="pil-pdf" title="Download this order as an Excel workbook">Excel</a>' : '')
         + '</td>'
         + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
+          + '<div class="pil-acts">'
           // Straight into a new Packing List with this order already ticked —
           // the common case is shipping one order, and the picker is still
           // there for the times it is two or three.
           + (r.status === 'Cancelled' || r.status === 'Packed'
             ? ''
-            : '<button type="button" class="osl-pack-btn" data-order="' + esc(r.orderNo) + '" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:700;padding:2px 6px;">Pack</button>')
-          + (r.status === 'Cancelled'
-            ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
-            : '<button type="button" class="osl-cancel-btn" data-order="' + esc(r.orderNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
-          + Utils.ownerDeleteBtn('osl-delete-btn', 'order', r.orderNo)
+            : '<button type="button" class="osl-pack-btn btn-primary btn-sm" data-order="' + esc(r.orderNo) + '">Pack</button>')
+          + _moreMenuHtml(
+              (r.status === 'Cancelled' ? '' : '<button type="button" role="menuitem" class="pil-mi osl-cancel-btn" data-order="' + esc(r.orderNo) + '">Cancel Order</button>')
+              + Utils.ownerDeleteBtn('osl-delete-btn pil-mi pil-mi-danger', 'order', r.orderNo).replace('<button ', '<button role="menuitem" '),
+              'More actions for order ' + r.orderNo)
+          + '</div>'
         + '</td>'
       + '</tr>').join('');
   }
@@ -2034,7 +2112,11 @@ window.Pages['proforma-invoice'] = (() => {
     const body = document.getElementById('osl-body');
     if (!body || body.dataset.actionsBound) return;
     body.dataset.actionsBound = '1';
+    _pilBindMenuDoc();
     body.addEventListener('click', async (e) => {
+      const moreBtn = e.target.closest('.pil-more-btn');
+      if (moreBtn) { _pilToggleMenu(moreBtn); return; }
+      if (e.target.closest('.pil-mi')) _pilCloseMenus();
       const packBtn = e.target.closest('.osl-pack-btn');
       if (packBtn) { _plStartNew(packBtn.dataset.order); return; }
       const cancelBtn = e.target.closest('.osl-cancel-btn');
@@ -3066,6 +3148,36 @@ window.Pages['proforma-invoice'] = (() => {
     + '.pi-sheet-foot > button { flex:1; min-height:44px; }'
   + '}</style>';
 
+  // Create-form table and action bar (all widths; _PI_MOBILE_CSS reshapes
+  // the table into cards on phones, where this thead is hidden anyway).
+  const _PI_FORM_CSS = '<style>'
+    + '.pic-th { padding:8px 14px;text-align:left;font-size:11px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;vertical-align:bottom;line-height:1.3; }'
+    + '.pic-th-num { text-align:right; }'
+    + '.pic-th-group { padding:6px 14px 2px;text-align:left;font-size:10.5px;font-weight:700;color:var(--color-primary-strong);letter-spacing:.04em;border-left:1px solid var(--border-base);background:var(--surface); }'
+    + '.pic-items-groups th:first-child, .pic-items-groups th:last-child { border-left:none;background:var(--surface); }'
+    + '.pic-items-tbl input.pic-derived { background:var(--surface-alt); }'
+    + '.pic-actionbar { position:sticky;bottom:0;z-index:5;display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap;'
+      + 'margin:0 -12px;padding:12px;background:var(--surface);border-top:1px solid var(--border-base);box-shadow:0 -6px 16px rgba(15,23,42,.06);border-radius:12px 12px 0 0; }'
+    + '.pic-actionbar-note { font-size:12px;color:var(--text-secondary);margin-right:auto; }'
+    + '.pil-acts { display:flex;align-items:center;gap:8px; }'
+    + '.pil-pdf { display:inline-flex;align-items:center;gap:3px;padding:4px 2px;color:var(--color-primary-strong);font-weight:600;text-decoration:none; }'
+    + '.pil-pdf:hover { text-decoration:underline; }'
+    + '.pil-more { position:relative;display:inline-flex; }'
+    + '.pil-more-btn { display:grid;place-items:center;width:30px;height:30px;border-radius:var(--radius-sm);border:1px solid var(--border-base);background:var(--surface);color:var(--text-secondary);cursor:pointer; }'
+    + '.pil-more-btn:hover, .pil-more-btn[aria-expanded="true"] { background:var(--surface-alt);color:var(--text-primary); }'
+    + '.pil-more-btn:focus-visible, .pil-mi:focus-visible { outline:2px solid var(--color-primary);outline-offset:1px; }'
+    + '.pil-menu { position:fixed;z-index:60;min-width:160px;padding:4px;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border-base);border-radius:var(--radius-md);box-shadow:var(--shadow-lg); }'
+    + '.pil-menu[hidden] { display:none; }'
+    + '.pil-menu .pil-mi { all:unset;box-sizing:border-box;display:block;width:100%;padding:8px 10px;border-radius:var(--radius-sm);font-size:12.5px;font-weight:600;color:var(--text-primary);cursor:pointer;white-space:nowrap; }'
+    + '.pil-menu .pil-mi:hover { background:var(--surface-alt); }'
+    + '.pil-menu .pil-mi-danger { color:var(--color-danger-text) !important;border-top:1px solid var(--border-light);border-radius:0 0 var(--radius-sm) var(--radius-sm);margin-top:2px; }'
+    + '.pil-menu .pil-mi-danger:hover { background:var(--color-danger-bg) !important; }'
+    + '.pil-menu .pil-mi-danger { padding:8px 10px !important;margin-left:0 !important;font-weight:600 !important; }'
+    + '.pil-menu .pil-mi:focus-visible { outline:2px solid var(--color-primary);outline-offset:-2px; }'
+    + '.sr-only { position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }'
+    + '@media (max-width: 767px) { .pic-actionbar { margin:0;padding:10px 0 calc(10px + env(safe-area-inset-bottom,0px)); } .pic-actionbar-note { display:none; } }'
+  + '</style>';
+
   function renderPage() {
     const el = document.getElementById('main-content');
     if (!el) return;
@@ -3094,15 +3206,18 @@ window.Pages['proforma-invoice'] = (() => {
         + _sectionTitle('Items')
         + _itemsTableHtml()
         + '<div class="pi-btnrow" style="display:flex;gap:10px;flex-wrap:wrap;">'
-          + '<button type="button" id="pic-add-item" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px solid #e2e8f0;color:#1e293b;font-size:12.5px;font-weight:600;cursor:pointer;">+ Add Item</button>'
+          + '<button type="button" id="pic-add-item" class="btn-secondary btn-sm">+ Add Item</button>'
           + (_hasFeature('add_product')
-            ? '<button type="button" id="pic-new-product" style="padding:7px 14px;border-radius:8px;background:#fff;border:1.5px dashed var(--color-primary);color:var(--color-primary);font-size:12.5px;font-weight:700;cursor:pointer;">+ New Product</button>'
+            ? '<button type="button" id="pic-new-product" class="btn-secondary btn-sm" style="border-style:dashed;color:var(--color-primary-strong);">+ New Product</button>'
             : '')
         + '</div>'
         + '<div id="pi-product-modal"></div>'
         + _sectionTitle('Validity & Terms')
         + _footerFieldsHtml()
-        + '<button type="submit" id="pic-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">' + (_reviseOf ? 'Issue Revision' : 'Create Proforma Invoice') + '</button>'
+        + '<div class="pic-actionbar">'
+          + '<span class="pic-actionbar-note">Rates are added afterwards from PI List → Add Price.</span>'
+          + '<button type="submit" id="pic-submit-btn" class="btn-primary btn-lg">' + (_reviseOf ? 'Issue Revision' : 'Create Proforma Invoice') + '</button>'
+        + '</div>'
       + '</form>';
 
     // The packing form's line table is the widest thing on this page — it
@@ -3110,6 +3225,7 @@ window.Pages['proforma-invoice'] = (() => {
     // weights on every row — so it gets more room than the other views.
     el.innerHTML = '<div class="pi-page" style="max-width:' + (isPacking ? '1360px' : isList || isOrders ? '1200px' : '1180px') + ';margin:0 auto;padding:4px 0 40px;">'
       + _PI_MOBILE_CSS
+      + _PI_FORM_CSS
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">Proforma Invoice / OCS</h1>'
         + '<p style="font-size:12.5px;color:#64748b;margin:3px 0 0;">Export PI. Create captures consignee, shipping &amp; items only — the rate, its basis and its currency are added afterward by an authorized user.</p>'
