@@ -6810,7 +6810,12 @@ const PO_FORMAT_CONFIG = {
     partyLabel: 'VENDOR',
     hasShipTo: false,
     header: { poNo: 'J9', date: 'J8', prNo: 'J10', department: 'J11', party: 'A16', deliverySchedule: 'F23', poValidity: 'G23', paymentTerms: 'B23', poMadeBy: 'A23' },
-    items: { firstRow: 26, lastRow: 55, clearCols: ['A', 'J'], fields: { itemCode: 'A', customerCodeRef: 'D', barcode: 'E', stickerQty: 'G', rate: 'H', taxPercent: 'I' } },
+    // firstRow is 27, NOT 26: the header band is merged across rows 25:26, so
+    // anything written to row 26 lands inside the merge and never prints —
+    // every ENR PO up to PO396 silently lost its first item (and its amount
+    // from the total). The header formulas' spill still lines up row-for-row
+    // with column A, so row 27 picks up description/size/total as normal.
+    items: { firstRow: 27, lastRow: 55, clearCols: ['A', 'J'], fields: { itemCode: 'A', customerCodeRef: 'D', barcode: 'E', stickerQty: 'G', rate: 'H', taxPercent: 'I' } },
     summary: { fields: { shipping: 'J57', other: 'J58', discountPercent: 'I59' }, totalCell: 'J60' },
     approvalCell: 'H66',   // the H66:J69 signature merge above "Director/Authorized Signatory"
   },
