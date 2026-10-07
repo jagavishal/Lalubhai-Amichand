@@ -405,14 +405,14 @@ window.Pages['all-tasks'] = (function () {
 
     const doneBtn = canDone
       ? (t.type === 'Checklist'
-          ? `<button class="at-pill-btn at-pill-green" onclick="window._atChecklistDone('${esc(t.id)}')">Done</button>`
+          ? `<button class="at-pill-btn at-pill-green" onclick="window._atChecklistDone('${esc(t.id)}')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Done</button>`
           : t.type === 'FMS'
-          ? `<button class="at-pill-btn at-pill-green" onclick="window._atFmsDone('${esc(t.id)}')">Done</button>`
-          : `<button class="at-pill-btn at-pill-green" onclick="window._atMarkDone('${esc(t.id)}')">Done</button>`)
-      : `<button class="at-pill-btn at-pill-gray" onclick="window._atReopenTask('${esc(t.id)}','${esc(t.type)}')">Reopen</button>`;
+          ? `<button class="at-pill-btn at-pill-green" onclick="window._atFmsDone('${esc(t.id)}')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Done</button>`
+          : `<button class="at-pill-btn at-pill-green" onclick="window._atMarkDone('${esc(t.id)}')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Done</button>`)
+      : `<button class="at-pill-btn at-pill-gray" onclick="window._atReopenTask('${esc(t.id)}','${esc(t.type)}')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Reopen</button>`;
 
     const reviseBtn = (canRevise && t.type !== 'Checklist')
-      ? `<button class="at-pill-btn at-pill-amber" onclick="window._atMarkRevise('${esc(t.id)}')">Shifted</button>`
+      ? `<button class="at-pill-btn at-pill-amber" title="Shift this task to a new date" onclick="window._atMarkRevise('${esc(t.id)}')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>Shift</button>`
       : '';
 
     const urlLink = t.url
@@ -702,29 +702,33 @@ window.Pages['all-tasks'] = (function () {
 
     /* top action buttons */
     const actionBtns = admin
-      ? `<div class="at-actions" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-           ${hasFeature('transfer') ? `<button id="at-transfer-btn" class="at-btn at-btn-secondary">
-             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 3 4 4-4 4"/><path d="M21 7H4"/><path d="m7 21-4-4 4-4"/><path d="M3 17h17"/></svg>
-             Transfer
-           </button>` : ''}
-           <button id="at-checklist-btn" class="at-btn" style="background:#10b981;color:#fff;border-color:#10b981">
-             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-             Checklist
-           </button>
-           <button id="at-checklist-delete-all-btn" class="at-btn" style="background:#fff5f5;color:#ef4444;border-color:#fecaca">
-             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-             Delete All Checklist
-           </button>
-           <div class="at-del-date" style="display:flex;align-items:center;gap:4px;background:#fff5f5;border:1px solid #fecaca;border-radius:8px;padding:3px 3px 3px 10px;">
-             <input id="at-delete-by-date-input" type="date" style="border:none;background:transparent;font-size:12.5px;color:#ef4444;outline:none;" />
-             <button id="at-delete-by-date-btn" class="at-btn" style="background:#ef4444;color:#fff;border-color:#ef4444;padding:5px 10px;">
-               Delete by Due Date
-             </button>
-           </div>
+      ? `<div class="at-actions">
+         <div class="at-act-group">
            ${hasFeature('delegate') ? `<button id="at-delegate-btn" class="at-btn at-btn-primary">
              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
              Delegate Task
            </button>` : ''}
+           <button id="at-checklist-btn" class="at-btn at-btn-secondary">
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+             Checklist
+           </button>
+           ${hasFeature('transfer') ? `<button id="at-transfer-btn" class="at-btn at-btn-secondary">
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 3 4 4-4 4"/><path d="M21 7H4"/><path d="m7 21-4-4 4-4"/><path d="M3 17h17"/></svg>
+             Transfer
+           </button>` : ''}
+         </div>
+         <div class="at-act-group" role="group" aria-label="Bulk delete">
+           <button id="at-checklist-delete-all-btn" class="at-btn at-btn-danger-outline">
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+             Delete All Checklist
+           </button>
+           <div class="at-del-date">
+             <input id="at-delete-by-date-input" type="date" aria-label="Due date to delete" />
+             <button id="at-delete-by-date-btn" class="at-btn at-btn-danger-outline">
+               Delete by Due Date
+             </button>
+           </div>
+         </div>
          </div>`
       : `<button id="at-my-transfer-btn" class="at-btn at-btn-secondary">
            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 3 4 4-4 4"/><path d="M21 7H4"/><path d="m7 21-4-4 4-4"/><path d="M3 17h17"/></svg>
@@ -793,15 +797,29 @@ window.Pages['all-tasks'] = (function () {
         .at-btn:hover { opacity:0.85 }
         .at-btn-primary  { background:var(--color-primary);color:#fff;border-color:var(--color-primary) }
         .at-btn-secondary { background:var(--surface);color:var(--text-secondary);border-color:var(--border-base) }
+        .at-btn-danger-outline { background:var(--surface);color:var(--color-danger-text);border-color:var(--color-danger-border) }
+        .at-btn-sm { padding:4px 10px;font-size:12px;gap:4px }
+        .at-actions { display:flex;gap:8px 16px;flex-wrap:wrap;align-items:center;justify-content:space-between;width:100% }
+        .at-act-group { display:flex;gap:8px;flex-wrap:wrap;align-items:center }
+        .at-del-date { display:flex;align-items:center;gap:4px;border:1px solid var(--color-danger-border);border-radius:8px;padding:2px 2px 2px 10px;background:var(--surface) }
+        .at-del-date input { border:none;background:transparent;font-size:12.5px;color:var(--text-primary);outline:none;font-family:inherit }
+        .at-del-date .at-btn { padding:5px 10px;border-color:transparent;background:var(--color-danger-bg) }
+        .at-list-head { display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--border-light);font-size:13px;color:var(--text-secondary) }
+        .at-list-head b { color:var(--text-primary) }
         .at-seg { display:inline-flex;border:1px solid var(--border-base);border-radius:8px;overflow:hidden }
         .at-seg-btn { padding:6px 14px;font-size:13px;font-weight:500;background:var(--surface);color:var(--text-secondary);border:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:background 0.15s }
         .at-seg-btn:not(:last-child) { border-right:1px solid var(--border-base) }
         .at-seg-active { background:var(--color-primary);color:#fff }
-        .at-pill-btn { display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;border:none;cursor:pointer;transition:opacity 0.15s }
-        .at-pill-btn:hover { opacity:0.8 }
-        .at-pill-green { background:var(--color-success-bg);color:var(--color-success-text) }
-        .at-pill-amber { background:var(--color-warning-bg);color:var(--color-warning-text) }
-        .at-pill-gray  { background:var(--color-neutral-bg);color:var(--color-neutral-text) }
+        /* Row actions: bordered + iconed + 6px corners, so they can't be read as
+           the round status pills beside them. */
+        .at-pill-btn { display:inline-flex;align-items:center;gap:4px;min-height:28px;padding:0 10px;border-radius:var(--radius-sm);font-size:12px;font-weight:600;border:1px solid;cursor:pointer;font-family:inherit;box-shadow:var(--shadow-xs);transition:background 0.15s,border-color 0.15s }
+        .at-pill-btn:focus-visible { outline:2px solid var(--color-primary);outline-offset:2px }
+        .at-pill-green { background:var(--color-success-bg);color:var(--color-success-text);border-color:var(--color-success-border) }
+        .at-pill-amber { background:var(--color-warning-bg);color:var(--color-warning-text);border-color:var(--color-warning-border) }
+        .at-pill-gray  { background:var(--surface);color:var(--color-neutral-text);border-color:var(--border-strong) }
+        .at-pill-green:hover { border-color:var(--color-success-text) }
+        .at-pill-amber:hover { border-color:var(--color-warning-text) }
+        .at-pill-gray:hover  { background:var(--surface-alt) }
         .at-action-btn { width:28px;height:28px;border-radius:6px;display:grid;place-items:center;border:none;cursor:pointer;background:transparent;transition:background 0.15s }
         .at-btn-amber { color:var(--color-warning) } .at-btn-amber:hover { background:var(--color-warning-bg) }
         .at-btn-red   { color:var(--color-danger) }  .at-btn-red:hover   { background:var(--color-danger-bg) }
@@ -816,7 +834,8 @@ window.Pages['all-tasks'] = (function () {
         /* Phone: rows become cards, filter bar stacks, modals open as bottom sheets */
         @media (max-width: 767px) {
           .at-actions { width:100% }
-          .at-actions > .at-btn { flex:1 1 auto; justify-content:center }
+          .at-act-group { width:100% }
+          .at-act-group > .at-btn { flex:1 1 auto; justify-content:center }
           .at-del-date { flex:1 1 100% }
           .at-del-date input { flex:1; min-width:0 }
 
@@ -829,7 +848,7 @@ window.Pages['all-tasks'] = (function () {
           #at-emp-filter { height:38px !important }
           .at-dates input { flex:1; min-width:0; width:auto }
           .at-search-wrap input { width:100% !important; height:38px }
-          .at-status-row > div:nth-child(2) { order:3; width:100% }
+          .at-list-head { padding:10px 12px }
 
           .at-group-btn { flex-wrap:wrap; gap:6px; padding:12px 14px !important }
           .at-g-left { gap:10px !important; min-width:0; flex:1 1 100% }
@@ -867,13 +886,14 @@ window.Pages['all-tasks'] = (function () {
         <!-- Filter bar -->
         <div class="at-card at-filterbar" style="padding:12px 16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div class="at-seg" id="at-tab-seg">${tabBtns}</div>
-          <div class="at-divider" style="width:1px;height:24px;background:#e2e8f0;margin:0 4px"></div>
+          <div class="at-seg" id="at-status-seg" role="group" aria-label="Status">${statusBtns}</div>
+          <div class="at-divider" style="width:1px;height:24px;background:var(--border-base);margin:0 4px"></div>
           ${empFilter}
           ${masterMode ? '' : `
           <div class="at-dates" style="display:flex;align-items:center;gap:8px">
-            <input type="date" id="at-from-date" value="${_fromDate}" class="at-input" style="width:auto" />
-            <span style="font-size:12px;color:#94a3b8">to</span>
-            <input type="date" id="at-to-date" value="${_toDate}" class="at-input" style="width:auto" />
+            <input type="date" id="at-from-date" value="${_fromDate}" class="at-input" style="width:auto" aria-label="From date" />
+            <span style="font-size:12px;color:var(--text-muted)" aria-hidden="true">to</span>
+            <input type="date" id="at-to-date" value="${_toDate}" class="at-input" style="width:auto" aria-label="To date" />
           </div>`}
           ${clearBtn}
           <div class="at-spacer" style="flex:1"></div>
@@ -884,24 +904,23 @@ window.Pages['all-tasks'] = (function () {
           </div>
         </div>
 
-        <!-- Status tabs + summary + expand controls -->
-        <div class="at-status-row" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-          <div class="at-seg" id="at-status-seg">${statusBtns}</div>
-          <div style="font-size:13px;color:#475569">
+        <!-- Groups (or the Checklist master table), with its summary and
+             expand/collapse controls in the card's own header -->
+        <div class="at-card">
+          <div class="at-list-head">
+            <span>
             ${masterMode
-              ? `<b style="color:#1e293b">${new Set(masterRowsList.map(r => r.doer)).size}</b> doer${new Set(masterRowsList.map(r => r.doer)).size === 1 ? '' : 's'} ·
-                 <b style="color:#1e293b">${masterRowsList.length}</b> master task${masterRowsList.length === 1 ? '' : 's'}`
-              : `<b style="color:#1e293b">${visGroups.length}</b> doer${visGroups.length === 1 ? '' : 's'} ·
-                 <b style="color:#1e293b">${totalTasks}</b> task${totalTasks === 1 ? '' : 's'}`}
+              ? `<b>${new Set(masterRowsList.map(r => r.doer)).size}</b> doer${new Set(masterRowsList.map(r => r.doer)).size === 1 ? '' : 's'} ·
+                 <b>${masterRowsList.length}</b> master task${masterRowsList.length === 1 ? '' : 's'}`
+              : `<b>${visGroups.length}</b> doer${visGroups.length === 1 ? '' : 's'} ·
+                 <b>${totalTasks}</b> task${totalTasks === 1 ? '' : 's'}`}
+            </span>
+            <button id="at-expand-all" type="button" class="at-btn at-btn-secondary at-btn-sm">Expand all</button>
+            <button id="at-collapse-all" type="button" class="at-btn at-btn-secondary at-btn-sm">Collapse all</button>
+            <span style="flex:1"></span>
           </div>
-          <div style="display:flex;gap:4px">
-            <button id="at-expand-all"   style="padding:4px 10px;border-radius:6px;font-size:12px;background:none;border:1px solid #e2e8f0;cursor:pointer;color:#475569">Expand all</button>
-            <button id="at-collapse-all" style="padding:4px 10px;border-radius:6px;font-size:12px;background:none;border:1px solid #e2e8f0;cursor:pointer;color:#475569">Collapse all</button>
-          </div>
+          ${masterMode ? masterViewHTML(masterGroupsList) : groupsHTML}
         </div>
-
-        <!-- Groups (or the Checklist master table) -->
-        <div class="at-card">${masterMode ? masterViewHTML(masterGroupsList) : groupsHTML}</div>
 
       </div>`;
 

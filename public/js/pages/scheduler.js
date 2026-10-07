@@ -117,17 +117,20 @@ window.Pages.scheduler = (() => {
     // instead of the ellipsis actually taking effect.
     const itemHTML = shown.map(it => {
       const color = it.muted ? 'var(--text-muted)' : (it.kind === 'meeting' ? 'var(--color-purple-text)' : 'var(--color-warning-text)');
-      return `<div class="sch-item" style="display:flex;align-items:center;gap:4px;min-width:0;">
-          <span style="width:5px;height:5px;border-radius:50%;flex-shrink:0;background:${ITEM_DOT[it.kind]};opacity:${it.muted ? '.4' : '1'};"></span>
-          <span class="sch-item-label" style="flex:1;min-width:0;font-size:10.5px;font-weight:500;color:${color};text-decoration:${it.done ? 'line-through' : 'none'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(it.label)}">${esc(it.label)}</span>
+      const marker = it.done
+        ? `<span style="display:flex;width:8px;flex-shrink:0;"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0;"><path d="M20 6 9 17l-5-5"/></svg></span>`
+        : `<span style="width:6px;height:6px;margin:0 1px;border-radius:50%;flex-shrink:0;background:${ITEM_DOT[it.kind]};opacity:${it.muted ? '.4' : '1'};"></span>`;
+      return `<div class="sch-item" style="display:flex;align-items:flex-start;gap:4px;min-width:0;">
+          ${marker}
+          <span class="sch-item-label" style="color:${color};" title="${esc(it.label)}${it.done ? ' (done)' : ''}">${esc(it.label)}</span>
         </div>`;
     }).join('');
-    const moreHTML = more > 0 ? `<div class="sch-more" style="font-size:10px;font-weight:600;color:var(--text-muted);padding-left:9px;">+ ${more} more</div>` : '';
+    const moreHTML = more > 0 ? `<button type="button" class="sch-more" aria-label="Show all ${items.length} items on ${_fmtDayShort(dateStr)}">+ ${more} more</button>` : '';
 
     const tagHTML = info.holiday
-      ? `<span class="sch-tag" style="font-size:10px;font-weight:700;color:var(--color-danger);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:64px;" title="${esc(info.holiday.name)}">${esc(info.holiday.name)}</span>`
+      ? `<span class="sch-tag" style="font-size:11px;font-weight:700;color:var(--color-danger-text);min-width:0;text-align:right;line-height:1.25;overflow-wrap:anywhere;" title="${esc(info.holiday.name)}">${esc(info.holiday.name)}</span>`
       : off
-      ? `<span class="sch-tag" style="font-size:10px;font-weight:700;color:var(--color-danger);">Off</span>`
+      ? `<span class="sch-tag" style="font-size:11px;font-weight:700;color:var(--color-danger-text);">Off</span>`
       : '';
 
     const numHTML = (isSelected || isToday)
@@ -144,7 +147,7 @@ window.Pages.scheduler = (() => {
           display:flex;flex-direction:column;gap:4px;transition:background .12s;
           overflow:hidden;box-sizing:border-box;
         ">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;min-width:0;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:4px;min-width:0;">
           <span style="font-size:12.5px;font-weight:600;color:var(--text-primary);flex-shrink:0;">${numHTML}</span>
           ${tagHTML}
         </div>
@@ -179,13 +182,16 @@ window.Pages.scheduler = (() => {
 
     const tasksHTML = info.tasks.length
       ? info.tasks.map(t => {
-        const dotColor = t.status === 'done' ? 'var(--color-success)' : t.status === 'leave' ? 'var(--text-muted)' : 'var(--color-warning)';
+        const done = t.status === 'done';
+        const marker = done
+          ? `<span style="display:flex;margin-top:3px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0;"><path d="M20 6 9 17l-5-5"/></svg></span>`
+          : `<div style="width:7px;height:7px;border-radius:50%;margin:5px 2px 0;flex-shrink:0;background:${t.status === 'leave' ? 'var(--text-muted)' : 'var(--color-warning)'};"></div>`;
         return `
         <div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-radius:8px;background:var(--surface-alt);">
-          <div style="width:7px;height:7px;border-radius:50%;margin-top:4px;flex-shrink:0;background:${dotColor};"></div>
+          ${marker}
           <div style="min-width:0;flex:1;">
-            <div style="font-size:12.5px;font-weight:600;color:var(--text-primary);text-decoration:${t.status === 'done' ? 'line-through' : 'none'};">${esc(t.description)}</div>
-            <div style="font-size:11px;color:var(--text-muted);margin-top:1px;">${esc(t.doer || '')}${t.status === 'leave' ? ' · On Leave' : (t.priority ? ' · ' + esc(t.priority) : '')}</div>
+            <div style="font-size:12.5px;font-weight:600;color:${done ? 'var(--text-secondary)' : 'var(--text-primary)'};">${esc(t.description)}</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:1px;">${esc(t.doer || '')}${done ? ' · Done' : t.status === 'leave' ? ' · On Leave' : (t.priority ? ' · ' + esc(t.priority) : '')}</div>
           </div>
         </div>`;
       }).join('')
@@ -285,6 +291,17 @@ window.Pages.scheduler = (() => {
 
     el.innerHTML = `
       <style>
+        #sch-grid .sch-item-label { flex:1;min-width:0;font-size:12px;font-weight:500;line-height:1.3;
+          display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere; }
+        #sch-grid .sch-item > span:first-child { margin-top:5px; }
+        #sch-grid .sch-more { align-self:flex-start;padding:1px 4px;margin-left:6px;border:none;border-radius:4px;background:transparent;
+          font:inherit;font-size:11px;font-weight:700;color:var(--color-primary-strong);cursor:pointer; }
+        #sch-grid .sch-more:hover { background:var(--color-primary-light);text-decoration:underline; }
+        #sch-grid .sch-more:focus-visible { outline:2px solid var(--color-primary);outline-offset:1px; }
+        .sch-legend { display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:11.5px;color:var(--text-secondary); }
+        .sch-legend span { display:inline-flex;align-items:center;gap:5px; }
+        .sch-legend i { width:7px;height:7px;border-radius:50%;display:inline-block; }
+        .sch-legend b { font-size:11px; }
         /* Phone: compact month grid (dots instead of titles), full-width day panel,
            bigger nav targets, meeting form tidied into the bottom sheet. */
         @media (max-width: 767px) {
@@ -292,7 +309,8 @@ window.Pages.scheduler = (() => {
           .sch-toolbar-left { width: 100%; gap: 8px !important; }
           #sch-today { min-height: 38px; }
           #sch-prev, #sch-next { width: 36px !important; height: 34px !important; }
-          #sch-month-label { min-width: 0 !important; flex: 1; text-align: right; font-size: 15px !important; white-space: nowrap; }
+          .sch-monthnav { flex: 1; }
+          #sch-month-label { min-width: 0 !important; flex: 1; font-size: 15px !important; white-space: nowrap; }
           #sch-schedule-btn { width: 100%; justify-content: center; min-height: 42px; }
           #sch-grid-wrap { flex-basis: 100% !important; padding: 8px !important; }
           #sch-grid .sch-cell { min-height: 54px !important; padding: 4px 3px !important; gap: 3px !important; }
@@ -300,7 +318,7 @@ window.Pages.scheduler = (() => {
           #sch-grid .sch-tag { font-size: 8.5px !important; max-width: 100% !important; line-height: 1.1; }
           #sch-grid .sch-items { flex-direction: row !important; flex-wrap: wrap; gap: 3px !important; }
           #sch-grid .sch-item-label, #sch-grid .sch-more { display: none !important; }
-          #sch-grid .sch-item > span:first-child { width: 6px !important; height: 6px !important; }
+          #sch-grid .sch-item > span:first-child { width: 6px !important; height: 6px !important; margin-top: 0; }
           #sch-day-panel { flex-basis: 100% !important; max-width: none !important; min-width: 0 !important; }
           #sch-add-btn { width: 36px !important; height: 36px !important; border-radius: 9px !important; }
           .sch-meeting-del { width: 32px !important; height: 32px !important; }
@@ -319,14 +337,14 @@ window.Pages.scheduler = (() => {
 
         <div class="sch-toolbar" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
           <div class="sch-toolbar-left" style="display:flex;align-items:center;gap:10px;">
-            <button id="sch-today" class="btn-secondary" style="padding:7px 12px;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;">Today</button>
-            <div style="display:flex;align-items:center;gap:2px;border:1.5px solid var(--border-base);border-radius:8px;padding:2px;">
-              <button id="sch-prev" style="width:26px;height:26px;border-radius:6px;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
-              <button id="sch-next" style="width:26px;height:26px;border-radius:6px;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+            <button id="sch-today" class="btn-secondary">Today</button>
+            <div class="sch-monthnav" style="display:flex;align-items:center;gap:2px;border:1.5px solid var(--border-base);border-radius:8px;padding:2px;">
+              <button id="sch-prev" aria-label="Previous month" title="Previous month" style="width:28px;height:28px;border-radius:6px;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+              <div id="sch-month-label" aria-live="polite" style="font-size:15px;font-weight:700;color:var(--text-primary);min-width:136px;text-align:center;">${MONTH_NAMES[_view.getMonth()]} ${_view.getFullYear()}</div>
+              <button id="sch-next" aria-label="Next month" title="Next month" style="width:28px;height:28px;border-radius:6px;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
             </div>
-            <div id="sch-month-label" style="font-size:16px;font-weight:700;color:var(--text-primary);min-width:150px;">${MONTH_NAMES[_view.getMonth()]} ${_view.getFullYear()}</div>
           </div>
-          <button id="sch-schedule-btn" class="btn-primary" style="display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:9px;font-size:13px;font-weight:600;border:none;cursor:pointer;">
+          <button id="sch-schedule-btn" class="btn-primary">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
             Schedule
           </button>
@@ -335,6 +353,13 @@ window.Pages.scheduler = (() => {
         <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">
           <div id="sch-grid-wrap" style="flex:1 1 640px;min-width:0;background:var(--surface);border:1px solid var(--border-light);border-radius:12px;padding:14px;box-shadow:var(--shadow-xs);">
             <div id="sch-grid">${_gridHTML()}</div>
+            <div class="sch-legend" aria-label="Legend">
+              <span><i style="background:var(--color-warning);"></i>Task due</span>
+              <span><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--color-success)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex-shrink:0;"><path d="M20 6 9 17l-5-5"/></svg>Task done</span>
+              <span><i style="background:var(--text-muted);opacity:.5;"></i>On leave</span>
+              <span><i style="background:var(--color-purple);"></i>Meeting</span>
+              <span><b style="color:var(--color-danger-text);">Off</b>Holiday / week off</span>
+            </div>
           </div>
           <div id="sch-day-panel" style="flex:1 1 300px;max-width:340px;min-width:280px;background:var(--surface);border:1px solid var(--border-light);border-radius:12px;padding:16px;box-shadow:var(--shadow-xs);">
             ${_dayPanelHTML()}

@@ -88,8 +88,12 @@ window.Sidebar = {
      pushes the page over, for people who'd rather not hover to read them. */
   _PINNED_KEY: 'sb-pinned',
 
+  // No saved choice yet: open by default on wide screens, where the extra
+  // 176px costs nothing, so labels are visible without discovering the pin.
   _isPinned() {
-    try { return localStorage.getItem(this._PINNED_KEY) === '1'; } catch { return false; }
+    let saved = null;
+    try { saved = localStorage.getItem(this._PINNED_KEY); } catch {}
+    return saved === null ? window.innerWidth >= 1600 : saved === '1';
   },
 
   togglePinned() {

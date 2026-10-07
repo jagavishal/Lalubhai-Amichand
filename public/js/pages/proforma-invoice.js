@@ -1640,7 +1640,7 @@ window.Pages['proforma-invoice'] = (() => {
     const currency = form.currency || _priceDefault.currency;
 
     modal.innerHTML = '<div class="pi-sheet-ov" style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="pipm-backdrop">'
-      + '<div class="pi-sheet" style="background:#fff;border-radius:18px;width:100%;max-width:1040px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;" onclick="event.stopPropagation()">'
+      + '<div class="pi-sheet" style="background:#fff;border-radius:18px;width:100%;max-width:1040px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;">'
         + '<div style="padding:20px 24px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:12px;">'
           + '<div style="flex:1;"><div style="font-size:15px;font-weight:700;color:#1e293b;">' + (row.status === 'Priced' ? 'Edit Price' : 'Add Price') + ' — PI ' + esc(row.piNo) + '</div><div style="font-size:12px;color:#94a3b8;margin-top:1px;">' + esc(row.buyer) + '</div></div>'
           + '<button type="button" id="pipm-close" style="background:transparent;border:none;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#94a3b8;">'
@@ -1739,7 +1739,13 @@ window.Pages['proforma-invoice'] = (() => {
       + '</div>'
     + '</div>';
 
-    document.getElementById('pipm-backdrop').addEventListener('click', _closePriceModal);
+    // Close only on a click on the backdrop itself. (The sheet used to stop
+    // propagation instead, which also kept every click from reaching the
+    // delegated handlers on #pi-price-modal — "+ Add line", the line ×, and
+    // the "use this rate" links all silently did nothing.)
+    document.getElementById('pipm-backdrop').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) _closePriceModal();
+    });
     document.getElementById('pipm-close').addEventListener('click', _closePriceModal);
     document.getElementById('pipm-cancel').addEventListener('click', _closePriceModal);
     modal.querySelectorAll('.pipm-rate').forEach(inp => inp.addEventListener('input', _priceRecompute));
