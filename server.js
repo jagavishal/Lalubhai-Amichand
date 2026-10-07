@@ -3075,8 +3075,22 @@ const DEFAULT_LEAVE_AUTHORITY = [
     withinTeamApprover: 'Jayesh Udani',
     escalateFromDays: 3,           // escalates strictly ABOVE this — 3 days stays in-team
     escalateTo: 'Paresh Sir',
+    // Treated like the within-team approver: every request, any length, goes
+    // to escalateTo alone (management, Oct 2026: Rajesh Joshi → Paresh Sir only).
+    directToEscalation: ['RAJESH NATVARLAL JOSHI'],
   },
 ];
+
+/* The stored matrix predates directToEscalation, and readAuthority never
+   re-seeds — so a row that has never been saved with the field takes the
+   seed's list for its department. Once the editor saves it, the stored value
+   (even an empty one) is what counts. */
+function directToEscalationOf(tier) {
+  if (Array.isArray(tier.directToEscalation)) return tier.directToEscalation;
+  const seed = DEFAULT_LEAVE_AUTHORITY.find((s) =>
+    String(s.department).toLowerCase() === String(tier.department || '').trim().toLowerCase());
+  return seed?.directToEscalation || [];
+}
 
 const DEFAULT_EXPENSE_AUTHORITY = [
   { category: 'IT',                   owner: 'Saloni Anchan' },
@@ -3185,7 +3199,12 @@ async function leaveAuthorityFor(department, days, applicantIdentity) {
      requests have nobody above them in this matrix, so no tier applies. */
   if (applicant || applicantEmail || applicantId) {
     if (await matches(tier.escalateTo)) return null;
-    if (await matches(tier.withinTeamApprover)) {
+    let direct = await matches(tier.withinTeamApprover);
+    for (const named of directToEscalationOf(tier)) {
+      if (direct) break;
+      direct = await matches(named);
+    }
+    if (direct) {
       if (!tier.escalateTo) return null;
       return { ...(await resolve(tier.escalateTo)), escalated: true, thresholdDays: 0, then: null, authority: null };
     }
@@ -3270,7 +3289,8 @@ app.get('/api/approval-authority', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
     res.json({
-      leave:   await readAuthority('leave_authority',   DEFAULT_LEAVE_AUTHORITY),
+      leave:   (await readAuthority('leave_authority', DEFAULT_LEAVE_AUTHORITY))
+        .map((t) => ({ ...t, directToEscalation: directToEscalationOf(t) })),
       expense: await readAuthority('expense_authority', DEFAULT_EXPENSE_AUTHORITY),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -3309,6 +3329,8 @@ app.put('/api/approval-authority', requireAuth, requireAdmin, async (req, res) =
           withinTeamApprover: String(r.withinTeamApprover || '').trim(),
           escalateFromDays:   Number(r.escalateFromDays) || 0,
           escalateTo:         String(r.escalateTo || '').trim(),
+          directToEscalation: (Array.isArray(r.directToEscalation) ? r.directToEscalation : String(r.directToEscalation || '').split(','))
+            .map((n) => String(n).trim()).filter(Boolean),
         }))
         .filter((r) => r.department);
       await writeAuthority('leave_authority', rows);
