@@ -430,7 +430,14 @@ window.Pages['po-creation'] = (() => {
   // _removeAppliedPr can pull exactly this PR's rows back out later.
   function _fillPrIntoForm(pr) {
     const partyInput = document.getElementById('poc-party');
-    if (partyInput && pr.party) { partyInput.value = pr.party; partyInput.readOnly = true; partyInput.style.cssText += READONLY_FIELD_STYLE; }
+    if (partyInput && pr.party) {
+      const hit = _matchVendor(pr.party);
+      partyInput.value = hit || pr.party;
+      // Locked to the PR's party only once it is a name the template can find;
+      // otherwise left open so the right Vendor Details name can be picked.
+      if (hit) { partyInput.readOnly = true; partyInput.style.cssText += READONLY_FIELD_STYLE; }
+      _paintPartyHint();
+    }
     const deptSel = document.getElementById('poc-department');
     if (deptSel && pr.department) {
       if (!deptSel.querySelector('option[value="' + CSS.escape(pr.department) + '"]')) {
@@ -473,11 +480,65 @@ window.Pages['po-creation'] = (() => {
     _recomputeGrandTotal();
   }
 
+  /* ── Party ↔ Vendor Details. The PO template prints the address with an
+     exact VLOOKUP into Vendor Details, so a party spelt even slightly
+     differently prints with no address. The PR's party comes from the PR
+     sheet's own vendor list (other spellings: "AMIGO TREDERS" for "AMIGO
+     TRADERS", "RUSHABH SALES" for "RUSHABH SALES,"), so it is matched to the
+     Vendor Details spelling here, and anything that still doesn't match is
+     flagged with the nearest names to pick from. ────────────────────────── */
+  const _vendorClean = (s) => String(s || '').replace(/[\s\u00a0\u200b]+/g, ' ').trim().toLowerCase();
+  // Same key as server.js _partyKey.
+  const _vendorKey = (s) => _vendorClean(s).replace(/&/g, 'and').replace(/[^a-z0-9]/g, '');
+  function _matchVendor(name) {
+    const c = _vendorClean(name), k = _vendorKey(name);
+    if (!c) return '';
+    return _vendors.find(v => _vendorClean(v) === c) || (k && _vendors.find(v => _vendorKey(v) === k)) || '';
+  }
+  function _editDistance(a, b) {
+    if (Math.abs(a.length - b.length) > 8) return 99;
+    let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+  function _vendorSuggestions(name) {
+    const k = _vendorKey(name);
+    if (k.length < 3) return [];
+    return _vendors
+      .map(v => {
+        const vk = _vendorKey(v);
+        const d = (vk.startsWith(k) || k.startsWith(vk)) && Math.min(vk.length, k.length) >= 5 ? 1 : _editDistance(k, vk);
+        return { v, d };
+      })
+      .filter(x => x.d <= Math.max(2, Math.floor(k.length * 0.3)))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 3)
+      .map(x => x.v);
+  }
+  // The hint under the party box: nothing when the name is in Vendor
+  // Details, otherwise a warning plus click-to-use suggestions.
+  function _paintPartyHint() {
+    const input = document.getElementById('poc-party');
+    const hint = document.getElementById('poc-party-hint');
+    if (!input || !hint) return;
+    const val = input.value.trim();
+    if (!val || !_vendors.length || _matchVendor(val)) { hint.innerHTML = ''; hint.hidden = true; return; }
+    const sugg = _vendorSuggestions(val);
+    hint.hidden = false;
+    hint.innerHTML = '<b>Not in Vendor Details</b> — the PO will print without an address.'
+      + (sugg.length ? ' Did you mean: ' + sugg.map(v => '<button type="button" class="poc-party-sugg" data-v="' + esc(v) + '">' + esc(v) + '</button>').join(' ') : ' Add this vendor to Vendor Details first, or pick a listed name.');
+  }
+
   /* ── Party (customer/vendor) typeahead — plain text input + filtered list,
      same pattern as the PR Form's vendor search box ─────────────────────── */
   function _partyField() {
     return _fieldWrap(PARTY_LABEL[_format], ''
-      + '<input type="text" id="poc-party" autocomplete="off" placeholder="Type to search…" style="' + _inputStyle + '" />'
+      + '<input type="text" id="poc-party" autocomplete="off" placeholder="Type to search…" aria-describedby="poc-party-hint" style="' + _inputStyle + '" />'
+      + '<div id="poc-party-hint" class="poc-party-hint" role="status" hidden></div>'
       + '<div id="poc-party-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>', '', 'poc-wide');
   }
 
@@ -496,11 +557,24 @@ window.Pages['po-creation'] = (() => {
     };
     input.addEventListener('input', showMatches);
     input.addEventListener('focus', showMatches);
+    input.addEventListener('blur', () => {
+      // A typed name that is in Vendor Details takes its exact spelling.
+      const hit = _matchVendor(input.value);
+      if (hit && !input.readOnly) input.value = hit;
+      _paintPartyHint();
+    });
     dd.addEventListener('mousedown', (e) => {
       const opt = e.target.closest('.poc-party-opt');
       if (!opt) return;
       input.value = opt.dataset.v;
       dd.style.display = 'none';
+      _paintPartyHint();
+    });
+    document.getElementById('poc-party-hint')?.addEventListener('click', (e) => {
+      const b = e.target.closest('.poc-party-sugg');
+      if (!b) return;
+      input.value = b.dataset.v;
+      _paintPartyHint();
     });
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
@@ -1099,6 +1173,11 @@ window.Pages['po-creation'] = (() => {
       return;
     }
     if (!party) { Utils.showToast(PARTY_LABEL[_format] + ' is required', 'error'); return; }
+    if (_vendors.length && !_matchVendor(party)) {
+      _paintPartyHint();
+      const ok = await Utils.showConfirm('"' + party + '" is not in Vendor Details, so this PO will print without the vendor\'s address. Create it anyway?', { title: 'Vendor address missing', confirmText: 'Create anyway' });
+      if (!ok) { document.getElementById('poc-party')?.focus(); return; }
+    }
     if (!poMadeBy) { Utils.showToast('PO Made By is required', 'error'); return; }
     if (!items.length) { Utils.showToast(_isManual() ? 'Add at least one service line' : 'Add at least one item', 'error'); return; }
 
@@ -1123,6 +1202,10 @@ window.Pages['po-creation'] = (() => {
      each field group shares one card in two columns, each item line becomes
      a compact card, PO List rows become cards (shared .m-cards). ────────── */
   const MOBILE_CSS = `
+  .poc-party-hint { margin-top:6px;padding:7px 10px;border-radius:8px;background:var(--color-warning-bg);color:var(--color-warning-text);font-size:12px;line-height:1.5; }
+  .poc-party-sugg { margin:2px 2px 0 0;padding:2px 8px;border-radius:999px;border:1px solid var(--color-warning-border);background:var(--surface);color:var(--text-primary);font:inherit;font-size:12px;font-weight:600;cursor:pointer; }
+  .poc-party-sugg:hover { background:var(--surface-alt); }
+  .poc-party-sugg:focus-visible { outline:2px solid var(--color-primary);outline-offset:1px; }
   .poc-fbar-dates { display: inline-flex; align-items: center; gap: 6px; padding: 0 4px; border: 1.5px solid #e2e8f0; border-radius: 8px; background: var(--surface); }
   .poc-fbar-dates input { border: none; outline: none; background: transparent; padding: 7px 6px; font-size: 13px; color: var(--text-primary); font-family: inherit; }
   .poc-fbar-dates:focus-within { border-color: var(--color-primary); }

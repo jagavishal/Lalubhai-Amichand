@@ -23,6 +23,11 @@ window.Pages['grn-creation'] = (() => {
   let _poListAt = 0;
   const PO_LIST_MAX_AGE_MS = 20000;
   let _poList = []; // POs still needing a GRN (fully or partly), for the PO No. suggestion dropdown
+  // POs picked onto the GRN being made. One bill/truck often carries goods
+  // against several POs ("GRN mai multiple PO ka maal aata hai"), so this is
+  // a list: each pick adds a chip and appends that PO's lines.
+  let _selectedPos = [];
+  let _autoPrNo = ''; // what we last auto-filled into PR No., so a hand edit is never overwritten
 
   // GRN List (in-page tab) state — read-only history from the ERP GRN Log tab.
   let _grlRows = [];
@@ -102,8 +107,9 @@ window.Pages['grn-creation'] = (() => {
      already carries the PR No it was raised against) and carries that PO's
      items over (mapped field-for-field) ─────────────────────────────────── */
   function _poNoField() {
-    return _fieldWrap('PO No.', ''
-      + '<input type="text" id="grnc-po-no" autocomplete="off" placeholder="Type, or pick a PO…" style="' + _inputStyle + '" />'
+    return _fieldWrap('PO No. — pick one or more', ''
+      + '<div id="grnc-po-chips" class="grnc-po-chips" aria-live="polite"></div>'
+      + '<input type="text" id="grnc-po-no" autocomplete="off" placeholder="Type, or pick a PO… (add more for the same bill)" style="' + _inputStyle + '" />'
       + '<div id="grnc-pono-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>', '', 'grnc-wide');
   }
 
@@ -120,44 +126,105 @@ window.Pages['grn-creation'] = (() => {
     return { itemNo: it.itemCode || '', orderedQty: it.qty || '', uom: it.uom || '', rate: it.unitPrice || '' };
   }
 
-  function _fillPoIntoForm(po) {
-    const poInput = document.getElementById('grnc-po-no');
-    if (poInput) poInput.value = po.poNo;
+  const _vendorKey = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+  function _renderPoChips() {
+    const box = document.getElementById('grnc-po-chips');
+    if (box) {
+      box.innerHTML = _selectedPos.map(p => '<span class="grnc-po-chip">#' + esc(p.poNo)
+        + (p.items && p.items.length ? '' : ' <span style="font-weight:500;opacity:.75;">(typed)</span>')
+        + '<button type="button" class="grnc-po-chip-x" data-po="' + esc(p.poNo) + '" aria-label="Remove PO ' + esc(p.poNo) + '" title="Remove this PO and its lines">×</button></span>').join('');
+    }
+    // The per-line PO column only means something once there are two POs.
+    document.querySelector('table.grnc-items')?.classList.toggle('grnc-multi-po', _selectedPos.length > 1);
+    document.querySelectorAll('#grnc-items-tbody .grnc-item-row').forEach(_refreshRowPoSelect);
+  }
+
+  // A line's PO picker lists the GRN's POs; a line that came from a PO keeps
+  // it, a hand-added line takes the only PO when there is just one.
+  function _refreshRowPoSelect(row) {
+    const sel = row.querySelector('.grnc-item-po');
+    if (!sel) return;
+    const keep = sel.value || row.dataset.po || (_selectedPos.length === 1 ? _selectedPos[0].poNo : '');
+    sel.innerHTML = '<option value="">— PO —</option>'
+      + _selectedPos.map(p => '<option value="' + esc(p.poNo) + '"' + (p.poNo === keep ? ' selected' : '') + '>#' + esc(p.poNo) + '</option>').join('');
+  }
+
+  function _syncPrNo() {
     const prInput = document.getElementById('grnc-pr-no');
-    if (prInput && po.prNo) prInput.value = po.prNo;
+    if (!prInput) return;
+    const joined = [...new Set(_selectedPos.map(p => String(p.prNo || '').trim()).filter(Boolean))].join(', ');
+    // Only follow the POs while the field still holds what we put there.
+    if (!prInput.value.trim() || prInput.value.trim() === _autoPrNo) { prInput.value = joined; _autoPrNo = joined; }
+  }
+
+  async function _addPo(po) {
+    if (_selectedPos.some(p => String(p.poNo) === String(po.poNo))) { Utils.showToast('#' + po.poNo + ' is already on this GRN', 'warning'); return; }
     const vendorInput = document.getElementById('grnc-vendor');
-    if (vendorInput && po.vendorName) vendorInput.value = po.vendorName;
+    const current = (vendorInput && vendorInput.value.trim()) || (_selectedPos[0] && _selectedPos[0].vendorName) || '';
+    if (current && po.vendorName && _vendorKey(current) !== _vendorKey(po.vendorName)) {
+      const ok = await Utils.showConfirm('PO #' + po.poNo + ' is for ' + po.vendorName + ', but this GRN is for ' + current + '. One GRN is one vendor\'s bill — add it anyway?', { title: 'Different vendor', confirmText: 'Add anyway' });
+      if (!ok) return;
+    }
+    _selectedPos.push(po);
+    if (vendorInput && !vendorInput.value.trim() && po.vendorName) vendorInput.value = po.vendorName;
 
     const tbody = document.getElementById('grnc-items-tbody');
-    if (!tbody || !Array.isArray(po.items) || !po.items.length) return;
-    tbody.innerHTML = '';
-    po.items.forEach(it => {
-      tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
-      const row = tbody.lastElementChild;
-      _bindItemRow(row);
-      const mapped = _mapPoItemToGrn(it, po.format);
-      const noInput = row.querySelector('.grnc-item-no');
-      if (noInput) noInput.value = mapped.itemNo;
-      // Description / size come with the PO line (looked up server-side from
-      // the item catalog) — the same two cells the typeahead fills on a pick.
-      const descCell = row.querySelector('.grnc-item-desc');
-      if (descCell) descCell.textContent = it.description || '—';
-      const sizeCell = row.querySelector('.grnc-item-size');
-      if (sizeCell) sizeCell.textContent = it.size || '—';
-      const orderedCell = row.querySelector('.grnc-item-ordered');
-      if (orderedCell) orderedCell.textContent = mapped.orderedQty || '—';
-      // Received defaults to what was ordered — the user adjusts it down if
-      // less actually arrived; Approved/Rejected start blank either way.
-      const receivedInput = row.querySelector('[data-field="receivedQty"]');
-      if (receivedInput) receivedInput.value = mapped.orderedQty || '';
-      ['uom', 'rate'].forEach(field => {
-        const fieldInput = row.querySelector('[data-field="' + field + '"]');
-        if (fieldInput) fieldInput.value = mapped[field];
+    if (tbody && Array.isArray(po.items) && po.items.length) {
+      // The form opens with one blank line — replace it rather than keep it.
+      tbody.querySelectorAll('.grnc-item-row').forEach(r => { if (!r.querySelector('.grnc-item-no').value.trim()) r.remove(); });
+      po.items.forEach(it => {
+        tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
+        const row = tbody.lastElementChild;
+        row.dataset.po = po.poNo;
+        _bindItemRow(row);
+        const mapped = _mapPoItemToGrn(it, po.format);
+        const noInput = row.querySelector('.grnc-item-no');
+        if (noInput) noInput.value = mapped.itemNo;
+        // Description / size come with the PO line (looked up server-side from
+        // the item catalog) — the same two cells the typeahead fills on a pick.
+        const descCell = row.querySelector('.grnc-item-desc');
+        if (descCell) descCell.textContent = it.description || '—';
+        const sizeCell = row.querySelector('.grnc-item-size');
+        if (sizeCell) sizeCell.textContent = it.size || '—';
+        const orderedCell = row.querySelector('.grnc-item-ordered');
+        if (orderedCell) orderedCell.textContent = mapped.orderedQty || '—';
+        // Received defaults to what was ordered — the user adjusts it down if
+        // less actually arrived; Approved/Rejected start blank either way.
+        const receivedInput = row.querySelector('[data-field="receivedQty"]');
+        if (receivedInput) receivedInput.value = mapped.orderedQty || '';
+        ['uom', 'rate'].forEach(field => {
+          const fieldInput = row.querySelector('[data-field="' + field + '"]');
+          if (fieldInput) fieldInput.value = mapped[field];
+        });
+        _recomputeRow(row);
       });
-      _recomputeRow(row);
-    });
+    }
+    _renderPoChips();
+    _syncPrNo();
+    _applyGstPercent();
     _recomputeGrandTotal();
   }
+
+  async function _removePo(poNo) {
+    const rows = Array.from(document.querySelectorAll('#grnc-items-tbody .grnc-item-row'))
+      .filter(r => (r.querySelector('.grnc-item-po')?.value || r.dataset.po) === poNo);
+    if (rows.length && !(await Utils.showConfirm('Remove PO #' + poNo + ' and its ' + rows.length + ' line' + (rows.length === 1 ? '' : 's') + ' from this GRN?', { title: 'Remove PO', confirmText: 'Remove' }))) return;
+    _selectedPos = _selectedPos.filter(p => String(p.poNo) !== String(poNo));
+    rows.forEach(r => r.remove());
+    const tbody = document.getElementById('grnc-items-tbody');
+    if (tbody && !tbody.querySelector('.grnc-item-row')) {
+      tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
+      _bindItemRow(tbody.lastElementChild);
+    }
+    _renderPoChips();
+    _syncPrNo();
+    _applyGstPercent();
+    _recomputeGrandTotal();
+  }
+
+  // "PO047" / "47" both find the same PO.
+  const _poDigits = (v) => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
 
   function _bindPoNoField() {
     const input = document.getElementById('grnc-po-no');
@@ -165,9 +232,16 @@ window.Pages['grn-creation'] = (() => {
     if (!input || !dd) return;
     const showMatches = () => {
       const q = input.value.trim().toLowerCase();
+      const picked = new Set(_selectedPos.map(p => String(p.poNo)));
+      const vendor = _selectedPos[0] ? _vendorKey(_selectedPos[0].vendorName) : '';
+      // Once a PO is on the GRN, the same vendor's other POs come first —
+      // that is what a second PO on one bill nearly always is.
       const matches = (q
         ? _poList.filter(p => String(p.poNo).toLowerCase().includes(q) || (p.vendorName || '').toLowerCase().includes(q))
-        : _poList).slice(0, 30);
+        : _poList)
+        .filter(p => !picked.has(String(p.poNo)))
+        .sort((a, b) => (vendor ? (_vendorKey(b.vendorName) === vendor) - (_vendorKey(a.vendorName) === vendor) : 0))
+        .slice(0, 30);
       if (!matches.length) { dd.style.display = 'none'; return; }
       // partiallyReceived: this PO already has an earlier bill's GRN against
       // it but isn't fully received yet, so it's still offered here too
@@ -177,7 +251,8 @@ window.Pages['grn-creation'] = (() => {
       // like an untouched PO when it's really a second/third bill.
       dd.innerHTML = matches.map(p => '<div class="grnc-pono-opt" style="padding:7px 12px;font-size:12.5px;cursor:pointer;" data-po="' + esc(p.poNo) + '">'
         + '<b>#' + esc(p.poNo) + '</b> — ' + esc(p.vendorName) + (p.department ? ' <span style="color:#94a3b8;">(' + esc(p.department) + ')</span>' : '')
-        + (p.partiallyReceived ? ' <span style="color:#b45309;font-weight:600;">· part received</span>' : '') + '</div>').join('');
+        + (p.partiallyReceived ? ' <span style="color:#b45309;font-weight:600;">· part received</span>' : '')
+        + (vendor && _vendorKey(p.vendorName) !== vendor ? ' <span style="color:#94a3b8;">· other vendor</span>' : '') + '</div>').join('');
       const rect = input.getBoundingClientRect();
       dd.style.top = (rect.bottom + 3) + 'px'; dd.style.left = rect.left + 'px'; dd.style.width = Math.max(rect.width, 260) + 'px';
       dd.style.display = 'block';
@@ -195,21 +270,32 @@ window.Pages['grn-creation'] = (() => {
       if (!opt) return;
       dd.style.display = 'none';
       const po = _poList.find(p => String(p.poNo) === opt.dataset.po);
-      if (po) _fillPoIntoForm(po); else input.value = opt.dataset.po;
+      input.value = '';
+      if (po) _addPo(po);
     });
-    // A PO number typed by hand (never picked from the dropdown) should still
-    // pull its PR No / vendor across — but only into fields still empty, so a
-    // blur never overwrites something the user already typed. "PO047"/"47"
-    // both match the same PO.
-    input.addEventListener('blur', () => {
-      const typedKey = input.value.trim().replace(/\D/g, '').replace(/^0+/, '');
-      if (!typedKey) return;
-      const po = _poList.find(p => String(p.poNo).replace(/\D/g, '').replace(/^0+/, '') === typedKey);
-      if (!po) return;
-      const prInput = document.getElementById('grnc-pr-no');
-      if (prInput && !prInput.value.trim() && po.prNo) prInput.value = po.prNo;
-      const vendorInput = document.getElementById('grnc-vendor');
-      if (vendorInput && !vendorInput.value.trim() && po.vendorName) vendorInput.value = po.vendorName;
+    // A PO typed by hand: Enter (or leaving the field) adds it. A known PO
+    // brings its lines like a pick; one that isn't in the list (fully
+    // received, or older than the ERP) is still recorded on the GRN, as
+    // before, just without lines. Commas add several at once.
+    // Leaving the field only adds what matches a listed PO exactly, so a
+    // half-typed number is never turned into a chip behind the user's back;
+    // Enter adds an unlisted one too.
+    const addTyped = (knownOnly) => {
+      const typed = input.value.split(',').map(t => t.trim()).filter(Boolean);
+      if (!typed.length) return;
+      const found = typed.map(t => ({ t, po: _poList.find(p => _poDigits(p.poNo) && _poDigits(p.poNo) === _poDigits(t)) }));
+      if (knownOnly && found.some(f => !f.po)) return;
+      input.value = '';
+      dd.style.display = 'none';
+      (async () => {
+        for (const f of found) await _addPo(f.po || { poNo: f.t.replace(/^#/, ''), vendorName: '', prNo: '', items: [] });
+      })();
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addTyped(false); } });
+    input.addEventListener('blur', () => addTyped(true));
+    document.getElementById('grnc-po-chips')?.addEventListener('click', (e) => {
+      const x = e.target.closest('.grnc-po-chip-x');
+      if (x) _removePo(x.dataset.po);
     });
     document.addEventListener('click', (e) => { if (e.target !== input) dd.style.display = 'none'; }, { signal: window.Router.pageSignal() });
   }
@@ -344,6 +430,7 @@ window.Pages['grn-creation'] = (() => {
         + '<input type="text" class="grnc-item-no" autocomplete="off" placeholder="Item No…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" />'
         + '<div class="grnc-item-dd" style="display:none;position:fixed;z-index:50;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;"></div>'
       + '</td>'
+      + '<td class="grnc-c-po" data-label="PO" style="padding:6px;min-width:96px;"><select class="grnc-item-po" aria-label="PO this line belongs to" style="width:100%;box-sizing:border-box;padding:6px 6px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;background:#fff;"><option value="">— PO —</option></select></td>'
       + '<td style="padding:6px;min-width:140px;font-size:12px;color:#64748b;" class="grnc-item-desc grnc-c-wide" data-label="Description">—</td>'
       + '<td style="padding:6px;min-width:90px;font-size:12px;color:#64748b;" class="grnc-item-size" data-label="Dept/Size">—</td>'
       + '<td style="padding:6px;min-width:80px;font-size:12px;color:#64748b;text-align:right;" class="grnc-item-ordered" data-label="Ordered Qty">—</td>'
@@ -361,7 +448,7 @@ window.Pages['grn-creation'] = (() => {
     return '<div class="grnc-items-wrap" style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
       + '<table class="grnc-items" style="width:100%;border-collapse:collapse;min-width:1080px;">'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-          + ['Item No.', 'Description', 'Dept/Size', 'Ordered Qty', 'Received Qty', 'Approved Qty', 'Rejected Qty', 'UOM', 'Rate per UOM'].map(h => '<th style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+          + ['Item No.', 'PO', 'Description', 'Dept/Size', 'Ordered Qty', 'Received Qty', 'Approved Qty', 'Rejected Qty', 'UOM', 'Rate per UOM'].map(h => '<th' + (h === 'PO' ? ' class="grnc-c-po"' : '') + ' style="padding:8px 6px;text-align:left;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '<th style="padding:8px 6px;text-align:right;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">Total (INR)</th>'
           + '<th></th>'
         + '</tr></thead>'
@@ -372,6 +459,7 @@ window.Pages['grn-creation'] = (() => {
 
   function _bindItemRow(rowEl) {
     _bindItemNoInput(rowEl.querySelector('.grnc-item-no'));
+    _refreshRowPoSelect(rowEl);
     const removeBtn = rowEl.querySelector('.grnc-item-remove');
     removeBtn.addEventListener('click', () => {
       const tbody = document.getElementById('grnc-items-tbody');
@@ -561,8 +649,10 @@ window.Pages['grn-creation'] = (() => {
 
   /* ── Submit ─────────────────────────────────────────────────────────── */
   function _collectItems() {
+    const onlyPo = _selectedPos.length === 1 ? _selectedPos[0].poNo : '';
     return Array.from(document.querySelectorAll('#grnc-items-tbody .grnc-item-row')).map(row => ({
       itemNo: row.querySelector('.grnc-item-no').value.trim(),
+      poNo: (_selectedPos.length > 1 ? row.querySelector('.grnc-item-po')?.value : onlyPo) || '',
       receivedQty: row.querySelector('[data-field="receivedQty"]').value.trim(),
       approvedQty: row.querySelector('[data-field="approvedQty"]').value.trim(),
       rejectedQty: row.querySelector('[data-field="rejectedQty"]').value.trim(),
@@ -575,7 +665,9 @@ window.Pages['grn-creation'] = (() => {
     e.preventDefault();
     const date = document.getElementById('grnc-date').value;
     const madeBy = document.getElementById('grnc-made-by').value.trim();
-    const poNo = document.getElementById('grnc-po-no').value.trim();
+    // Anything still typed in the box (not yet turned into a chip) counts too.
+    const pending = document.getElementById('grnc-po-no').value.split(',').map(t => t.trim()).filter(Boolean);
+    const poNo = [...new Set([..._selectedPos.map(p => String(p.poNo)), ...pending])].join(', ');
     const prNo = document.getElementById('grnc-pr-no').value.trim();
     const vendorName = document.getElementById('grnc-vendor').value.trim();
     const billNo = document.getElementById('grnc-bill-no').value.trim();
@@ -591,6 +683,10 @@ window.Pages['grn-creation'] = (() => {
     if (!vendorName) { Utils.showToast('Vendor Name is required', 'error'); return; }
     if (!madeBy) { Utils.showToast('Made By is required', 'error'); return; }
     if (!items.length) { Utils.showToast('Add at least one item', 'error'); return; }
+    if (_selectedPos.length > 1) {
+      const loose = items.find(it => !it.poNo);
+      if (loose) { Utils.showToast(loose.itemNo + ': pick which PO this line belongs to (PO column)', 'error'); return; }
+    }
 
     const btn = document.getElementById('grnc-submit-btn');
     btn.disabled = true; btn.textContent = 'Creating…';
@@ -612,6 +708,16 @@ window.Pages['grn-creation'] = (() => {
   /* ── Phone layout (< 768px only; desktop untouched). Field groups share one
      card in two columns, each item line becomes a compact card, GRN List
      rows become cards (shared .m-cards). ─────────────────────────────────── */
+  const GRN_FORM_CSS = `
+    .grnc-po-chips { display:flex;flex-wrap:wrap;gap:6px; }
+    .grnc-po-chips:not(:empty) { margin-bottom:8px; }
+    .grnc-po-chip { display:inline-flex;align-items:center;gap:4px;padding:3px 4px 3px 10px;border-radius:999px;background:var(--color-primary-light);color:var(--color-primary-strong);font-size:12.5px;font-weight:700; }
+    .grnc-po-chip-x { display:grid;place-items:center;width:22px;height:22px;border:none;border-radius:50%;background:transparent;color:inherit;font-size:15px;line-height:1;cursor:pointer; }
+    .grnc-po-chip-x:hover { background:rgba(1,80,170,.12); }
+    .grnc-po-chip-x:focus-visible { outline:2px solid var(--color-primary);outline-offset:1px; }
+    table.grnc-items:not(.grnc-multi-po) .grnc-c-po { display:none; }
+  `;
+
   const MOBILE_CSS = `@media (max-width: 767px) {
     .grnc-page { padding-bottom: 16px !important; }
     .grnc-tabs { gap: 0 !important; margin-bottom: 14px !important; }
@@ -655,6 +761,7 @@ window.Pages['grn-creation'] = (() => {
     if (!el) return;
 
     const isList = _view === 'list';
+    _selectedPos = []; _autoPrNo = ''; // every render of Create is a new, empty GRN
     const bodyHtml = isList
       ? _grlViewHtml()
       : '<form id="grnc-form" style="display:flex;flex-direction:column;gap:16px;">'
@@ -684,7 +791,7 @@ window.Pages['grn-creation'] = (() => {
         + '<button type="submit" id="grnc-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create GRN</button>'
       + '</form>';
 
-    el.innerHTML = '<style>' + MOBILE_CSS + '</style>'
+    el.innerHTML = '<style>' + GRN_FORM_CSS + MOBILE_CSS + '</style>'
       + '<div class="grnc-page" style="max-width:' + (isList ? '1200px' : '1080px') + ';margin:0 auto;padding:4px 0 40px;">'
       + '<div style="margin-bottom:14px;">'
         + '<h1 style="font-size:19px;font-weight:700;color:#0f172a;letter-spacing:-0.02em;margin:0;">GRN Creation</h1>'

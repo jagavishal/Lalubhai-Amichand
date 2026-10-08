@@ -7021,6 +7021,14 @@ function _seqKey(raw) {
   return isNaN(n) ? s : String(n);
 }
 
+// A GRN can cover goods from more than one PO ("GRN mai multiple PO ka maal
+// aata hai"), so its PO No. cell holds a comma list ("PO396, PO397"). Every
+// reader of that cell must split it: _seqKey on the whole string keeps only
+// the first number, which silently credited nothing to the other POs.
+function _poKeysFromCell(raw) {
+  return String(raw ?? '').split(',').map(_seqKey).filter(Boolean);
+}
+
 // Finds the 0-indexed sheet row whose column-A value matches `key`
 // (bare-vs-prefixed tolerant) — shared by anything that needs to locate a
 // PO/PR/GRN log row by its own number before acting on it.
@@ -7137,14 +7145,27 @@ async function _poSheetMeta() {
 function _cleanPartyName(s) {
   return String(s ?? '').replace(/[\s ​]+/g, ' ').trim();
 }
+// Looser key for the same party written two ways — "RUSHABH SALES" vs
+// "RUSHABH SALES,", "J.D TIMBERS" vs "JD TIMBERS", "& CO." vs "AND CO".
+// PO party names mostly arrive from the PR, whose vendor list is a different
+// sheet with its own spellings, and every one of those mismatches printed
+// the PO with a blank address ("PO mai abhi bhi kuch partys ke address nhi
+// aa rhe hai"). Must match public/js/pages/po-creation.js _vendorKey.
+function _partyKey(s) {
+  return _cleanPartyName(s).toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '');
+}
+// Vendor Details holds 360+ parties; it used to be read only to row 200, so
+// anything added after that never matched (and never showed in the picker).
 async function _resolvePoVendorName(party) {
   const clean = _cleanPartyName(party);
   try {
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
-    const res = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:A200`, valueRenderOption: 'FORMATTED_VALUE' });
-    const key = clean.toLowerCase();
-    const hit = (res.data.values || []).map(r => r[0]).find(v => v && _cleanPartyName(v).toLowerCase() === key);
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:A`, valueRenderOption: 'FORMATTED_VALUE' });
+    const names = (res.data.values || []).map(r => r[0]).filter(Boolean);
+    const lower = clean.toLowerCase();
+    const hit = names.find(v => _cleanPartyName(v).toLowerCase() === lower)
+      || names.find(v => _partyKey(v) && _partyKey(v) === _partyKey(clean));
     if (hit) return hit;
   } catch (e) {
     console.error('[po-creation] Vendor Details read for name match failed:', e.message);
@@ -7167,7 +7188,7 @@ app.get('/api/po-creation/masters', requireAuth, async (req, res) => {
       const { google } = require('googleapis');
       const sheets = google.sheets({ version: 'v4', auth });
       const [vendorsRes, shipToRes, departments, meta] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:E200`, valueRenderOption: 'FORMATTED_VALUE' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:E`, valueRenderOption: 'FORMATTED_VALUE' }),
         sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!I3:I45`, valueRenderOption: 'FORMATTED_VALUE' }),
         listDepartments(),
         _poSheetMeta(),
@@ -7222,6 +7243,127 @@ function _sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 // A:N/14), the real content gets shrunk to a fraction of its size to make
 // room for columns of empty space nobody can see. Pass colRange to pin the
 // export to just the template's actual columns instead.
+// ── Template item rows that grow to fit ──────────────────────────────────────
+// Every PR / PO / GRN template has a fixed block of item rows, and a document
+// with more lines than that used to be refused ("PR, PO, GRN format mai
+// column fix hai usko automatic add hona chahiye"). Instead, for the length of
+// one fill, extra rows are inserted INSIDE the block (just below its first
+// row — the one place every range over the block contains, even one that
+// stops short of the block's last row), so the sheet's own SUM/ARRAYFORMULA
+// ranges over the block stretch to cover them, and every cell below the block (totals, GST, comments,
+// signature) moves down with them. The new rows take the first item row's
+// format/merges and its per-row formulas (e.g. the PR's =iferror(E*I,"")
+// column). After the PDF is exported the rows are deleted again, so the
+// template is back to its own shape for the next document.
+//
+// The inserted rows carry a developer-metadata tag. A fill that dies halfway
+// (process restart, Sheets error) can leave them behind; the next fill of the
+// same tab finds the tag and deletes them first, so a stretched template can
+// never shift a later document's cells.
+const TEMP_ITEM_ROWS_KEY = 'erp-temp-item-rows';
+const TEMPLATE_MAX_ITEM_LINES = 150; // a log row's Form JSON cell holds 50,000 characters
+
+async function _removeTempItemRows(sheets, spreadsheetId, sheetId) {
+  let found = [];
+  try {
+    const r = await sheets.spreadsheets.developerMetadata.search({
+      spreadsheetId,
+      requestBody: { dataFilters: [{ developerMetadataLookup: { metadataKey: TEMP_ITEM_ROWS_KEY } }] },
+    });
+    // The tag sits on the first inserted row (Sheets only lets row metadata
+    // cover a single row); its value is how many rows were inserted.
+    found = (r.data.matchedDeveloperMetadata || [])
+      .map(m => {
+        const d = m.developerMetadata?.location?.dimensionRange;
+        const count = parseInt(m.developerMetadata?.metadataValue, 10) || 1;
+        return d ? { sheetId: d.sheetId, dimension: d.dimension, startIndex: d.startIndex, endIndex: d.startIndex + count } : null;
+      })
+      .filter(d => d && d.sheetId === sheetId && d.dimension === 'ROWS');
+  } catch (e) {
+    console.error('[template-rows] leftover search failed:', e.message);
+    return;
+  }
+  if (!found.length) return;
+  // Bottom-up, so deleting one range never moves the next one.
+  found.sort((a, b) => b.startIndex - a.startIndex);
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests: found.map(d => ({ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: d.startIndex, endIndex: d.endIndex } } })) },
+  });
+  console.log('[template-rows] removed leftover rows on sheet', sheetId, found.map(d => `${d.startIndex + 1}-${d.endIndex}`).join(', '));
+}
+
+// Runs fn(shift, extra) with the item block [firstRow..lastRow] (1-based)
+// stretched to hold `count` lines. shift('I64') gives where a cell below the
+// first item row has moved to; cells above it are unchanged. Item line i is
+// still simply row firstRow + i.
+async function _withItemRows(sheets, spreadsheetId, sheetId, { firstRow, lastRow }, count, fn) {
+  await _removeTempItemRows(sheets, spreadsheetId, sheetId);
+  const extra = Math.max(0, count - (lastRow - firstRow + 1));
+  const shift = (a1) => {
+    if (!extra || !a1) return a1;
+    const m = /^([A-Z]+)(\d+)$/.exec(String(a1));
+    if (!m) return a1;
+    const row = parseInt(m[2], 10);
+    return row > firstRow ? m[1] + (row + extra) : a1;
+  };
+  if (!extra) return fn(shift, 0);
+
+  const start = firstRow;              // 0-based: insert just below the block's first row
+  const end = start + extra;
+  // Which cells of the first item row hold a formula of their own (as opposed
+  // to a value spilled into them by a header ARRAYFORMULA — copying one of
+  // those would freeze the value and break the spill).
+  const grid = await sheets.spreadsheets.get({
+    spreadsheetId, includeGridData: true,
+    ranges: [`'${await _sheetTitleById(sheets, spreadsheetId, sheetId)}'!${firstRow}:${firstRow}`],
+    fields: 'sheets(data(rowData(values(userEnteredValue))))',
+  });
+  const cells = grid.data.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values || [];
+  const formulaCols = cells.map((c, i) => (c?.userEnteredValue?.formulaValue ? i : -1)).filter(i => i >= 0);
+
+  const src = { sheetId, startRowIndex: firstRow - 1, endRowIndex: firstRow };
+  const dst = { sheetId, startRowIndex: start, endRowIndex: end };
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests: [
+      { insertDimension: { range: { sheetId, dimension: 'ROWS', startIndex: start, endIndex: end }, inheritFromBefore: true } },
+      { copyPaste: { source: src, destination: dst, pasteType: 'PASTE_FORMAT' } },
+      ...formulaCols.map(c => ({ copyPaste: {
+        source: { ...src, startColumnIndex: c, endColumnIndex: c + 1 },
+        destination: { ...dst, startColumnIndex: c, endColumnIndex: c + 1 },
+        pasteType: 'PASTE_FORMULA',
+      } })),
+      { createDeveloperMetadata: { developerMetadata: {
+        metadataKey: TEMP_ITEM_ROWS_KEY, metadataValue: String(extra), visibility: 'DOCUMENT',
+        location: { dimensionRange: { sheetId, dimension: 'ROWS', startIndex: start, endIndex: start + 1 } },
+      } } },
+    ] },
+  });
+  try {
+    return await fn(shift, extra);
+  } finally {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: start, endIndex: end } } }] },
+      });
+    } catch (e) {
+      // Left for _removeTempItemRows to clear on the next fill of this tab.
+      console.error('[template-rows] could not remove the extra rows now:', e.message);
+    }
+  }
+}
+
+const _sheetTitleCache = new Map();
+async function _sheetTitleById(sheets, spreadsheetId, sheetId) {
+  const k = spreadsheetId + ':' + sheetId;
+  if (_sheetTitleCache.has(k)) return _sheetTitleCache.get(k);
+  const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets(properties(sheetId,title))' });
+  for (const s of meta.data.sheets) _sheetTitleCache.set(spreadsheetId + ':' + s.properties.sheetId, s.properties.title);
+  return _sheetTitleCache.get(k);
+}
+
 async function _exportSheetTabPdf(spreadsheetId, sourceSheetId, colRange) {
   const auth = getGoogleAuth();
   const client = await auth.getClient();
@@ -7293,11 +7435,15 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
   const tab = cfg.tabName;
   const sourceSheetId = sheetIdByTitle[tab];
   if (sourceSheetId === undefined) throw new Error(`Template tab "${tab}" not found in the PO sheet`);
+  // The item block grows to fit (see _withItemRows); every cell below it is
+  // addressed through `at` for the length of this fill.
+  return _withItemRows(sheets, PO_CREATION_SHEET_ID, sourceSheetId, cfg.items, cleanItems.length, async (at, extra) => {
+  const lastItemRow = cfg.items.lastRow + extra;
 
     // 1) Clear the previous PO's item rows so nothing from it bleeds into this one.
     await sheets.spreadsheets.values.clear({
       spreadsheetId: PO_CREATION_SHEET_ID,
-      range: `'${tab}'!${cfg.items.clearCols[0]}${cfg.items.firstRow}:${cfg.items.clearCols[1]}${cfg.items.lastRow}`,
+      range: `'${tab}'!${cfg.items.clearCols[0]}${cfg.items.firstRow}:${cfg.items.clearCols[1]}${lastItemRow}`,
     });
 
     // 2) Write header fields, item rows, and summary fields (freight/shipping/
@@ -7323,7 +7469,7 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
     put(cfg.header.paymentTerms, paymentTerms);
     put(cfg.header.poMadeBy, poMadeBy);
     // Always written, blank or stamped — see approvalCell in PO_FORMAT_CONFIG.
-    if (cfg.approvalCell) put(cfg.approvalCell, approvalStamp || '');
+    if (cfg.approvalCell) put(at(cfg.approvalCell), approvalStamp || '');
 
     // A "...Percent" summary field (Diamond PO's gstPercent, Diamond
     // PO/ENR PO's discountPercent) lands on a percent-formatted cell whose
@@ -7337,7 +7483,7 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
     // cell would — correctly, as 5% — so divide by 100 before writing.
     Object.entries(cfg.summary.fields).forEach(([field, a1]) => {
       const raw = parseFloat(summary?.[field]) || 0;
-      data.push({ range: `'${tab}'!${a1}`, values: [[field.endsWith('Percent') ? raw / 100 : raw]] });
+      data.push({ range: `'${tab}'!${at(a1)}`, values: [[field.endsWith('Percent') ? raw / 100 : raw]] });
     });
 
     // Terms & Conditions / Comments / Test Certificate Required (Purchase-
@@ -7346,14 +7492,14 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
     // must never keep showing a previous PO's leftover text.
     if (cfg.extra?.termsAndConditionsRows) {
       const lines = String(termsAndConditions || '').split('\n').map(s => s.trim());
-      cfg.extra.termsAndConditionsRows.forEach((a1, i) => data.push({ range: `'${tab}'!${a1}`, values: [[lines[i] || '']] }));
+      cfg.extra.termsAndConditionsRows.forEach((a1, i) => data.push({ range: `'${tab}'!${at(a1)}`, values: [[lines[i] || '']] }));
     }
-    if (cfg.extra?.comments) data.push({ range: `'${tab}'!${cfg.extra.comments}`, values: [[comments || '']] });
-    if (cfg.extra?.testCertificateRequired) data.push({ range: `'${tab}'!${cfg.extra.testCertificateRequired}`, values: [[testCertificateRequired || '']] });
+    if (cfg.extra?.comments) data.push({ range: `'${tab}'!${at(cfg.extra.comments)}`, values: [[comments || '']] });
+    if (cfg.extra?.testCertificateRequired) data.push({ range: `'${tab}'!${at(cfg.extra.testCertificateRequired)}`, values: [[testCertificateRequired || '']] });
 
     cleanItems.forEach((it, i) => {
       const row = cfg.items.firstRow + i;
-      if (row > cfg.items.lastRow) return; // beyond the template's own capacity — drop silently
+      if (row > lastItemRow) return; // cannot happen: the block was grown to fit
       Object.entries(cfg.items.fields).forEach(([field, col]) => {
         const raw = it[field];
         put(`${col}${row}`, PO_TEXT_ITEM_FIELDS.has(field) ? raw : _cleanPoItemNum(raw));
@@ -7377,7 +7523,7 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
     // never recompute the formula's math server-side).
     let totalAmount = null;
     try {
-      const totalRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${tab}'!${cfg.summary.totalCell}`, valueRenderOption: 'UNFORMATTED_VALUE' });
+      const totalRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${tab}'!${at(cfg.summary.totalCell)}`, valueRenderOption: 'UNFORMATTED_VALUE' });
       totalAmount = totalRes.data.values?.[0]?.[0] ?? null;
     } catch (e) { console.error('[po-creation] total read-back failed:', e.message); }
 
@@ -7390,6 +7536,7 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${poNoFormatted} - ${tab}.pdf`, PO_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[po-creation] PDF export failed:', e.message); }
   return { totalAmount, pdfLink };
+  });
 }
 
 // POST /api/po-creation — fills the live template tab for the chosen format,
@@ -7457,8 +7604,9 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po', async (req, res)
     // one used to be dropped without a word — the user was told the PO had
     // been created while lines were missing from the PDF and from the log's own
     // Form JSON. Refusing is the only honest answer.
-    const poCapacity = cfg.items.lastRow - cfg.items.firstRow + 1;
-    if (cleanItems.length > poCapacity) return res.status(400).json({ error: `This PO format fits ${poCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one PO.` });
+    // The template's item block grows to fit (see _withItemRows); the only
+    // ceiling left is what one log row can store.
+    if (cleanItems.length > TEMPLATE_MAX_ITEM_LINES) return res.status(400).json({ error: `A PO can hold up to ${TEMPLATE_MAX_ITEM_LINES} item lines and ${cleanItems.length} were sent. Split it across more than one PO.` });
 
     // Same user re-submitting the identical PO (a timed-out first attempt, a
     // double-fired submit) gets the first create's result back, not a second PO.
@@ -7562,7 +7710,7 @@ async function _grnExistsForPo(poNo) {
   const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
   try {
     const r = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:M`, valueRenderOption: 'FORMATTED_VALUE' });
-    return (r.data.values || []).some(row => _seqKey(row[5]) === key && (row[12] || '') !== 'Cancelled');
+    return (r.data.values || []).some(row => _poKeysFromCell(row[5]).includes(key) && (row[12] || '') !== 'Cancelled');
   } catch (e) {
     if (/unable to parse range/i.test(e.message || '')) return false;
     throw e;
@@ -8049,8 +8197,9 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr', async (req, res)
     // one used to be dropped without a word — the user was told the PR had
     // been created while lines were missing from the PDF and from the log's own
     // Form JSON. Refusing is the only honest answer.
-    const prCapacity = cfg.items.lastRow - cfg.items.firstRow + 1;
-    if (cleanItems.length > prCapacity) return res.status(400).json({ error: `This PR format fits ${prCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one PR.` });
+    // The template's item block grows to fit (see _withItemRows); the only
+    // ceiling left is what one log row can store.
+    if (cleanItems.length > TEMPLATE_MAX_ITEM_LINES) return res.status(400).json({ error: `A PR can hold up to ${TEMPLATE_MAX_ITEM_LINES} item lines and ${cleanItems.length} were sent. Split it across more than one PR.` });
 
     // Same user re-submitting the identical PR (a timed-out first attempt, a
     // double-fired submit) gets the first create's result back, not a second PR.
@@ -8072,10 +8221,14 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr', async (req, res)
     const sourceSheetId = sheetIdByTitle[tab];
     if (sourceSheetId === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the PR sheet` });
 
+    // The item block grows to fit (see _withItemRows): cells below it are
+    // addressed through `at`, and the export window takes the extra rows.
+    const { totalAmount, departmentOut, pdfLink } = await _withItemRows(sheets, PR_CREATION_SHEET_ID, sourceSheetId, cfg.items, cleanItems.length, async (at, extra) => {
+    const lastItemRow = cfg.items.lastRow + extra;
     // 1) Clear the previous PR's item rows so nothing from it bleeds into this one.
     await sheets.spreadsheets.values.clear({
       spreadsheetId: PR_CREATION_SHEET_ID,
-      range: `'${tab}'!${cfg.items.clearCols[0]}${cfg.items.firstRow}:${cfg.items.clearCols[1]}${cfg.items.lastRow}`,
+      range: `'${tab}'!${cfg.items.clearCols[0]}${cfg.items.firstRow}:${cfg.items.clearCols[1]}${lastItemRow}`,
     });
 
     // 2) Write header fields and item rows in one batch.
@@ -8099,7 +8252,7 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr', async (req, res)
 
     cleanItems.forEach((it, i) => {
       const row = cfg.items.firstRow + i;
-      if (row > cfg.items.lastRow) return; // beyond the template's own capacity — drop silently
+      if (row > lastItemRow) return; // cannot happen: the block was grown to fit
       Object.entries(cfg.items.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
     });
 
@@ -8128,7 +8281,7 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr', async (req, res)
     let totalAmount = null, departmentOut = department || '';
     try {
       const deptCell = cfg.header.department ? null : cfg.departmentCell;
-      const ranges = [`'${tab}'!${cfg.summary.totalCell}`];
+      const ranges = [`'${tab}'!${at(cfg.summary.totalCell)}`];
       if (deptCell && !department) ranges.push(`'${tab}'!${deptCell}`);
       const readRes = await sheets.spreadsheets.values.batchGet({ spreadsheetId: PR_CREATION_SHEET_ID, ranges, valueRenderOption: 'UNFORMATTED_VALUE' });
       totalAmount = readRes.data.valueRanges?.[0]?.values?.[0]?.[0] ?? null;
@@ -8139,9 +8292,12 @@ app.post('/api/pr-creation', requireAuth, sheetSerialised('pr', async (req, res)
     // never block the PR itself from being created.
     let pdfLink = null;
     try {
-      const pdfBuffer = await _exportPrTabPdf(sourceSheetId, cfg.pdf ? { ...cfg.pdf, r2: rowCountByTitle[tab] } : cfg.pdf);
+      const pdfBuffer = await _exportPrTabPdf(sourceSheetId, cfg.pdf ? { ...cfg.pdf, r2: rowCountByTitle[tab] + extra } : cfg.pdf);
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `${prNoFormatted} - ${tab}.pdf`, PR_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[pr-creation] PDF export failed:', e.message); }
+
+    return { totalAmount, departmentOut, pdfLink };
+    });
 
     // 5) Log this PR so the ERP can list it — the sheet is still the database,
     // this is just another tab in it, same pattern as PO Creation's own log.
@@ -8767,20 +8923,29 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
     try {
       const grnRes = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:M`, valueRenderOption: 'FORMATTED_VALUE' });
       for (const r of (grnRes.data.values || [])) {
-        const poNo = _seqKey(r[5]);
-        if (!poNo || (r[12] || '') === 'Cancelled') continue; // a cancelled GRN never happened
+        const poKeys = _poKeysFromCell(r[5]);
+        if (!poKeys.length || (r[12] || '') === 'Cancelled') continue; // a cancelled GRN never happened
         let items = [];
         try { items = JSON.parse(r[11] || 'null')?.items || []; } catch { items = []; }
-        const perItem = receivedByPo.get(poNo) || new Map();
+        // Every PO on the GRN counts as touched (the "part received" flag),
+        // even one none of its lines can be credited to.
+        for (const k of poKeys) if (!receivedByPo.has(k)) receivedByPo.set(k, new Map());
         for (const it of items) {
           const code = String(it?.itemNo || '').trim().toLowerCase();
           if (!code) continue;
+          // A multi-PO GRN stamps each line with its own PO. An older or
+          // hand-typed multi-PO GRN without that can't be split by line, so
+          // it credits nothing — better a PO lingering in the picker than
+          // one hidden on a guess.
+          const poKey = it.poNo ? _seqKey(it.poNo) : (poKeys.length === 1 ? poKeys[0] : '');
+          if (!poKey) continue;
           // Approved is what actually landed in stock — a rejected quantity
           // was sent back, so it doesn't count against what's still owed.
           const qty = parseFloat(String(it.approvedQty ?? it.receivedQty ?? '0').replace(/,/g, '')) || 0;
+          const perItem = receivedByPo.get(poKey) || new Map();
           perItem.set(code, (perItem.get(code) || 0) + qty);
+          receivedByPo.set(poKey, perItem);
         }
-        receivedByPo.set(poNo, perItem);
       }
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
@@ -8903,14 +9068,24 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn', async (req, re
         return res.status(400).json({ error: `${label} must be a number 0 or greater` });
       }
     }
-    const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemNo || '').trim());
+    const cleanItems = (Array.isArray(items) ? items : []).filter(it => it && String(it.itemNo || '').trim())
+      .map(it => (it.poNo ? { ...it, poNo: String(it.poNo).trim() } : it));
     if (!cleanItems.length) return res.status(400).json({ error: 'Add at least one item' });
+    // More than one PO on the GRN: every line must say which PO it came in
+    // against, and only one of those POs — that is what each PO's
+    // received-so-far is worked out from (see /api/grn-creation/po-list).
+    const grnPoKeys = _poKeysFromCell(poNo);
+    if (grnPoKeys.length > 1) {
+      const bad = cleanItems.find(it => !it.poNo || !grnPoKeys.includes(_seqKey(it.poNo)));
+      if (bad) return res.status(400).json({ error: `${bad.itemNo}: pick which of this GRN's POs (${poNo}) this line belongs to` });
+    }
     // The template has a fixed number of item rows and anything past the last
     // one used to be dropped without a word — the user was told the GRN had
     // been created while lines were missing from the PDF and from the log's own
     // Form JSON. Refusing is the only honest answer.
-    const grnCapacity = GRN_ITEMS.lastRow - GRN_ITEMS.firstRow + 1;
-    if (cleanItems.length > grnCapacity) return res.status(400).json({ error: `A GRN fits ${grnCapacity} item lines and ${cleanItems.length} were sent. Split it across more than one GRN.` });
+    // The template's item block grows to fit (see _withItemRows); the only
+    // ceiling left is what one log row can store.
+    if (cleanItems.length > TEMPLATE_MAX_ITEM_LINES) return res.status(400).json({ error: `A GRN can hold up to ${TEMPLATE_MAX_ITEM_LINES} item lines and ${cleanItems.length} were sent. Split it across more than one GRN.` });
 
     // Item quantities/rate were written to the sheet with no numeric check at
     // all — a negative or garbage value silently corrupted the Total formula
@@ -8943,17 +9118,21 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn', async (req, re
     const sourceSheetId = sheetIdByTitle[tab];
     if (sourceSheetId === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the GRN sheet` });
 
+    // The item block grows to fit (see _withItemRows): cells below it are
+    // addressed through `at` for the length of this fill.
+    const { subtotal, totalAmount, pdfLink } = await _withItemRows(sheets, GRN_CREATION_SHEET_ID, sourceSheetId, GRN_ITEMS, cleanItems.length, async (at, extra) => {
+    const lastItemRow = GRN_ITEMS.lastRow + extra;
     // 1) Clear the previous GRN's item rows so nothing from it bleeds into
     // this one — only the manual columns (see comment on GRN_ITEMS above).
     await sheets.spreadsheets.values.batchClear({
       spreadsheetId: GRN_CREATION_SHEET_ID,
       requestBody: { ranges: [
-        `'${tab}'!${GRN_ITEMS.itemNoCol}${GRN_ITEMS.firstRow}:${GRN_ITEMS.itemNoCol}${GRN_ITEMS.lastRow}`,
+        `'${tab}'!${GRN_ITEMS.itemNoCol}${GRN_ITEMS.firstRow}:${GRN_ITEMS.itemNoCol}${lastItemRow}`,
         // I:M is one contiguous block (received/approved/rejected qty, uom,
         // rate) now that Approved/Rejected sit between qty and uom/rate —
         // see the GRN_ITEMS comment above. N (the totals formula) is never
         // touched.
-        `'${tab}'!${GRN_ITEMS.qtyCol}${GRN_ITEMS.firstRow}:${GRN_ITEMS.rateCol}${GRN_ITEMS.lastRow}`,
+        `'${tab}'!${GRN_ITEMS.qtyCol}${GRN_ITEMS.firstRow}:${GRN_ITEMS.rateCol}${lastItemRow}`,
       ] },
     });
 
@@ -8977,14 +9156,14 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn', async (req, re
     put(GRN_HEADER_CELLS.billRecvDate, billRecvDate);
     put(GRN_HEADER_CELLS.deptHead, deptHead);
     put(GRN_HEADER_CELLS.date, date);
-    data.push({ range: `'${tab}'!${GRN_COMMENTS_CELL}`, values: [[comments || '']] });
-    data.push({ range: `'${tab}'!${GRN_SUMMARY_CELLS.cgst}`, values: [[parseFloat(cgst) || 0]] });
-    data.push({ range: `'${tab}'!${GRN_SUMMARY_CELLS.sgst}`, values: [[parseFloat(sgst) || 0]] });
-    data.push({ range: `'${tab}'!${GRN_SUMMARY_CELLS.roundOff}`, values: [[parseFloat(roundOff) || 0]] });
+    data.push({ range: `'${tab}'!${at(GRN_COMMENTS_CELL)}`, values: [[comments || '']] });
+    data.push({ range: `'${tab}'!${at(GRN_SUMMARY_CELLS.cgst)}`, values: [[parseFloat(cgst) || 0]] });
+    data.push({ range: `'${tab}'!${at(GRN_SUMMARY_CELLS.sgst)}`, values: [[parseFloat(sgst) || 0]] });
+    data.push({ range: `'${tab}'!${at(GRN_SUMMARY_CELLS.roundOff)}`, values: [[parseFloat(roundOff) || 0]] });
 
     cleanItems.forEach((it, i) => {
       const row = GRN_ITEMS.firstRow + i;
-      if (row > GRN_ITEMS.lastRow) return; // beyond the template's own capacity — drop silently
+      if (row > lastItemRow) return; // cannot happen: the block was grown to fit
       put(`${GRN_ITEMS.itemNoCol}${row}`, it.itemNo);
       put(`${GRN_ITEMS.qtyCol}${row}`, it.receivedQty);
       put(`${GRN_ITEMS.uomCol}${row}`, it.uom);
@@ -9012,7 +9191,7 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn', async (req, re
     try {
       const totalsRes = await sheets.spreadsheets.values.batchGet({
         spreadsheetId: GRN_CREATION_SHEET_ID,
-        ranges: [`'${tab}'!${GRN_SUBTOTAL_CELL}`, `'${tab}'!${GRN_TOTAL_CELL}`],
+        ranges: [`'${tab}'!${at(GRN_SUBTOTAL_CELL)}`, `'${tab}'!${at(GRN_TOTAL_CELL)}`],
         valueRenderOption: 'UNFORMATTED_VALUE',
       });
       subtotal = totalsRes.data.valueRanges?.[0]?.values?.[0]?.[0] ?? null;
@@ -9040,6 +9219,9 @@ app.post('/api/grn-creation', requireAuth, sheetSerialised('grn', async (req, re
       const pdfBuffer = await _exportSheetTabPdf(GRN_CREATION_SHEET_ID, sourceSheetId, { c1: 0, c2: 14, portrait: false });
       pdfLink = await safeUploadPdfToDrive(pdfBuffer, `GR ${nextGrNo}.pdf`, GRN_PDF_DRIVE_FOLDER_ID);
     } catch (e) { console.error('[grn-creation] PDF export failed:', e.message); }
+
+    return { subtotal, totalAmount, pdfLink };
+    });
 
     // 5) Log this GRN so the ERP can list it — same pattern as "ERP PO Log".
     const sessUser = req.session?.user;
