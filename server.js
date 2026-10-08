@@ -967,6 +967,13 @@ function computeDashboard(store, filter='all', doerFilter='') {
   let total=0, completed=0, pending=0, revised=0, upcoming=0;
   const items=[];
   const now=new Date(); now.setHours(0,0,0,0);
+  // Checklist occurrences due in the next UPCOMING_WINDOW_DAYS — kept out of
+  // items/pending (they aren't due yet) but listed for the Dashboard's
+  // Upcoming tab ("15-30 days ke upcoming tasks dashboard pe dekhne hai").
+  // Future delegations are already in items, so this only carries checklists.
+  const UPCOMING_WINDOW_DAYS = 30;
+  const upcomingEnd = new Date(now); upcomingEnd.setDate(upcomingEnd.getDate() + UPCOMING_WINDOW_DAYS);
+  const upcomingTasks = [];
   // doerFilter is either '' (no filter — everyone), a single name (string, matched
   // case-insensitively), or a Set of lowercased names (team-scope match — used for
   // an HOD's "All (My Team)" view, see /api/dashboard below).
@@ -1008,13 +1015,17 @@ function computeDashboard(store, filter='all', doerFilter='') {
         return;
       }
       const due = new Date(dateStr); due.setHours(0,0,0,0);
-      if (m.startDate && due > now) return; // not due yet — don't count as pending or show in the list
+      if (m.startDate && due > now) { // not due yet — don't count as pending or show in the list
+        if (due <= upcomingEnd) upcomingTasks.push({ id:m.id, doerId:m.doerId||null, type:'Checklist', description:m.task, doer:m.assignedTo, department:m.department||'', frequency:m.frequency||'', date:dateStr, client:'-', overdue:false, status:'pending', upcoming:true, remarks:m.remarks||'', createdAt:m.createdAt||m.created_at });
+        return;
+      }
       const isOverdue = m.startDate ? due < now : false;
       pending++;
       items.push({ id:m.id, doerId:m.doerId||null, type:'Checklist', description:m.task, doer:m.assignedTo, department:m.department||'', frequency:m.frequency||'', date:dateStr, client:'-', overdue:isOverdue, status:'pending', remarks:m.remarks||'', createdAt:m.createdAt||m.created_at });
     });
   }
-  return { total, completed, pending, revised, upcoming, pendingTasks:items.sort((a,b)=>new Date(b.createdAt||b.date)-new Date(a.createdAt||a.date)).slice(0,1000) };
+  upcomingTasks.sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  return { total, completed, pending, revised, upcoming, pendingTasks:items.sort((a,b)=>new Date(b.createdAt||b.date)-new Date(a.createdAt||a.date)).slice(0,1000), upcomingTasks:upcomingTasks.slice(0,3000) };
 }
 
 function normDate(s) {

@@ -14,6 +14,8 @@ window.Pages['all-tasks'] = (function () {
   let _sortCol   = null;         // 'description' | 'doer' | 'assignee' | 'dueDate' | 'remarks' | 'status'
   let _sortDir   = 'asc';        // 'asc' | 'desc'
   let _masterRowsCache = [];     // latest masterRows() output — Master view Edit/Delete look rows up by index
+  let _mSortCol  = 'doer';       // Master view: 'doer' (doer, then task A–Z) | 'task' | 'frequency' | 'nextDue' | 'lastDone'
+  let _mSortDir  = 'asc';
 
   /* ─── helpers ───────────────────────────────────────────────────────────── */
   const isAdmin = () => {
@@ -215,6 +217,7 @@ window.Pages['all-tasks'] = (function () {
           priority:    'Low',
           frequency:   m.frequency || '',
           remarks:     m.remarks || '',
+          endDate:     m.endDate || m.end_date || '',
           url:         '',
           createdAt:   m.createdAt || m.created_at || '',
         })),
@@ -598,11 +601,44 @@ window.Pages['all-tasks'] = (function () {
     }
   }
 
+  /* Master view sort ("master checklist mai date wise sort option do").
+     The default keeps doers A–Z with their tasks A–Z. Any other sort orders
+     every row by that column first, so the doer groups follow it too — sorted
+     by Next Due Date, the doer with the soonest task comes first. Rows with
+     no date (all done / never done) always go last, whichever direction. */
+  const MASTER_SORTS = [
+    ['doer:asc',      'Doer (A–Z)'],
+    ['nextDue:asc',   'Next due date — earliest first'],
+    ['nextDue:desc',  'Next due date — latest first'],
+    ['lastDone:desc', 'Last done — most recent first'],
+    ['lastDone:asc',  'Last done — oldest first'],
+    ['task:asc',      'Task (A–Z)'],
+  ];
+  function sortMasterRows(rows) {
+    if (_mSortCol === 'doer') return rows;
+    const dir = _mSortDir === 'desc' ? -1 : 1;
+    const key = (r) => _mSortCol === 'task' ? r.task.toLowerCase()
+      : _mSortCol === 'frequency' ? (r.frequency || '').toLowerCase()
+      : (r[_mSortCol] || '');
+    return [...rows].sort((a, b) => {
+      const av = key(a), bv = key(b);
+      if (!av !== !bv) return av ? -1 : 1;
+      return (av < bv ? -1 : av > bv ? 1 : 0) * dir
+        || a.doer.localeCompare(b.doer) || a.task.localeCompare(b.task);
+    });
+  }
+  function masterSortTh(col, label) {
+    const ind = _mSortCol !== col ? '' : _mSortDir === 'asc'
+      ? ' <span style="font-size:9px;">&#9650;</span>'
+      : ' <span style="font-size:9px;">&#9660;</span>';
+    return `<th class="at-th at-th-sort at-th-msort" data-msort="${col}" style="cursor:pointer;user-select:none;" title="Sort by ${label}">${label}${ind}</th>`;
+  }
+
   // Master rows folded per doer, in the same shape as the task groups so the
   // expand/collapse controls and _expanded work for both views alike.
   function masterGroups(rows) {
     const map = new Map();
-    for (const r of rows) {
+    for (const r of sortMasterRows(rows)) {
       if (!map.has(r.doer)) map.set(r.doer, { doer: r.doer, rows: [] });
       map.get(r.doer).rows.push(r);
     }
@@ -629,10 +665,10 @@ window.Pages['all-tasks'] = (function () {
             <tr style="background:#f8fafc">
               <th class="at-th">#</th>
               ${canManageMasters() ? '<th class="at-th">Action</th>' : ''}
-              <th class="at-th">Task</th>
-              <th class="at-th">Frequency</th>
-              <th class="at-th">Next Due Date</th>
-              <th class="at-th">Last Done</th>
+              ${masterSortTh('task', 'Task')}
+              ${masterSortTh('frequency', 'Frequency')}
+              ${masterSortTh('nextDue', 'Next Due Date')}
+              ${masterSortTh('lastDone', 'Last Done')}
               <th class="at-th">Occurrences</th>
               <th class="at-th">Remarks</th>
             </tr>
@@ -918,6 +954,10 @@ window.Pages['all-tasks'] = (function () {
             <button id="at-expand-all" type="button" class="at-btn at-btn-secondary at-btn-sm">Expand all</button>
             <button id="at-collapse-all" type="button" class="at-btn at-btn-secondary at-btn-sm">Collapse all</button>
             <span style="flex:1"></span>
+            ${masterMode ? `<select id="at-master-sort" title="Sort master tasks" style="height:28px;padding:0 6px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;background:#fff;color:#475569">
+              ${MASTER_SORTS.map(([v, l]) => `<option value="${v}"${v === _mSortCol + ':' + _mSortDir ? ' selected' : ''}>Sort: ${l}</option>`).join('')}
+              ${MASTER_SORTS.some(([v]) => v === _mSortCol + ':' + _mSortDir) ? '' : `<option selected>Sort: custom</option>`}
+            </select>` : ''}
           </div>
           ${masterMode ? masterViewHTML(masterGroupsList) : groupsHTML}
         </div>
@@ -947,8 +987,24 @@ window.Pages['all-tasks'] = (function () {
       });
     });
 
+    /* Master view sort — dropdown, or click a column header */
+    document.getElementById('at-master-sort')?.addEventListener('change', (e) => {
+      const [col, dir] = e.target.value.split(':');
+      if (!dir) return;
+      _mSortCol = col; _mSortDir = dir;
+      renderContent();
+    });
+    document.querySelectorAll('.at-th-msort').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.msort;
+        if (_mSortCol === col) { _mSortDir = _mSortDir === 'asc' ? 'desc' : 'asc'; }
+        else { _mSortCol = col; _mSortDir = 'asc'; }
+        renderContent();
+      });
+    });
+
     /* sortable column headers */
-    document.querySelectorAll('.at-th-sort').forEach(th => {
+    document.querySelectorAll('.at-th-sort:not(.at-th-msort)').forEach(th => {
       th.addEventListener('click', () => {
         const col = th.dataset.sort;
         if (_sortCol === col) { _sortDir = _sortDir === 'asc' ? 'desc' : 'asc'; }
@@ -1021,7 +1077,7 @@ window.Pages['all-tasks'] = (function () {
   window._atEditMaster = (idx) => {
     const r = _masterRowsCache[idx];
     if (!r || !canManageMasters()) return;
-    openChecklistEditModal({ id: r.anyId, description: r.task, doer: r.doer, frequency: r.frequency }, r.ids);
+    openChecklistEditModal({ id: r.anyId, description: r.task, doer: r.doer, frequency: r.frequency, remarks: r.remarks }, r.ids);
   };
   window._atDeleteMaster = (idx) => {
     const r = _masterRowsCache[idx];
@@ -1058,478 +1114,64 @@ window.Pages['all-tasks'] = (function () {
     </div>`;
   }
 
-  /* ─── Bulk CSV upload (same section + parsing as Dashboard's modals) ──── */
-  function parseCsvLine(line) {
-    const out = [];
-    let cur = '', inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (inQuotes) {
-        if (c === '"') {
-          if (line[i + 1] === '"') { cur += '"'; i++; }
-          else inQuotes = false;
-        } else cur += c;
-      } else if (c === '"') inQuotes = true;
-      else if (c === ',') { out.push(cur); cur = ''; }
-      else cur += c;
-    }
-    out.push(cur);
-    return out;
-  }
+  /* ─── Delegate / Checklist add forms ──────────────────────────────────────
+     Shared with the Dashboard (js/components/task-forms.js) so both pages
+     show the very same form. */
+  function openDelegateModal()  { window.TaskForms.openDelegate({ users: _users, onSaved: reload }); }
+  function openChecklistModal() { window.TaskForms.openChecklist({ users: _users, onSaved: reload }); }
+  const _checklistFreqOptsHtml = (selected) => window.TaskForms.freqOptionsHtml(selected);
 
-  async function readCsvRows(file, headerAliases = {}) {
-    const text = (await file.text()).replace(/^﻿/, '');
-    const lines = text.trim().split('\n').filter(Boolean);
-    const headers = parseCsvLine(lines[0] || '').map(h => { const k = h.trim().toLowerCase(); return headerAliases[k] || k; });
-    return lines.slice(1).map(row => {
-      const cols = parseCsvLine(row).map(c => c.trim());
-      const obj = {};
-      headers.forEach((h, i) => obj[h] = cols[i] || '');
-      return obj;
-    });
-  }
-
-  const userByEmail = (email) => {
-    const e = String(email || '').trim().toLowerCase();
-    return e ? _users.find(u => (u.email || '').toLowerCase() === e) : null;
-  };
-
-  function csvUploadSection(prefix, sampleHref, formatText) {
-    return `<div style="border-top:1px solid #f1f5f9;padding:12px 24px 16px;background:#fafafa;flex-shrink:0">
-      <p style="font-size:10.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#94a3b8;text-align:center;margin:0 0 10px;">Or Bulk Upload CSV</p>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <input type="file" id="${prefix}-csv-file" accept=".csv" style="font-size:12px;flex:1;min-width:0;" />
-        <button id="${prefix}-csv-upload" style="padding:6px 14px;border-radius:7px;background:#10b981;color:#fff;border:none;cursor:pointer;font-size:12px;font-weight:700;white-space:nowrap;">+ Upload CSV</button>
-        <a href="${sampleHref}" download style="padding:6px 14px;border-radius:7px;background:#fff;color:#374151;border:1.5px solid #e2e8f0;font-size:12px;font-weight:700;text-decoration:none;white-space:nowrap;">↓ Sample</a>
-      </div>
-      <p style="font-size:10.5px;color:#94a3b8;margin:8px 0 0;">${formatText}</p>
-    </div>`;
-  }
-
-  /* ─── Delegate Task Modal ───────────────────────────────────────────────── */
-  // Same fields as Dashboard's "+ Delegate Task" modal: Doer, Due Date
-  // (defaults to today), Priority, Approval Required, Description, URL,
-  // Remarks, plus the bulk CSV upload.
-  function openDelegateModal() {
-    const userOpts = _users.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('');
-    const div = modalOverlay('at-delegate-modal', `
-      ${modalHeader('Delegate Task', "document.getElementById('at-delegate-modal').remove()")}
-      <div style="padding:20px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div>
-            <label class="at-label">Doer (Assign To) *</label>
-            <select id="atd-doer" class="at-input" style="width:100%"><option value="">— Select —</option>${userOpts}</select>
-          </div>
-          <div>
-            <label class="at-label">Due Date *</label>
-            <input type="date" id="atd-due" class="at-input" style="width:100%" value="${esc(Utils.todayISO())}" />
-          </div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div>
-            <label class="at-label">Priority</label>
-            <select id="atd-priority" class="at-input" style="width:100%"><option>Low</option><option>Medium</option><option>High</option></select>
-          </div>
-          <div>
-            <label class="at-label">Approval Required</label>
-            <select id="atd-approval" class="at-input" style="width:100%">
-              <option value="No Approval">No Approval</option>
-              <option value="Approval Required">Approval Required</option>
-            </select>
-          </div>
-        </div>
-        <div>
-          <label class="at-label">Description *</label>
-          <textarea id="atd-desc" rows="3" class="at-input" style="width:100%;height:auto;padding:8px 10px;resize:none" placeholder="Enter task description..."></textarea>
-        </div>
-        <div>
-          <label class="at-label">URL <span style="color:#94a3b8;font-weight:400">(optional)</span></label>
-          <input id="atd-url" class="at-input" style="width:100%" placeholder="https://…" />
-        </div>
-        <div>
-          <label class="at-label">Remarks</label>
-          <textarea id="atd-remarks" rows="2" class="at-input" style="width:100%;height:auto;padding:8px 10px;resize:none" placeholder="Any remarks…"></textarea>
-        </div>
-        <p id="atd-err" style="color:#ef4444;font-size:12px;margin:0"></p>
-      </div>
-      <div style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0">
-        <button onclick="document.getElementById('at-delegate-modal').remove()" class="at-btn at-btn-secondary">Cancel</button>
-        <button id="atd-save" class="at-btn at-btn-primary">Delegate</button>
-      </div>
-      ${csvUploadSection('atd', '/api/samples/delegation', 'Format: doer_email, approver_email, due_date, priority, approval, description, remarks, client_name')}
-    `);
-
-    document.getElementById('atd-csv-upload').addEventListener('click', async (ev) => {
-      const btn = ev.currentTarget;
-      const file = document.getElementById('atd-csv-file').files?.[0];
-      if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
-      btn.disabled = true; btn.textContent = 'Uploading…';
-      let ok = 0, fail = 0;
-      for (const obj of await readCsvRows(file)) {
-        const doer = userByEmail(obj['doer_email']);
-        if (!doer) { fail++; continue; }
-        try {
-          await Utils.apiFetch('/api/delegations', {
-            method: 'POST',
-            body: JSON.stringify({
-              description: obj['description'] || '',
-              doerId: doer.id, doerName: doer.name,
-              delegatedBy: currentUserId(),
-              dueDate: obj['due_date'] || Utils.todayISO(),
-              priority: obj['priority'] || 'Low',
-              approval: obj['approval'] === 'yes' ? 'Approval Required' : 'No Approval',
-              client: obj['client_name'] || '',
-              remarks: obj['remarks'] || '',
-              url: '',
-            }),
-          });
-          ok++;
-        } catch { fail++; }
-      }
-      div.remove();
-      Utils.showToast(`${ok} tasks uploaded${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
-      await reload();
-    });
-
-    document.getElementById('atd-save').addEventListener('click', async () => {
-      const desc     = document.getElementById('atd-desc').value.trim();
-      const doerId   = document.getElementById('atd-doer').value;
-      const doerName = _users.find(u => u.id === doerId)?.name || '';
-      const dueDate  = document.getElementById('atd-due').value;
-      const priority = document.getElementById('atd-priority').value;
-      const approval = document.getElementById('atd-approval').value || 'No Approval';
-      const url      = document.getElementById('atd-url').value.trim();
-      const remarks  = document.getElementById('atd-remarks').value.trim();
-      const errEl    = document.getElementById('atd-err');
-
-      if (!desc)    { errEl.textContent = 'Description is required.'; return; }
-      if (!doerId)  { errEl.textContent = 'Please select a doer.'; return; }
-      if (!dueDate) { errEl.textContent = 'Due date is required.'; return; }
-
-      const btn = document.getElementById('atd-save');
-      btn.disabled = true; btn.textContent = 'Saving…';
-      try {
-        await Utils.apiFetch('/api/delegations', {
-          method: 'POST',
-          body: JSON.stringify({ description: desc, doerId, doerName, dueDate, priority, approval, url, remarks, delegatedBy: currentUserId() }),
-        });
-        div.remove();
-        Utils.showToast('Task delegated successfully');
-        await reload();
-      } catch (e) {
-        errEl.textContent = e.message;
-        btn.disabled = false; btn.textContent = 'Delegate';
-      }
-    });
-  }
-
-  /* ─── Checklist Modal ───────────────────────────────────────────────────── */
-  // Same 6 fields Dashboard's own "Add Checklist Task" modal sends to
-  // POST /api/masters (task, assignedTo, frequency, startDate, endDate,
-  // remarks) — this page was missing Due Date, End Date and Remarks
-  // entirely, and only offered 3 of the 6 frequencies ("all task page pe
-  // saare field nahi aa rahe, dashboard page pe jo field aa rahe hai vo
-  // aane chahiye same"). Due Date matters most: without it the server
-  // creates one bare, undated task instead of running
-  // generateChecklistDates() to lay out the whole recurring series.
-  const CHECKLIST_FREQ_OPTIONS = [
-    ['daily', 'Daily (365 tasks/year)'],
-    ['alternative_week', 'Alternative Week (26 tasks/year)'],
-    ['weekly', 'Weekly (52 tasks/year)'],
-    ['monthly', 'Monthly (12 tasks/year)'],
-    ['quarterly', 'Quarterly (4 tasks/year)'],
-    ['yearly', 'Yearly (1 task/year)'],
-  ];
-  const _checklistFreqOptsHtml = (selected) => CHECKLIST_FREQ_OPTIONS
-    .map(([v, l]) => `<option value="${v}"${v === selected ? ' selected' : ''}>${l}</option>`).join('');
-
-  function openChecklistModal() {
-    // "checklist master mai 2-2 baar aa rha hai" — /api/users?lite=1 returns
-    // every row including inactive ones, and two rows can share a display
-    // name; dedupe by name (keeping the first/active one) same as Dashboard's
-    // own Add Checklist Task modal.
-    const _seenChkNames = new Set();
-    const userOpts = _users
-      .filter(u => u.active !== false)
-      .filter(u => {
-        const key = String(u.name || '').trim().toLowerCase();
-        if (!key || _seenChkNames.has(key)) return false;
-        _seenChkNames.add(key);
-        return true;
-      })
-      .map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('');
-    const div = modalOverlay('at-checklist-modal', `
-      ${modalHeader('Add Checklist Task', "document.getElementById('at-checklist-modal').remove()")}
-      <div style="padding:20px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px">
-        <div>
-          <label class="at-label">Select Employee *</label>
-          <select id="atc-assigned" class="at-input" style="width:100%"><option value="">— Select —</option>${userOpts}</select>
-        </div>
-        <div>
-          <label class="at-label">Frequency</label>
-          <select id="atc-freq" class="at-input" style="width:100%">${_checklistFreqOptsHtml('daily')}</select>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div>
-            <label class="at-label">Due Date *</label>
-            <input type="date" id="atc-start" class="at-input" style="width:100%" value="${esc(Utils.todayISO())}" />
-          </div>
-          <div>
-            <label class="at-label">End Date <span style="font-size:10px;color:#94a3b8;font-weight:400;text-transform:none;">(optional)</span></label>
-            <input type="date" id="atc-end" class="at-input" style="width:100%" />
-          </div>
-        </div>
-        <div>
-          <label class="at-label">Task Name / Description *</label>
-          <input type="text" id="atc-task" class="at-input" style="width:100%" placeholder="Enter task name..." />
-        </div>
-        <div>
-          <label class="at-label">Remarks</label>
-          <input type="text" id="atc-remarks" class="at-input" style="width:100%" placeholder="Any remarks..." />
-        </div>
-        <p id="atc-err" style="color:#ef4444;font-size:12px;margin:0"></p>
-      </div>
-      <div style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0">
-        <button onclick="document.getElementById('at-checklist-modal').remove()" class="at-btn at-btn-secondary">Cancel</button>
-        <button id="atc-save" class="at-btn" style="background:#10b981;color:#fff;border-color:#10b981">Add Checklist</button>
-      </div>
-      ${csvUploadSection('atc', '/api/samples/checklist-bulk', 'Format: user_email, frequency (daily/weekly/monthly/yearly/quarterly/alternative_week), start_date, description, remarks — tasks auto-generate!')}
-    `);
-
-    document.getElementById('atc-csv-upload').addEventListener('click', async (ev) => {
-      const btn = ev.currentTarget;
-      const file = document.getElementById('atc-csv-file').files?.[0];
-      if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
-      btn.disabled = true; btn.textContent = 'Uploading…';
-      const HEADER_ALIASES = {
-        email: 'user_email', 'user email': 'user_email',
-        task: 'description', 'task name': 'description', 'task name / description': 'description', 'task/description': 'description',
-        'next due date': 'start_date', 'due date': 'start_date', 'start date': 'start_date',
-      };
-      const FREQUENCY_ALIASES = { y: 'yearly', m: 'monthly', q: 'quarterly', w: 'weekly', d: 'daily', aw: 'alternative_week' };
-      const MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
-      const parseFlexibleDate = (s) => {
-        if (!s) return null;
-        s = s.trim();
-        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-        let m = s.match(/^(\d{1,2})-([A-Za-z]{3,})-(\d{2,4})$/);
-        if (m) {
-          const mon = MONTHS[m[2].toLowerCase().slice(0, 3)];
-          if (mon) return `${m[3].length === 2 ? '20' + m[3] : m[3]}-${String(mon).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
-        }
-        m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
-        if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
-        return null;
-      };
-      const rows = await readCsvRows(file, HEADER_ALIASES);
-      let ok = 0, fail = 0;
-      const failures = [];
-      for (let i = 0; i < rows.length; i++) {
-        const obj = rows[i];
-        const rowLabel = `Row ${i + 2} (${obj['user_email'] || 'no email'})`;
-        const user = userByEmail(obj['user_email']);
-        if (!user) { fail++; failures.push(`${rowLabel}: email not found in Users list`); continue; }
-        if (!obj['description']) { fail++; failures.push(`${rowLabel}: description/task is empty`); continue; }
-        const freqRaw = (obj['frequency'] || 'daily').trim().toLowerCase();
-        try {
-          await Utils.apiFetch('/api/masters', {
-            method: 'POST',
-            body: JSON.stringify({
-              task: obj['description'],
-              assignedTo: user.name,
-              frequency: FREQUENCY_ALIASES[freqRaw] || freqRaw,
-              startDate: parseFlexibleDate(obj['start_date']),
-              remarks: obj['remarks'] || '',
-              department: obj['department'] || '',
-            }),
-          });
-          ok++;
-        } catch (e) { fail++; failures.push(`${rowLabel}: ${e.message || 'server error'}`); }
-      }
-      div.remove();
-      Utils.showToast(`${ok} checklist(s) created${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
-      if (failures.length) alert(`${failures.length} row(s) failed to upload:\n\n${failures.join('\n')}`);
-      await reload();
-    });
-
-    document.getElementById('atc-save').addEventListener('click', async () => {
-      const task     = document.getElementById('atc-task').value.trim();
-      const assignedSel = document.getElementById('atc-assigned');
-      const assignedId  = assignedSel.value;
-      const assignedTo  = assignedId ? (_users.find(u => u.id === assignedId)?.name || '') : '';
-      const frequency   = document.getElementById('atc-freq').value;
-      const startDate   = document.getElementById('atc-start').value || Utils.todayISO();
-      const endDate     = document.getElementById('atc-end').value || '';
-      const remarks     = document.getElementById('atc-remarks').value.trim();
-      const errEl       = document.getElementById('atc-err');
-
-      if (!task) { errEl.textContent = 'Task is required.'; return; }
-      if (!assignedTo) { errEl.textContent = 'Assigned To is required.'; return; }
-
-      const btn = document.getElementById('atc-save');
-      btn.disabled = true; btn.textContent = 'Saving…';
-      try {
-        const result = await Utils.apiFetch('/api/masters', {
-          method: 'POST',
-          body: JSON.stringify({ task, assignedTo, frequency, startDate, endDate: endDate || null, remarks }),
-        });
-        div.remove();
-        Utils.showToast(result?.count > 1 ? `${result.count} checklist tasks generated!` : 'Checklist task added');
-        await reload();
-      } catch (e) {
-        errEl.textContent = e.message;
-        btn.disabled = false; btn.textContent = 'Add Checklist';
-      }
-    });
-  }
-
-  /* ─── Edit Checklist Task Modal ─────────────────────────────────────────── */
+  /* ─── Edit: the same full form as "+ Checklist" / "+ Delegate Task" ──────
+     (js/components/task-forms.js), filled in — not a cut-down copy of it. */
   function openChecklistEditModal(task, seriesIds) {
     // From the Master view, seriesIds is every occurrence of this task for
     // this doer; from the list it is just the one row.
     const ids = (seriesIds && seriesIds.length) ? seriesIds : [task.id];
-    const userOpts = _users.map(u =>
-      `<option value="${esc(u.id)}"${sameName(u.name, task.doer) ? ' selected' : ''}>${esc(u.name)}</option>`
-    ).join('');
-
-    const div = modalOverlay('at-checklist-edit-modal', `
-      ${modalHeader(ids.length > 1 ? `Edit Checklist Task (${ids.length} occurrences)` : 'Edit Checklist Task', "document.getElementById('at-checklist-edit-modal').remove()")}
-      <div style="padding:20px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px">
-        <div>
-          <label class="at-label">Task *</label>
-          <textarea id="atce-task" rows="3" class="at-input" style="width:100%;height:auto;padding:8px 10px;resize:none">${esc(task.description || '')}</textarea>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div>
-            <label class="at-label">Assigned To</label>
-            <select id="atce-assigned" class="at-input" style="width:100%"><option value="">— Select —</option>${userOpts}</select>
-          </div>
-          <div>
-            <label class="at-label">Frequency</label>
-            <select id="atce-freq" class="at-input" style="width:100%">
-              <option${task.frequency === 'Daily'   ? ' selected' : ''}>Daily</option>
-              <option${task.frequency === 'Weekly'  ? ' selected' : ''}>Weekly</option>
-              <option${task.frequency === 'Monthly' ? ' selected' : ''}>Monthly</option>
-            </select>
-          </div>
-        </div>
-        <p id="atce-err" style="color:#ef4444;font-size:12px;margin:0"></p>
-      </div>
-      <div style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0">
-        <button onclick="document.getElementById('at-checklist-edit-modal').remove()" class="at-btn at-btn-secondary">Cancel</button>
-        <button id="atce-save" class="at-btn at-btn-primary">Save Changes</button>
-      </div>
-    `);
-
-    document.getElementById('atce-save').addEventListener('click', async () => {
-      const taskText     = document.getElementById('atce-task').value.trim();
-      const assignedSel  = document.getElementById('atce-assigned');
-      const assignedId   = assignedSel.value;
-      const assignedTo   = assignedId ? (_users.find(u => u.id === assignedId)?.name || '') : '';
-      const frequency    = document.getElementById('atce-freq').value;
-      const errEl        = document.getElementById('atce-err');
-
-      if (!taskText) { errEl.textContent = 'Task is required.'; return; }
-      if (!assignedTo) { errEl.textContent = 'Assigned To is required.'; return; }
-
-      const btn = document.getElementById('atce-save');
-      btn.disabled = true; btn.textContent = 'Saving…';
-      try {
-        for (const id of ids) {
-          await Utils.apiFetch('/api/masters', {
-            method: 'PATCH',
-            body: JSON.stringify({ id, task: taskText, assignedTo, frequency }),
-          });
-        }
-        div.remove();
-        Utils.showToast(ids.length > 1 ? `Checklist task updated (${ids.length} occurrences)` : 'Checklist task updated');
-        await reload();
-      } catch (e) {
-        errEl.textContent = e.message;
-        btn.disabled = false; btn.textContent = 'Save Changes';
-      }
+    window.TaskForms.openChecklist({
+      users: _users,
+      onSaved: reload,
+      edit: {
+        series: ids.length,
+        values: {
+          task: task.description || '', assignedTo: task.doer || '', frequency: task.frequency || '',
+          startDate: task.dueDate || '', endDate: task.endDate || '', remarks: task.remarks || '',
+        },
+        async onSubmit(vals) {
+          // The due date is per occurrence, so it is only sent when editing
+          // one; an empty end date means "leave it", not "clear it".
+          const body = { task: vals.task, assignedTo: vals.assignedTo, frequency: vals.frequency, remarks: vals.remarks,
+            ...(vals.startDate && ids.length === 1 ? { startDate: vals.startDate } : {}),
+            ...(vals.endDate ? { endDate: vals.endDate } : {}) };
+          for (const id of ids) {
+            await Utils.apiFetch('/api/masters', { method: 'PATCH', body: JSON.stringify({ id, ...body }) });
+          }
+          Utils.showToast(ids.length > 1 ? `Checklist task updated (${ids.length} occurrences)` : 'Checklist task updated');
+        },
+      },
     });
   }
 
-  /* ─── Edit Task Modal ───────────────────────────────────────────────────── */
   function openEditModal(task) {
-    const userOpts = _users.map(u =>
-      `<option value="${esc(u.id)}"${u.id === task.doerId ? ' selected' : ''}>${esc(u.name)}</option>`
-    ).join('');
-
-    const div = modalOverlay('at-edit-modal', `
-      ${modalHeader('Edit Task', "document.getElementById('at-edit-modal').remove()")}
-      <div style="padding:20px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px">
-        <div>
-          <label class="at-label">Description *</label>
-          <textarea id="ate-desc" rows="3" class="at-input" style="width:100%;height:auto;padding:8px 10px;resize:none">${esc(task.description || '')}</textarea>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div>
-            <label class="at-label">Doer</label>
-            <select id="ate-doer" class="at-input" style="width:100%"><option value="">— Select —</option>${userOpts}</select>
-          </div>
-          <div>
-            <label class="at-label">Due Date</label>
-            <input type="date" id="ate-due" value="${esc((task.dueDate || '').split('T')[0])}" class="at-input" style="width:100%" />
-          </div>
-        </div>
-        <div>
-          <label class="at-label">Priority</label>
-          <select id="ate-priority" class="at-input" style="width:100%">
-            <option${task.priority === 'Low'    ? ' selected' : ''}>Low</option>
-            <option${task.priority === 'Medium' ? ' selected' : ''}>Medium</option>
-            <option${task.priority === 'High'   ? ' selected' : ''}>High</option>
-          </select>
-        </div>
-        <div>
-          <label class="at-label">URL <span style="color:#94a3b8;font-weight:400">(optional)</span></label>
-          <input id="ate-url" value="${esc(task.url || '')}" class="at-input" style="width:100%" placeholder="https://…" />
-        </div>
-        <div>
-          <label class="at-label">Remarks</label>
-          <textarea id="ate-remarks" rows="2" class="at-input" style="width:100%;height:auto;padding:8px 10px;resize:none" placeholder="Any remarks…">${esc(task.remarks || '')}</textarea>
-        </div>
-        <p id="ate-err" style="color:#ef4444;font-size:12px;margin:0"></p>
-      </div>
-      <div style="padding:16px 24px;border-top:1px solid #f1f5f9;display:flex;justify-content:flex-end;gap:8px;flex-shrink:0">
-        <button onclick="document.getElementById('at-edit-modal').remove()" class="at-btn at-btn-secondary">Cancel</button>
-        <button id="ate-save" class="at-btn at-btn-primary">Save Changes</button>
-      </div>
-    `);
-
-    document.getElementById('ate-save').addEventListener('click', async () => {
-      const desc     = document.getElementById('ate-desc').value.trim();
-      const doerId   = document.getElementById('ate-doer').value;
-      const dueDate  = document.getElementById('ate-due').value;
-      const priority = document.getElementById('ate-priority').value;
-      const url      = document.getElementById('ate-url').value.trim();
-      const remarks  = document.getElementById('ate-remarks').value.trim();
-      const errEl    = document.getElementById('ate-err');
-
-      if (!desc) { errEl.textContent = 'Description is required.'; return; }
-
-      const selectedUser = doerId ? _users.find(u => u.id === doerId) : null;
-      const btn = document.getElementById('ate-save');
-      btn.disabled = true; btn.textContent = 'Saving…';
-      try {
-        await Utils.apiFetch('/api/delegations', {
-          method: 'PATCH',
-          body: JSON.stringify({
-            id: task.id,
-            description: desc,
-            dueDate:  dueDate  || undefined,
-            priority, url, remarks,
-            ...(selectedUser ? { doer: selectedUser.name, doerId: selectedUser.id } : {}),
-          }),
-        });
-        div.remove();
-        Utils.showToast('Task updated');
-        await reload();
-      } catch (e) {
-        errEl.textContent = e.message;
-        btn.disabled = false; btn.textContent = 'Save Changes';
-      }
+    window.TaskForms.openDelegate({
+      users: _users,
+      onSaved: reload,
+      edit: {
+        values: {
+          doerId: task.doerId, doerName: task.doer, dueDate: task.dueDate || '', priority: task.priority || 'Low',
+          approval: task.approval || 'No Approval', description: task.description || '', url: task.url || '', remarks: task.remarks || '',
+        },
+        async onSubmit(vals) {
+          await Utils.apiFetch('/api/delegations', {
+            method: 'PATCH',
+            body: JSON.stringify({
+              id: task.id, description: vals.description, dueDate: vals.dueDate, priority: vals.priority,
+              approval: vals.approval, url: vals.url, remarks: vals.remarks,
+              ...(vals.doerId ? { doer: vals.doerName, doerId: vals.doerId } : {}),
+            }),
+          });
+          Utils.showToast('Task updated');
+        },
+      },
     });
   }
 

@@ -12,25 +12,6 @@ window.Pages.dashboard = (function () {
       .replace(/\//g, '-');
   }
 
-  function parseCsvLine(line) {
-    const out = [];
-    let cur = '', inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (inQuotes) {
-        if (c === '"') {
-          if (line[i + 1] === '"') { cur += '"'; i++; }
-          else inQuotes = false;
-        } else cur += c;
-      } else if (c === '"') inQuotes = true;
-      else if (c === ',') { out.push(cur); cur = ''; }
-      else cur += c;
-    }
-    out.push(cur);
-    return out;
-  }
-
-
   function todayISO() {
     return new Date().toISOString().split('T')[0];
   }
@@ -94,6 +75,7 @@ window.Pages.dashboard = (function () {
     reviseDate: '',
     sortCol: null,   // 'type' | 'description' | 'doer' | 'priority' | 'date'
     sortDir: 'asc',
+    upcomingDays: 15, // Upcoming tab window: 15 or 30 (server sends 30 days of checklists)
   };
 
   /* ── column sort (click a header, like Google Sheets) ──────────────── */
@@ -128,21 +110,51 @@ window.Pages.dashboard = (function () {
   }
 
   /* ── render helpers for tasks table ─────────────────────────────── */
+  // Upcoming = future delegations (already in pendingTasks) plus checklist
+  // occurrences the server lists separately, since those aren't due yet and
+  // so never enter pendingTasks. Soonest first. Shared by the Upcoming tab
+  // and the Upcoming stat card so the two always agree.
+  function upcomingList(days) {
+    const { data, userFilter } = _state;
+    if (!data) return [];
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const upcomingEnd = new Date(today); upcomingEnd.setDate(upcomingEnd.getDate() + days);
+    const upcomingChecklists = (data.upcomingTasks || []).filter(t => {
+      const due = new Date(t.date); due.setHours(0, 0, 0, 0);
+      return due <= upcomingEnd;
+    });
+    return (data.pendingTasks || [])
+      .filter(t => {
+        if (t.type !== 'Delegation' || t.status === 'done') return false;
+        const due = new Date(t.date); due.setHours(0, 0, 0, 0);
+        return due > today && due <= upcomingEnd;
+      })
+      .concat(upcomingChecklists)
+      .filter(t => userFilter === 'All' || (t.doer || '').trim().toLowerCase() === userFilter.trim().toLowerCase())
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  }
+
+  // "Upcoming" stat card: the next 15 days as the number, 30 days beneath
+  // ("doer want to see 15-30 days upcoming tasks on dashboard").
+  function _paintUpcomingStat() {
+    const n15 = upcomingList(15).length, n30 = upcomingList(30).length;
+    const num = document.getElementById('db-stat-upcoming');
+    const sub = document.getElementById('db-stat-upcoming-sub');
+    if (num) num.textContent = n15;
+    if (sub) sub.textContent = `next 15 days · ${n30} in 30`;
+  }
+
   function getFiltered() {
-    const { data, subTab, userFilter } = _state;
+    const { data, subTab } = _state;
     if (!data) return [];
     const STATUS_RANK = { revise: 0, pending: 1, done: 2 };
-    const today = new Date(); today.setHours(0, 0, 0, 0);
+    if (subTab === 'Upcoming') return upcomingList(_state.upcomingDays);
     return data.pendingTasks
       .filter(t => {
         if (subTab === 'Completed') {
           if (t.status !== 'done') return false;
         } else if (subTab === 'Shifted') {
           if (t.status !== 'revise' && t.status !== 'revise_requested') return false;
-        } else if (subTab === 'Upcoming') {
-          if (t.type !== 'Delegation' || t.status === 'done') return false;
-          const due = new Date(t.date); due.setHours(0, 0, 0, 0);
-          if (!(due > today)) return false;
         } else {
           if (t.status === 'done') return false;
           if (subTab !== 'All' && t.type !== subTab) return false;
@@ -345,10 +357,9 @@ window.Pages.dashboard = (function () {
           #db-emp-picker { width: auto !important; max-width: 100%; }
           #db-emp-trigger { width: 100% !important; min-width: unset !important; min-height: 38px; }
           #db-emp-dropdown { left: auto !important; right: 0; width: min(280px, calc(100vw - 24px)) !important; }
-          /* Stat tiles: 2-up grid, the 5th (Meetings) spans the row */
+          /* Stat tiles: 2-up grid — six tiles, three even rows */
           #db-stat-cards { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 10px !important; margin-bottom: 14px !important; }
           #db-stat-cards .db-stat-card { padding: 14px 14px !important; min-width: 0; border-radius: 14px; }
-          #db-stat-cards .db-stat-card:last-child { grid-column: 1 / -1; }
           #db-stat-cards .db-stat-card > div:nth-child(2) { font-size: 1.75rem !important; line-height: 1.15; }
           #db-main-grid { grid-template-columns: 1fr !important; gap: 12px !important; margin-bottom: 12px !important; }
           /* Recent Activity: header stacks, tabs scroll sideways, rows become cards */
@@ -466,7 +477,7 @@ window.Pages.dashboard = (function () {
              after the shell renders; stays empty (and invisible) when nobody is out. -->
         <div id="db-onleave" style="display:none;margin-bottom:16px;"></div>
 
-        <div id="db-stat-cards" style="display:grid;grid-template-columns:repeat(5,1fr);gap:1rem;margin-bottom:20px;">
+        <div id="db-stat-cards" style="display:grid;grid-template-columns:repeat(6,1fr);gap:1rem;margin-bottom:20px;">
           <div class="card db-stat-card" style="padding:18px 20px;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Total Tasks</div>
             <div id="db-stat-total" style="font-size:2.2rem;font-weight:800;color:var(--color-primary);">${admin ? data.total : data.pendingTasks.length}</div>
@@ -490,6 +501,11 @@ window.Pages.dashboard = (function () {
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Revised</div>
             <div id="db-stat-revised-count" style="font-size:2.2rem;font-weight:800;color:var(--color-warning);">${data.revised || 0}</div>
             <div id="db-stat-revised-sub" style="font-size:11px;font-weight:600;color:var(--text-muted);margin-top:4px;">${(data.revised || 0) > 0 ? 'Needs rework' : 'None pending'}</div>
+          </div>
+          <div class="card db-stat-card" data-filter="Upcoming" role="button" tabindex="0" title="Show tasks due in the next 15 / 30 days" style="padding:18px 20px;cursor:pointer;">
+            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Upcoming</div>
+            <div id="db-stat-upcoming" style="font-size:2.2rem;font-weight:800;color:var(--color-purple);">–</div>
+            <div id="db-stat-upcoming-sub" style="font-size:11px;font-weight:600;color:var(--text-muted);margin-top:4px;">next 15 days</div>
           </div>
           <a href="#scheduler" class="card db-stat-card" title="Open Scheduler" style="padding:18px 20px;cursor:pointer;display:block;text-decoration:none;color:inherit;">
             <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Meetings</div>
@@ -539,195 +555,18 @@ window.Pages.dashboard = (function () {
                 `<button class="db-tab-btn" data-tab="${t}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">${t}</button>`
               ).join('')}
             </div>
+            <!-- Upcoming window — only shown on the Upcoming tab -->
+            <div id="db-upcoming-range" style="display:none;align-items:center;gap:4px;background:#f5f3ff;border-radius:8px;padding:3px;">
+              ${[15, 30].map(d =>
+                `<button class="db-upc-btn" data-days="${d}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">Next ${d} days</button>`
+              ).join('')}
+            </div>
           </div>
           <div class="db-act-scroll" style="overflow-x:auto;max-height:420px;overflow-y:auto;">
             <table id="db-tasks-table" class="m-cards" style="width:100%;border-collapse:collapse;font-size:12.5px;"></table>
           </div>
         </div>
 
-      </div>
-
-      <!-- ── Add Delegate Modal ── -->
-      <div id="modal-delegate" class="modal-overlay" style="display:none;">
-        <div class="modal-box" style="max-width:520px;" onclick="event.stopPropagation()">
-          <div class="modal-header">
-            <h2 style="font-size:15px;font-weight:700;margin:0;flex:1;">+ Delegate Task</h2>
-            <button id="modal-delegate-close" style="width:28px;height:28px;border-radius:50%;background:var(--border-light);border:none;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;justify-content:center;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          </div>
-          <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
-            <!-- Row 1: Doer | Due Date -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-              <div>
-                <label class="label">DOER (ASSIGN TO)</label>
-                <select id="del-doer" class="input">
-                  <option value="">Select Doer</option>
-                  ${(users || []).map(u => `<option value="${u.id}" data-name="${u.name}">${u.name}</option>`).join('')}
-                </select>
-              </div>
-              <div>
-                <label class="label">DUE DATE</label>
-                <input type="date" id="del-due" class="input" value="${todayISO()}" />
-              </div>
-            </div>
-            <!-- Doer-defined due date checkbox -->
-            <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
-              <input type="checkbox" id="del-doer-date" style="width:14px;height:14px;accent-color:var(--color-primary);cursor:pointer;" />
-              <label for="del-doer-date" style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#64748b;cursor:pointer;">Doer-Defined Due Date</label>
-            </div>
-            <!-- Row 2: Priority | Approval Required -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-              <div>
-                <label class="label">PRIORITY</label>
-                <select id="del-priority" class="input">
-                  <option value="Low">Low</option>
-                  <option value="Medium">Medium</option>
-                  <option value="High">High</option>
-                </select>
-              </div>
-              <div>
-                <label class="label">APPROVAL REQUIRED</label>
-                <select id="del-approval" class="input">
-                  <option value="No Approval">No Approval</option>
-                  <option value="Approval Required">Approval Required</option>
-                </select>
-              </div>
-            </div>
-            <!-- Description -->
-            <div>
-              <label class="label">DESCRIPTION</label>
-              <textarea id="del-desc" rows="3" class="input" style="resize:vertical;" placeholder="Enter task description..."></textarea>
-            </div>
-            <!-- URL -->
-            <div>
-              <label class="label">URL <span style="font-size:10px;color:#94a3b8;font-weight:400;text-transform:none;">(OPTIONAL)</span></label>
-              <input type="url" id="del-url" class="input" placeholder="https://docs.google.com/..." />
-            </div>
-            <!-- Remarks -->
-            <div>
-              <label class="label">REMARKS</label>
-              <textarea id="del-remarks" rows="2" class="input" style="resize:vertical;" placeholder="Any remarks..."></textarea>
-            </div>
-            <p id="del-error" style="color:#dc2626;font-size:12px;display:none;margin:0;"></p>
-          </div>
-          <!-- Footer buttons -->
-          <div class="modal-footer" style="justify-content:space-between;">
-            <button id="modal-delegate-cancel" class="btn-secondary">Close</button>
-            <button id="modal-delegate-submit" class="btn-primary">Assign</button>
-          </div>
-          <!-- Bulk CSV upload -->
-          <div style="border-top:1px solid #f1f5f9;padding:12px 20px 16px;background:#fafafa;">
-            <p style="font-size:10.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#94a3b8;text-align:center;margin:0 0 10px;">OR BULK UPLOAD CSV</p>
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <input type="file" id="del-csv-file" accept=".csv" style="font-size:12px;flex:1;min-width:0;" />
-              <button id="del-csv-upload" style="padding:6px 14px;border-radius:7px;background:#10b981;color:#fff;border:none;cursor:pointer;font-size:12px;font-weight:700;display:flex;align-items:center;gap:5px;white-space:nowrap;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-                Upload CSV
-              </button>
-              <a href="/api/samples/delegation" download style="padding:6px 14px;border-radius:7px;background:#fff;color:#374151;border:1.5px solid #e2e8f0;cursor:pointer;font-size:12px;font-weight:700;text-decoration:none;display:flex;align-items:center;gap:5px;white-space:nowrap;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
-                Sample
-              </a>
-            </div>
-            <p style="font-size:10.5px;color:#94a3b8;margin:8px 0 0;">Format: doer_email, approver_email, due_date, priority, approval, description, remarks, client_name</p>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── Add Checklist Master Modal ── -->
-      <div id="modal-checklist" class="modal-overlay" style="display:none;">
-        <div class="modal-box" style="max-width:520px;" onclick="event.stopPropagation()">
-          <div class="modal-header">
-            <h2 style="font-size:15px;font-weight:700;margin:0;flex:1;">+ Add Checklist Task</h2>
-            <button id="modal-checklist-close" style="width:28px;height:28px;border-radius:50%;background:var(--border-light);border:none;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;justify-content:center;">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          </div>
-          <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
-            <!-- Select Employee -->
-            <div>
-              <label class="label">SELECT EMPLOYEE</label>
-              <select id="chk-assigned" class="input">
-                <option value="">Select Employee</option>
-                ${(() => {
-                  // "Sarvan,susil,jayash ka name checklist master mai 2-2 baar
-                  // aa rha hai" — /api/users returns every row including
-                  // inactive ones, and two rows can share a display name (see
-                  // allDoers' own dedupe above); this list never filtered or
-                  // deduped, so an inactive/duplicate account doubled the name.
-                  const seen = new Set();
-                  return (users || [])
-                    .filter(u => u.active !== false)
-                    .filter(u => {
-                      const key = String(u.name || '').trim().toLowerCase();
-                      if (!key || seen.has(key)) return false;
-                      seen.add(key);
-                      return true;
-                    })
-                    .map(u => `<option value="${u.id}" data-email="${u.email}" data-name="${u.name}">${u.name}</option>`).join('');
-                })()}
-              </select>
-            </div>
-            <!-- Frequency -->
-            <div>
-              <label class="label">FREQUENCY</label>
-              <select id="chk-frequency" class="input">
-                <option value="daily">Daily (365 tasks/year)</option>
-                <option value="alternative_week">Alternative Week (26 tasks/year)</option>
-                <option value="weekly">Weekly (52 tasks/year)</option>
-                <option value="monthly">Monthly (12 tasks/year)</option>
-                <option value="quarterly">Quarterly (4 tasks/year)</option>
-                <option value="yearly">Yearly (1 task/year)</option>
-              </select>
-            </div>
-            <!-- Due Date | End Date -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-              <div>
-                <label class="label">DUE DATE</label>
-                <input type="date" id="chk-start" class="input" value="${todayISO()}" />
-              </div>
-              <div>
-                <label class="label">END DATE <span style="font-size:10px;color:#94a3b8;font-weight:400;text-transform:none;">(OPTIONAL)</span></label>
-                <input type="date" id="chk-end" class="input" />
-              </div>
-            </div>
-            <!-- Task Name / Description -->
-            <div>
-              <label class="label">TASK NAME / DESCRIPTION</label>
-              <input type="text" id="chk-task" class="input" placeholder="Enter task name..." />
-            </div>
-            <!-- Remarks -->
-            <div>
-              <label class="label">REMARKS</label>
-              <input type="text" id="chk-remarks" class="input" placeholder="Any remarks..." />
-            </div>
-            <p id="chk-error" style="color:#dc2626;font-size:12px;display:none;margin:0;"></p>
-          </div>
-          <!-- Footer buttons -->
-          <div class="modal-footer" style="justify-content:space-between;">
-            <button id="modal-checklist-cancel" class="btn-secondary">Close</button>
-            <button id="modal-checklist-submit" style="display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:7px 18px;border-radius:8px;font-size:12.5px;font-weight:600;background:#2563eb;color:#fff;border:none;cursor:pointer;">
-              Generate Tasks
-            </button>
-          </div>
-          <!-- Bulk CSV upload -->
-          <div style="border-top:1px solid #f1f5f9;padding:12px 20px 16px;background:#fafafa;">
-            <p style="font-size:10.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:#94a3b8;text-align:center;margin:0 0 10px;">OR BULK UPLOAD CSV</p>
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <input type="file" id="chk-csv-file" accept=".csv" style="font-size:12px;flex:1;min-width:0;" />
-              <button id="chk-csv-upload" style="padding:6px 14px;border-radius:7px;background:#10b981;color:#fff;border:none;cursor:pointer;font-size:12px;font-weight:700;display:flex;align-items:center;gap:5px;white-space:nowrap;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-                Upload CSV
-              </button>
-              <a href="/api/samples/checklist-bulk" download style="padding:6px 14px;border-radius:7px;background:#fff;color:#374151;border:1.5px solid #e2e8f0;cursor:pointer;font-size:12px;font-weight:700;text-decoration:none;display:flex;align-items:center;gap:5px;white-space:nowrap;">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
-                Sample
-              </a>
-            </div>
-            <p style="font-size:10.5px;color:#94a3b8;margin:8px 0 0;">Format: user_email, frequency (daily/weekly/monthly/yearly/quarterly/alternative_week), start_date, description, remarks — tasks auto-generate!</p>
-          </div>
-        </div>
       </div>
 
       <!-- ── Holidays Modal ── -->
@@ -955,13 +794,26 @@ window.Pages.dashboard = (function () {
 
   /* ── tasks table update ──────────────────────────────────────────── */
   function _updateTasksTable(admin) {
+    _paintUpcomingStat();
     const filtered = getFiltered();
     const table = document.getElementById('db-tasks-table');
     const countEl = document.getElementById('db-tasks-count');
     if (!table) return;
 
-    const countLabel = _state.subTab === 'Completed' ? 'completed' : _state.subTab === 'Shifted' ? 'shifted' : 'awaiting action';
+    const isUpcoming = _state.subTab === 'Upcoming';
+    const countLabel = _state.subTab === 'Completed' ? 'completed' : _state.subTab === 'Shifted' ? 'shifted'
+      : isUpcoming ? `due in the next ${_state.upcomingDays} days` : 'awaiting action';
     if (countEl) countEl.textContent = `${filtered.length} ${countLabel}`;
+
+    const range = document.getElementById('db-upcoming-range');
+    if (range) {
+      range.style.display = isUpcoming ? 'flex' : 'none';
+      range.querySelectorAll('.db-upc-btn').forEach(btn => {
+        const active = Number(btn.dataset.days) === _state.upcomingDays;
+        btn.style.background = active ? '#7c3aed' : 'transparent';
+        btn.style.color      = active ? '#fff' : '#6d28d9';
+      });
+    }
 
     /* update tab button styles */
     document.querySelectorAll('.db-tab-btn').forEach(btn => {
@@ -982,8 +834,8 @@ window.Pages.dashboard = (function () {
           <div style="width:44px;height:44px;border-radius:14px;background:#ecfdf5;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
           </div>
-          <div style="font-size:13px;font-weight:600;color:#334155;">${_state.subTab === 'Completed' || _state.subTab === 'Shifted' ? 'Nothing here' : 'All caught up!'}</div>
-          <div style="font-size:12px;color:#94a3b8;margin-top:3px;">${_state.subTab === 'Completed' ? 'No completed tasks yet.' : _state.subTab === 'Shifted' ? 'No shifted tasks.' : 'No pending tasks.'}</div>
+          <div style="font-size:13px;font-weight:600;color:#334155;">${_state.subTab === 'Completed' || _state.subTab === 'Shifted' || isUpcoming ? 'Nothing here' : 'All caught up!'}</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:3px;">${_state.subTab === 'Completed' ? 'No completed tasks yet.' : _state.subTab === 'Shifted' ? 'No shifted tasks.' : isUpcoming ? `No tasks due in the next ${_state.upcomingDays} days.` : 'No pending tasks.'}</div>
         </td></tr></tbody>`;
       return;
     }
@@ -998,7 +850,14 @@ window.Pages.dashboard = (function () {
       const transferred = t.transferredFrom ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 6px;border-radius:var(--radius-sm);background:var(--color-warning-bg);color:var(--color-warning-text);border:1px solid var(--color-warning-border, #fde68a);font-weight:600;" title="${t.transferredBy ? 'Transferred by ' + esc(t.transferredBy) : ''}">🔄 from ${esc(t.transferredFrom)}</span>` : '';
 
       let actionHTML;
-      if (t.status === 'done') {
+      if (t.upcoming) {
+        // A checklist occurrence that isn't due yet — it can't be marked done
+        // ahead of its date, so just say how far off it is.
+        const today = new Date(); today.setHours(0, 0, 0, 0);
+        const due = new Date(t.date); due.setHours(0, 0, 0, 0);
+        const days = Math.round((due - today) / 86400000);
+        actionHTML = `<span style="color:#7c3aed;font-weight:600;font-size:11.5px;white-space:nowrap;">In ${days} day${days === 1 ? '' : 's'}</span>`;
+      } else if (t.status === 'done') {
         actionHTML = `<span style="color:#059669;font-weight:600;font-size:11.5px;">✓ Completed</span>
           <button class="pill-act pill-deny" data-action="reopen" data-id="${t.id}">Reopen</button>`;
       } else if (t.type === 'PI') {
@@ -1560,11 +1419,21 @@ window.Pages.dashboard = (function () {
         _updateTasksTable(admin);
       });
     });
+    el.querySelectorAll('.db-upc-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        _state.upcomingDays = Number(btn.dataset.days) || 15;
+        _updateTasksTable(admin);
+      });
+    });
 
     /* ── stat cards (click to filter the tasks table) ── */
     el.querySelectorAll('.db-stat-card[data-filter]').forEach(card => {
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); card.click(); }
+      });
       card.addEventListener('click', () => {
         _state.subTab = card.dataset.filter;
+        if (card.dataset.filter === 'Upcoming') _state.upcomingDays = 15;
         _updateTasksTable(admin);
         document.getElementById('db-tasks-table')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
@@ -1613,7 +1482,7 @@ window.Pages.dashboard = (function () {
         if (statTotal)     statTotal.textContent     = newData.total;
         if (statCompleted) statCompleted.textContent = newData.completed;
         if (statPending)   statPending.textContent   = newData.pending;
-        if (statUpcoming)  statUpcoming.textContent  = newData.upcoming || 0;
+        _paintUpcomingStat();
         if (statRevisedC)  statRevisedC.textContent  = newData.revised || 0;
         if (statRevised) {
           statRevised.textContent = newData.revised > 0 ? `+ ${newData.revised} shifted` : '';
@@ -1685,122 +1554,11 @@ window.Pages.dashboard = (function () {
       empList.addEventListener('mouseout',  e => { const o = e.target.closest('.db-emp-opt'); if (o && o.dataset.empVal !== _state.userFilter) o.style.background = ''; });
     }
 
-    /* ── delegate modal ── */
-    function resetDelegateForm() {
-      ['#del-doer','#del-due','#del-priority','#del-approval','#del-desc','#del-url','#del-remarks'].forEach(id => {
-        const f = el.querySelector(id);
-        if (!f) return;
-        if (f.tagName === 'SELECT') f.selectedIndex = 0;
-        else f.value = id === '#del-due' ? todayISO() : '';
-      });
-      const chk = el.querySelector('#del-doer-date');
-      if (chk) chk.checked = false;
-      const err = el.querySelector('#del-error');
-      if (err) { err.textContent = ''; err.style.display = 'none'; }
-    }
-    const btnDelegate = el.querySelector('#db-btn-delegate');
-    if (btnDelegate) btnDelegate.addEventListener('click', () => { resetDelegateForm(); showModal('modal-delegate'); });
-    el.querySelector('#modal-delegate-close')?.addEventListener('click', () => hideModal('modal-delegate'));
-    el.querySelector('#modal-delegate-cancel')?.addEventListener('click', () => hideModal('modal-delegate'));
-    el.querySelector('#modal-delegate')?.addEventListener('click', () => hideModal('modal-delegate'));
-    el.querySelector('#modal-delegate-submit')?.addEventListener('click', async () => {
-      const desc      = el.querySelector('#del-desc')?.value.trim();
-      const doerSel   = el.querySelector('#del-doer');
-      const doerId    = doerSel?.value;
-      const doerName  = doerSel?.selectedOptions[0]?.dataset.name || '';
-      const dueDate   = el.querySelector('#del-due')?.value;
-      const priority  = el.querySelector('#del-priority')?.value || 'Low';
-      const approval  = el.querySelector('#del-approval')?.value || 'No Approval';
-      const url       = el.querySelector('#del-url')?.value.trim();
-      const remarks   = el.querySelector('#del-remarks')?.value.trim();
-      const errEl     = el.querySelector('#del-error');
-
-      if (!doerId)  { if (errEl) { errEl.textContent = 'Please select a doer.'; errEl.style.display = 'block'; } return; }
-      if (!dueDate) { if (errEl) { errEl.textContent = 'Due date is required.';  errEl.style.display = 'block'; } return; }
-      if (errEl) errEl.style.display = 'none';
-
-      const submitBtn = el.querySelector('#modal-delegate-submit');
-      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Assigning…'; }
-
-      try {
-        await Utils.apiFetch('/api/delegations', {
-          method: 'POST',
-          body: JSON.stringify({
-            description: desc || '',
-            doerId, doerName,
-            delegatedBy: window.currentUser?.id,
-            dueDate, priority, approval,
-            url: url || '',
-            remarks: remarks || '',
-          }),
-        });
-        hideModal('modal-delegate');
-        resetDelegateForm();
-        Utils.showToast('Task delegated successfully!');
-        await _refresh(admin);
-      } catch (err) {
-        if (errEl) { errEl.textContent = err.message || 'Failed to add task.'; errEl.style.display = 'block'; }
-      } finally {
-        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Assign'; }
-      }
-    });
-
-    /* CSV bulk upload */
-    el.querySelector('#del-csv-upload')?.addEventListener('click', async () => {
-      const fileInput = el.querySelector('#del-csv-file');
-      const file = fileInput?.files?.[0];
-      if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
-      const text = (await file.text()).replace(/^﻿/, '');
-      const lines = text.trim().split('\n').filter(Boolean);
-      const headers = parseCsvLine(lines[0]).map(h => h.trim().toLowerCase());
-      const rows = lines.slice(1);
-      let ok = 0, fail = 0;
-      for (const row of rows) {
-        const cols = parseCsvLine(row).map(c => c.trim());
-        const obj = {};
-        headers.forEach((h, i) => obj[h] = cols[i] || '');
-        try {
-          const allUsers = _state.users || [];
-          const doerEmail = (obj['doer_email'] || '').toLowerCase();
-          const doer = allUsers.find(u => (u.email || '').toLowerCase() === doerEmail);
-          if (!doer) { fail++; continue; }
-          await Utils.apiFetch('/api/delegations', {
-            method: 'POST',
-            body: JSON.stringify({
-              description: obj['description'] || '',
-              doerId: doer.id, doerName: doer.name,
-              delegatedBy: window.currentUser?.id,
-              dueDate: obj['due_date'] || todayISO(),
-              priority: obj['priority'] || 'Low',
-              approval: obj['approval'] === 'yes' ? 'Approval Required' : 'No Approval',
-              client: obj['client_name'] || '',
-              remarks: obj['remarks'] || '',
-              url: '',
-            }),
-          });
-          ok++;
-        } catch { fail++; }
-      }
-      hideModal('modal-delegate');
-      Utils.showToast(`${ok} tasks uploaded${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
-      await _refresh(admin);
-    });
-
-    /* ── checklist modal ── */
-    function resetChecklistForm() {
-      ['#chk-assigned','#chk-frequency','#chk-start','#chk-end','#chk-task','#chk-remarks'].forEach(id => {
-        const f = el.querySelector(id);
-        if (!f) return;
-        if (f.tagName === 'SELECT') f.selectedIndex = 0;
-        else f.value = id === '#chk-start' ? todayISO() : '';
-      });
-      const err = el.querySelector('#chk-error');
-      if (err) { err.textContent = ''; err.style.display = 'none'; }
-      const csvFile = el.querySelector('#chk-csv-file');
-      if (csvFile) csvFile.value = '';
-    }
-    const btnChecklist = el.querySelector('#db-btn-checklist');
-    if (btnChecklist) btnChecklist.addEventListener('click', () => { resetChecklistForm(); showModal('modal-checklist'); });
+    /* ── delegate / checklist forms — shared with All Tasks (js/components/task-forms.js) ── */
+    el.querySelector('#db-btn-delegate')?.addEventListener('click', () =>
+      window.TaskForms.openDelegate({ users: _state.users, onSaved: () => _refresh(admin) }));
+    el.querySelector('#db-btn-checklist')?.addEventListener('click', () =>
+      window.TaskForms.openChecklist({ users: _state.users, onSaved: () => _refresh(admin) }));
 
     const btnHelpTicket = el.querySelector('#db-btn-help-ticket');
     if (btnHelpTicket) btnHelpTicket.addEventListener('click', () => _openHelpTicketModal());
@@ -1813,118 +1571,6 @@ window.Pages.dashboard = (function () {
 
     const btnLeave = el.querySelector('#db-btn-leave');
     if (btnLeave) btnLeave.addEventListener('click', () => _openLeaveModal());
-    el.querySelector('#modal-checklist-close')?.addEventListener('click', () => hideModal('modal-checklist'));
-    el.querySelector('#modal-checklist-cancel')?.addEventListener('click', () => hideModal('modal-checklist'));
-    el.querySelector('#modal-checklist')?.addEventListener('click', () => hideModal('modal-checklist'));
-    el.querySelector('#modal-checklist-submit')?.addEventListener('click', async () => {
-      const task       = el.querySelector('#chk-task')?.value.trim();
-      const userSel    = el.querySelector('#chk-assigned');
-      const userId     = userSel?.value;
-      const userName   = userSel?.selectedOptions[0]?.dataset.name || '';
-      const frequency  = el.querySelector('#chk-frequency')?.value || 'daily';
-      const startDate  = el.querySelector('#chk-start')?.value || todayISO();
-      const endDate    = el.querySelector('#chk-end')?.value || '';
-      const remarks    = el.querySelector('#chk-remarks')?.value.trim() || '';
-      const errEl      = el.querySelector('#chk-error');
-
-      if (!task)   { if (errEl) { errEl.textContent = 'Task name is required.'; errEl.style.display = 'block'; } return; }
-      if (!userId) { if (errEl) { errEl.textContent = 'Please select an employee.'; errEl.style.display = 'block'; } return; }
-      if (errEl) errEl.style.display = 'none';
-
-      const submitBtn = el.querySelector('#modal-checklist-submit');
-      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Generating…'; }
-
-      try {
-        const result = await Utils.apiFetch('/api/masters', {
-          method: 'POST',
-          body: JSON.stringify({ task, assignedTo: userName, frequency, startDate, endDate: endDate || null, remarks }),
-        });
-        hideModal('modal-checklist');
-        Utils.showToast(result?.count > 1 ? `${result.count} checklist tasks generated!` : 'Checklist task added!');
-        await _refresh(admin);
-      } catch (err) {
-        if (errEl) { errEl.textContent = err.message || 'Failed to generate tasks.'; errEl.style.display = 'block'; }
-      } finally {
-        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Generate Tasks'; }
-      }
-    });
-
-    /* checklist CSV bulk upload */
-    el.querySelector('#chk-csv-upload')?.addEventListener('click', async (ev) => {
-      const btn = ev.currentTarget;
-      if (btn.disabled) return;
-      const fileInput = el.querySelector('#chk-csv-file');
-      const file = fileInput?.files?.[0];
-      if (!file) { Utils.showToast('Please choose a CSV file first.', 'error'); return; }
-      btn.disabled = true;
-      const btnOrigHtml = btn.innerHTML;
-      btn.textContent = 'Uploading…';
-      const HEADER_ALIASES = {
-        email: 'user_email', 'user email': 'user_email',
-        task: 'description', 'task name': 'description', 'task name / description': 'description', 'task/description': 'description',
-        'next due date': 'start_date', 'due date': 'start_date', 'start date': 'start_date',
-      };
-      const FREQUENCY_ALIASES = { y: 'yearly', m: 'monthly', q: 'quarterly', w: 'weekly', d: 'daily', aw: 'alternative_week' };
-      const MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
-      function parseFlexibleDate(s) {
-        if (!s) return null;
-        s = s.trim();
-        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-        let m = s.match(/^(\d{1,2})-([A-Za-z]{3,})-(\d{2,4})$/);
-        if (m) {
-          const mon = MONTHS[m[2].toLowerCase().slice(0, 3)];
-          if (mon) {
-            const year = m[3].length === 2 ? '20' + m[3] : m[3];
-            return `${year}-${String(mon).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
-          }
-        }
-        m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
-        if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
-        return null;
-      }
-      const text = (await file.text()).replace(/^﻿/, '');
-      const lines = text.trim().split('\n').filter(Boolean);
-      const headers = parseCsvLine(lines[0]).map(h => { const k = h.trim().toLowerCase(); return HEADER_ALIASES[k] || k; });
-      const rows = lines.slice(1);
-      let ok = 0, fail = 0;
-      const failures = [];
-      for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        const cols = parseCsvLine(row).map(c => c.trim());
-        const obj = {};
-        headers.forEach((h, idx) => obj[h] = cols[idx] || '');
-        const rowLabel = `Row ${i + 2} (${obj['user_email'] || 'no email'})`;
-        try {
-          const allUsers = _state.users || [];
-          const userEmail = (obj['user_email'] || '').toLowerCase();
-          const user = allUsers.find(u => (u.email || '').toLowerCase() === userEmail);
-          if (!user) { fail++; failures.push(`${rowLabel}: email not found in Users list`); continue; }
-          if (!obj['description']) { fail++; failures.push(`${rowLabel}: description/task is empty`); continue; }
-          const freqRaw = (obj['frequency'] || 'daily').trim().toLowerCase();
-          await Utils.apiFetch('/api/masters', {
-            method: 'POST',
-            body: JSON.stringify({
-              task: obj['description'],
-              assignedTo: user.name,
-              frequency: FREQUENCY_ALIASES[freqRaw] || freqRaw,
-              startDate: parseFlexibleDate(obj['start_date']),
-              remarks: obj['remarks'] || '',
-              department: obj['department'] || '',
-            }),
-          });
-          ok++;
-        } catch (e) { fail++; failures.push(`${rowLabel}: ${e.message || 'server error'}`); }
-      }
-      btn.disabled = false;
-      btn.innerHTML = btnOrigHtml;
-      hideModal('modal-checklist');
-      Utils.showToast(`${ok} checklist(s) created${fail ? `, ${fail} failed` : ''}`, fail ? 'warning' : 'success');
-      if (failures.length) {
-        console.warn('Checklist CSV upload failures:\n' + failures.join('\n'));
-        alert(`${failures.length} row(s) failed to upload:\n\n${failures.join('\n')}`);
-      }
-      await _refresh(admin);
-    });
 
     /* ── holidays modal ── */
     const btnHolidays = el.querySelector('#db-btn-holidays');
@@ -2176,7 +1822,7 @@ window.Pages.dashboard = (function () {
     if (statPending)   statPending.textContent   = dashData.pending;
     if (statCompleted) statCompleted.textContent = dashData.completed;
     if (statTotal)     statTotal.textContent     = admin ? dashData.total : dashData.pendingTasks.length;
-    if (statUpcoming)  statUpcoming.textContent  = dashData.upcoming || 0;
+    _paintUpcomingStat();
     if (statRevisedC)  statRevisedC.textContent  = dashData.revised || 0;
     if (statRevised) {
       statRevised.textContent = dashData.revised > 0 ? `+ ${dashData.revised} revised` : '';
