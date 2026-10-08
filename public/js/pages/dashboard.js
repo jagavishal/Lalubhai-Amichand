@@ -145,7 +145,7 @@ window.Pages.dashboard = (function () {
   }
 
   function getFiltered() {
-    const { data, subTab } = _state;
+    const { data, subTab, userFilter } = _state;
     if (!data) return [];
     const STATUS_RANK = { revise: 0, pending: 1, done: 2 };
     if (subTab === 'Upcoming') return upcomingList(_state.upcomingDays);
