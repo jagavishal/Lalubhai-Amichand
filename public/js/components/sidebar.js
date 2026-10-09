@@ -215,6 +215,11 @@ window.Sidebar = {
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
       { route: 'fms',           label: 'FMS',          icon: 'fms',          flag: 'fms' },
       { route: 'mis',           label: 'MIS Report',   icon: 'mis' },
+      // AMC Management. alwaysShow: every employee raises service requests
+      // here, and permission records saved before the page existed cannot
+      // mention it. What each person can do inside is the module's own role
+      // (Admin / Manager / Maintenance Team / Employee) — see backend/amc.js.
+      { route: 'amc',           label: 'AMC Management', icon: 'amc', alwaysShow: true },
       // No entry for 'developer': it is a maintenance console (reset, restore,
       // export) rather than day-to-day work, so it stays off the menu. The
       // route still resolves, so #developer reaches it when it is needed --
@@ -254,13 +259,6 @@ window.Sidebar = {
       // adminOnly, but grantable to a non-admin from Users → Access like
       // Employee Master — the API gates on the same rule (requireAdminOrPage).
       { route: 'bulk-email',     label: 'Bulk Email',     icon: 'bulkemail', adminOnly: true },
-    ]},
-    // AMC Management. alwaysShow: every employee raises service requests
-    // here, and permission records saved before the page existed cannot
-    // mention it. What each person can do inside is the module's own role
-    // (Admin / Manager / Maintenance Team / Employee) — see backend/amc.js.
-    { title: 'Maintenance', items: [
-      { route: 'amc',            label: 'AMC Management', icon: 'amc', alwaysShow: true },
     ]},
   ],
 
