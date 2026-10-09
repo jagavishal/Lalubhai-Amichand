@@ -439,6 +439,12 @@ SCHEMA.push(...HR_SCHEMA);
 const { BULK_MAIL_SCHEMA, mountBulkMail } = require('./backend/bulk-mail.js');
 SCHEMA.push(...BULK_MAIL_SCHEMA);
 
+// AMC Management — maintenance contracts, renewals, expiry reminders and
+// service requests. Same arrangement again: tables appended here, routes
+// mounted further down (search "mountAmc"). See backend/amc.js.
+const { AMC_SCHEMA, mountAmc } = require('./backend/amc.js');
+SCHEMA.push(...AMC_SCHEMA);
+
 // The factory's own department list (the numbered list the plant keeps on
 // paper), used to seed the `departments` table on a fresh DB and as the
 // fallback whenever that table can't be read. Not the live list — once seeded,
@@ -5612,6 +5618,16 @@ mountBulkMail(app, {
   q, ensureSchema, express,
   requireAuth, requireSuperAdmin, withSeqId, getMailer,
   requireBulkEmail: requireAdminOrPage('bulk-email'),
+});
+
+// ── AMC Management routes ─────────────────────────────────────────────────────
+// Everything under /api/amc/. Open to every signed-in user — an employee must
+// be able to raise a service request — with the module's own roles (Admin /
+// Manager / Maintenance Team / Employee) deciding what each one sees and does.
+// It runs its own half-hourly reminder sweep. See backend/amc.js.
+mountAmc(app, {
+  q, pool, ensureSchema, requireAuth, isSuperAdmin, rolesOf, withSeqId, getMailer,
+  notifyAddressFor, istToday, appOrigin: APP_ORIGIN, useDb: USE_DB,
 });
 
 

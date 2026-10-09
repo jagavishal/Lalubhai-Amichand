@@ -58,6 +58,8 @@ window.Sidebar = {
     // New Expense — a plus in a circle, the sidebar's direct shortcut into
     // Retail Dashboard's "+ New Expense" drawer.
     newexpense:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>',
+    // AMC Management — a wrench, the maintenance mark.
+    amc:          '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
     // Company Overview — a briefcase, the plain "company/business" glyph,
     // distinct from every module's own icon since this page sits above all of them.
     companyoverview: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><path d="M2 13h20"/></svg>',
@@ -252,6 +254,13 @@ window.Sidebar = {
       // adminOnly, but grantable to a non-admin from Users → Access like
       // Employee Master — the API gates on the same rule (requireAdminOrPage).
       { route: 'bulk-email',     label: 'Bulk Email',     icon: 'bulkemail', adminOnly: true },
+    ]},
+    // AMC Management. alwaysShow: every employee raises service requests
+    // here, and permission records saved before the page existed cannot
+    // mention it. What each person can do inside is the module's own role
+    // (Admin / Manager / Maintenance Team / Employee) — see backend/amc.js.
+    { title: 'Maintenance', items: [
+      { route: 'amc',            label: 'AMC Management', icon: 'amc', alwaysShow: true },
     ]},
   ],
 
