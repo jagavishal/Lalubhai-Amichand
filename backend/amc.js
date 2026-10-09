@@ -26,11 +26,13 @@
    stays in the log as Failed and is retried by the next sweep. The same
    sweep mails overdue service requests once per expected date.
 
-   Roles. ERP Admin (and the owner) is AMC Admin. Everyone else is what
-   Settings → Roles says, else Manager for an HOD and Employee for anyone
-   else. Employee raises requests and sees their own; Maintenance works
-   the requests assigned to them; Manager runs contracts, renewals,
-   masters and assignment; Admin also owns settings, roles and deletes.
+   Access. The owner login always has it; anyone else only when Users →
+   Access grants them the 'amc' page (hasAmcAccess in server.js). Whoever
+   has access has all of it — there are no roles inside the module.
+
+   Mail goes only to the addresses typed into Settings: one list for
+   expiry reminders, one for service requests (plus the vendor, when an
+   assignment ticks "email the vendor"). Nobody is added automatically.
 
    Documents are written to uploads/amc/<id>/ on the server's disk, like
    the urgent-payment attachments — never in git, never in the DB.
@@ -205,8 +207,6 @@ const PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
 const SR_STATUSES = ['Open', 'Assigned', 'In Progress', 'On Hold', 'Resolved', 'Closed'];
 const SR_DONE = new Set(['Resolved', 'Closed']);
 const ASSET_STATUSES = ['Active', 'Inactive', 'Scrapped'];
-const ROLES = ['admin', 'manager', 'maintenance', 'employee'];
-const ROLE_LABEL = { admin: 'Admin', manager: 'Manager', maintenance: 'Maintenance Team', employee: 'Employee' };
 
 // Settings live in app_config under these keys, as JSON.
 const CFG = {
@@ -386,7 +386,7 @@ function mailHtml({ heading, colour = '#0150AA', lead, rows, footer, link }) {
 
 function mountAmc(app, ctx) {
   const {
-    q, pool, ensureSchema, requireAuth, isSuperAdmin, rolesOf,
+    q, pool, ensureSchema, requireAuth, hasAmcAccess,
     withSeqId, getMailer, notifyAddressFor, istToday, appOrigin, useDb,
   } = ctx;
 
@@ -427,12 +427,10 @@ function mountAmc(app, ctx) {
 
   /* ── Who is asking ─────────────────────────────────────────────── */
 
+  // Everyone who can open the page gets every AMC right (see the header).
   async function roleOf(user) {
     if (!user) return null;
-    if (isSuperAdmin(user) || rolesOf(user).includes('Admin')) return 'admin';
-    const rows = await q('SELECT role FROM amc_roles WHERE user_id = $1', [user.id]);
-    if (rows[0] && ROLES.includes(rows[0].role)) return rows[0].role;
-    return rolesOf(user).includes('HOD') ? 'manager' : 'employee';
+    return (await hasAmcAccess(user)) ? 'admin' : null;
   }
 
   const CAN = {
@@ -450,6 +448,7 @@ function mountAmc(app, ctx) {
         await ensureSchema();
         const user = req.session.user;
         const role = await roleOf(user);
+        if (!role) return res.status(403).json({ error: 'You do not have access to AMC Management — ask an admin to grant it from Users → Access' });
         const can = CAN[role];
         if (need && !can[need]) return res.status(403).json({ error: 'You do not have permission to do this' });
         req.amc = { user, role, can, by: user?.name || user?.email || '' };
@@ -605,14 +604,8 @@ function mountAmc(app, ctx) {
   }
 
   async function users() {
-    const rows = await q(`SELECT u.id, u.name, u.email, u.department, u.roles, u.active, r.role AS amc_role
-                            FROM users u LEFT JOIN amc_roles r ON r.user_id = u.id ORDER BY u.name`);
+    const rows = await q(`SELECT id, name, department, active FROM users ORDER BY name`);
     return rows.filter((u) => Number(u.active ?? 1) !== 0);
-  }
-  function effectiveRole(u) {
-    if (isSuperAdmin(u) || rolesOf(u).includes('Admin')) return 'admin';
-    if (ROLES.includes(u.amc_role)) return u.amc_role;
-    return rolesOf(u).includes('HOD') ? 'manager' : 'employee';
   }
 
   /* ── Recipients ────────────────────────────────────────────────── */
@@ -646,25 +639,6 @@ function mountAmc(app, ctx) {
     return out;
   }
 
-  // People whose AMC role is one of `roles`, by explicit Settings → Roles
-  // assignment only (an HOD's implied Manager role does not volunteer
-  // them for every mail).
-  async function explicitRoleUsers(roles) {
-    const rows = await q(`SELECT u.id FROM amc_roles r JOIN users u ON u.id = r.user_id
-                           WHERE r.role IN (${roles.map((_, i) => '$' + (i + 1)).join(',')})`, roles);
-    return rows;
-  }
-
-  // Who hears about reminders and requests while Settings lists nobody:
-  // the AMC Admins/Managers named in Settings → Roles, plus every ERP Admin,
-  // so a fresh install never sends its first reminders into the void.
-  async function fallbackUsers() {
-    const explicit = await explicitRoleUsers(['admin', 'manager']);
-    const admins = (await q(`SELECT id, roles, active FROM users WHERE roles LIKE $1`, ['%Admin%']))
-      .filter((u) => Number(u.active ?? 1) !== 0 && rolesOf(u).includes('Admin'));
-    return [...explicit, ...admins];
-  }
-
   /* Claim a notification key and send. Returns 'sent' | 'duplicate' |
      'failed' | 'skipped'. A key already Sent is never sent again; one that
      Failed (or had nobody to go to) is re-claimed and retried. */
@@ -690,7 +664,7 @@ function mountAmc(app, ctx) {
     const toList = [...to];
     const ccList = cc.filter((e) => !toList.some((t) => t.toLowerCase() === e.toLowerCase()));
     if (!toList.length && ccList.length) toList.push(ccList.shift());
-    if (!toList.length) { await finish('Skipped', 'No recipients configured — set them in AMC → Settings'); return 'skipped'; }
+    if (!toList.length) { await finish('Skipped', 'No email address set for this mail in AMC → Settings'); return 'skipped'; }
     const mailer = getMailer();
     const recips = toList.join(', ') + (ccList.length ? ' | cc: ' + ccList.join(', ') : '');
     if (!mailer) { await finish('Failed', 'SMTP is not configured on this server', recips); return 'failed'; }
@@ -755,7 +729,7 @@ function mountAmc(app, ctx) {
       const { hour } = istToday();
       if (!force && hour < cfg.reminderHour) return { waiting: true, hour: cfg.reminderHour };
       const { contracts, ctxRow } = await loadAll();
-      const reminderBase = await resolveRecipients(cfg.reminderTo, cfg.reminderTo.length ? [] : await fallbackUsers());
+      const reminderTo = await resolveRecipients(cfg.reminderTo);
       for (const c of contracts) {
         // A renewed contract carries its new expiry, so its reminders key on
         // that date; only a contract nobody is renewing is left alone.
@@ -766,24 +740,22 @@ function mountAmc(app, ctx) {
         const v = ctxRow.vendors.get(c.vendor_id) || {};
         Object.assign(c, { vendor_contact: v.contact_person || '', vendor_phone: v.phone || '', vendor_email: v.email || '' });
         const { subject, html } = reminderMail(c, off);
-        const owner = c.owner_user_id ? await resolveRecipients([], [{ id: c.owner_user_id }]) : [];
         const r = await claimAndSend({
           key: `rem:${c.id}:${c.expiry_date}:${off}`, kind: 'reminder', refId: c.id, offset: off,
-          subject, to: reminderBase.length ? reminderBase : owner, cc: reminderBase.length ? owner : [], html, by,
+          subject, to: reminderTo, html, by,
         });
         summary.reminders[r] += 1;
       }
       if (cfg.overdueMail) {
         const srRows = await q(`SELECT * FROM amc_service_requests WHERE status NOT IN ('Resolved','Closed') AND expected_date IS NOT NULL AND expected_date < $1`, [ctxRow.today]);
-        const srBase = await resolveRecipients(cfg.srTo, cfg.srTo.length ? [] : await fallbackUsers());
+        const srTo = await resolveRecipients(cfg.srTo);
         for (const row of srRows) {
           const s = srOut(row, ctxRow);
-          const assignee = s.assigned_user_id ? await resolveRecipients([], [{ id: s.assigned_user_id }]) : [];
           const late = daysBetween(s.expected_date, ctxRow.today);
           const r = await claimAndSend({
             key: `od:${s.id}:${s.expected_date}`, kind: 'sr_overdue', refId: s.id,
             subject: `Overdue service request ${s.id} — ${late} day(s) past expected resolution`,
-            to: assignee.length ? assignee : srBase, cc: assignee.length ? srBase : [],
+            to: srTo,
             html: srMailHtml(s, 'overdue', { late }), by,
           });
           summary.overdue[r] += 1;
@@ -836,21 +808,9 @@ function mountAmc(app, ctx) {
   function notifySr(s, stage, req, { vendorEmail = '' } = {}) {
     (async () => {
       const cfg = await settings();
-      const base = await resolveRecipients(cfg.srTo, cfg.srTo.length ? [] : await fallbackUsers());
-      const requester = s.raised_by_id ? await resolveRecipients([], [{ id: s.raised_by_id }]) : [];
-      let to = [], cc = [];
-      if (stage === 'new') {
-        const team = await resolveRecipients([], await explicitRoleUsers(['maintenance']));
-        to = [...base, ...team]; cc = requester;
-      } else if (stage === 'assigned') {
-        to = s.assigned_user_id ? await resolveRecipients([], [{ id: s.assigned_user_id }]) : [];
-        if (vendorEmail && EMAIL_RE.test(vendorEmail)) to.push(vendorEmail);
-        cc = [...requester, ...base];
-      } else if (stage === 'resolved') {
-        to = requester; cc = [];
-      }
-      const seen = new Set(to.map((e) => e.toLowerCase()));
-      cc = cc.filter((e) => !seen.has(e.toLowerCase()) && seen.add(e.toLowerCase()));
+      const to = await resolveRecipients(cfg.srTo);
+      if (stage === 'assigned' && vendorEmail && EMAIL_RE.test(vendorEmail)
+        && !to.some((e) => e.toLowerCase() === vendorEmail.toLowerCase())) to.push(vendorEmail);
       const subject = {
         new: `New service request ${s.id} [${s.priority}] — ${s.issue.slice(0, 60)}`,
         assigned: `Service request ${s.id} assigned [${s.priority}] — ${s.issue.slice(0, 60)}`,
@@ -860,7 +820,7 @@ function mountAmc(app, ctx) {
       // own log row; the dedupe that matters for these is "one per event".
       await claimAndSend({
         key: `sr:${stage}:${s.id}:${Date.now()}`, kind: `sr_${stage}`, refId: s.id,
-        subject, to, cc, html: srMailHtml(s, stage), by: req.amc.by,
+        subject, to, html: srMailHtml(s, stage), by: req.amc.by,
       });
     })().catch((e) => console.error('[amc] sr mail', stage, s.id, '—', e.message));
   }
@@ -875,18 +835,15 @@ function mountAmc(app, ctx) {
     const requests = srRows.map((r) => srOut(r, ctxRow)).filter((s) => srVisible(s, amc));
     const userRows = await users();
     const out = {
-      role: amc.role, roleLabel: ROLE_LABEL[amc.role], can: amc.can, today: ctxRow.today, window: cfg.upcomingWindow,
+      role: amc.role, can: amc.can, today: ctxRow.today, window: cfg.upcomingWindow,
       me: { id: amc.user.id, name: amc.user.name, department: amc.user.department || '' },
       contracts: amc.can.money ? contracts : contracts.map(stripMoney),
       vendors: vendors.map(vendorOut).map((v) => (amc.can.manage || amc.can.work ? v : { id: v.id, name: v.name, active: v.active })),
       assets: assets.map(assetOut).map((a) => ({ ...a, contract_ids: ctxRow.contractsByAsset.get(a.id) || [] })),
       requests,
-      // For the assign / owner pickers. Addresses only to those who manage.
-      users: userRows.map((u) => ({
-        id: u.id, name: u.name, department: u.department || '', role: effectiveRole(u),
-        ...(amc.can.settings ? { email: u.email || '', explicitRole: ROLES.includes(u.amc_role) ? u.amc_role : '' } : {}),
-      })),
-      lists: { AMC_TYPES, FREQUENCIES: Object.keys(FREQUENCIES), RENEWAL_STATUSES, PRIORITIES, SR_STATUSES, ASSET_STATUSES, ROLES, ROLE_LABEL },
+      // For the "assigned person" picker on a service request.
+      users: userRows.map((u) => ({ id: u.id, name: u.name, department: u.department || '' })),
+      lists: { AMC_TYPES, FREQUENCIES: Object.keys(FREQUENCIES), RENEWAL_STATUSES, PRIORITIES, SR_STATUSES, ASSET_STATUSES },
     };
     if (amc.can.settings) out.settings = cfg;
     return out;
@@ -1650,8 +1607,7 @@ function mountAmc(app, ctx) {
     for (const e of list) {
       const s = String(e || '').trim();
       if (!s) continue;
-      if (s.startsWith('user:') && /^user:[\w-]{1,16}$/.test(s)) out.push(s);
-      else if (EMAIL_RE.test(s)) out.push(s.toLowerCase());
+      if (EMAIL_RE.test(s)) out.push(s.toLowerCase());
       else bad(`"${s}" is not a valid email address`);
     }
     return [...new Set(out)].slice(0, 50);
@@ -1687,29 +1643,13 @@ function mountAmc(app, ctx) {
     return after;
   }));
 
-  app.post('/api/amc/roles', requireAuth, route('settings', async (req) => {
-    const userId = str(req.body?.user_id, 16);
-    const role = str(req.body?.role, 16);
-    if (!userId) bad('Choose a user');
-    const u = (await q('SELECT id, name, email, roles FROM users WHERE id = $1', [userId]))[0];
-    if (!u) bad('That user does not exist');
-    if (isSuperAdmin(u) || rolesOf(u).includes('Admin')) bad(`${u.name} is an ERP Admin and is always AMC Admin`);
-    if (!role) {
-      await q('DELETE FROM amc_roles WHERE user_id = $1', [userId]);
-    } else {
-      if (!ROLES.includes(role)) bad('Unknown role');
-      await q(`INSERT INTO amc_roles (user_id, role, updated_by, updated_at) VALUES ($1,$2,$3,NOW())
-               ON CONFLICT (user_id) DO UPDATE SET role=$4, updated_by=$5, updated_at=NOW()`, [userId, role, req.amc.by, role, req.amc.by]);
-    }
-    await logActivity(req, 'role', userId, 'set', `${u.name} → ${role ? ROLE_LABEL[role] : 'default'}`);
-    return { ok: true };
-  }));
-
   app.post('/api/amc/test-mail', requireAuth, route('settings', async (req) => {
     const mailer = getMailer();
     if (!mailer) bad('SMTP is not configured on this server (SMTP_USER / SMTP_PASS)');
-    const to = await notifyAddressFor(req.amc.user.id, req.amc.user.email);
-    if (!to || !EMAIL_RE.test(to)) bad('Your account has no email address to send the test to');
+    // The addresses typed into Settings (saved or not yet), so the person can
+    // check the lists before relying on them.
+    const to = cleanRecipients(req.body?.to).join(', ');
+    if (!to) bad('Write at least one email ID first');
     await mailer.sendMail({
       from: `"AMC Management" <${process.env.SMTP_USER}>`, to,
       subject: 'AMC Management — test mail',

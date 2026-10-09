@@ -215,11 +215,10 @@ window.Sidebar = {
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
       { route: 'fms',           label: 'FMS',          icon: 'fms',          flag: 'fms' },
       { route: 'mis',           label: 'MIS Report',   icon: 'mis' },
-      // AMC Management. alwaysShow: every employee raises service requests
-      // here, and permission records saved before the page existed cannot
-      // mention it. What each person can do inside is the module's own role
-      // (Admin / Manager / Maintenance Team / Employee) — see backend/amc.js.
-      { route: 'amc',           label: 'AMC Management', icon: 'amc', alwaysShow: true },
+      // AMC Management. grantOnly: the owner, plus whoever Users → Access
+      // has ticked it for — being Admin/HOD (or having no saved permissions)
+      // does not show it. The API applies the same rule (hasAmcAccess).
+      { route: 'amc',           label: 'AMC Management', icon: 'amc', grantOnly: true },
       // No entry for 'developer': it is a maintenance console (reset, restore,
       // export) rather than day-to-day work, so it stays off the menu. The
       // route still resolves, so #developer reaches it when it is needed --
@@ -342,6 +341,7 @@ window.Sidebar = {
     }
     if (!item) return true;
     if (item.trueAdminOnly && !this._isTrueAdmin(u)) return false;
+    if (item.grantOnly) return !!(u.permissions && Array.isArray(u.permissions.grants) && u.permissions.grants.includes(route));
 
     const permissions = u.permissions || null;
     // An explicit page grant from Users → Access outranks adminOnly: HR staff
@@ -368,6 +368,7 @@ window.Sidebar = {
     // Same grant-outranks-adminOnly rule as canAccess above — the menu and the
     // router must never disagree about who can open a page.
     if (item.trueAdminOnly && !this._isTrueAdmin(window.currentUser)) return '';
+    if (item.grantOnly && !this.canAccess(item.route)) return '';
     const grantedAdminPage = !!(permissions && permissions.pages && permissions.pages.includes(item.route));
     if (item.adminOnly && !isAdmin && !grantedAdminPage) return '';
     if (item.flag && !(featureFlags || {})[item.flag]) return '';

@@ -82,7 +82,7 @@ window.Pages.amc = (() => {
     const open = D.requests.filter((r) => !DONE.has(r.status)).length;
     const t = [{ key: 'dashboard', label: 'Dashboard' }];
     if (can('work')) t.push({ key: 'contracts', label: 'Contracts', count: D.contracts.length });
-    t.push({ key: 'requests', label: can('assign') ? 'Service Requests' : D.role === 'employee' ? 'My Requests' : 'Requests', count: open });
+    t.push({ key: 'requests', label: 'Service Requests', count: open });
     if (can('work')) t.push({ key: 'assets', label: 'Equipment', count: D.assets.length });
     if (can('work')) t.push({ key: 'vendors', label: 'Vendors', count: D.vendors.length });
     if (can('reports')) t.push({ key: 'reports', label: 'Reports' });
@@ -169,7 +169,7 @@ window.Pages.amc = (() => {
         .amc-link:hover { text-decoration:underline; }
         .amc-od { color:#dc2626;font-weight:700; }
       </style>
-      ${H.header('AMC Management', `Maintenance contracts, renewals and service requests · you are ${D.roleLabel}`, actions)}
+      ${H.header('AMC Management', 'Maintenance contracts, renewals and service requests', actions)}
       ${H.tabs('amc', tabsFor(), _tab)}
       ${body}
     </div>`;
@@ -192,7 +192,7 @@ window.Pages.amc = (() => {
       tiles.push({ label: `AMC Spend ${_dash.fy}`, value: '₹ ' + H.inr0(_dash.money.fySpend), hint: 'terms starting this FY' });
     }
     const srTiles = [
-      { label: D.role === 'employee' ? 'My Open Requests' : 'Open Service Requests', value: c.openRequests },
+      { label: 'Open Service Requests', value: c.openRequests },
       { label: 'Overdue Requests', value: c.overdueRequests, color: c.overdueRequests ? '#dc2626' : undefined },
       { label: 'Open High / Critical', value: c.criticalOpen, color: c.criticalOpen ? '#d97706' : undefined },
     ];
@@ -225,17 +225,17 @@ window.Pages.amc = (() => {
       </div>`).join('');
     const totalSr = _dash.byStatus.reduce((n, s) => n + s.count, 0);
 
-    const noRecipients = can('settings') && D.settings && !D.settings.reminderTo.length;
+    const missing = D.settings ? [!D.settings.reminderTo.length && 'expiry reminders', !D.settings.srTo.length && 'service requests'].filter(Boolean) : [];
     return `
-      ${noRecipients ? `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:12px;">
-        No reminder recipients are set — expiry reminders currently go to the ERP Admins. <button class="amc-link" data-goto="settings">Set them in Settings</button>.</div>` : ''}
+      ${missing.length ? `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:12px;">
+        No email ID is set for ${esc(missing.join(' and '))} — those mails are not being sent. <button class="amc-link" data-goto="settings">Add them in Settings</button>.</div>` : ''}
       ${tiles.length ? H.stats(tiles) : ''}
       ${H.stats(srTiles)}
       <div class="amc-two" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
         ${can('work') ? `<div class="amc-card"><h3>Upcoming Renewals</h3>${contractList(_dash.upcoming, `Nothing expires in the next ${_dash.window} days`)}</div>
         <div class="amc-card"><h3>Expired — Not Renewed</h3>${contractList(_dash.expired, 'No expired contracts')}</div>` : ''}
         <div class="amc-card"><h3>Overdue Service Requests</h3>${srList(_dash.overdue, 'Nothing is overdue')}</div>
-        <div class="amc-card"><h3>Recent Service Requests</h3>${srList(_dash.recent, D.role === 'employee' ? 'You have not raised any requests yet' : 'No requests yet')}</div>
+        <div class="amc-card"><h3>Recent Service Requests</h3>${srList(_dash.recent, 'No requests yet')}</div>
         ${_dash.money ? `<div class="amc-card"><h3>Active AMC Value by Department</h3>${deptBars || '<div style="font-size:12.5px;color:#94a3b8;">No active contracts</div>'}</div>` : ''}
         <div class="amc-card"><h3>Requests by Status</h3>
           ${_dash.byStatus.map((s) => `<div style="display:flex;align-items:center;gap:10px;margin:6px 0;font-size:12px;">
@@ -298,10 +298,10 @@ window.Pages.amc = (() => {
 
   function contractExportRows() {
     const cols = ['AMC ID', 'Contract', 'Vendor', 'Equipment', 'Department', 'Location', 'AMC Type', 'Start Date', 'Expiry Date', 'Days Left',
-      ...(can('money') ? ['Amount'] : []), 'Renewal Frequency', 'Status', 'Renewal Status', 'Owner', 'Remarks'];
+      ...(can('money') ? ['Amount'] : []), 'Renewal Frequency', 'Status', 'Renewal Status', 'Remarks'];
     const rows = sortRows(filteredContracts(), 'contracts').map((c) => [c.id, c.contract_name, c.vendor_name, (c.asset_names || []).join(', '),
       c.department, c.location, c.amc_type, c.start_date, c.expiry_date, c.days_left, ...(can('money') ? [c.amount] : []),
-      c.renewal_frequency, c.status, c.renewal_state, c.owner_name, c.remarks || '']);
+      c.renewal_frequency, c.status, c.renewal_state, c.remarks || '']);
     return { cols, rows };
   }
 
@@ -577,76 +577,63 @@ window.Pages.amc = (() => {
 
   /* ── Settings ─────────────────────────────────────────────────────── */
 
-  function recipientEditor(id, list) {
-    const users = list.filter((x) => x.startsWith('user:')).map((x) => x.slice(5));
-    const emails = list.filter((x) => !x.startsWith('user:'));
+  // One address per line (commas also work). These lists are the ONLY
+  // people the module mails — nobody is added automatically.
+  function emailBox(id, label, list, hint) {
     return `<div style="grid-column:span 2;">
-      <label style="${H.LABEL}">People</label>
-      <div style="max-height:180px;overflow:auto;border:1.5px solid #e2e8f0;border-radius:8px;padding:6px 10px;">
-        ${D.users.map((u) => `<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:3px 0;cursor:pointer;">
-          <input type="checkbox" data-rcpt="${id}" value="${esc(u.id)}"${users.includes(u.id) ? ' checked' : ''}/> ${esc(u.name)}
-          <span style="color:#94a3b8;font-size:11px;">${esc(u.department || '')}</span></label>`).join('')}
-      </div>
-      <label style="${H.LABEL}margin-top:10px;">Other email addresses (comma separated)</label>
-      <input id="${id}-emails" value="${esc(emails.join(', '))}" placeholder="facility@laltd.in, maintenance@laltd.in" style="${H.CONTROL}"/>
+      <label style="${H.LABEL}">${esc(label)}</label>
+      <textarea id="${id}" rows="4" placeholder="maintenance@laltd.in&#10;admin@laltd.in" style="${H.CONTROL}resize:vertical;font-family:inherit;">${esc(list.join('\n'))}</textarea>
+      <div style="font-size:11.5px;color:#94a3b8;margin-top:4px;">${esc(hint)}</div>
     </div>`;
   }
 
   function settingsTab() {
     const s = D.settings;
-    const roleOpts = [{ value: '', label: 'Default (by ERP role)' }, ...D.lists.ROLES.map((r) => ({ value: r, label: D.lists.ROLE_LABEL[r] }))];
     return `
       <div class="amc-two" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div class="amc-card">
-          <h3>Expiry Reminders</h3>
+          <h3>Who gets the emails</h3>
+          <div style="font-size:12px;color:#64748b;margin-bottom:12px;">Write the email IDs below — mail goes only to these addresses. One per line.</div>
           ${H.grid(
-            H.field('st-days', 'Remind this many days before expiry', s.reminderDays.join(', '), { span: 2, hint: '0 = on the expiry date itself. Default: 30, 15, 7, 0' })
-            + H.select('st-hour', 'Send from (IST hour)', s.reminderHour, Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String(h).padStart(2, '0')}:00` })))
-            + H.field('st-window', '“Upcoming renewal” window (days)', s.upcomingWindow, { type: 'number' })
-            + `<div style="grid-column:span 2;"><label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer;">
-                <input type="checkbox" id="st-overdue"${s.overdueMail ? ' checked' : ''}/> Email overdue service requests (once per expected date)</label></div>`
-            + H.sectionTitle('Reminder recipients')
-            + recipientEditor('st-rem', s.reminderTo)
-            + `<div style="grid-column:span 2;font-size:11.5px;color:#94a3b8;">The contract's owner is always copied. With nobody listed, reminders go to the ERP Admins and anyone given AMC Admin/Manager below.</div>`
-            + H.sectionTitle('Service request recipients')
-            + recipientEditor('st-sr', s.srTo)
-            + `<div style="grid-column:span 2;font-size:11.5px;color:#94a3b8;">Told about every new request (with the Maintenance Team) and copied on assignments and overdue notices.</div>`,
+            emailBox('st-rem', 'AMC expiry reminders', s.reminderTo, 'Gets the reminder before every contract expires (days set on the right).')
+            + emailBox('st-sr', 'Service requests', s.srTo, 'Gets a mail when a request is raised, assigned, resolved, or becomes overdue.'),
           )}
-          <div style="display:flex;justify-content:flex-end;margin-top:14px;"><button class="btn-primary btn-sm" id="st-save">Save Settings</button></div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap;">
+            <button class="btn-secondary btn-sm" id="st-test">Send test email to these IDs</button>
+            <button class="btn-primary btn-sm" id="st-save">Save Settings</button>
+          </div>
         </div>
         <div style="display:flex;flex-direction:column;gap:12px;">
           <div class="amc-card">
-            <h3>Roles</h3>
-            <div style="font-size:12px;color:#64748b;margin-bottom:8px;">ERP Admins are always AMC Admin. Without a choice here an HOD is a Manager and everyone else an Employee.</div>
-            <input id="st-role-q" placeholder="Find a person…" style="${H.CONTROL}margin-bottom:8px;"/>
-            <div style="max-height:380px;overflow:auto;" id="st-roles">
-              ${D.users.map((u) => `<div data-role-row="${esc(u.name.toLowerCase())}" style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dotted #e2e8f0;">
-                <div style="font-size:12.5px;min-width:0;"><b>${esc(u.name)}</b><div style="font-size:11px;color:#94a3b8;">${esc(u.department || '')} · now ${esc(D.lists.ROLE_LABEL[u.role])}</div></div>
-                ${u.role === 'admin' && !u.explicitRole ? '<span style="font-size:11.5px;color:#94a3b8;">ERP Admin</span>'
-                  : `<select data-role-user="${esc(u.id)}" style="${H.CONTROL}max-width:190px;">${roleOpts.map((o) => `<option value="${o.value}"${(u.explicitRole || '') === o.value ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`}
-              </div>`).join('')}
-            </div>
+            <h3>Reminder schedule</h3>
+            ${H.grid(
+              H.field('st-days', 'Remind this many days before expiry', s.reminderDays.join(', '), { span: 2, hint: '0 = on the expiry date itself. Default: 30, 15, 7, 0' })
+              + H.select('st-hour', 'Send from (IST hour)', s.reminderHour, Array.from({ length: 24 }, (_, h) => ({ value: h, label: `${String(h).padStart(2, '0')}:00` })))
+              + H.field('st-window', '“Upcoming renewal” window (days)', s.upcomingWindow, { type: 'number' })
+              + `<div style="grid-column:span 2;"><label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer;">
+                  <input type="checkbox" id="st-overdue"${s.overdueMail ? ' checked' : ''}/> Email overdue service requests (once per expected date)</label></div>`,
+            )}
+            <div style="font-size:11.5px;color:#94a3b8;margin-top:10px;">Saved with the “Save Settings” button.</div>
           </div>
           <div class="amc-card">
             <h3>Tools</h3>
             <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">
               <button class="btn-secondary btn-sm" id="st-run">Send due reminders now</button>
               <div style="font-size:11.5px;color:#94a3b8;margin-top:-4px;">Runs the same check the server does every 30 minutes. Safe to repeat — a reminder already sent is never sent twice.</div>
-              <button class="btn-secondary btn-sm" id="st-test">Send me a test email</button>
               <button class="btn-secondary btn-sm" id="st-backup">Download backup (JSON)</button>
               <div style="font-size:11.5px;color:#94a3b8;margin-top:-4px;">Every AMC table in one file. Attachments stay on the server under uploads/amc/.</div>
+              <div style="font-size:11.5px;color:#64748b;margin-top:6px;">Access to this page is given from Users → Access → “AMC Management”.</div>
             </div>
           </div>
         </div>
       </div>`;
   }
 
-  function readRecipients(id) {
-    const users = [...document.querySelectorAll(`[data-rcpt="${id}"]:checked`)].map((i) => 'user:' + i.value);
-    const emails = H.val(`${id}-emails`).split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+  function readEmails(id) {
+    const emails = H.val(id).split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
     const badOne = emails.find((e) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
     if (badOne) throw new Error(`"${badOne}" is not a valid email address`);
-    return [...users, ...emails];
+    return emails;
   }
 
   /* ── Files ────────────────────────────────────────────────────────── */
@@ -726,7 +713,6 @@ window.Pages.amc = (() => {
         + H.field('cf-expiry', 'Expiry Date', c.expiry_date, { type: 'date', required: true, hint: 'Filled from start date + frequency; change it if the contract says otherwise' })
         + H.field('cf-amount', 'Contract Amount (₹)', c.amount || '', { type: 'number', step: '0.01', required: true })
         + H.select('cf-rstatus', 'Renewal Status', c.renewal_status, D.lists.RENEWAL_STATUSES, { hint: 'Not Renewing / Discontinued stop the reminders' })
-        + H.select('cf-owner', 'Contract Owner', c.owner_user_id || '', [{ value: '', label: '— None —' }, ...D.users.map((u) => ({ value: u.id, label: u.name }))], { hint: 'Copied on every reminder' })
         + assetPicker('cf-assets', c.asset_ids || [])
         + H.textarea('cf-remarks', 'Remarks', c.remarks || '')
         + (editing ? '' : fileInput('cf-docs', 'Contract Document(s)')),
@@ -754,7 +740,7 @@ window.Pages.amc = (() => {
           contract_name: H.val('cf-name').trim(), vendor_id: H.val('cf-vendor'), amc_type: H.val('cf-type'),
           department: H.val('cf-dept'), location: H.val('cf-loc'), start_date: H.val('cf-start'), expiry_date: H.val('cf-expiry'),
           renewal_frequency: H.val('cf-freq'), amount: H.val('cf-amount'), renewal_status: H.val('cf-rstatus'),
-          owner_user_id: H.val('cf-owner'), remarks: H.val('cf-remarks'),
+          owner_user_id: c.owner_user_id || '', remarks: H.val('cf-remarks'),
           asset_ids: [...document.querySelectorAll('#cf-assets input:checked')].map((i) => i.value),
         };
         if (!body.contract_name) throw new Error('Contract name is required');
@@ -854,7 +840,7 @@ window.Pages.amc = (() => {
         <div class="m-grid-1" style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px;">
           ${H.readout('Vendor', c.vendor_name)}${H.readout('Vendor Contact', [v.contact_person, v.phone].filter(Boolean).join(' · '))}
           ${H.readout('Vendor Email', v.email)}${H.readout('Department', c.department)}
-          ${H.readout('Location', c.location)}${H.readout('Contract Owner', c.owner_name)}
+          ${H.readout('Location', c.location)}
           ${H.readout('Start Date', H.fmtDate(c.start_date))}${H.readout('Expiry Date', H.fmtDate(c.expiry_date))}
           ${c.amount != null ? H.readout('Contract Amount', money(c.amount)) : ''}${H.readout('Renewal Frequency', c.renewal_frequency)}
           ${H.readout('Created', `${H.fmtDate(c.created_at)}${c.created_by ? ' · ' + c.created_by : ''}`)}
@@ -1038,8 +1024,6 @@ window.Pages.amc = (() => {
   }
 
   function assignModal(s) {
-    const people = D.users.filter((u) => ['maintenance', 'manager', 'admin'].includes(u.role));
-    const others = D.users.filter((u) => !people.includes(u));
     const c = s.contract_id ? contractById(s.contract_id) : null;
     const v0 = s.assigned_vendor_id || c?.vendor_id || '';
     const suggested = { Critical: 1, High: 2, Medium: 4, Low: 7 }[s.priority] || 3;
@@ -1048,8 +1032,7 @@ window.Pages.amc = (() => {
       id: 'amc-assign', width: 540, title: `Assign ${s.id}`, subtitle: s.issue.slice(0, 90),
       bodyHTML: H.grid(
         H.select('as-user', 'Assigned Person', s.assigned_user_id || '', [{ value: '', label: '— None —' },
-          ...people.map((u) => ({ value: u.id, label: `${u.name} (${D.lists.ROLE_LABEL[u.role]})` })),
-          ...others.map((u) => ({ value: u.id, label: u.name }))], { span: 2 })
+          ...D.users.map((u) => ({ value: u.id, label: u.department ? `${u.name} (${u.department})` : u.name }))], { span: 2 })
         + H.select('as-vendor', 'Vendor', v0, [{ value: '', label: '— None —' }, ...D.vendors.filter((v) => v.active || v.id === v0).map((v) => ({ value: v.id, label: v.name }))])
         + H.field('as-exp', 'Expected Resolution', exp, { type: 'date', required: true, hint: `Suggested for ${s.priority} priority` })
         + `<div style="grid-column:span 2;"><label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer;">
@@ -1065,7 +1048,7 @@ window.Pages.amc = (() => {
         if (body.notify_vendor && body.assigned_vendor_id && !vendorById(body.assigned_vendor_id)?.email) throw new Error('That vendor has no email address in the vendor master');
         await H.post(`/api/amc/requests/${encodeURIComponent(s.id)}/assign`, body);
         H.closeModal('amc-assign');
-        H.toast('Assigned — notification sent');
+        H.toast('Assigned');
         await refresh();
         requestView(s.id);
       },
@@ -1346,24 +1329,13 @@ window.Pages.amc = (() => {
       try {
         const body = {
           reminderDays: H.val('st-days'), reminderHour: Number(H.val('st-hour')), upcomingWindow: Number(H.val('st-window')),
-          overdueMail: $('st-overdue').checked, reminderTo: readRecipients('st-rem'), srTo: readRecipients('st-sr'),
+          overdueMail: $('st-overdue').checked, reminderTo: readEmails('st-rem'), srTo: readEmails('st-sr'),
         };
         btn.disabled = true;
         D.settings = await H.post('/api/amc/settings', body);
         H.toast('Settings saved');
         await refresh();
       } catch (err) { btn.disabled = false; H.fail(err); }
-    });
-    document.querySelectorAll('[data-role-user]').forEach((sel) => sel.addEventListener('change', async () => {
-      try {
-        await H.post('/api/amc/roles', { user_id: sel.getAttribute('data-role-user'), role: sel.value });
-        H.toast('Role saved');
-        await refresh();
-      } catch (e) { H.fail(e); }
-    }));
-    $('st-role-q')?.addEventListener('input', (e) => {
-      const n = e.target.value.trim().toLowerCase();
-      document.querySelectorAll('[data-role-row]').forEach((r) => { r.style.display = !n || r.getAttribute('data-role-row').includes(n) ? 'flex' : 'none'; });
     });
     $('st-run')?.addEventListener('click', async (e) => {
       const btn = e.target;
@@ -1377,7 +1349,12 @@ window.Pages.amc = (() => {
       btn.disabled = false;
     });
     $('st-test')?.addEventListener('click', async () => {
-      try { const r = await H.post('/api/amc/test-mail'); H.toast(`Test mail sent to ${r.to}`); } catch (e) { H.fail(e); }
+      try {
+        const to = [...new Set([...readEmails('st-rem'), ...readEmails('st-sr')])];
+        if (!to.length) return H.toast('Write at least one email ID first', 'error');
+        const r = await H.post('/api/amc/test-mail', { to });
+        H.toast(`Test mail sent to ${r.to}`);
+      } catch (e) { H.fail(e); }
     });
     $('st-backup')?.addEventListener('click', () => { window.location.href = '/api/amc/backup'; });
   }

@@ -90,6 +90,8 @@ window.Pages.users = (() => {
 
     { cat: 'Admin Section', key: 'fms',          label: 'FMS Master' },
     { cat: 'Admin Section', key: 'mis',          label: 'MIS Report' },
+    // Grant-only (see GRANT_PAGES below): ticked per person, Admins included.
+    { cat: 'Admin Section', key: 'amc',          label: 'AMC Management', grant: true },
 
     { cat: 'HR Section', key: 'hr-employees',  label: 'Employee Master' },
     { cat: 'HR Section', key: 'hr-attendance', label: 'Attendance' },
@@ -101,6 +103,14 @@ window.Pages.users = (() => {
     { cat: 'Accounts', key: 'client-master',     label: 'Vendor Master' },
     { cat: 'Accounts', key: 'bulk-email',        label: 'Bulk Email' },
   ];
+
+  /* Grant-only pages live in permissions.grants, not permissions.pages, and
+     nobody has them by default — not an Admin, not an account with no saved
+     record. Keeping them out of `pages` matters: saving a pages list for an
+     Admin would otherwise restrict that Admin's whole menu to the list.
+     Mirrors `grantOnly` in sidebar.js and hasAmcAccess in server.js. */
+  const GRANT_PAGES = new Set(ALL_PAGES.filter(p => p.grant).map(p => p.key));
+  const PAGE_KEYS = ALL_PAGES.filter(p => !p.grant).map(p => p.key);
 
   const ALL_FEATURES = {
     'all-tasks': [
@@ -343,10 +353,11 @@ window.Pages.users = (() => {
     _permSaving     = false;
     const existing  = user.permissions;
     if (existing && existing.pages) {
-      _permData = { pages: [...existing.pages], features: existing.features ? JSON.parse(JSON.stringify(existing.features)) : {} };
+      _permData = { pages: [...existing.pages], features: existing.features ? JSON.parse(JSON.stringify(existing.features)) : {}, grants: [...(existing.grants || [])] };
     } else {
       _permData = {
-        pages: ALL_PAGES.map(p => p.key),
+        pages: [...PAGE_KEYS],
+        grants: [...((existing && existing.grants) || [])],
         features: Object.fromEntries(Object.entries(ALL_FEATURES).map(([k, arr]) => [k, arr.map(f => f.key)])),
       };
     }
@@ -659,7 +670,11 @@ window.Pages.users = (() => {
         el.querySelectorAll('.pi-page').forEach(chk => {
           chk.addEventListener('change', () => {
             const page = chk.dataset.page;
-            if (chk.checked) { if (!_permData.pages.includes(page)) _permData.pages.push(page); }
+            if (GRANT_PAGES.has(page)) {
+              const g = new Set(_permData.grants || []);
+              if (chk.checked) g.add(page); else g.delete(page);
+              _permData.grants = [...g];
+            } else if (chk.checked) { if (!_permData.pages.includes(page)) _permData.pages.push(page); }
             else {
               _permData.pages = _permData.pages.filter(p => p !== page);
               delete _permData.features[page]; // feature toggles are meaningless without page access
@@ -695,13 +710,21 @@ window.Pages.users = (() => {
           if (!u) return;
 
           /* build updated permissions for this user */
-          const existing = u.permissions || { pages: ALL_PAGES.map(p => p.key), features: {} };
-          let pages = [...(existing.pages || ALL_PAGES.map(p => p.key))];
-          if (chk.checked) { if (!pages.includes(page)) pages.push(page); }
-          else              { pages = pages.filter(p => p !== page); }
-
-          /* optimistically update local state */
-          u.permissions = { ...existing, pages };
+          const existing = u.permissions || null;
+          if (GRANT_PAGES.has(page)) {
+            // Only the grants list changes — an account with no saved record
+            // keeps "no pages list" (= unrestricted), an Admin keeps theirs.
+            const g = new Set((existing && existing.grants) || []);
+            if (chk.checked) g.add(page); else g.delete(page);
+            u.permissions = { ...(existing || {}), grants: [...g] };
+          } else {
+            const base = existing || { pages: [...PAGE_KEYS], features: {} };
+            let pages = [...(base.pages || PAGE_KEYS)];
+            if (chk.checked) { if (!pages.includes(page)) pages.push(page); }
+            else              { pages = pages.filter(p => p !== page); }
+            /* optimistically update local state */
+            u.permissions = { ...base, pages };
+          }
 
           chk.disabled = true;
           try {
@@ -865,7 +888,7 @@ window.Pages.users = (() => {
         ? `<div style="padding:${lastCat ? '12px' : '2px'} 0 4px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8;">${esc(p.cat)}</div>`
         : '';
       lastCat = p.cat || lastCat;
-      const checked = _permData.pages.includes(p.key);
+      const checked = p.grant ? (_permData.grants || []).includes(p.key) : _permData.pages.includes(p.key);
       const feats   = ALL_FEATURES[p.key] || [];
       const featHtml = feats.map(f => {
         const fc = (_permData.features[p.key] || []).includes(f.key);
@@ -886,7 +909,7 @@ window.Pages.users = (() => {
   }
 
   function renderAccessTab() {
-    const allPageKeys = ALL_PAGES.map(p => p.key);
+    const allPageKeys = PAGE_KEYS;
 
     // Admin is the only role still hard-wired to "always everything" here —
     // HOD is governed by its own saved record now, same as a plain User
@@ -909,6 +932,7 @@ window.Pages.users = (() => {
     };
 
     const userHasPage = (u, pageKey) => {
+      if (GRANT_PAGES.has(pageKey)) return !!(u.permissions && (u.permissions.grants || []).includes(pageKey));
       if (isAdminRole(u)) return true;
       const perm = u.permissions;
       if (!perm || !perm.pages) return true;
@@ -948,7 +972,7 @@ window.Pages.users = (() => {
       const pageCells = ALL_PAGES.map(p => {
         const checked = userHasPage(u, p.key);
         const tdStyle = `padding:10px 12px;border-bottom:1px solid #f1f5f9;text-align:center;${_isCatStart(p) ? _catEdge : ''}`;
-        if (isFixedAdmin) {
+        if (isFixedAdmin && !p.grant) {
           return `<td style="${tdStyle}">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
           </td>`;

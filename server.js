@@ -5621,13 +5621,18 @@ mountBulkMail(app, {
 });
 
 // ── AMC Management routes ─────────────────────────────────────────────────────
-// Everything under /api/amc/. Open to every signed-in user — an employee must
-// be able to raise a service request — with the module's own roles (Admin /
-// Manager / Maintenance Team / Employee) deciding what each one sees and does.
-// It runs its own half-hourly reminder sweep. See backend/amc.js.
+// Everything under /api/amc/. The owner always; anyone else only when Users →
+// Access has ticked AMC Management for them (permissions.grants, kept apart
+// from the pages list) — being Admin/HOD is not enough on
+// its own. It runs its own half-hourly reminder sweep. See backend/amc.js.
 mountAmc(app, {
-  q, pool, ensureSchema, requireAuth, isSuperAdmin, rolesOf, withSeqId, getMailer,
+  q, pool, ensureSchema, requireAuth, withSeqId, getMailer,
   notifyAddressFor, istToday, appOrigin: APP_ORIGIN, useDb: USE_DB,
+  hasAmcAccess: async (user) => {
+    if (isSuperAdmin(user)) return true;
+    const perms = await getUserPermissions(user?.id);
+    return !!(perms && Array.isArray(perms.grants) && perms.grants.includes('amc'));
+  },
 });
 
 
