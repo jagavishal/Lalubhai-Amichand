@@ -893,7 +893,7 @@ window.Pages['po-creation'] = (() => {
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + _polStatusPill(r) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + _polStatusPill(r) + _polPendingWithHtml(r) + '</td>'
         + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           + (r.status === 'Approved' || r.status === 'Rejected' || r.status === 'Cancelled'
             ? ''
@@ -916,6 +916,15 @@ window.Pages['po-creation'] = (() => {
     if (r.status === 'Approved')  return pill('Approved', 'var(--color-success-bg)', 'var(--color-success-text)', who);
     if (r.status === 'Rejected')  return pill('Rejected', 'var(--color-danger-bg)', 'var(--color-danger-text)', who);
     return pill('Awaiting approval', 'var(--color-warning-bg)', 'var(--color-warning-text)');
+  }
+
+  // Where the PO's PR sits in the Stores FMS and whose step that is (see the
+  // fmsPending field of /api/po-creation/list) — names who it is pending with.
+  function _polPendingWithHtml(r) {
+    const p = r.fmsPending;
+    if (!p || !p.owner) return '';
+    return '<div style="margin-top:4px;font-size:11px;color:var(--color-warning-text);white-space:normal;min-width:150px;" title="Stores FMS step: ' + esc(p.label) + '">'
+      + 'Pending with <b>' + esc(p.owner) + '</b> <span style="color:var(--text-muted);">· ' + esc(p.label) + '</span></div>';
   }
 
   function _polBindRowActions() {

@@ -83,6 +83,8 @@ const LAYOUT = {
 // is what the app fills in.
 const HEADER_LINES = [
   { key: 'orderNos',        row: 3, zone: 'left',  label: 'ORDER NO. :- ' },
+  // The buyer's own order reference(s), as typed on each order's PI.
+  { key: 'buyerOrderNos',   row: 3, zone: 'mid',   label: 'BUYER ORDER NO. :- ' },
   { key: 'containerSize',   row: 3, zone: 'right', label: 'CONTAINER SIZE : ' },
   { key: 'invoiceNo',       row: 4, zone: 'left',  label: 'INVOICE NO. :- ' },
   { key: 'plDate',          row: 4, zone: 'mid',   label: 'DATE :- ' },
@@ -95,6 +97,7 @@ const CELLS = {
   company: 'A1',
   department: 'A2',
   orderNos: 'A3',
+  buyerOrderNos: 'H3',
   containerSize: 'M3',
   invoiceNo: 'A4',
   plDate: 'H4',

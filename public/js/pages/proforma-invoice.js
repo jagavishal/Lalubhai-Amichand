@@ -32,6 +32,37 @@ window.Pages['proforma-invoice'] = (() => {
     return pageFeats.includes(feat);
   }
 
+  // The buyer's own Order No. as typed on the PI, as a muted second line under
+  // whatever cell it rides in — the PI, Order Sheet and Packing List lists all
+  // show it the same way.
+  function _buyerOrderLine(no) {
+    return no ? '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">Order No. <b style="color:var(--text-secondary);">' + esc(no) + '</b></div>' : '';
+  }
+
+  /* ── which tabs this user gets ─────────────────────────────────────────
+     The whole page ('proforma-invoice') is all four tabs. The packing desk
+     can instead be granted just 'order-sheet' and/or 'packing-list' in
+     Users → Access, which open this same page on those tabs alone — no
+     Create PI, no PI List, so no prices. ─────────────────────────────── */
+  const _ROUTE_OF_VIEW = { orders: 'order-sheet', packing: 'packing-list' };
+  function _canRoute(route) {
+    return !(window.Sidebar && window.Sidebar.canAccess) || window.Sidebar.canAccess(route);
+  }
+  function _fullAccess() { return _canRoute('proforma-invoice'); }
+  function _allowedViews() {
+    if (_fullAccess()) return ['create', 'list', 'orders', 'packing'];
+    return ['orders', 'packing'].filter(v => _canRoute(_ROUTE_OF_VIEW[v]));
+  }
+  // The hash this page lives under for the current view — the user's own
+  // route when they only hold the tab grant, so the router lets them in.
+  function _hostRoute() {
+    return _fullAccess() ? 'proforma-invoice' : (_ROUTE_OF_VIEW[_view] || 'order-sheet');
+  }
+  function _isHere() {
+    const h = (window.location.hash || '').replace('#', '');
+    return h === 'proforma-invoice' || h === 'order-sheet' || h === 'packing-list';
+  }
+
   /* ── state ──────────────────────────────────────────────────── */
   let _view = 'create'; // 'create' | 'list'
   let _mastersLoaded = false;
@@ -1127,11 +1158,13 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   function _tabsHtml() {
+    const views = _allowedViews();
+    const tab = (v, label, cls) => views.includes(v) ? _tabTab(label, _view === v, 'class="' + cls + '"') : '';
     return '<div class="pi-tabs" role="tablist" aria-label="Proforma invoice views" style="display:flex;gap:6px;margin-bottom:18px;border-bottom:1px solid var(--border-base);">'
-      + _tabTab('Create PI', _view === 'create', 'class="pic-create-tab"')
-      + _tabTab('PI List', _view === 'list', 'class="pic-list-tab"')
-      + _tabTab('Order Sheets', _view === 'orders', 'class="pic-orders-tab"')
-      + _tabTab('Packing List', _view === 'packing', 'class="pic-packing-tab"')
+      + tab('create', 'Create PI', 'pic-create-tab')
+      + tab('list', 'PI List', 'pic-list-tab')
+      + tab('orders', 'Order Sheets', 'pic-orders-tab')
+      + tab('packing', 'Packing List', 'pic-packing-tab')
     + '</div>';
   }
 
@@ -1285,7 +1318,10 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _pilFilteredRows() {
     return _pilRows.filter(r => {
-      if (_pilFBuyer && !(r.buyer || '').toLowerCase().includes(_pilFBuyer.toLowerCase())) return false;
+      if (_pilFBuyer) {
+        const q = _pilFBuyer.toLowerCase();
+        if (!(r.buyer || '').toLowerCase().includes(q) && !String((r.form && r.form.orderNo) || '').toLowerCase().includes(q)) return false;
+      }
       if (_pilFFrom && (r.date || '') < _pilFFrom) return false;
       if (_pilFTo && (r.date || '') > _pilFTo) return false;
       return true;
@@ -1346,7 +1382,7 @@ window.Pages['proforma-invoice'] = (() => {
             : (v.child ? '<span style="color:#94a3b8;font-weight:400;margin-right:5px;">↳</span>' : '') + esc(r.piNo))
         + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + _buyerOrderLine(r.form && r.form.orderNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + _statusPillHtml(r.status)
           + (isOrdered ? ' <span title="An Order Sheet has already been raised against this PI" style="display:inline-flex;padding:2px 8px;border-radius:10px;background:var(--color-success-bg);color:var(--color-success-text);font-size:11px;font-weight:600;">Ordered</span>' : '')
         + '</td>'
@@ -1971,7 +2007,7 @@ window.Pages['proforma-invoice'] = (() => {
       if (_oslFBuyer) {
         const q = _oslFBuyer.toLowerCase();
         if (!(r.buyer || '').toLowerCase().includes(q) && !(r.orderNo || '').toLowerCase().includes(q)
-          && !(r.piNo || '').toLowerCase().includes(q)) return false;
+          && !(r.piNo || '').toLowerCase().includes(q) && !(r.buyerOrderNo || '').toLowerCase().includes(q)) return false;
       }
       if (_oslFFrom && (r.orderDate || '') < _oslFFrom) return false;
       if (_oslFTo && (r.orderDate || '') > _oslFTo) return false;
@@ -2019,7 +2055,7 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _osFilterBarHtml() {
     return '<div class="pi-fbar" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
-      + '<input type="text" id="osl-q" value="' + esc(_oslFBuyer) + '" placeholder="Search order no, PI no or customer…" style="flex:1;min-width:220px;' + _inputStyle + '" />'
+      + '<input type="text" id="osl-q" value="' + esc(_oslFBuyer) + '" placeholder="Search order no, buyer order no, PI no or customer…" style="flex:1;min-width:220px;' + _inputStyle + '" />'
       + '<input type="date" id="osl-from" value="' + esc(_oslFFrom) + '" style="' + _inputStyle + 'width:auto;" />'
       + '<span style="align-self:center;font-size:12px;color:#94a3b8;">to</span>'
       + '<input type="date" id="osl-to" value="' + esc(_oslFTo) + '" style="' + _inputStyle + 'width:auto;" />'
@@ -2030,16 +2066,21 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _osListHtml() {
     return '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;">'
-        + '<p style="font-size:12.5px;color:var(--text-secondary);margin:0;">Raised once a PI is final and the advance is in. Start one from the Create Order Sheet button on any priced PI in the PI List.</p>'
-        + '<span id="osl-count" style="font-size:12px;color:var(--text-muted);font-weight:600;"></span>'
+        + '<p style="font-size:12.5px;color:var(--text-secondary);margin:0;">Raised once a PI is final and the advance is in. Pick the priced PI on the right, or use Create Order Sheet on it in the PI List.</p>'
+        + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+          + '<span id="osl-count" style="font-size:12px;color:var(--text-muted);font-weight:600;"></span>'
+          + '<select id="osl-new-pi" aria-label="New Order Sheet against a priced PI" style="' + _inputStyle + 'width:auto;max-width:340px;font-weight:600;">'
+            + '<option value="">+ New Order Sheet — pick a priced PI…</option>'
+          + '</select>'
+        + '</div>'
       + '</div>'
       + _osFilterBarHtml()
       + '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-        + '<table class="m-cards pi-mtbl" style="width:100%;border-collapse:collapse;min-width:860px;">'
+        + '<table class="m-cards pi-mtbl" style="width:100%;border-collapse:collapse;min-width:960px;">'
           + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-            + ['Order No', 'Order Date', 'Against PI', 'Customer', 'Status', 'Total Qty', 'PDF', 'Actions'].map(h => '<th scope="col" style="padding:8px 10px;text-align:' + (h === 'Total Qty' ? 'right' : 'left') + ';font-size:11px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
+            + ['Order No', 'Buyer Order No', 'Order Date', 'Against PI', 'Customer', 'Status', 'Total Qty', 'PDF', 'Actions'].map(h => '<th scope="col" style="padding:8px 10px;text-align:' + (h === 'Total Qty' ? 'right' : 'left') + ';font-size:11px;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
           + '</tr></thead>'
-          + '<tbody id="osl-body"><tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
+          + '<tbody id="osl-body"><tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr></tbody>'
         + '</table>'
       + '</div>';
   }
@@ -2049,25 +2090,27 @@ window.Pages['proforma-invoice'] = (() => {
     const countEl = document.getElementById('osl-count');
     if (!body) return;
     if (!_oslLoaded) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_oslLoadError) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_oslLoadError) + '</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_oslLoadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
+    _osFillNewPicker();
     const rows = _osFilteredRows();
     if (countEl) countEl.textContent = rows.length + ' of ' + _oslRows.length;
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="8" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">'
+      body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">'
         + (_oslRows.length ? 'No Order Sheets match these filters' : 'No Order Sheets raised yet') + '</td></tr>';
       return;
     }
     body.innerHTML = rows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
         + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.orderNo) + '</td>'
+        + '<td data-label="Buyer Order No" style="padding:8px 10px;font-size:12.5px;font-weight:600;">' + (r.buyerOrderNo ? esc(r.buyerOrderNo) : '<span style="color:#cbd5e1;">—</span>') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.orderDate) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + esc(r.piNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
@@ -2096,9 +2139,36 @@ window.Pages['proforma-invoice'] = (() => {
       + '</tr>').join('');
   }
 
+  // Priced PIs with no live order sheet yet — what "+ New Order Sheet" offers.
+  // The PI List rows are fetched once here when this tab is opened on its own.
+  let _osPiChoicesLoading = false;
+  function _osFillNewPicker() {
+    const sel = document.getElementById('osl-new-pi');
+    if (!sel) return;
+    if (!_pilLoaded) {
+      if (!_osPiChoicesLoading) {
+        _osPiChoicesLoading = true;
+        Utils.apiFetch('/api/proforma-invoice/list')
+          .then(rows => { _pilRows = rows || []; _pilLoaded = true; _pilLoadError = ''; })
+          .catch(() => {})
+          .finally(() => { _osPiChoicesLoading = false; if (_pilLoaded) _osFillNewPicker(); });
+      }
+      return;
+    }
+    const ordered = _osOrderedPiNos();
+    const choices = _pilRows.filter(r => r.status === 'Priced' && r.form && !ordered.has(String(r.piNo).trim()));
+    sel.innerHTML = '<option value="">' + (choices.length ? '+ New Order Sheet — pick a priced PI…' : 'No priced PI is waiting for an Order Sheet') + '</option>'
+      + choices.map(r => '<option value="' + esc(r.piNo) + '">' + esc(r.piNo + ' — ' + (r.buyer || '') + (r.form.orderNo ? ' (Order No. ' + r.form.orderNo + ')' : '')) + '</option>').join('');
+  }
+
   function _osBindListBar() {
     const q = document.getElementById('osl-q');
     if (!q) return;
+    const newPi = document.getElementById('osl-new-pi');
+    if (newPi) newPi.addEventListener('change', () => {
+      const row = _pilRows.find(r => String(r.piNo) === newPi.value);
+      if (row) _osStartFrom(row);
+    });
     q.addEventListener('input', (e) => { _oslFBuyer = e.target.value; _osRenderTable(); });
     document.getElementById('osl-from').addEventListener('change', (e) => { _oslFFrom = e.target.value; _osRenderTable(); });
     document.getElementById('osl-to').addEventListener('change', (e) => { _oslFTo = e.target.value; _osRenderTable(); });
@@ -2238,6 +2308,7 @@ window.Pages['proforma-invoice'] = (() => {
         // Issued server-side on submit, so the form cannot promise a number
         // that a concurrent order would take first.
         + _readonlyField('os-next-no', 'Order No.', 'Assigned on save')
+        + _readonlyField('os-buyer-order-no', 'Buyer Order No. (from the PI)', pi.orderNo || '—')
         + _textField('os-order-date', 'Order Date', { type: 'date', value: _today() })
         + _textField('os-advance-date', 'Advance Received On', { type: 'date' })
         + _textField('os-delivery-date', 'Delivery / Dispatch Date', { type: 'date' })
@@ -2327,7 +2398,8 @@ window.Pages['proforma-invoice'] = (() => {
         const q = _pklFBuyer.toLowerCase();
         if (!(r.buyer || '').toLowerCase().includes(q) && !(r.plNo || '').toLowerCase().includes(q)
           && !(r.invoiceNo || '').toLowerCase().includes(q)
-          && !(r.orderNos || '').toLowerCase().includes(q) && !(r.piNos || '').toLowerCase().includes(q)) return false;
+          && !(r.orderNos || '').toLowerCase().includes(q) && !(r.piNos || '').toLowerCase().includes(q)
+          && !(r.buyerOrderNos || '').toLowerCase().includes(q)) return false;
       }
       if (_pklFFrom && (r.plDate || '') < _pklFFrom) return false;
       if (_pklFTo && (r.plDate || '') > _pklFTo) return false;
@@ -2375,7 +2447,7 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _pklFilterBarHtml() {
     return '<div class="pi-fbar" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">'
-      + '<input type="text" id="pkl-q" value="' + esc(_pklFBuyer) + '" placeholder="Search packing list no, invoice no, order no or party…" style="flex:1;min-width:220px;' + _inputStyle + '" />'
+      + '<input type="text" id="pkl-q" value="' + esc(_pklFBuyer) + '" placeholder="Search packing list no, invoice no, order no, buyer order no or party…" style="flex:1;min-width:220px;' + _inputStyle + '" />'
       + '<input type="date" id="pkl-from" value="' + esc(_pklFFrom) + '" style="' + _inputStyle + 'width:auto;" />'
       + '<span style="align-self:center;font-size:12px;color:#94a3b8;">to</span>'
       + '<input type="date" id="pkl-to" value="' + esc(_pklFTo) + '" style="' + _inputStyle + 'width:auto;" />'
@@ -2428,7 +2500,7 @@ window.Pages['proforma-invoice'] = (() => {
         + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.plNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + esc(r.plDate) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;font-weight:600;white-space:nowrap;">' + num(r.invoiceNo) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12px;line-height:1.5;">' + esc(r.orderNos || '—') + '</td>'
+        + '<td style="padding:8px 10px;font-size:12px;line-height:1.5;">' + esc(r.orderNos || '—') + _buyerOrderLine(r.buyerOrderNos) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.buyer) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + _pklStatusPillHtml(r.status) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + _pklApprovalPillHtml(r) + '</td>'
@@ -2686,6 +2758,7 @@ window.Pages['proforma-invoice'] = (() => {
         + '<div style="font-size:11px;color:#94a3b8;margin-top:2px;">'
           + esc(o.orderDate || '') + (o.piNo ? ' · ' + esc(o.piNo) : '')
         + '</div>'
+        + _buyerOrderLine(o.buyerOrderNo)
         + '<div style="font-size:11.5px;margin-top:3px;font-weight:600;color:' + (o.packedQty ? '#b45309' : '#15803d') + ';">'
           + 'Balance ' + esc(o.balanceQty) + ' of ' + esc(o.orderedQty)
           + (o.packedQty ? ' · ' + esc(o.packedQty) + ' already shipped' : '')
@@ -3182,6 +3255,9 @@ window.Pages['proforma-invoice'] = (() => {
     const el = document.getElementById('main-content');
     if (!el) return;
 
+    const views = _allowedViews();
+    if (views.length && !views.includes(_view)) { _view = views[0]; _osOf = null; _plNew = null; }
+
     const isList = _view === 'list';
     const isOrders = _view === 'orders';
     const isPacking = _view === 'packing';
@@ -3236,15 +3312,16 @@ window.Pages['proforma-invoice'] = (() => {
 
     // Switching to Create by hand means a NEW PI — a half-finished revision
     // must not silently ride along on the tab the user thinks is blank.
-    document.querySelector('.pic-create-tab').addEventListener('click', () => { _reviseOf = null; _view = 'create'; renderPage(); });
-    document.querySelector('.pic-list-tab').addEventListener('click', () => { _view = 'list'; renderPage(); });
+    const onTab = (cls, fn) => { const t = document.querySelector(cls); if (t) t.addEventListener('click', fn); };
+    onTab('.pic-create-tab', () => { _reviseOf = null; _view = 'create'; renderPage(); });
+    onTab('.pic-list-tab', () => { _view = 'list'; renderPage(); });
     // Clicking the tab by hand means "show me the orders", not "carry on with
     // the one I started" — same reasoning as the Create tab clearing a revision.
-    document.querySelector('.pic-orders-tab').addEventListener('click', () => { _osOf = null; _view = 'orders'; renderPage(); });
+    onTab('.pic-orders-tab', () => { _osOf = null; _view = 'orders'; renderPage(); });
     // Same reasoning again: clicking the tab means "show me the packing lists",
     // so a half-filled one is dropped rather than carried onto a tab the user
     // thinks is the list.
-    document.querySelector('.pic-packing-tab').addEventListener('click', () => { _plNew = null; _view = 'packing'; renderPage(); });
+    onTab('.pic-packing-tab', () => { _plNew = null; _view = 'packing'; renderPage(); });
 
     // Both views need the masters, not just Create: the Add Price screen opens
     // off the LIST, and its Price Type / Currency dropdowns are filled from
@@ -3402,9 +3479,10 @@ window.Pages['proforma-invoice'] = (() => {
   // _view/_osOf/_plNew survive the router's render() untouched, so no queue
   // flag is needed — set the state, then paint or navigate.
   function _goToView() {
-    const here = (window.location.hash || '').replace('#', '') === 'proforma-invoice';
-    if (here) { renderPage(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
-    else window.Router.navigate('proforma-invoice');
+    const route = _hostRoute();
+    const here = (window.location.hash || '').replace('#', '') === route;
+    if (here || (_isHere() && _fullAccess())) { renderPage(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    else window.Router.navigate(route);
   }
 
   /* ── entry point for the FMS "Order Sheet" step ───────────────────────
@@ -3490,8 +3568,19 @@ window.Pages['proforma-invoice'] = (() => {
       _priceQueued = false;
       renderPage();
     },
+    // The 'order-sheet' / 'packing-list' routes: this same page opened on
+    // that tab. A form already in progress there (e.g. openOrderSheetFor's)
+    // is kept; arriving from another tab starts on the list.
+    renderView(view) {
+      _priceModalRow = null; _priceReturnHash = ''; _priceQueued = false;
+      if (_view !== view) { _view = view; if (view === 'orders') _osOf = null; else _plNew = null; }
+      renderPage();
+    },
     openPriceFor,
     openOrderSheetFor,
     openPackingListFor,
   };
 })();
+
+window.Pages['order-sheet'] = { render() { window.Pages['proforma-invoice'].renderView('orders'); } };
+window.Pages['packing-list'] = { render() { window.Pages['proforma-invoice'].renderView('packing'); } };

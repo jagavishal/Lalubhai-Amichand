@@ -99,6 +99,9 @@ const CELLS = {
   buyerAddress2: 'A10',
   buyerContact: 'A11',
   buyerEmail: 'A12',
+  // The buyer's own order reference, as typed on the PI ("Order No.") —
+  // written label-and-value together in the customer panel's first free row.
+  buyerOrderNo: 'A13',
   // Order block values (each merged J:L), labels sit in G:I
   orderNo: 'J6',
   orderDate: 'J7',

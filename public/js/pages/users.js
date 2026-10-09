@@ -76,6 +76,11 @@ window.Pages.users = (() => {
     { cat: 'Export — Factory', key: 'ims-alu',         label: 'IMS Alu & SS' },
     { cat: 'Export — Factory', key: 'ims-accessories', label: 'IMS Accessories' },
     { cat: 'Export — Marketing', key: 'proforma-invoice', label: 'Proforma Invoice' },
+    // Just the Order Sheets / Packing List tabs of that page, without the PI's
+    // create form or prices — for the packing desk. The full page above
+    // already includes both.
+    { cat: 'Export — Marketing', key: 'order-sheet',      label: 'Order Sheet' },
+    { cat: 'Export — Marketing', key: 'packing-list',     label: 'Packing List' },
     { cat: 'Export — Marketing', key: 'consignee-master', label: 'Consignee Master' },
     { cat: 'Export — Documentation', key: 'export-documentation', label: 'Export Documentation' },
 

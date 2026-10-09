@@ -24,6 +24,8 @@ window.Sidebar = {
     prcreation:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 12v6M9 15h6"/></svg>',
     pocreation:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14l2 2 4-4"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>',
     grncreation:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>',
+    ordersheet:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg>',
+    packinglist:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>',
     picreation:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1-2-1Z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>',
     signout:        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>',
     helpticket:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
@@ -179,6 +181,12 @@ window.Sidebar = {
       { route: 'ims-alu',         label: 'IMS Alu & SS',    icon: 'imsalu',    group: 'Factory' },
       { route: 'ims-accessories', label: 'IMS Accessories', icon: 'imsaccess', group: 'Factory' },
       { route: 'proforma-invoice', label: 'Proforma Invoice', icon: 'picreation', group: 'Marketing' },
+      // The Proforma Invoice page's Order Sheets / Packing List tabs on their
+      // own, for the packing desk — granted without the PI's prices. Anyone
+      // who has the whole Proforma Invoice page already has both as tabs
+      // there, so the shortcuts stay out of their menu (hiddenWith).
+      { route: 'order-sheet',  label: 'Order Sheet',  icon: 'ordersheet',  group: 'Marketing', hiddenWith: 'proforma-invoice' },
+      { route: 'packing-list', label: 'Packing List', icon: 'packinglist', group: 'Marketing', hiddenWith: 'proforma-invoice' },
       { route: 'consignee-master', label: 'Consignee Master', icon: 'consignee',  group: 'Marketing' },
       { route: 'export-documentation', label: 'Export Documentation', icon: 'exportdocs', group: 'Export Documentation' },
     ]},
@@ -343,6 +351,8 @@ window.Sidebar = {
       ? ['hr-leave', 'leave-tracker']
       : route === 'retail-new-expense'
       ? ['retail-new-expense', 'retail-dashboard']
+      : (route === 'order-sheet' || route === 'packing-list')
+      ? [route, 'proforma-invoice']
       : [route];
     return routeAliases.some(r => permissions.pages.includes(r));
   },
@@ -354,6 +364,7 @@ window.Sidebar = {
     const grantedAdminPage = !!(permissions && permissions.pages && permissions.pages.includes(item.route));
     if (item.adminOnly && !isAdmin && !grantedAdminPage) return '';
     if (item.flag && !(featureFlags || {})[item.flag]) return '';
+    if (item.hiddenWith && this.canAccess(item.hiddenWith)) return '';
     // 'inward'/'outward' were their own toggleable pages once, and 'ims' was
     // the single combined page before the per-book split (see users.js). A
     // user permissioned before either change only has those old keys saved,
@@ -369,6 +380,8 @@ window.Sidebar = {
       ? ['hr-leave', 'leave-tracker']
       : item.route === 'retail-new-expense'
       ? ['retail-new-expense', 'retail-dashboard']
+      : (item.route === 'order-sheet' || item.route === 'packing-list')
+      ? [item.route, 'proforma-invoice']
       : [item.route];
     if (!item.alwaysShow && permissions && permissions.pages && !routeAliases.some(r => permissions.pages.includes(r))) return '';
 

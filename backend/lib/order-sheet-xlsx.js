@@ -48,6 +48,7 @@ function buildOrderSheetXlsx(orderNo, form) {
     ['TRN / Tax Reg. No.', form.buyerTrn || '', '', 'Port of Loading', form.portOfLoading || ''],
     ['Address', [form.buyerAddress1, form.buyerAddress2].filter(Boolean).join(', '), '', 'Port of Discharge', form.portOfDischarge || ''],
     ['Contact', [form.buyerContact, form.buyerEmail].filter(Boolean).join(' | '), '', 'Place of Delivery', form.placeOfDelivery || ''],
+    ['Buyer Order No.', form.buyerOrderNo || ''],
     ['Shipment', form.shipmentNote || ''],
     [],
     LINE_HEADERS,
@@ -69,7 +70,8 @@ function buildOrderSheetXlsx(orderNo, form) {
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [6, 16, 14, 34, 12, 8, 12, 14, 10, 11, 11, 13, 14, 24, 40].map(w => ({ wch: w }));
   const fullWidth = (r) => ({ s: { r, c: 0 }, e: { r, c: LINE_HEADERS.length - 1 } });
-  ws['!merges'] = [fullWidth(0), fullWidth(1), fullWidth(2), fullWidth(3), fullWidth(5), { s: { r: 14, c: 1 }, e: { r: 14, c: LINE_HEADERS.length - 1 } }];
+  const shipRow = head.findIndex(r => r[0] === 'Shipment');
+  ws['!merges'] = [fullWidth(0), fullWidth(1), fullWidth(2), fullWidth(3), fullWidth(5), { s: { r: shipRow, c: 1 }, e: { r: shipRow, c: LINE_HEADERS.length - 1 } }];
   // Number formats on the figure columns, so Excel shows 0.0419 not 4.19E-2.
   const fmtCol = (c, z) => {
     for (let r = headerRowIdx + 1; r <= headerRowIdx + body.length + 1; r++) {

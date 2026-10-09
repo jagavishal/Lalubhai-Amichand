@@ -668,6 +668,7 @@ window.Pages['pr-creation'] = (() => {
             ? ''
             : '<button type="button" class="pcr-cancel-btn" data-pr="' + esc(r.prNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
           + Utils.ownerDeleteBtn('pcr-delete-btn', 'pr', r.prNo)
+          + _pendingWithHtml(r)
         + '</td>'
       + '</tr>').join('');
   }
@@ -690,6 +691,15 @@ window.Pages['pr-creation'] = (() => {
     if (r.stage === 'manager')    return pill('Manager Approved', '#ccfbf1', '#0f766e', trail + ' — Sajil Sir\'s approval pending');
     if (r.stage === 'factory')    return pill('Factory Approved', '#e0f2fe', '#0369a1', trail + ' — Manager and Sajil Sir\'s approval pending');
     return pill('Pending', '#fef3c7', '#b45309');
+  }
+
+  // Whose desk the PR is on, from the Stores FMS (see _prPendingWith in
+  // server.js) — the step's owner by name, so "Pending" says who to chase.
+  function _pendingWithHtml(r) {
+    const p = r.fmsPending;
+    if (!p || !p.owner) return '';
+    return '<div style="margin-top:4px;font-size:11px;color:#b45309;white-space:normal;" title="Stores FMS step: ' + esc(p.label) + '">'
+      + 'Pending with <b>' + esc(p.owner) + '</b> <span style="color:#94a3b8;">· ' + esc(p.label) + '</span></div>';
   }
 
   function _sumBindRowActions() {

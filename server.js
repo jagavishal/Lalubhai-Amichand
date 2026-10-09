@@ -7680,14 +7680,22 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:N`, valueRenderOption: 'FORMATTED_VALUE' });
+    const [result, fmsPending] = await Promise.all([
+      sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:N`, valueRenderOption: 'FORMATTED_VALUE' }),
+      _fmsPendingByPr(),
+    ]);
     const rows = (result.data.values || []).filter(r => r[0]).map(r => {
       let form = null;
       try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
+      const status = r[11] || 'Active';
+      // Where the PO's PR now sits in the Stores FMS, and whose step it is.
+      const pendingAt = ['Cancelled', 'Rejected'].includes(status) || !fmsPending ? null
+        : _prNosFromCell(r[9]).map(k => fmsPending.get(k)).find(Boolean) || null;
       return {
         poNo: r[0] || '', format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', department: r[4] || '',
         total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', createdAt: r[8] || '', prNo: r[9] || '', form,
-        status: r[11] || 'Active', decidedBy: r[12] || '', decidedAt: r[13] || '',
+        status, decidedBy: r[12] || '', decidedAt: r[13] || '',
+        fmsPending: pendingAt ? { label: pendingAt.label, owner: pendingAt.owner } : null,
       };
     }).reverse();
     return res.json(rows.slice(0, 200));
@@ -8376,7 +8384,10 @@ app.get('/api/pr-creation/list', requireAuth, async (req, res) => {
     // email button, so a PR the log still calls Active may well be approved
     // there — see _fmsPrApprovals. A Monitoring read failure only costs the
     // Form-derived statuses, never the list itself.
-    const fms = await _fmsPrApprovals().catch(e => { console.error('[pr-creation] FMS approval read failed:', e.message); return null; });
+    const [fms, fmsPending] = await Promise.all([
+      _fmsPrApprovals().catch(e => { console.error('[pr-creation] FMS approval read failed:', e.message); return null; }),
+      _fmsPendingByPr(),
+    ]);
     const rows = (result.data.values || []).map((r, i) => ({ r, sheetRow: i + 2 })).filter(x => x.r[0]).map(({ r, sheetRow }) => {
       let form = null;
       try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
@@ -8385,7 +8396,8 @@ app.get('/api/pr-creation/list', requireAuth, async (req, res) => {
         department: r[5] || '', total: r[6] || '', pdfLink: r[7] || '', createdBy: r[8] || '', createdAt: r[9] || '', form,
         status: r[11] || 'Active', decidedBy: r[12] || '', decidedAt: r[13] || '', sheetRow,
       };
-      return fms ? _applyFmsPrApproval(row, fms.get(_normalizePrNo(row.prNo))) : row;
+      const out = fms ? _applyFmsPrApproval(row, fms.get(_normalizePrNo(row.prNo))) : row;
+      return { ...out, fmsPending: _prPendingWith(out, fmsPending) };
     }).reverse();
     // Final Form decisions are copied into the log's own Status / Decided
     // By / Decided At (L:N) — exactly what /pr-action writes — so PO
@@ -8758,6 +8770,37 @@ async function _buildFmsPoPending() {
     },
     byStep,
   };
+}
+
+// prKey → the Stores FMS step it is waiting on ({ key, label, owner, ... }),
+// or null once its chain is complete. Shares the PO Pending report's cache so
+// the PR and PO lists do not each re-read the Monitoring tab. Null when the
+// FMS cannot be read at all — the lists then just show no "pending with".
+async function _fmsPendingByPr() {
+  const fresh = _fmsPendingCache.payload && (Date.now() - _fmsPendingCache.at) < FMS_PENDING_TTL_MS;
+  if (!fresh) {
+    try { _fmsPendingCache = { at: Date.now(), payload: await _buildFmsPoPending() }; }
+    catch (e) { console.error('[fms] PO pending read for PR/PO lists failed:', e.message); }
+  }
+  const p = _fmsPendingCache.payload;
+  return p ? new Map(p.rows.map(r => [r.prKey, r.pendingAt])) : null;
+}
+
+// Whose desk a PR is on, for the PR list: the Stores FMS's own first open
+// step when the PR is on the Monitoring tab; otherwise the next approver in
+// the same chain from the stage the log already knows. Nothing once the PR
+// is cancelled/rejected or its FMS chain is complete.
+function _prPendingWith(row, fmsPending) {
+  if (['Cancelled', 'Rejected'].includes(row.status) || !fmsPending) return null;
+  const key = _normalizePrNo(row.prNo);
+  if (fmsPending.has(key)) {
+    const at = fmsPending.get(key);
+    return at ? { label: at.label, owner: at.owner } : null;
+  }
+  if (row.status !== 'Active') return null;
+  const stepKey = row.stage === 'manager' ? 'S4B' : row.stage === 'factory' ? 'S3' : 'S2';
+  const step = FMS_PO_STEPS.find(s => s.key === stepKey);
+  return step ? { label: step.label, owner: step.owner } : null;
 }
 
 // GET /api/fms-po-pending?refresh=1 — where every tracked PR currently sits in
@@ -11455,6 +11498,9 @@ function _orderFormFromBody(b, pi, user, cleanItems) {
     orderDate: String(b.orderDate || '').trim(),
     piNo: String(b.piNo || '').trim(),
     piDate: String(p.date || '').trim(),
+    // The buyer's own order reference typed on the PI — printed on the order,
+    // the packing list and both lists, so it is carried, never re-asked.
+    buyerOrderNo: String(p.orderNo || '').trim(),
     advanceReceivedOn: String(b.advanceReceivedOn || '').trim(),
     deliveryDate: String(b.deliveryDate || '').trim(),
     buyerName: String(p.buyerName || '').trim(),
@@ -11534,6 +11580,7 @@ async function _fillOrderTemplate(sheets, form, templateSheetId) {
   put(C.buyerAddress2, form.buyerAddress2);
   put(C.buyerContact, form.buyerContact);
   put(C.buyerEmail, form.buyerEmail);
+  put(C.buyerOrderNo, form.buyerOrderNo ? 'Buyer Order No. : ' + form.buyerOrderNo : '');
   put(C.shipmentNote, form.shipmentNote);
 
   // Whatever the stored form says, verbatim — _orderFormFromBody has already
@@ -11646,6 +11693,69 @@ async function _piFormByNo(sheets, piNo) {
   return { form, status: row[10] || 'Draft', pdfLink: row[4] || '', notFound: false };
 }
 
+// PI No → the buyer's Order No. typed on that PI. Orders raised before the
+// order form carried buyerOrderNo (and packing lists built on them) read it
+// back through here instead of showing a blank.
+async function _piBuyerOrderNoMap(sheets) {
+  const map = new Map();
+  try {
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:J`, valueRenderOption: 'FORMATTED_VALUE' });
+    for (const r of (res.data.values || [])) {
+      let form = null;
+      try { form = r[9] ? JSON.parse(r[9]) : null; } catch {}
+      const no = String((form && form.orderNo) || '').trim();
+      if (r[0] && no) map.set(String(r[0]).trim(), no);
+    }
+  } catch (e) {
+    if (!/unable to parse range/i.test(e.message || '')) console.error('[order-sheet] PI log read for buyer order nos failed:', e.message);
+  }
+  return map;
+}
+
+// Who hears about a new Order Sheet / Packing List. app_config holds a JSON
+// array of emails or login names (seeded with `seed` on first read), so a
+// change of inbox is not a code change.
+async function _notifyRecipients(key, seed) {
+  const out = new Set();
+  for (const entry of await readAuthority(key, seed)) {
+    const s = String(entry || '').trim();
+    if (!s) continue;
+    if (s.includes('@')) { out.add(s.toLowerCase()); continue; }
+    const u = await userByName(s);
+    if (u && u.email) out.add(String(u.email).toLowerCase());
+  }
+  return [...out];
+}
+
+async function sendOrderSheetCreatedEmail({ orderNo, form, pdfLink, createdBy }) {
+  const mailer = getMailer();
+  if (!mailer) { console.log('[email] Order Sheet mail skipped — SMTP not configured'); return; }
+  const to = await _notifyRecipients('order_sheet_notify', ['exportorder@laltd.in']);
+  if (!to.length) return;
+  const totalQty = (form.items || []).reduce((s, it) => s + (parseFloat(String(it.qty ?? '').replace(/,/g, '')) || 0), 0);
+  await mailer.sendMail({
+    from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+    to: to.join(', '),
+    subject: `Order Sheet ${orderNo} created — ${form.buyerName || ''}${form.buyerOrderNo ? ' (Order No. ' + form.buyerOrderNo + ')' : ''}`,
+    html: _leaveMailHtml({
+      heading: 'New Order Sheet',
+      colour: '#0150AA',
+      lead: `<b>${escHtml(createdBy || 'The export team')}</b> has raised an Order Sheet in the ERP.`,
+      rows: [
+        ['Order Sheet No', orderNo], ['Buyer Order No', form.buyerOrderNo || '—'], ['Against PI', form.piNo],
+        ['Customer', form.buyerName], ['Order Date', _piDisplayDate(form.orderDate)],
+        ['Delivery / Dispatch Date', form.deliveryDate ? _piDisplayDate(form.deliveryDate) : '—'],
+        ['Lines', (form.items || []).length], ['Total Qty', totalQty || '—'], ['Created By', createdBy],
+      ].map(([k, v]) => [k, escHtml(v)]),
+      actions: pdfLink
+        ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open Order Sheet PDF</a></td></tr></table>`
+        : '',
+      footer: 'Automated notification from the ERP (Proforma Invoice → Order Sheets). Recipients are app_config "order_sheet_notify".',
+    }),
+  });
+  console.log('[email] Order Sheet mail sent to:', to.join(', '), 'for', orderNo);
+}
+
 // POST /api/order-sheet — raises the Order Sheet for one PI: fills the tab,
 // exports the PDF and logs the order. Body carries only the order-side fields;
 // everything about the customer and the goods comes from the PI.
@@ -11734,6 +11844,11 @@ app.post('/api/order-sheet', requireAuth, sheetSerialised('order', async (req, r
     // out) a save that has already succeeded.
     _closeFmsAppPageSteps('orderSheet', [piNo], req.session.user?.name || '');
 
+    // Export order desk hears about every new order — fire-and-forget, the
+    // order is already filed by now.
+    sendOrderSheetCreatedEmail({ orderNo, form: { ...form, piNo }, pdfLink, createdBy: req.session.user.name || '' })
+      .catch((e) => console.error('[order-sheet] notification mail failed:', e.message));
+
     const orderResultPayload = { success: true, orderNo, pdfLink, piNo, fmsTracked };
     _rememberCreate(dupeKey, orderResultPayload);
     return res.json(orderResultPayload);
@@ -11763,6 +11878,7 @@ app.get('/api/order-sheet/xlsx', requireAuth, async (req, res) => {
     let form = null;
     try { form = row[8] ? JSON.parse(row[8]) : null; } catch {}
     if (!form) return res.status(400).json({ error: 'Order ' + orderNo + ' has no saved detail to build a workbook from' });
+    if (!form.buyerOrderNo) form.buyerOrderNo = (await _piBuyerOrderNoMap(sheets)).get(String(row[2] || '').trim()) || '';
 
     const buf = OS_XLSX.buildOrderSheetXlsx(orderNo, form);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -11781,12 +11897,16 @@ app.get('/api/order-sheet/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J`, valueRenderOption: 'FORMATTED_VALUE' });
+    const [result, piOrderNos] = await Promise.all([
+      sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J`, valueRenderOption: 'FORMATTED_VALUE' }),
+      _piBuyerOrderNoMap(sheets),
+    ]);
     const rows = (result.data.values || []).map(r => {
       let form = null;
       try { form = r[8] ? JSON.parse(r[8]) : null; } catch {}
       return {
         orderNo: r[0] || '', orderDate: _sheetDateToIso(r[1]), piNo: r[2] || '', buyer: r[3] || '',
+        buyerOrderNo: (form && form.buyerOrderNo) || piOrderNos.get(String(r[2] || '').trim()) || '',
         totalQty: r[4] || '', pdfLink: r[5] || '', createdBy: r[6] || '', createdAt: r[7] || '',
         form, status: r[9] || 'Open',
       };
@@ -11937,10 +12057,19 @@ async function _plReadLogs(sheets) {
     return {
       orderNo: String(r[0] || '').trim(), orderDate: _sheetDateToIso(r[1]), piNo: String(r[2] || '').trim(),
       buyer: r[3] || '', pdfLink: r[5] || '', form, status: r[9] || PL_FMT.ORDER_STATUS.open,
+      buyerOrderNo: String((form && form.buyerOrderNo) || '').trim(),
     };
   }).filter(o => o.orderNo);
   const packingLists = (plRes.data.values || []).map(_plRowFromLog).filter(p => p.plNo);
   return { orders, packingLists };
+}
+
+// Orders raised before the order form stored buyerOrderNo take it from their
+// PI instead — only read when one of them is actually missing it.
+async function _plFillBuyerOrderNos(sheets, orders) {
+  if (!orders.some(o => !o.buyerOrderNo && o.piNo)) return;
+  const piMap = await _piBuyerOrderNoMap(sheets);
+  orders.forEach(o => { if (!o.buyerOrderNo) o.buyerOrderNo = piMap.get(o.piNo) || ''; });
 }
 
 // How much of every order line is already spoken for, keyed order#line.
@@ -12026,6 +12155,7 @@ app.get('/api/packing-list/pending', requireAuth, async (req, res) => {
     const sheets = google.sheets({ version: 'v4', auth });
 
     const { orders, packingLists } = await _plReadLogs(sheets);
+    await _plFillBuyerOrderNos(sheets, orders);
     const packed = _plPackedByLine(packingLists);
     const showAll = String(req.query.all || '') === '1';
 
@@ -12035,7 +12165,7 @@ app.get('/api/packing-list/pending', requireAuth, async (req, res) => {
         const lines = _plOrderLines(o, packed);
         const f = o.form || {};
         return {
-          orderNo: o.orderNo, orderDate: o.orderDate, piNo: o.piNo,
+          orderNo: o.orderNo, orderDate: o.orderDate, piNo: o.piNo, buyerOrderNo: o.buyerOrderNo,
           buyer: f.buyerName || o.buyer || '', buyerKey: _plBuyerKey(f.buyerName || o.buyer),
           status: o.status, pdfLink: o.pdfLink,
           lines,
@@ -12191,6 +12321,7 @@ function _plFormFromBody(b, orders, user, lines) {
   const f = lead.form || {};
   const orderNos = [...new Set(lines.map(l => l.orderNo))];
   const piNos = [...new Set(orderNos.map(no => (orders.find(o => o.orderNo === no) || {}).piNo).filter(Boolean))];
+  const buyerOrderNos = [...new Set(orderNos.map(no => (orders.find(o => o.orderNo === no) || {}).buyerOrderNo).filter(Boolean))];
   const D = PL_FMT.DEFAULTS;
   return {
     plDate: String(b.plDate || '').trim(),
@@ -12200,6 +12331,7 @@ function _plFormFromBody(b, orders, user, lines) {
     productCategory: String(b.productCategory || D.productCategory).trim(),
     orderNos,
     piNos,
+    buyerOrderNos,
     buyerName: String(f.buyerName || lead.buyer || '').trim(),
     totalCartons: lines.reduce((s, l) => s + l.cartons, 0),
     totalPackedQty: lines.reduce((s, l) => s + l.packedQty, 0),
@@ -12229,6 +12361,7 @@ async function _fillPackingTemplate(sheets, form, templateSheetId) {
   // reads it — "ORDER NO. :- P00595, P00660".
   const headerValue = {
     orderNos: (form.orderNos || []).join(', '),
+    buyerOrderNos: (form.buyerOrderNos || []).join(', '),
     containerSize: form.containerSize,
     invoiceNo: form.invoiceNo,
     plDate: _piDisplayDate(form.plDate),
@@ -12373,6 +12506,7 @@ app.post('/api/packing-list', requireAuth, sheetSerialised('packing', async (req
     // buyers onto it would print one party name over another's goods, so the
     // orders have to agree on who they are going to.
     const shipped = [...new Set(lines.map(l => l.orderNo))].map(no => ordersByNo.get(no));
+    await _plFillBuyerOrderNos(sheets, shipped);
     const buyerKeys = [...new Set(shipped.map(o => _plBuyerKey((o.form && o.form.buyerName) || o.buyer)))];
     if (buyerKeys.length > 1) {
       return res.status(400).json({
@@ -12410,6 +12544,10 @@ app.post('/api/packing-list', requireAuth, sheetSerialised('packing', async (req
       plNo, buyer: form.buyerName, orderNos: form.orderNos, invoiceNo: form.invoiceNo,
       totalQty: form.totalPackedQty, totalCartons: form.totalCartons, pdfLink, createdBy: req.session.user.name || '',
     }).catch((e) => console.error('[packing-list] approval mail failed:', e.message));
+    // ...and the packing desk's own FYI copy (no Approve/Reject buttons — the
+    // signed links are minted for the approver alone).
+    sendPackingListCreatedEmail({ plNo, form, pdfLink, createdBy: req.session.user.name || '' })
+      .catch((e) => console.error('[packing-list] notification mail failed:', e.message));
 
     // Reported back rather than thrown: the packing list itself is already
     // filled, exported and logged by this point, and the order's status is a
@@ -12448,6 +12586,12 @@ app.get('/api/packing-list/list', requireAuth, async (req, res) => {
     const sheets = google.sheets({ version: 'v4', auth });
     const result = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PACKING_LOG_TAB}'!A2:P`, valueRenderOption: 'FORMATTED_VALUE' });
     const rows = (result.data.values || []).map(_plRowFromLog).filter(r => r.plNo).reverse().slice(0, 200);
+    // Lists raised before the form stored buyerOrderNos read them off their PIs.
+    const piMap = rows.some(r => !(r.form && r.form.buyerOrderNos)) ? await _piBuyerOrderNoMap(sheets) : new Map();
+    rows.forEach(r => {
+      const own = r.form && r.form.buyerOrderNos;
+      r.buyerOrderNos = (own || String(r.piNos || '').split(',').map(p => piMap.get(p.trim())).filter(Boolean)).join(', ');
+    });
     return res.json(rows);
   } catch (e) {
     if (/unable to parse range/i.test(e.message || '')) return res.json([]);
@@ -12520,6 +12664,35 @@ app.delete('/api/packing-list', requireAuth, requireSuperAdmin, sheetSerialised(
 const PL_TOKEN_NS = 'pl:';
 const plActionUrl = (plNo, decision, email) =>
   `${APP_ORIGIN}/pl-action?t=${encodeURIComponent(leaveTokenFor(PL_TOKEN_NS + plNo, decision, email))}`;
+
+async function sendPackingListCreatedEmail({ plNo, form, pdfLink, createdBy }) {
+  const mailer = getMailer();
+  if (!mailer) { console.log('[email] Packing List mail skipped — SMTP not configured'); return; }
+  const to = await _notifyRecipients('packing_list_notify', ['queen1911@laltd.in']);
+  if (!to.length) return;
+  const buyerOrderNos = (form.buyerOrderNos || []).join(', ');
+  await mailer.sendMail({
+    from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+    to: to.join(', '),
+    subject: `Packing List ${plNo} created — ${form.buyerName || ''}${buyerOrderNos ? ' (Order No. ' + buyerOrderNos + ')' : ''}`,
+    html: _leaveMailHtml({
+      heading: 'New Packing List',
+      colour: '#0150AA',
+      lead: `<b>${escHtml(createdBy || 'The export team')}</b> has raised a Packing List in the ERP. It has gone to the approver for sign-off.`,
+      rows: [
+        ['Packing List No', plNo], ['Invoice No', form.invoiceNo || '—'], ['Customer', form.buyerName],
+        ['Buyer Order No', buyerOrderNos || '—'], ['Order Sheets', (form.orderNos || []).join(', ')],
+        ['Date', _piDisplayDate(form.plDate)], ['Total Packed Qty', form.totalPackedQty], ['Total Cartons', form.totalCartons],
+        ['Created By', createdBy],
+      ].map(([k, v]) => [k, escHtml(v)]),
+      actions: pdfLink
+        ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open Packing List PDF</a></td></tr></table>`
+        : '',
+      footer: 'Automated notification from the ERP (Proforma Invoice → Packing List). Recipients are app_config "packing_list_notify".',
+    }),
+  });
+  console.log('[email] Packing List mail sent to:', to.join(', '), 'for', plNo);
+}
 
 async function sendPackingListApprovalEmail({ plNo, buyer, orderNos, invoiceNo, totalQty, totalCartons, pdfLink, createdBy }) {
   const mailer = getMailer();
