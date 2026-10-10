@@ -305,6 +305,7 @@ window.Pages.dashboard = (function () {
     _state.userFilter  = 'All';
 
     _renderShell(el, admin, hod);
+    window.Festival?.mount(document.getElementById('db-wrap'));
     _paintOnLeave();
     _paintMeetings();
     } catch(err) {
