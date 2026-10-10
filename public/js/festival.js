@@ -517,12 +517,28 @@ window.Festival = (function () {
       .fest-days i.today { opacity: 1; box-shadow: 0 0 0 2px var(--surface, #fff), 0 0 0 3.5px var(--fa); }
 
       .fest-tb { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center;
-        gap: 9px; white-space: nowrap; pointer-events: none; padding: 5px 16px; border-radius: 999px;
+        gap: 9px; white-space: nowrap; padding: 4px 5px 4px 4px; border-radius: 999px;
         background: var(--color-primary-light, rgba(190,18,60,.08)); }
       .fest-tb i { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 0 2px var(--surface, #fff), 0 0 0 3px var(--color-primary); }
       .fest-tb b { font-size: 16px; font-weight: 700; color: var(--color-primary); }
       .fest-tb span { font-size: 12.5px; font-weight: 500; color: var(--text-secondary, #475569); }
-      @media (max-width: 1100px) { .fest-tb span { display: none; } }
+      .fest-tb-art { width: 32px; height: 32px; border-radius: 50%; overflow: hidden; display: grid; place-items: center;
+        background: var(--surface, #fff); flex-shrink: 0; }
+      .fest-tb-art svg { width: 32px; height: 32px; }
+      .fest-tb .fest-tb-col { display: inline-flex; align-items: center; gap: 5px; }
+      .fest-tb .fest-tb-col i { width: 9px; height: 9px; }
+      .fest-tb .fest-ctrl { padding: 2px; margin-left: 4px; }
+      .fest-tb .fest-ctrl button { padding: 3px 9px; font-size: 11px; }
+      .fest-tb .fest-ctrl button.on { color: var(--color-primary); }
+      .fest-tb-ravan, .fest-tb-on { border: 1px solid var(--color-primary); background: var(--surface, #fff); color: var(--color-primary);
+        font-size: 11.5px; font-weight: 700; border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+      .fest-tb-on { border-style: dashed; font-weight: 600; }
+      @media (max-width: 1450px) { .fest-tb .fest-tb-col { display: none; } }
+      @media (max-width: 1300px) { .fest-tb .fest-tb-mid { display: none; } }
+      /* The date beside it is also on the dashboard; give the pill the room. */
+      @media (max-width: 1600px) { #topbar:has(.fest-tb) #topbar-title + div + div { display: none !important; } }
+      /* Desktop has the topbar pill, so the dashboard banner is phones-only. */
+      @media (min-width: 768px) { .fest-banner, .fest-off { display: none !important; } }
       .fest-right { margin-left: auto; position: relative; z-index: 1; display: flex; align-items: center; gap: 12px; }
       .fest-ctrl { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px;
         background: var(--surface-alt, #f8fafc); border: 1px solid var(--border, #e2e8f0); }
@@ -745,6 +761,7 @@ window.Festival = (function () {
 
   /* ── mount ───────────────────────────────────────────────────────── */
   function mount(wrap) {
+    _wrap = wrap;
     const f = current();
     if (!f || !wrap) return;
     injectCSS();
@@ -766,14 +783,14 @@ window.Festival = (function () {
 
     if (m === 'off') {
       const t = add(`<button type="button" class="fest-off">🪔 ${f.kind === 'navratri' ? 'Navratri' : 'Dussehra'} theme is off — turn on</button>`, 'top');
-      t.querySelector('button').onclick = () => { setMode('full'); paint(wrap, f); };
+      t.querySelector('button').onclick = () => setModeAndRepaint('full');
       return;
     }
 
     const accent = f.kind === 'navratri' ? '#e11d48' : '#b45309';
     const top = add(`<div class="fest-toran"></div>${bannerHTML(f)}`, 'top');
     top.querySelector('.fest-toran').style.backgroundImage = TORAN(accent);
-    top.querySelectorAll('[data-fest-mode]').forEach(b => b.onclick = () => { setMode(b.dataset.festMode); paint(wrap, f); });
+    top.querySelectorAll('[data-fest-mode]').forEach(b => b.onclick = () => setModeAndRepaint(b.dataset.festMode));
 
     if (m !== 'full') return;
     if (f.kind === 'navratri') { add(sceneHTML(Math.max(0, f.day - 1))); mountCorners(wrap, Math.max(0, f.day - 1)); }
@@ -816,17 +833,45 @@ window.Festival = (function () {
     if (!bar) return;
     bar.querySelector('.fest-tb')?.remove();
     const f = current();
-    if (!f || mode() === 'off') return;
+    if (!f) return;
     injectCSS();
-    const nav = f.kind === 'navratri';
-    const hex = nav ? HEX[navratriColour(f.row.start, Math.max(0, f.day - 1))] : '#f59e0b';
+    const m = mode(), nav = f.kind === 'navratri';
     const g = document.createElement('div');
     g.className = 'fest-tb';
-    g.innerHTML = nav
-      ? `<i style="background:${hex}"></i><b>शुभ नवरात्रि</b><span>${f.day ? `Maa ${GODDESS[f.day - 1]}` : 'kal se shuru'}</span>`
-      : `<i style="background:${hex}"></i><b>शुभ विजयादशमी</b><span>Happy Dussehra</span>`;
+    if (m === 'off') {
+      g.innerHTML = `<button type="button" class="fest-tb-on">🪔 ${nav ? 'Navratri' : 'Dussehra'} theme · turn on</button>`;
+      g.querySelector('button').onclick = () => setModeAndRepaint('full');
+      bar.appendChild(g);
+      return;
+    }
+    const day = Math.max(0, f.day - 1);
+    let text;
+    if (nav && f.day === 0) {
+      text = `<b>शुभ नवरात्रि</b><span>कल से शुरू · Ghatasthapana ${new Date(f.row.start + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>`;
+    } else if (nav) {
+      const col = navratriColour(f.row.start, day);
+      text = `<b>शुभ नवरात्रि</b><span class="fest-tb-mid">माँ ${GODDESS_HI[day]}${f.day === 8 ? ' · Ashtami' : f.day === 9 ? ' · Navami' : ''}</span>
+        <span class="fest-tb-col"><i style="background:${HEX[col]}"></i>${col}</span>`;
+    } else {
+      text = `<b>शुभ विजयादशमी</b><span class="fest-tb-mid">असत्य पर सत्य की विजय</span>`;
+    }
+    const ravan = !nav && m === 'full' && !f.after ? `<button type="button" class="fest-tb-ravan" title="Ravan Dahan">🏹 Ravan Dahan</button>` : '';
+    g.innerHTML = `<span class="fest-tb-art">${nav ? DURGA(day, true) : BOW}</span>${text}${ravan}
+      <span class="fest-ctrl" role="group" aria-label="Festival theme">${['full', 'lite', 'off'].map(k =>
+        `<button type="button" data-fest-mode="${k}" class="${m === k ? 'on' : ''}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</span>`;
+    g.querySelectorAll('[data-fest-mode]').forEach(btn => btn.onclick = () => setModeAndRepaint(btn.dataset.festMode));
+    g.querySelector('.fest-tb-ravan')?.addEventListener('click', () => window.Festival._shoot?.(true));
     bar.appendChild(g);
   }
+
+  // The switch lives in the topbar now, so it has to repaint the dashboard too.
+  let _wrap = null;
+  function setModeAndRepaint(m) {
+    setMode(m);
+    const f = current();
+    if (f && _wrap?.isConnected) paint(_wrap, f);
+  }
+
 
   function applyTheme() {
     decorateTopbar();
