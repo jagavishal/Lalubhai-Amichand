@@ -86,34 +86,67 @@ window.Festival = (function () {
   </svg>`;
 
   // Ravan effigy: ten heads (one big, nine small), crown, body on a stand.
+  // Ravan effigy, putla style: ten crowned heads, gold armour, striped
+  // skirt, sword and shield, on a bamboo stand. .fest-fire is the burn layer.
+  let _rid = 0;
   function RAVAN() {
-    const small = [-4, -3, -2, -1, 1, 2, 3, 4].map(i => {
-      const x = 60 + i * 12.5, y = 32 + Math.abs(i) * 2.2;
-      return `<g><rect x="${x - 6}" y="${y - 12}" width="12" height="8" fill="#facc15"/><circle cx="${x}" cy="${y}" r="7" fill="#d97706"/>
-        <circle cx="${x - 2.3}" cy="${y - 1}" r="1.2" fill="#111"/><circle cx="${x + 2.3}" cy="${y - 1}" r="1.2" fill="#111"/>
-        <path d="M${x - 3} ${y + 3} q3 2 6 0" stroke="#7f1d1d" stroke-width="1.2" fill="none"/></g>`;
-    }).join('');
-    return `<svg class="fest-ravan-svg" width="26" height="42" viewBox="0 0 120 190" aria-hidden="true">
-      ${small}
-      <path d="M48 14 L52 2 L56 10 L60 0 L64 10 L68 2 L72 14Z" fill="#facc15" stroke="#b45309"/>
-      <circle cx="60" cy="30" r="13" fill="#ea580c"/>
-      <path d="M52 25 l5 2 M68 25 l-5 2" stroke="#111" stroke-width="2"/>
-      <circle cx="55" cy="29" r="2" fill="#111"/><circle cx="65" cy="29" r="2" fill="#111"/>
-      <path d="M53 37 q7 -4 14 0" stroke="#111" stroke-width="2" fill="none"/>
-      <path d="M50 40 q10 6 20 0" stroke="#111" stroke-width="2.2" fill="none"/>
-      <path d="M40 46 H80 L86 120 H34Z" fill="#b91c1c"/>
-      <path d="M40 46 H80 L78 60 H42Z" fill="#facc15"/>
-      ${[56, 70, 84, 98, 112].map(y => `<path d="M36 ${y} H84" stroke="#fde047" stroke-width="2" stroke-dasharray="4 3"/>`).join('')}
-      <path d="M40 50 L22 88 L28 90 L44 60Z M80 50 L98 88 L92 90 L76 60Z" fill="#991b1b"/>
-      <path d="M95 86 L103 40" stroke="#94a3b8" stroke-width="3"/><path d="M103 40 l-4 8 h8z" fill="#cbd5e1"/>
-      <path d="M44 120 L40 176 H50 L56 120Z M64 120 L70 176 H80 L76 120Z" fill="#7f1d1d"/>
-      <rect x="26" y="176" width="68" height="8" rx="2" fill="#78350f"/>
+    const id = 'rv' + (++_rid);
+    const head = (x, y, r, main) => {
+      const s = r / 18; // everything below is drawn for r = 18, scaled
+      return `<g transform="translate(${x} ${y}) scale(${s})">
+        <path d="M-15 -14 L-13 -34 L-6 -24 L0 -40 L6 -24 L13 -34 L15 -14Z" fill="url(#${id}g)" stroke="#92400e" stroke-width="1.4" stroke-linejoin="round"/>
+        <circle cy="-28" r="3.4" fill="#dc2626" stroke="#fde68a"/>
+        <circle r="18" fill="url(#${id}f)" stroke="#9a3412" stroke-width="1.6"/>
+        <path d="M-16 -14 Q0 -22 16 -14" stroke="${GOLD}" stroke-width="3.4" fill="none"/>
+        <path d="M-12 -6 L-3 -2 M12 -6 L3 -2" stroke="#111" stroke-width="3" stroke-linecap="round"/>
+        <ellipse cx="-6.5" cy="1" rx="4.2" ry="3" fill="#fff"/><ellipse cx="6.5" cy="1" rx="4.2" ry="3" fill="#fff"/>
+        <circle cx="-6" cy="1.4" r="2" fill="#111"/><circle cx="6" cy="1.4" r="2" fill="#111"/>
+        <path d="M0 -10 V-3" stroke="#dc2626" stroke-width="2.4"/>
+        <path d="M0 9 C-6 4 -12 6 -15 12 C-12 9 -7 9 -2 12 M0 9 C6 4 12 6 15 12 C12 9 7 9 2 12" fill="#111" stroke="#111" stroke-width="1.6" stroke-linejoin="round"/>
+        <path d="M-5 13 Q0 16.5 5 13" stroke="#7f1d1d" stroke-width="1.8" fill="none"/>
+        ${main ? '<circle cx="-18" cy="4" r="3" fill="#facc15"/><circle cx="18" cy="4" r="3" fill="#facc15"/>' : ''}
+      </g>`;
+    };
+    const side = [4, 3, 2, 1].map(i => head(80 - i * 16.5, 50 + i * 2.6, 13 - i * 0.6) + head(80 + i * 16.5, 50 + i * 2.6, 13 - i * 0.6)).join('');
+    return `<svg class="fest-ravan-svg" width="28" height="42" viewBox="0 0 160 240" aria-label="Ravan">
+      <defs>
+        <radialGradient id="${id}f" cx=".4" cy=".35" r=".75"><stop offset="0" stop-color="#fdba74"/><stop offset=".6" stop-color="#f97316"/><stop offset="1" stop-color="#c2410c"/></radialGradient>
+        <linearGradient id="${id}g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fef3c7"/><stop offset=".45" stop-color="#f5b301"/><stop offset="1" stop-color="#b7791f"/></linearGradient>
+        <linearGradient id="${id}a" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fde68a"/><stop offset=".5" stop-color="#eab308"/><stop offset="1" stop-color="#a16207"/></linearGradient>
+      </defs>
+      <path d="M62 196 L56 232 M98 196 L104 232" stroke="#a16207" stroke-width="4"/>
+      <path d="M58 214 H102" stroke="#a16207" stroke-width="3"/>
+      <rect x="34" y="230" width="92" height="9" rx="3" fill="#78350f"/>
+      <path d="M66 180 L62 226 H72 L76 182Z M94 180 L98 226 H88 L84 182Z" fill="#7f1d1d"/>
+      <path d="M60 218 h14 M86 218 h14" stroke="${GOLD}" stroke-width="3"/>
+      <path d="M50 136 H110 L124 196 H36Z" fill="#dc2626"/>
+      ${[0, 1, 2, 3, 4, 5, 6].map(i => `<path d="M${46 + i * 11} 138 L${40 + i * 13.5} 196" stroke="${i % 2 ? '#facc15' : '#16a34a'}" stroke-width="4"/>`).join('')}
+      <path d="M36 190 H124 L126 198 H34Z" fill="${GOLD}"/>
+      <path d="M48 86 Q80 74 112 86 L110 140 H50Z" fill="url(#${id}a)" stroke="#a16207" stroke-width="1.4"/>
+      <path d="M56 100 Q80 92 104 100 M58 116 Q80 108 102 116" stroke="#a16207" stroke-width="2" fill="none"/>
+      <circle cx="80" cy="112" r="10" fill="#dc2626" stroke="${GOLD}" stroke-width="3"/><circle cx="80" cy="112" r="4" fill="#fde68a"/>
+      <rect x="48" y="130" width="64" height="9" rx="2" fill="#15803d"/>
+      ${[54, 64, 74, 86, 96, 106].map(x => `<circle cx="${x}" cy="134.5" r="2" fill="${GOLD}"/>`).join('')}
+      <path d="M48 88 Q34 96 26 132" stroke="#7f1d1d" stroke-width="11" fill="none" stroke-linecap="round"/>
+      <path d="M112 88 Q126 96 134 128" stroke="#7f1d1d" stroke-width="11" fill="none" stroke-linecap="round"/>
+      <ellipse cx="46" cy="90" rx="11" ry="8" fill="#dc2626" stroke="${GOLD}" stroke-width="2"/><ellipse cx="114" cy="90" rx="11" ry="8" fill="#dc2626" stroke="${GOLD}" stroke-width="2"/>
+      <path d="M22 134 L18 70" stroke="#cbd5e1" stroke-width="5" stroke-linecap="round"/><path d="M18 70 l-3 -10 l6 2z" fill="#e2e8f0"/>
+      <path d="M12 134 H32" stroke="${GOLD}" stroke-width="5" stroke-linecap="round"/><circle cx="26" cy="134" r="5" fill="#f3c08d"/>
+      <circle cx="138" cy="132" r="17" fill="url(#${id}g)" stroke="#dc2626" stroke-width="4"/><circle cx="138" cy="132" r="6" fill="#dc2626"/>
+      ${[0, 72, 144, 216, 288].map(a => `<circle cx="138" cy="120" r="2" fill="#dc2626" transform="rotate(${a} 138 132)"/>`).join('')}
+      <path d="M60 84 Q80 98 100 84" stroke="${GOLD}" stroke-width="5" fill="none"/>
+      ${side}
+      ${head(80, 22, 10)}
+      ${head(80, 50, 19, true)}
       <g class="fest-fire">
-        ${[[40, 150], [60, 110], [80, 150], [50, 70], [70, 70], [60, 30]].map(([x, y], i) =>
-          `<path style="animation-delay:${i * 0.12}s" d="M${x} ${y - 26} C${x + 14} ${y - 8} ${x + 10} ${y + 8} ${x} ${y + 10} C${x - 10} ${y + 8} ${x - 14} ${y - 8} ${x} ${y - 26}Z" fill="${i % 2 ? '#f97316' : '#fbbf24'}"/>`).join('')}
+        ${[[50, 190], [80, 150], [110, 190], [62, 110], [98, 110], [80, 60], [40, 70], [120, 70]].map(([x, y], i) =>
+          `<path style="animation-delay:${i * 0.11}s" d="M${x} ${y - 30} C${x + 16} ${y - 10} ${x + 12} ${y + 9} ${x} ${y + 12} C${x - 12} ${y + 9} ${x - 16} ${y - 10} ${x} ${y - 30}Z" fill="${i % 2 ? '#f97316' : '#fbbf24'}"/>
+           <path style="animation-delay:${i * 0.11 + 0.05}s" d="M${x} ${y - 14} C${x + 7} ${y - 4} ${x + 6} ${y + 6} ${x} ${y + 8} C${x - 6} ${y + 6} ${x - 7} ${y - 4} ${x} ${y - 14}Z" fill="#fff7d6"/>`).join('')}
       </g>
     </svg>`;
   }
+
+
 
   /* ── Navratri scene (bottom of the dashboard) ────────────────────── */
   // Drawn in SVG so it needs no image files. It sits in the page flow at the
@@ -172,74 +205,111 @@ window.Festival = (function () {
     none: '',
   };
 
-  // day: 0..8. portrait = head-and-shoulders crop for the banner / login orb.
+  // Hex blend, for shading the day's saree colour without hand-picking nine shades.
+  function mix(a, b, t) {
+    const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+    const x = p(a), y = p(b);
+    return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join('');
+  }
+  let _gid = 0; // gradient ids must be unique per <svg> on the page
+
+  // day: 0..8. portrait = face crop for the banner / topbar / login orb.
   function DURGA(day, portrait) {
     const g = NAVADURGA[Math.max(0, Math.min(8, day))];
-    const skin = g.skin || SKIN, skinD = g.skinD || SKIN_D;
+    const id = 'dg' + (++_gid);
+    const skin = g.skin || SKIN, skinD = g.skinD || SKIN_D, hairC = g.wild ? '#0b0b0b' : '#1a1110';
     const white = g.saree === '#f8fafc';
-    const border = white ? '#f59e0b' : GOLD;
+    const sareeTop = white ? '#ffffff' : mix(g.saree, '#ffffff', 0.12), sareeBot = white ? '#e7e5e4' : mix(g.saree, '#000000', 0.28);
+
     const rays = Array.from({ length: 24 }, (_, i) =>
-      `<path d="M110 92 L106 6 L114 6Z" fill="${i % 2 ? '#fde68a' : '#fdba74'}" transform="rotate(${i * 15} 110 92)"/>`).join('');
+      `<path d="M110 92 L106 8 L114 8Z" fill="${i % 2 ? '#fde68a' : '#fdba74'}" transform="rotate(${i * 15} 110 92)"/>`).join('');
+    const petals = Array.from({ length: 16 }, (_, i) =>
+      `<ellipse cx="110" cy="30" rx="6" ry="11" fill="#fbbf24" stroke="#d97706" stroke-width="1" transform="rotate(${i * 22.5} 110 92)"/>`).join('');
+
     const half = Math.ceil(g.items.length / 2);
-    const left = ARM_POS[half] || ARM_POS[4];
     const arms = g.items.map((item, i) => {
       const side = i < half ? 0 : 1, k = side ? i - half : i;
-      const pos = (side ? ARM_POS[g.items.length - half] : left) || left;
+      const pos = (side ? ARM_POS[g.items.length - half] : ARM_POS[half]) || ARM_POS[4];
       let [x, y] = pos[k];
       if (side) x = 220 - x;
-      const sx = side ? 128 : 92, sy = 146;
-      return `<path d="M${sx} ${sy} Q${(sx + x) / 2} ${(sy + y) / 2 + 12} ${x} ${y}" stroke="${skin}" stroke-width="9" fill="none" stroke-linecap="round"/>
-        <path d="M${x - 5} ${y + 7} q5 4 10 0" stroke="${GOLD}" stroke-width="3" fill="none"/>
-        <circle cx="${x}" cy="${y}" r="6" fill="${skin}"/>${ITEM(item, x, y).replace(/\$SKIN/g, skin)}`;
+      const sx = side ? 128 : 92, sy = 148, mx = (sx + x) / 2, my = (sy + y) / 2 + 12;
+      return `<path d="M${sx} ${sy} Q${mx} ${my} ${x} ${y}" stroke="${skinD}" stroke-width="11" fill="none" stroke-linecap="round"/>
+        <path d="M${sx} ${sy} Q${mx} ${my} ${x} ${y}" stroke="${skin}" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <circle cx="${mx}" cy="${my - 6}" r="4.5" fill="none" stroke="${GOLD}" stroke-width="2.6"/>
+        <path d="M${x - 6} ${y + 7} q6 5 12 0 M${x - 6} ${y + 10} q6 5 12 0" stroke="${GOLD}" stroke-width="2.2" fill="none"/>
+        <circle cx="${x}" cy="${y}" r="6.5" fill="${skin}" stroke="${skinD}" stroke-width="1"/><circle cx="${x}" cy="${y}" r="2" fill="#dc2626" opacity=".7"/>
+        ${ITEM(item, x, y).replace(/\$SKIN/g, skin)}`;
     }).join('');
-    const hair = g.wild
-      ? `<path d="M70 70 L60 60 L74 58 L70 40 L86 50 L92 30 L102 46 L110 26 L118 46 L128 30 L134 50 L150 40 L146 58 L160 60 L150 70 Q156 120 152 152 L68 152 Q64 120 70 70Z" fill="#111"/>`
-      : `<path d="M78 66 Q72 120 70 150 L150 150 Q148 120 142 66Z" fill="#1f1410"/>`;
+
+    const hairBack = g.wild
+      ? `<path d="M74 70 L58 62 L72 56 L62 40 L82 46 L86 26 L100 42 L110 22 L120 42 L134 26 L138 46 L158 40 L148 56 L162 62 L146 70 Q160 120 158 160 L62 160 Q60 120 74 70Z" fill="${hairC}"/>`
+      : `<path d="M80 64 Q64 112 62 160 Q86 170 110 168 Q134 170 158 160 Q156 112 140 64Z" fill="${hairC}"/>
+         <path d="M76 90 Q70 120 70 150 M144 90 Q150 120 150 150" stroke="#3a2a22" stroke-width="2" fill="none" opacity=".7"/>`;
+
     const crown = g.ascetic
-      ? `<ellipse cx="110" cy="58" rx="14" ry="11" fill="#1f1410"/><path d="M98 60 Q110 52 122 60" stroke="#92400e" stroke-width="2.4" stroke-dasharray="1 3" stroke-linecap="round" fill="none"/>`
-      : `<path d="M82 74 L85 40 L96 56 L110 22 L124 56 L135 40 L138 74 Q110 64 82 74Z" fill="${GOLD}" stroke="${GOLD_D}" stroke-width="1.5"/>
-         <circle cx="110" cy="46" r="5" fill="#dc2626" stroke="#fff" stroke-width="1.2"/><circle cx="96" cy="62" r="3" fill="#16a34a"/><circle cx="124" cy="62" r="3" fill="#16a34a"/>
-         <path d="M82 74 Q110 64 138 74" stroke="#dc2626" stroke-width="2.4" fill="none"/>`;
-    const moon = g.moon ? `<path d="M100 ${g.ascetic ? 44 : 16} q10 10 20 0 q-10 5 -20 0Z" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1"/>` : '';
-    const baby = g.baby ? `<g><path d="M96 230 Q96 196 110 194 Q124 196 124 230Z" fill="#f59e0b"/><circle cx="110" cy="186" r="10" fill="${SKIN}"/>
-      <path d="M102 180 L104 170 L110 176 L116 170 L118 180Z" fill="${GOLD}"/><circle cx="106" cy="186" r="1.3" fill="#1f1410"/><circle cx="114" cy="186" r="1.3" fill="#1f1410"/>
-      <path d="M107 190 q3 2 6 0" stroke="#be123c" stroke-width="1.2" fill="none"/></g>` : '';
-    const eyeFill = g.wild ? '#fff' : '#fff';
+      ? `<ellipse cx="110" cy="58" rx="15" ry="12" fill="${hairC}"/><path d="M96 60 Q110 50 124 60" stroke="#92400e" stroke-width="3" stroke-dasharray="1 3.4" stroke-linecap="round" fill="none"/>
+         <path d="M110 66 V76" stroke="#dc2626" stroke-width="2"/>`
+      : `<path d="M80 74 L81 48 L92 58 L97 36 L106 50 L110 18 L114 50 L123 36 L128 58 L139 48 L140 74 Q110 63 80 74Z" fill="url(#${id}g)" stroke="${GOLD_D}" stroke-width="1.4" stroke-linejoin="round"/>
+         <path d="M82 70 Q110 60 138 70" stroke="#dc2626" stroke-width="3" fill="none"/>
+         <path d="M82 66 Q110 56 138 66" stroke="#fff7d6" stroke-width="1.2" fill="none" stroke-dasharray="2 3"/>
+         <circle cx="110" cy="44" r="5.5" fill="#dc2626" stroke="#fff7d6" stroke-width="1.5"/><circle cx="108.4" cy="42.4" r="1.6" fill="#fff" opacity=".9"/>
+         <circle cx="97" cy="54" r="3.2" fill="#16a34a" stroke="#fff7d6"/><circle cx="123" cy="54" r="3.2" fill="#16a34a" stroke="#fff7d6"/>
+         <circle cx="88" cy="63" r="2.4" fill="#dc2626"/><circle cx="132" cy="63" r="2.4" fill="#dc2626"/>
+         ${[86, 92, 98, 104, 110, 116, 122, 128, 134].map(x => `<circle cx="${x}" cy="${75 - 6 * (1 - Math.abs(x - 110) / 24)}" r="1.7" fill="#fff" stroke="#e5e7eb" stroke-width=".5"/>`).join('')}`;
+    const moon = g.moon ? `<path d="M99 ${g.ascetic ? 44 : 14} q11 11 22 0 q-11 6 -22 0Z" fill="#f8fafc" stroke="#94a3b8" stroke-width="1"/>` : '';
+    const baby = g.baby ? `<g><path d="M95 230 Q95 194 110 192 Q125 194 125 230Z" fill="#f59e0b" stroke="#b45309"/><circle cx="110" cy="184" r="11" fill="${SKIN}" stroke="${SKIN_D}"/>
+      <path d="M101 177 L103 166 L110 173 L117 166 L119 177Z" fill="${GOLD}" stroke="${GOLD_D}" stroke-width=".8"/><circle cx="106" cy="184" r="1.5" fill="#1f1410"/><circle cx="114" cy="184" r="1.5" fill="#1f1410"/>
+      <ellipse cx="103" cy="188" rx="2.5" ry="1.5" fill="#fb7185" opacity=".5"/><ellipse cx="117" cy="188" rx="2.5" ry="1.5" fill="#fb7185" opacity=".5"/>
+      <path d="M107 189 q3 2.4 6 0" stroke="#be123c" stroke-width="1.3" fill="none"/></g>` : '';
+    // eye: almond, iris with highlight, winged liner, lashes
+    const eye = (cx, dir) => `<path d="M${cx - 8} 98 Q${cx} 89 ${cx + 8} 98 Q${cx} 104 ${cx - 8} 98Z" fill="#fff"/>
+      <circle cx="${cx + dir * 0.6}" cy="97.6" r="4.3" fill="#3b2314"/><circle cx="${cx + dir * 0.6}" cy="97.6" r="2.2" fill="#000"/><circle cx="${cx + dir * 0.6 + 1.4}" cy="96" r="1.3" fill="#fff"/>
+      <path d="M${cx - 9} 97.5 Q${cx} 88 ${cx + 9} 97.5 l${dir * 3.5} -2.6" stroke="#111" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+      <path d="M${cx - 8} 98 Q${cx} 104 ${cx + 8} 98" stroke="#111" stroke-width=".9" fill="none"/>`;
     const vb = portrait ? '68 30 84 84' : '0 0 220 230';
     return `<svg class="${portrait ? 'fx-portrait' : 'fx-durga'}" width="${portrait ? 54 : 220}" height="${portrait ? 54 : 230}" viewBox="${vb}" aria-label="Maa ${GODDESS[day]}">
-      <defs><radialGradient id="fxHalo${day}${portrait ? 'p' : ''}"><stop offset="0" stop-color="#fff7d6"/><stop offset=".6" stop-color="#fde68a"/><stop offset="1" stop-color="#fb923c"/></radialGradient></defs>
-      ${portrait ? '' : `<g class="fx-rays">${rays}</g>`}
-      <circle cx="110" cy="92" r="58" fill="url(#fxHalo${day}${portrait ? 'p' : ''})"/>
-      <circle cx="110" cy="92" r="58" fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="2 5"/>
+      <defs>
+        <radialGradient id="${id}h"><stop offset="0" stop-color="#fffbeb"/><stop offset=".55" stop-color="#fde68a"/><stop offset="1" stop-color="#fb923c"/></radialGradient>
+        <radialGradient id="${id}s" cx=".42" cy=".38" r=".7"><stop offset="0" stop-color="${mix(skin, '#ffffff', 0.3)}"/><stop offset=".6" stop-color="${skin}"/><stop offset="1" stop-color="${skinD}"/></radialGradient>
+        <linearGradient id="${id}r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${sareeTop}"/><stop offset="1" stop-color="${sareeBot}"/></linearGradient>
+        <linearGradient id="${id}g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fef3c7"/><stop offset=".45" stop-color="#f5b301"/><stop offset="1" stop-color="#b7791f"/></linearGradient>
+      </defs>
+      ${portrait ? '' : `<g class="fx-rays">${rays}</g>${petals}`}
+      <circle cx="110" cy="92" r="58" fill="url(#${id}h)"/>
+      <circle cx="110" cy="92" r="54" fill="none" stroke="#fff7d6" stroke-width="1.6" stroke-dasharray="1 5" stroke-linecap="round"/>
       ${portrait ? '' : arms}
-      ${hair}
-      <path d="M68 150 Q110 132 152 150 L170 230 H50Z" fill="${g.saree}" ${white ? 'stroke="#e5e7eb"' : ''}/>
-      <path d="M68 150 Q110 132 152 150 L150 158 Q110 142 70 158Z" fill="${border}"/>
-      <path d="M58 214 H162 L166 230 H54Z" fill="${border}"/>
-      ${[66, 82, 98, 114, 130, 146].map(x => `<circle cx="${x + 6}" cy="222" r="2.2" fill="${white ? '#dc2626' : '#b91c1c'}"/>`).join('')}
-      <path d="M120 146 L156 230 H140 L110 150Z" fill="${white ? '#f59e0b' : '#000'}" opacity="${white ? '.35' : '.18'}"/>
-      <path d="M124 146 L160 228" stroke="${border}" stroke-width="4"/>
-      <rect x="102" y="118" width="16" height="20" fill="${skinD}"/>
+      ${hairBack}
+      <path d="M64 154 Q110 136 156 154 L172 230 H48Z" fill="url(#${id}r)" ${white ? 'stroke="#e5e7eb"' : ''}/>
+      <path d="M64 154 Q110 136 156 154 L154 162 Q110 146 66 162Z" fill="url(#${id}g)"/>
+      <path d="M52 212 H168 L172 230 H48Z" fill="url(#${id}g)"/>
+      ${[58, 70, 82, 94, 106, 118, 130, 142, 154].map(x => `<path d="M${x} 221 l4 -5 l4 5 l-4 5z" fill="${white ? '#dc2626' : mix(g.saree, '#000000', 0.2)}"/>`).join('')}
+      <path d="M118 148 Q150 172 162 230 H140 Q130 182 104 152Z" fill="${mix(white ? '#f59e0b' : g.saree, '#000000', white ? 0 : 0.18)}" opacity="${white ? '.35' : '1'}"/>
+      <path d="M118 148 Q150 172 162 230" stroke="url(#${id}g)" stroke-width="5" fill="none"/>
+      ${[0.2, 0.4, 0.6, 0.8].map(k => `<circle cx="${128 + 30 * k}" cy="${160 + 64 * k}" r="2" fill="#fff7d6" opacity=".8"/>`).join('')}
+      <path d="M100 118 Q100 136 96 146 L124 146 Q120 136 120 118Z" fill="${skinD}"/>
       ${g.ascetic
-        ? `<path d="M92 140 Q110 166 128 140" stroke="#92400e" stroke-width="3" fill="none" stroke-dasharray="1 4" stroke-linecap="round"/>`
-        : `<path d="M90 140 Q110 162 130 140" stroke="${GOLD}" stroke-width="4" fill="none"/>
-           <path d="M94 142 Q110 172 126 142" stroke="#f97316" stroke-width="5" fill="none" stroke-dasharray="1 6" stroke-linecap="round"/>
-           <circle cx="110" cy="160" r="5" fill="#dc2626" stroke="${GOLD}" stroke-width="2"/>`}
-      <ellipse cx="110" cy="98" rx="24" ry="28" fill="${skin}"/>
-      <path d="M86 92 Q88 66 110 64 Q132 66 134 92 Q126 76 110 76 Q94 76 86 92Z" fill="${g.wild ? '#111' : '#1f1410'}"/>
+        ? `<path d="M90 142 Q110 172 130 142" stroke="#92400e" stroke-width="3.4" fill="none" stroke-dasharray="1 4.2" stroke-linecap="round"/>`
+        : `<path d="M92 138 Q110 152 128 138" stroke="url(#${id}g)" stroke-width="6" fill="none"/>
+           ${[96, 102, 110, 118, 124].map(x => `<circle cx="${x}" cy="${144 + 4 * (1 - Math.abs(x - 110) / 16)}" r="2" fill="#dc2626"/>`).join('')}
+           <path d="M88 142 Q110 178 132 142" stroke="${GOLD}" stroke-width="2.6" fill="none"/>
+           <path d="M110 166 l-6 6 l6 8 l6 -8z" fill="#dc2626" stroke="${GOLD}" stroke-width="2"/>`}
+      <ellipse cx="84" cy="100" rx="4" ry="6" fill="${skinD}"/><ellipse cx="136" cy="100" rx="4" ry="6" fill="${skinD}"/>
+      <ellipse cx="110" cy="99" rx="26" ry="29" fill="url(#${id}s)"/>
+      <path d="M84 96 Q84 66 110 62 Q136 66 136 96 Q132 76 112 74 L110 66 L108 74 Q88 76 84 96Z" fill="${hairC}"/>
+      <path d="M110 64 V73" stroke="#dc2626" stroke-width="2.2"/>
       ${crown}${moon}
-      <ellipse cx="110" cy="84" rx="2" ry="4.5" fill="#dc2626"/>
-      <path d="M94 88 Q100 84 106 88 M114 88 Q120 84 126 88" stroke="#1f1410" stroke-width="2" fill="none" stroke-linecap="round"/>
-      <path d="M93 96 Q100 90 107 96 Q100 100 93 96Z M113 96 Q120 90 127 96 Q120 100 113 96Z" fill="${eyeFill}" stroke="#1f1410" stroke-width="1.8"/>
-      <circle cx="100" cy="95.5" r="2.6" fill="#1f1410"/><circle cx="120" cy="95.5" r="2.6" fill="#1f1410"/>
-      <path d="M92 95 l-3 -2 M128 95 l3 -2" stroke="#1f1410" stroke-width="1.6" stroke-linecap="round"/>
-      <path d="M110 99 L108 108 Q110 110 112 108" stroke="${skinD}" stroke-width="1.6" fill="none"/>
-      ${g.ascetic ? '' : `<circle cx="105" cy="109" r="3.6" fill="none" stroke="${GOLD}" stroke-width="1.6"/>`}
-      <path d="M103 115 Q110 120 117 115 Q110 117 103 115Z" fill="#be123c" stroke="#be123c" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="M110 77 V82" stroke="${GOLD}" stroke-width="1"/><ellipse cx="110" cy="85.5" rx="2.4" ry="4.8" fill="#dc2626" stroke="${GOLD}" stroke-width="1"/>
+      <path d="M92 89 Q100 83.5 107 88 M113 88 Q120 83.5 128 89" stroke="#1a1110" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      ${eye(100, -1)}${eye(120, 1)}
+      <ellipse cx="94" cy="110" rx="6" ry="3.4" fill="#fb7185" opacity=".38"/><ellipse cx="126" cy="110" rx="6" ry="3.4" fill="#fb7185" opacity=".38"/>
+      <path d="M110 100 Q108 108 107 110 Q110 112 113 110" stroke="${skinD}" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <path d="M102 117.5 Q106 114.5 110 116.5 Q114 114.5 118 117.5 Q110 124 102 117.5Z" fill="#be123c"/>
+      <path d="M106 119.5 q4 1.6 8 0" stroke="#fda4af" stroke-width="1" fill="none" opacity=".8"/>
       ${g.ascetic
-        ? `<circle cx="86" cy="106" r="2.6" fill="#92400e"/><circle cx="134" cy="106" r="2.6" fill="#92400e"/>`
-        : `<circle cx="86" cy="106" r="3.4" fill="${GOLD}"/><path d="M86 109 l-3 8 h6z" fill="${GOLD}"/>
-           <circle cx="134" cy="106" r="3.4" fill="${GOLD}"/><path d="M134 109 l-3 8 h6z" fill="${GOLD}"/>`}
+        ? `<circle cx="84" cy="108" r="2.8" fill="#92400e"/><circle cx="136" cy="108" r="2.8" fill="#92400e"/>`
+        : `<circle cx="104" cy="111" r="4.6" fill="none" stroke="${GOLD}" stroke-width="1.6"/><circle cx="100.2" cy="112.6" r="1.4" fill="#fff"/>
+           <path d="M104 106.5 Q92 100 86 104" stroke="${GOLD}" stroke-width=".9" fill="none"/>
+           ${[84, 136].map(x => `<path d="M${x - 5} 110 Q${x} 102 ${x + 5} 110Z" fill="url(#${id}g)"/>${[-4, -1.3, 1.3, 4].map(d => `<circle cx="${x + d}" cy="112.5" r="1.1" fill="#fff"/>`).join('')}`).join('')}`}
       ${portrait ? '' : baby + VAHANA[g.vahana]}
     </svg>`;
   }
@@ -455,10 +525,13 @@ window.Festival = (function () {
       .fx-corner.right { right: 18px; }
       .fx-corner.right .fx-durga { width: 190px; height: 199px; display: block; }
       .fx-corner.peek { opacity: .1; }
+      .fx-corner .fx-durga, .fx-corner .fest-ravan-svg, .fx-corner .fx-ram, .fx-couple .fx-dancer, .fx-scene .fx-durga, .fx-scene .fx-dancer {
+        filter: drop-shadow(2.5px 0 0 #fff) drop-shadow(-2.5px 0 0 #fff) drop-shadow(0 2.5px 0 #fff) drop-shadow(0 -2.5px 0 #fff)
+                drop-shadow(0 6px 8px rgba(0,0,0,.22)); }
       .fx-pill.dussehra { background: linear-gradient(90deg, #b45309, #dc2626); }
       .fx-ram .fx-str-loose, .fx-corner.loosed .fx-str-drawn, .fx-corner.loosed .fx-ram-arrow { display: none; }
       .fx-corner.loosed .fx-str-loose { display: inline; }
-      .fx-ravan .fest-ravan-svg { width: 150px; height: 238px; display: block; }
+      .fx-ravan .fest-ravan-svg { width: 160px; height: 240px; display: block; }
       .fx-ravan.burning .fest-fire { opacity: .95; }
       .fx-ravan.burning .fest-ravan-svg { animation: festShake .2s linear infinite; }
       .fx-ravan.burnt { opacity: 0; transition: opacity 1.2s; }
