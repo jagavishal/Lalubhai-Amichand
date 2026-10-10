@@ -82,7 +82,7 @@ window.Festival = (function () {
   </svg>`;
 
   // Crossed dandiya sticks with ribbon bands.
-  const DANDIYA = `<svg width="120" height="120" viewBox="0 0 120 120" aria-hidden="true">
+  const DANDIYA = `<svg width="72" height="72" viewBox="0 0 120 120" aria-hidden="true">
     <g class="fest-sway">
       <g transform="rotate(-35 60 60)">
         <rect x="55" y="6" width="10" height="108" rx="5" fill="#be123c"/>
@@ -98,7 +98,7 @@ window.Festival = (function () {
   </svg>`;
 
   // Garba deepak — the perforated pot danced around.
-  const GARBO = `<svg width="96" height="120" viewBox="0 0 96 120" aria-hidden="true">
+  const GARBO = `<svg width="54" height="68" viewBox="0 0 96 120" aria-hidden="true">
     <path class="fest-flame" d="M48 4 C55 15 55 22 48 28 C41 22 41 15 48 4Z" fill="#fbbf24"/>
     <path d="M48 12 C51 17 51 21 48 25 C45 21 45 17 48 12Z" fill="#fff7d6"/>
     <rect x="38" y="28" width="20" height="8" rx="2" fill="#b45309"/>
@@ -123,7 +123,7 @@ window.Festival = (function () {
         <circle cx="${x - 2.3}" cy="${y - 1}" r="1.2" fill="#111"/><circle cx="${x + 2.3}" cy="${y - 1}" r="1.2" fill="#111"/>
         <path d="M${x - 3} ${y + 3} q3 2 6 0" stroke="#7f1d1d" stroke-width="1.2" fill="none"/></g>`;
     }).join('');
-    return `<svg class="fest-ravan-svg" width="150" height="190" viewBox="0 0 120 190" aria-hidden="true">
+    return `<svg class="fest-ravan-svg" width="64" height="100" viewBox="0 0 120 190" aria-hidden="true">
       ${small}
       <path d="M48 14 L52 2 L56 10 L60 0 L64 10 L68 2 L72 14Z" fill="#facc15" stroke="#b45309"/>
       <circle cx="60" cy="30" r="13" fill="#ea580c"/>
@@ -173,7 +173,7 @@ window.Festival = (function () {
       .fest-days { display: flex; gap: 4px; margin-top: 8px; }
       .fest-days span { width: 18px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.3); }
       .fest-days span.on { background: #fff; }
-      .fest-ctrl { margin-left: auto; position: relative; z-index: 1; display: inline-flex; background: rgba(0,0,0,.18);
+      .fest-ctrl { position: relative; z-index: 1; display: inline-flex; background: rgba(0,0,0,.18);
         border-radius: 999px; padding: 3px; gap: 2px; align-self: flex-start; }
       .fest-ctrl button { border: 0; background: transparent; color: #fff; font-size: 11.5px; font-weight: 600; padding: 4px 11px;
         border-radius: 999px; cursor: pointer; }
@@ -182,7 +182,7 @@ window.Festival = (function () {
       .fest-off { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted, #64748b);
         background: none; border: 1px dashed currentColor; border-radius: 999px; padding: 3px 12px; cursor: pointer; margin-bottom: 14px; }
 
-      .fest-diya .fest-flame, .fest-corner .fest-flame { transform-origin: 50% 100%; animation: festFlicker .5s ease-in-out infinite alternate; }
+      .fest-diya .fest-flame, .fest-art .fest-flame { transform-origin: 50% 100%; animation: festFlicker .5s ease-in-out infinite alternate; }
       @keyframes festFlicker { from { transform: scale(1, 1) } to { transform: scale(.88, 1.12) } }
       .fest-hole { animation: festGlow 1.4s ease-in-out infinite alternate; }
       .fest-hole:nth-child(3n) { animation-delay: .5s } .fest-hole:nth-child(3n+1) { animation-delay: .9s }
@@ -190,12 +190,12 @@ window.Festival = (function () {
       .fest-sway { transform-origin: 60px 60px; animation: festSway 1.6s ease-in-out infinite alternate; }
       @keyframes festSway { from { transform: rotate(-6deg) } to { transform: rotate(6deg) } }
 
-      .fest-corner { position: fixed; bottom: 12px; z-index: 30; pointer-events: none; filter: drop-shadow(0 6px 10px rgba(0,0,0,.18)); }
-      .fest-corner.left { left: calc(var(--sidebar-w, 72px) + 12px); }
-      .fest-corner.right { right: 18px; }
-      .fest-corner.clickable { pointer-events: auto; cursor: pointer; }
-      .fest-tag { position: absolute; left: 50%; transform: translateX(-50%); top: -26px; white-space: nowrap; font-size: 11.5px;
-        font-weight: 700; color: #fff; background: #b91c1c; padding: 3px 10px; border-radius: 999px; box-shadow: 0 3px 8px rgba(0,0,0,.2); }
+      /* Art sits inside the banner, never fixed over the page — it used to cover table rows. */
+      .fest-right { margin-left: auto; position: relative; z-index: 1; display: flex; align-items: center; gap: 14px; }
+      .fest-art { display: flex; filter: drop-shadow(0 4px 6px rgba(0,0,0,.2)); }
+      .fest-art.fest-ravan { cursor: pointer; flex-direction: column; align-items: center; margin: -8px 0; }
+      .fest-tag { white-space: nowrap; font-size: 10.5px; font-weight: 700; color: #b91c1c; background: #fff; padding: 1px 8px;
+        border-radius: 999px; margin-bottom: 2px; }
 
       .fest-fire { opacity: 0; transition: opacity .4s; }
       .fest-fire path { transform-box: fill-box; transform-origin: 50% 100%; animation: festFlicker .35s ease-in-out infinite alternate; }
@@ -215,9 +215,9 @@ window.Festival = (function () {
       .fest-canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 25; }
 
       @media (max-width: 767px) {
-        .fest-corner, .fest-banner .fest-mandala { display: none; }
+        .fest-art.deco, .fest-banner .fest-mandala { display: none; }
+        .fest-right { margin-left: 0; }
         .fest-title { font-size: 18px; }
-        .fest-ctrl { margin-left: 0; }
         .fest-toran { margin-top: -2px; }
       }
       @media (prefers-reduced-motion: reduce) {
@@ -334,12 +334,13 @@ window.Festival = (function () {
         chip = `<div class="fest-chip"><i style="background:${HEX[col]}"></i>Today's colour: ${col}</div>
           <div class="fest-days" aria-hidden="true">${Array.from({ length: 9 }, (_, i) => `<span class="${i < f.day ? 'on' : ''}"></span>`).join('')}</div>`;
       }
+      const full = m === 'full';
       return `<div class="fest-banner navratri">
-        ${MANDALA}${DIYA}
+        ${MANDALA}${full ? `<span class="fest-art">${GARBO}</span>` : DIYA}
         <div style="position:relative;z-index:1;">
           <div class="fest-title">शुभ नवरात्रि · Happy Navratri</div>
           <div class="fest-sub">${sub}</div>${chip}
-        </div>${ctrl}
+        </div><div class="fest-right">${full ? `<span class="fest-art deco">${DANDIYA}</span>` : ''}${ctrl}</div>
       </div>`;
     }
 
@@ -348,13 +349,15 @@ window.Festival = (function () {
       <div style="position:relative;z-index:1;">
         <div class="fest-title">शुभ विजयादशमी · Happy Dussehra</div>
         <div class="fest-sub">असत्य पर सत्य की विजय — may good always win over evil.${m === 'full' && !f.after ? ' Click Ravan to light him up!' : ''}</div>
-      </div>${ctrl}
+      </div><div class="fest-right">${m === 'full' && !f.after
+        ? `<span class="fest-art fest-ravan" role="button" tabindex="0" title="Ravan Dahan — click to shoot the arrow"><span class="fest-tag">🏹 Ravan Dahan</span>${RAVAN()}</span>`
+        : ''}${ctrl}</div>
     </div>`;
   }
 
   /* ── Ravan dahan ─────────────────────────────────────────────────── */
-  function wireRavan(host) {
-    const rav = host.querySelector('.fest-ravan');
+  function wireRavan(banner, host) {
+    const rav = banner.querySelector('.fest-ravan');
     if (!rav) return;
     rav.addEventListener('click', () => {
       if (rav.classList.contains('burning')) return;
@@ -413,11 +416,9 @@ window.Festival = (function () {
     top.querySelectorAll('[data-fest-mode]').forEach(b => b.onclick = () => { setMode(b.dataset.festMode); paint(wrap, f); });
 
     if (m !== 'full') return;
-    const fx = add(f.kind === 'navratri'
-      ? `<div class="fest-corner left">${GARBO}</div><div class="fest-corner right">${DANDIYA}</div>`
-      : (f.after ? '' : `<div class="fest-corner right clickable fest-ravan" title="Ravan Dahan — click to shoot the arrow"><span class="fest-tag">🏹 Ravan Dahan</span>${RAVAN()}</div>`));
+    const fx = add('');
     startParticles(fx, f.kind);
-    wireRavan(fx);
+    wireRavan(top, fx);
   }
 
   return { mount, current };
