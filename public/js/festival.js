@@ -290,25 +290,132 @@ window.Festival = (function () {
     right.className = 'fx-corner right';
     right.innerHTML = DURGA(day);
     document.body.append(left, right);
-    wrap.classList.add('fx-pad');
+    peekAndWatch(wrap, [left, right]);
+  }
 
+  // Corner art lives on <body> (the dashboard wrapper is transformed, which
+  // would pin position:fixed to it), so it fades near the mouse and takes
+  // itself down once the dashboard is gone. onGone runs at teardown.
+  function peekAndWatch(wrap, els, onGone) {
+    wrap.classList.add('fx-pad');
     let raf = 0, mx = -1e4, my = -1e4;
     const near = () => {
       raf = 0;
-      for (const el of [left, right]) {
+      for (const el of els) {
         const b = el.getBoundingClientRect();
         el.classList.toggle('peek', mx > b.left - 30 && mx < b.right + 30 && my > b.top - 30 && my < b.bottom + 30);
       }
     };
     const onMove = e => { mx = e.clientX; my = e.clientY; if (!raf) raf = requestAnimationFrame(near); };
     document.addEventListener('mousemove', onMove, { passive: true });
-    // Body-level, so take them down ourselves once the dashboard is gone.
     const watch = setInterval(() => {
-      if (wrap.isConnected && left.isConnected) return;
+      if (wrap.isConnected && els[0].isConnected) return;
       clearInterval(watch);
       document.removeEventListener('mousemove', onMove);
-      left.remove(); right.remove();
+      els.forEach(el => el.remove());
+      onGone?.();
     }, 700);
+  }
+
+  /* ── Dussehra: Shri Ram shoots, Ravan burns ──────────────────────── */
+  const RAM_BLUE = '#5b8def', RAM_BLUE_D = '#3f6fcf';
+  const RAM = `<svg class="fx-ram" width="180" height="220" viewBox="0 0 180 220" aria-label="Shri Ram">
+    <circle cx="66" cy="48" r="34" fill="#fde68a" opacity=".6"/>
+    <g transform="rotate(-18 40 100)">
+      <rect x="30" y="72" width="15" height="58" rx="4" fill="#92400e" stroke="#78350f"/>
+      <path d="M32 74 l-3 -16 M37 74 v-18 M42 74 l3 -16" stroke="#78350f" stroke-width="2"/>
+      <path d="M26 56 l3 -8 l3 8z M34 54 l3 -8 l3 8z M42 56 l3 -8 l3 8z" fill="#dc2626"/>
+    </g>
+    <path d="M48 128 H92 L104 196 H83 L72 152 L61 196 H38Z" fill="#facc15"/>
+    <path d="M40 188 H62 M82 188 H103" stroke="#dc2626" stroke-width="4"/>
+    <ellipse cx="50" cy="201" rx="13" ry="5" fill="${RAM_BLUE_D}"/><ellipse cx="95" cy="201" rx="13" ry="5" fill="${RAM_BLUE_D}"/>
+    <path d="M50 80 Q70 72 90 80 L94 130 H46Z" fill="${RAM_BLUE}"/>
+    <path d="M52 80 L92 126" stroke="#f97316" stroke-width="7"/>
+    <path d="M58 82 L86 126" stroke="#fff" stroke-width="1.2" opacity=".8"/>
+    <rect x="44" y="124" width="52" height="8" rx="2" fill="#dc2626"/>
+    ${[50, 60, 70, 80, 90].map(x => `<circle cx="${x}" cy="128" r="1.6" fill="${GOLD}"/>`).join('')}
+    <path d="M58 82 Q70 96 82 82" stroke="${GOLD}" stroke-width="3" fill="none"/>
+    <path d="M55 82 Q70 106 85 82" stroke="#fde68a" stroke-width="3" fill="none" stroke-dasharray="1 4" stroke-linecap="round"/>
+    <path d="M54 86 Q42 78 76 70" stroke="${RAM_BLUE}" stroke-width="9" fill="none" stroke-linecap="round"/>
+    <path d="M47 80 l6 4" stroke="${GOLD}" stroke-width="3"/>
+    <path d="M50 46 Q48 74 56 86 L80 86 Q86 70 82 46Z" fill="#111"/>
+    <rect x="61" y="62" width="12" height="16" fill="${RAM_BLUE_D}"/>
+    <circle cx="67" cy="52" r="15" fill="${RAM_BLUE}"/>
+    <path d="M52 40 L54 16 L61 27 L67 6 L73 27 L80 16 L82 40 Q67 34 52 40Z" fill="${GOLD}" stroke="${GOLD_D}" stroke-width="1.2"/>
+    <circle cx="67" cy="24" r="3.4" fill="#dc2626" stroke="#fff" stroke-width="1"/>
+    <path d="M64 38 v7 q3 3 6 0 v-7" stroke="#fff" stroke-width="1.6" fill="none"/><path d="M67 39 v7" stroke="#dc2626" stroke-width="1.4"/>
+    <path d="M68 50 Q73 46 78 50 Q73 53 68 50Z" fill="#fff" stroke="#111" stroke-width="1.4"/><circle cx="75" cy="50" r="1.8" fill="#111"/>
+    <path d="M58 50 Q62 47 65 50" stroke="#111" stroke-width="1.4" fill="none"/>
+    <path d="M70 59 q4 3 8 0" stroke="#7f1d1d" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+    <circle cx="55" cy="58" r="2.8" fill="${GOLD}"/>
+    <path d="M86 86 Q112 80 140 76" stroke="${RAM_BLUE}" stroke-width="9" fill="none" stroke-linecap="round"/>
+    <path d="M104 78 l2 8" stroke="${GOLD}" stroke-width="3"/>
+    <path d="M136 14 Q182 76 136 138" stroke="#92400e" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <path d="M136 14 Q182 76 136 138" stroke="#fcd34d" stroke-width="1.4" fill="none" stroke-dasharray="3 6"/>
+    <path class="fx-str-drawn" d="M136 14 L76 70 L136 138" stroke="#e5e7eb" stroke-width="1.4" fill="none"/>
+    <path class="fx-str-loose" d="M136 14 L136 138" stroke="#e5e7eb" stroke-width="1.4" fill="none"/>
+    <g class="fx-ram-arrow">
+      <path d="M76 70 L168 72" stroke="#78350f" stroke-width="3"/>
+      <path d="M176 72 l-10 -5 v10z" fill="#94a3b8"/>
+      <path d="M76 70 l-6 -5 M76 70 l-6 5 M82 70 l-6 -5 M82 70 l-6 5" stroke="#dc2626" stroke-width="2"/>
+    </g>
+    <circle cx="140" cy="76" r="6" fill="${RAM_BLUE}"/><circle cx="76" cy="70" r="6" fill="${RAM_BLUE}"/>
+  </svg>`;
+
+  function mountDussehra(wrap) {
+    document.querySelectorAll('.fx-corner').forEach(n => n.remove());
+    const left = document.createElement('div');
+    left.className = 'fx-corner left';
+    left.innerHTML = `<div class="fx-pill dussehra">🏹 जय श्री राम</div>${RAM}`;
+    const right = document.createElement('div');
+    right.className = 'fx-corner right fx-ravan';
+    right.innerHTML = RAVAN();
+    document.body.append(left, right);
+
+    let busy = false, timers = [];
+    const later = (fn, ms) => timers.push(setTimeout(fn, ms));
+    function shoot(popup) {
+      if (busy || !right.isConnected) return;
+      busy = true;
+      const a = left.querySelector('.fx-ram-arrow').getBoundingClientRect();
+      const t = right.querySelector('svg').getBoundingClientRect();
+      const sx = a.left, sy = a.top + a.height / 2;
+      const tx = t.left + t.width * 0.5 - 90, ty = t.top + t.height * 0.4;
+      left.classList.add('loosed');
+      const arrow = document.createElement('div');
+      arrow.className = 'fest-arrow';
+      Object.assign(arrow.style, { left: '0px', top: '0px' });
+      document.body.appendChild(arrow);
+      // Arc over the page: height grows with distance, angle follows the path.
+      const H = Math.min(260, (tx - sx) * 0.25);
+      const frames = Array.from({ length: 13 }, (_, i) => {
+        const k = i / 12;
+        const x = sx + (tx - sx) * k, y = sy + (ty - sy) * k - H * 4 * k * (1 - k);
+        const ang = Math.atan2((ty - sy) - H * 4 * (1 - 2 * k), tx - sx);
+        return { transform: `translate(${x}px, ${y}px) rotate(${ang}rad)` };
+      });
+      arrow.animate(frames, { duration: 1100, easing: 'linear', fill: 'forwards' }).finished.then(() => {
+        arrow.remove();
+        right.classList.add('burning');
+        fireworks(document.body, tx + 90, ty);
+        if (popup) {
+          const v = document.createElement('div');
+          v.className = 'fest-victory';
+          v.innerHTML = 'जय श्री राम 🏹<small>Happy Dussehra from Lalubhai Amichand</small>';
+          document.body.appendChild(v);
+          requestAnimationFrame(() => v.classList.add('show'));
+          later(() => v.classList.remove('show'), 2600);
+          later(() => v.remove(), 3000);
+        }
+      });
+      later(() => left.classList.remove('loosed'), 1600);   // Ram nocks the next arrow
+      later(() => right.classList.add('burnt'), 4200);      // effigy burns down…
+      later(() => { right.classList.remove('burning', 'burnt'); busy = false; }, 8000); // …and a new one stands
+    }
+    window.Festival._shoot = shoot;
+    later(() => shoot(true), 2200);                          // once on arrival, with the greeting
+    const loop = setInterval(() => shoot(false), 25000);     // then quietly every 25 s
+    peekAndWatch(wrap, [left, right], () => { clearInterval(loop); timers.forEach(clearTimeout); window.Festival._shoot = null; });
   }
 
   function sceneHTML(day) {
@@ -348,6 +455,13 @@ window.Festival = (function () {
       .fx-corner.right { right: 18px; }
       .fx-corner.right .fx-durga { width: 190px; height: 199px; display: block; }
       .fx-corner.peek { opacity: .1; }
+      .fx-pill.dussehra { background: linear-gradient(90deg, #b45309, #dc2626); }
+      .fx-ram .fx-str-loose, .fx-corner.loosed .fx-str-drawn, .fx-corner.loosed .fx-ram-arrow { display: none; }
+      .fx-corner.loosed .fx-str-loose { display: inline; }
+      .fx-ravan .fest-ravan-svg { width: 150px; height: 238px; display: block; }
+      .fx-ravan.burning .fest-fire { opacity: .95; }
+      .fx-ravan.burning .fest-ravan-svg { animation: festShake .2s linear infinite; }
+      .fx-ravan.burnt { opacity: 0; transition: opacity 1.2s; }
       .fx-couple { display: flex; align-items: flex-end; margin-left: -10px; }
       .fx-couple .fx-dancer { width: 92px; height: 189px; margin: 0 -8px; }
       .fx-pill { font-size: 17px; font-weight: 800; color: #fff; padding: 6px 16px; border-radius: 999px; margin-bottom: 2px;
@@ -434,9 +548,9 @@ window.Festival = (function () {
       .fest-ravan.burning .fest-ravan-svg { animation: festShake .2s linear infinite; }
       .fest-ravan.burnt { opacity: 0; transition: opacity 1s; pointer-events: none; }
       @keyframes festShake { 0%,100% { transform: translateX(0) } 50% { transform: translateX(1.5px) } }
-      .fest-arrow { position: fixed; z-index: 31; pointer-events: none; width: 60px; height: 3px; background: #78350f; }
-      .fest-arrow::after { content: ''; position: absolute; right: -10px; top: -5px; border-left: 12px solid #b91c1c;
-        border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
+      .fest-arrow { position: fixed; z-index: 31; pointer-events: none; width: 90px; height: 4px; background: #78350f; border-radius: 2px; }
+      .fest-arrow::after { content: ''; position: absolute; right: -10px; top: -5px; border-left: 16px solid #b91c1c;
+        border-top: 8px solid transparent; border-bottom: 8px solid transparent; top: -6px; right: -14px; }
       .fest-victory { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%) scale(.9); z-index: 40; pointer-events: none;
         font-size: 28px; font-weight: 800; color: #b91c1c; background: var(--surface, #fff); padding: 16px 32px; border-radius: 16px;
         border-top: 4px solid #f59e0b; box-shadow: 0 20px 50px rgba(15,23,42,.18); opacity: 0; transition: opacity .3s, transform .3s; text-align: center; }
@@ -601,6 +715,9 @@ window.Festival = (function () {
     const rav = banner.querySelector('.fest-ravan');
     if (!rav) return;
     rav.addEventListener('click', () => {
+      // Desktop: Ram ji in the corner does the shooting.
+      const corner = document.querySelector('.fx-ravan');
+      if (corner && getComputedStyle(corner).display !== 'none' && window.Festival._shoot) { window.Festival._shoot(true); return; }
       if (rav.classList.contains('burning')) return;
       const r = rav.getBoundingClientRect();
       const tx = r.left + r.width / 2, ty = r.top + r.height * 0.35;
@@ -660,6 +777,7 @@ window.Festival = (function () {
 
     if (m !== 'full') return;
     if (f.kind === 'navratri') { add(sceneHTML(Math.max(0, f.day - 1))); mountCorners(wrap, Math.max(0, f.day - 1)); }
+    if (f.kind === 'dussehra' && !f.after) mountDussehra(wrap);
     const fx = add('');
     startParticles(fx, f.kind);
     wireRavan(top, fx);
@@ -880,5 +998,5 @@ window.Festival = (function () {
 
   applyTheme();
 
-  return { mount, current, decorateLogin, decorateTopbar, applyTheme };
+  return { mount, current, decorateLogin, decorateTopbar, applyTheme, _shoot: null };
 })();
