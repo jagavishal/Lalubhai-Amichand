@@ -77,16 +77,6 @@ window.Festival = (function () {
 
   // Crossed dandiya sticks with ribbon bands.
 
-  // Garba deepak — the perforated pot danced around.
-  const GARBO = `<svg width="30" height="38" viewBox="0 0 96 120" aria-hidden="true">
-    <path class="fest-flame" d="M48 4 C55 15 55 22 48 28 C41 22 41 15 48 4Z" fill="#fbbf24"/>
-    <path d="M48 12 C51 17 51 21 48 25 C45 21 45 17 48 12Z" fill="#fff7d6"/>
-    <rect x="38" y="28" width="20" height="8" rx="2" fill="#b45309"/>
-    <path d="M30 36 H66 C86 48 90 72 80 92 C72 108 24 108 16 92 C6 72 10 48 30 36Z" fill="#ea580c"/>
-    <path d="M16 70 H80" stroke="#facc15" stroke-width="4"/>
-    ${[[30, 52], [48, 50], [66, 52], [24, 84], [40, 86], [56, 86], [72, 84], [32, 98], [48, 99], [64, 98]]
-      .map(([x, y]) => `<circle class="fest-hole" cx="${x}" cy="${y}" r="3.2" fill="#fde68a"/>`).join('')}
-  </svg>`;
 
   const BOW = `<svg width="32" height="32" viewBox="0 0 46 46" aria-hidden="true">
     <path d="M10 4 C34 10 36 36 10 42" stroke="#92400e" stroke-width="3.5" fill="none" stroke-linecap="round"/>
@@ -130,62 +120,127 @@ window.Festival = (function () {
   // end of the dashboard — never fixed over the content.
   const SKIN = '#f3c08d', SKIN_D = '#d99a62', GOLD = '#f5b301', GOLD_D = '#b7791f';
 
-  function DURGA() {
+  // The nine forms, one per day — what each one holds, wears and rides, so
+  // the picture changes with the day the way the puja does.
+  const NAVADURGA = [
+    { saree: '#e11d48', items: ['trishul', 'lotus'], moon: true, vahana: 'bull' },                        // Shailputri
+    { saree: '#f8fafc', items: ['mala', 'kamandal'], ascetic: true, vahana: 'none' },                   // Brahmacharini
+    { saree: '#f59e0b', items: ['trishul', 'sword', 'mace', 'bow', 'lotus', 'bell', 'chakra', 'conch', 'arrow', 'kamandal'], moon: true, vahana: 'tiger' }, // Chandraghanta
+    { saree: '#f97316', items: ['kamandal', 'bow', 'arrow', 'lotus', 'kalash', 'chakra', 'mace', 'mala'], vahana: 'lion' },     // Kushmanda
+    { saree: '#eab308', items: ['lotus', 'bless', 'lotus', 'abhaya'], baby: true, vahana: 'lion' },       // Skandamata
+    { saree: '#dc2626', items: ['sword', 'bless', 'lotus', 'abhaya'], vahana: 'lion' },                  // Katyayani
+    { saree: '#7f1d1d', items: ['sword', 'bless', 'hook', 'abhaya'], skin: '#4a3f4f', skinD: '#3a3140', wild: true, vahana: 'donkey' }, // Kalaratri
+    { saree: '#f8fafc', items: ['trishul', 'bless', 'damaru', 'abhaya'], skin: '#fde3cc', skinD: '#ebc7a5', vahana: 'bull' }, // Mahagauri
+    { saree: '#be123c', items: ['chakra', 'conch', 'mace', 'lotus'], vahana: 'lotus' },                 // Siddhidatri
+  ];
+  const ARM_POS = { 1: [[40, 112]], 2: [[34, 72], [40, 150]], 4: [[34, 62], [22, 100], [26, 140], [44, 172]],
+                    5: [[38, 52], [24, 82], [18, 114], [26, 146], [46, 176]] };
+
+  function ITEM(item, x, y) {
+    return {
+      trishul: `<path d="M${x} ${y + 30} V${y - 26} M${x - 9} ${y - 18} Q${x - 9} ${y - 6} ${x} ${y - 8} Q${x + 9} ${y - 6} ${x + 9} ${y - 18} M${x} ${y - 26} l-3 6 h6z" stroke="${GOLD_D}" stroke-width="2.6" fill="none" stroke-linecap="round"/>`,
+      chakra:  `<circle cx="${x}" cy="${y - 14}" r="10" fill="#fde68a" stroke="${GOLD_D}" stroke-width="2"/>${[0, 45, 90, 135].map(a => `<path d="M${x - 10} ${y - 14} H${x + 10}" stroke="${GOLD_D}" stroke-width="1.4" transform="rotate(${a} ${x} ${y - 14})"/>`).join('')}`,
+      conch:   `<path d="M${x - 8} ${y - 6} Q${x - 4} ${y - 26} ${x + 9} ${y - 18} Q${x + 4} ${y - 10} ${x + 8} ${y - 4} Q${x} ${y} ${x - 8} ${y - 6}Z" fill="#fff" stroke="#cbd5e1" stroke-width="1.4"/>`,
+      lotus:   [-28, 0, 28].map(a => `<ellipse cx="${x}" cy="${y - 14}" rx="5" ry="11" fill="#f9a8d4" stroke="#db2777" stroke-width="1" transform="rotate(${a} ${x} ${y - 6})"/>`).join(''),
+      sword:   `<path d="M${x} ${y + 6} L${x - 3} ${y - 34} L${x} ${y - 42} L${x + 3} ${y - 34}Z" fill="#e2e8f0" stroke="#94a3b8"/><path d="M${x - 7} ${y - 2} H${x + 7}" stroke="${GOLD_D}" stroke-width="3" stroke-linecap="round"/>`,
+      bow:     `<path d="M${x - 2} ${y - 34} Q${x + 18} ${y - 6} ${x - 2} ${y + 22}" stroke="#92400e" stroke-width="3" fill="none"/><path d="M${x - 2} ${y - 34} V${y + 22}" stroke="#fcd34d" stroke-width="1"/>`,
+      arrow:   `<path d="M${x} ${y + 14} V${y - 30}" stroke="#78350f" stroke-width="2.2"/><path d="M${x} ${y - 36} l-4 8 h8z" fill="#94a3b8"/><path d="M${x} ${y + 14} l-4 5 M${x} ${y + 14} l4 5" stroke="#dc2626" stroke-width="2"/>`,
+      mace:    `<path d="M${x} ${y + 10} V${y - 18}" stroke="${GOLD_D}" stroke-width="3"/><circle cx="${x}" cy="${y - 24}" r="8" fill="${GOLD}" stroke="${GOLD_D}" stroke-width="1.5"/>`,
+      bell:    `<path d="M${x - 8} ${y - 6} Q${x - 8} ${y - 24} ${x} ${y - 24} Q${x + 8} ${y - 24} ${x + 8} ${y - 6}Z" fill="${GOLD}" stroke="${GOLD_D}"/><circle cx="${x}" cy="${y - 3}" r="2.4" fill="${GOLD_D}"/>`,
+      mala:    Array.from({ length: 12 }, (_, i) => { const a = i / 12 * Math.PI * 2; return `<circle cx="${(x + Math.cos(a) * 9).toFixed(1)}" cy="${(y - 12 + Math.sin(a) * 11).toFixed(1)}" r="2.2" fill="#92400e"/>`; }).join(''),
+      kamandal:`<path d="M${x - 9} ${y - 18} Q${x - 11} ${y - 2} ${x} ${y - 2} Q${x + 11} ${y - 2} ${x + 9} ${y - 18}Z" fill="${GOLD}" stroke="${GOLD_D}"/><path d="M${x + 8} ${y - 14} q8 -2 9 -10" stroke="${GOLD_D}" stroke-width="2" fill="none"/><path d="M${x - 9} ${y - 18} Q${x} ${y - 28} ${x + 9} ${y - 18}" stroke="${GOLD_D}" stroke-width="1.6" fill="none"/>`,
+      kalash:  `<path d="M${x - 9} ${y - 16} Q${x - 12} ${y - 2} ${x} ${y - 2} Q${x + 12} ${y - 2} ${x + 9} ${y - 16}Z" fill="#c2410c" stroke="${GOLD}" stroke-width="1.5"/><circle cx="${x}" cy="${y - 22}" r="6" fill="#92400e"/><path d="M${x - 10} ${y - 18} q4 -6 8 -2 M${x + 10} ${y - 18} q-4 -6 -8 -2" stroke="#16a34a" stroke-width="2.4" fill="none"/>`,
+      hook:    `<path d="M${x} ${y + 12} V${y - 26} q0 -8 -8 -6" stroke="#64748b" stroke-width="2.8" fill="none" stroke-linecap="round"/><path d="M${x} ${y - 26} l4 -8" stroke="#64748b" stroke-width="2.8" stroke-linecap="round"/>`,
+      damaru:  `<path d="M${x - 8} ${y - 26} H${x + 8} L${x - 8} ${y - 4} H${x + 8}Z" fill="#b45309" stroke="#78350f" stroke-width="1.4"/><path d="M${x + 8} ${y - 15} q6 2 6 8" stroke="#78350f" stroke-width="1.2" fill="none"/>`,
+      bless:   `<path d="M${x - 5} ${y - 4} V${y - 16} M${x - 1} ${y - 5} V${y - 19} M${x + 3} ${y - 5} V${y - 18} M${x + 7} ${y - 3} V${y - 13}" stroke="${'$SKIN'}" stroke-width="3.4" stroke-linecap="round"/><circle cx="${x + 1}" cy="${y - 7}" r="2" fill="#dc2626"/>`,
+      abhaya:  `<path d="M${x - 5} ${y - 4} V${y - 16} M${x - 1} ${y - 5} V${y - 19} M${x + 3} ${y - 5} V${y - 18} M${x + 7} ${y - 3} V${y - 13}" stroke="${'$SKIN'}" stroke-width="3.4" stroke-linecap="round"/>`,
+    }[item] || '';
+  }
+
+  const VAHANA = {
+    lion: `<g transform="translate(22 206)"><circle r="22" fill="#b45309" stroke="#92400e" stroke-width="3" stroke-dasharray="4 3"/><circle r="14" fill="#f59e0b"/>
+      <circle cx="-5" cy="-3" r="2" fill="#1f1410"/><circle cx="5" cy="-3" r="2" fill="#1f1410"/><path d="M-3 3 h6 l-3 3z" fill="#7c2d12"/><path d="M-5 8 q5 4 10 0" stroke="#7c2d12" stroke-width="1.4" fill="none"/></g>`,
+    tiger: `<g transform="translate(22 208)"><circle cx="-13" cy="-14" r="6" fill="#f97316"/><circle cx="13" cy="-14" r="6" fill="#f97316"/><circle r="18" fill="#f97316"/>
+      <path d="M-6 -17 l2 7 M0 -18 v7 M6 -17 l-2 7 M-17 -2 h7 M17 -2 h-7 M-16 5 h6 M16 5 h-6" stroke="#1f1410" stroke-width="2.2" stroke-linecap="round"/>
+      <ellipse cy="7" rx="9" ry="7" fill="#fff"/><circle cx="-6" cy="-4" r="2" fill="#1f1410"/><circle cx="6" cy="-4" r="2" fill="#1f1410"/><path d="M-3 3 h6 l-3 3z" fill="#be185d"/></g>`,
+    bull: `<g transform="translate(22 208)"><path d="M-12 -14 Q-24 -18 -22 -30 M12 -14 Q24 -18 22 -30" stroke="#d6d3d1" stroke-width="4" fill="none" stroke-linecap="round"/>
+      <ellipse cx="-17" cy="-8" rx="7" ry="4" fill="#e7e5e4"/><ellipse cx="17" cy="-8" rx="7" ry="4" fill="#e7e5e4"/><ellipse rx="14" ry="19" fill="#fafaf9" stroke="#d6d3d1" stroke-width="1.5"/>
+      <circle cx="-5" cy="-5" r="2" fill="#1f1410"/><circle cx="5" cy="-5" r="2" fill="#1f1410"/><ellipse cy="10" rx="10" ry="6" fill="#fbcfe8"/><circle cy="-13" r="3" fill="#dc2626"/></g>`,
+    donkey: `<g transform="translate(22 208)"><ellipse cx="-8" cy="-24" rx="4" ry="12" fill="#9ca3af" transform="rotate(-14 -8 -24)"/><ellipse cx="8" cy="-24" rx="4" ry="12" fill="#9ca3af" transform="rotate(14 8 -24)"/>
+      <ellipse rx="13" ry="19" fill="#9ca3af"/><ellipse cy="10" rx="9" ry="7" fill="#e5e7eb"/><circle cx="-5" cy="-5" r="2" fill="#1f1410"/><circle cx="5" cy="-5" r="2" fill="#1f1410"/></g>`,
+    lotus: `<g>${[-50, -30, -10, 10, 30, 50].map(dx => `<ellipse cx="${110 + dx}" cy="224" rx="12" ry="7" fill="#f9a8d4" stroke="#db2777" stroke-width="1"/>`).join('')}</g>`,
+    none: '',
+  };
+
+  // day: 0..8. portrait = head-and-shoulders crop for the banner / login orb.
+  function DURGA(day, portrait) {
+    const g = NAVADURGA[Math.max(0, Math.min(8, day))];
+    const skin = g.skin || SKIN, skinD = g.skinD || SKIN_D;
+    const white = g.saree === '#f8fafc';
+    const border = white ? '#f59e0b' : GOLD;
     const rays = Array.from({ length: 24 }, (_, i) =>
       `<path d="M110 92 L106 6 L114 6Z" fill="${i % 2 ? '#fde68a' : '#fdba74'}" transform="rotate(${i * 15} 110 92)"/>`).join('');
-    // Eight arms fan out behind the body: [hand x, hand y, item]
-    const arms = [
-      [34, 62, 'trishul'], [22, 100, 'chakra'], [26, 140, 'conch'], [44, 172, 'lotus'],
-      [186, 62, 'sword'], [198, 100, 'bow'], [194, 140, 'mace'], [176, 172, 'bell'],
-    ].map(([x, y, item]) => {
-      const sx = x < 110 ? 92 : 128, sy = 146;
-      const it = {
-        trishul: `<path d="M${x} ${y + 30} V${y - 26} M${x - 9} ${y - 18} Q${x - 9} ${y - 6} ${x} ${y - 8} Q${x + 9} ${y - 6} ${x + 9} ${y - 18} M${x} ${y - 26} l-3 6 h6z" stroke="${GOLD_D}" stroke-width="2.6" fill="none" stroke-linecap="round"/>`,
-        chakra:  `<circle cx="${x}" cy="${y - 14}" r="10" fill="#fde68a" stroke="${GOLD_D}" stroke-width="2"/>${[0, 45, 90, 135].map(a => `<path d="M${x - 10} ${y - 14} H${x + 10}" stroke="${GOLD_D}" stroke-width="1.4" transform="rotate(${a} ${x} ${y - 14})"/>`).join('')}`,
-        conch:   `<path d="M${x - 8} ${y - 6} Q${x - 4} ${y - 26} ${x + 9} ${y - 18} Q${x + 4} ${y - 10} ${x + 8} ${y - 4} Q${x} ${y} ${x - 8} ${y - 6}Z" fill="#fff" stroke="#cbd5e1" stroke-width="1.4"/>`,
-        lotus:   `${[-28, 0, 28].map(a => `<ellipse cx="${x}" cy="${y - 14}" rx="5" ry="11" fill="#f9a8d4" stroke="#db2777" stroke-width="1" transform="rotate(${a} ${x} ${y - 6})"/>`).join('')}`,
-        sword:   `<path d="M${x} ${y + 6} L${x - 3} ${y - 34} L${x} ${y - 42} L${x + 3} ${y - 34}Z" fill="#e2e8f0" stroke="#94a3b8"/><path d="M${x - 7} ${y - 2} H${x + 7}" stroke="${GOLD_D}" stroke-width="3" stroke-linecap="round"/>`,
-        bow:     `<path d="M${x - 2} ${y - 34} Q${x + 18} ${y - 6} ${x - 2} ${y + 22}" stroke="#92400e" stroke-width="3" fill="none"/><path d="M${x - 2} ${y - 34} V${y + 22}" stroke="#fcd34d" stroke-width="1"/>`,
-        mace:    `<path d="M${x} ${y + 10} V${y - 18}" stroke="${GOLD_D}" stroke-width="3"/><circle cx="${x}" cy="${y - 24}" r="8" fill="${GOLD}" stroke="${GOLD_D}" stroke-width="1.5"/>`,
-        bell:    `<path d="M${x - 8} ${y - 6} Q${x - 8} ${y - 24} ${x} ${y - 24} Q${x + 8} ${y - 24} ${x + 8} ${y - 6}Z" fill="${GOLD}" stroke="${GOLD_D}"/><circle cx="${x}" cy="${y - 3}" r="2.4" fill="${GOLD_D}"/>`,
-      }[item];
-      return `<path d="M${sx} ${sy} Q${(sx + x) / 2} ${(sy + y) / 2 + 12} ${x} ${y}" stroke="${SKIN}" stroke-width="9" fill="none" stroke-linecap="round"/>
+    const half = Math.ceil(g.items.length / 2);
+    const left = ARM_POS[half] || ARM_POS[4];
+    const arms = g.items.map((item, i) => {
+      const side = i < half ? 0 : 1, k = side ? i - half : i;
+      const pos = (side ? ARM_POS[g.items.length - half] : left) || left;
+      let [x, y] = pos[k];
+      if (side) x = 220 - x;
+      const sx = side ? 128 : 92, sy = 146;
+      return `<path d="M${sx} ${sy} Q${(sx + x) / 2} ${(sy + y) / 2 + 12} ${x} ${y}" stroke="${skin}" stroke-width="9" fill="none" stroke-linecap="round"/>
         <path d="M${x - 5} ${y + 7} q5 4 10 0" stroke="${GOLD}" stroke-width="3" fill="none"/>
-        <circle cx="${x}" cy="${y}" r="6" fill="${SKIN}"/>${it}`;
+        <circle cx="${x}" cy="${y}" r="6" fill="${skin}"/>${ITEM(item, x, y).replace(/\$SKIN/g, skin)}`;
     }).join('');
-    return `<svg class="fx-durga" width="220" height="230" viewBox="0 0 220 230" aria-label="Maa Durga">
-      <defs><radialGradient id="fxHalo"><stop offset="0" stop-color="#fff7d6"/><stop offset=".6" stop-color="#fde68a"/><stop offset="1" stop-color="#fb923c"/></radialGradient></defs>
-      <g class="fx-rays">${rays}</g>
-      <circle cx="110" cy="92" r="58" fill="url(#fxHalo)"/>
+    const hair = g.wild
+      ? `<path d="M70 70 L60 60 L74 58 L70 40 L86 50 L92 30 L102 46 L110 26 L118 46 L128 30 L134 50 L150 40 L146 58 L160 60 L150 70 Q156 120 152 152 L68 152 Q64 120 70 70Z" fill="#111"/>`
+      : `<path d="M78 66 Q72 120 70 150 L150 150 Q148 120 142 66Z" fill="#1f1410"/>`;
+    const crown = g.ascetic
+      ? `<ellipse cx="110" cy="58" rx="14" ry="11" fill="#1f1410"/><path d="M98 60 Q110 52 122 60" stroke="#92400e" stroke-width="2.4" stroke-dasharray="1 3" stroke-linecap="round" fill="none"/>`
+      : `<path d="M82 74 L85 40 L96 56 L110 22 L124 56 L135 40 L138 74 Q110 64 82 74Z" fill="${GOLD}" stroke="${GOLD_D}" stroke-width="1.5"/>
+         <circle cx="110" cy="46" r="5" fill="#dc2626" stroke="#fff" stroke-width="1.2"/><circle cx="96" cy="62" r="3" fill="#16a34a"/><circle cx="124" cy="62" r="3" fill="#16a34a"/>
+         <path d="M82 74 Q110 64 138 74" stroke="#dc2626" stroke-width="2.4" fill="none"/>`;
+    const moon = g.moon ? `<path d="M100 ${g.ascetic ? 44 : 16} q10 10 20 0 q-10 5 -20 0Z" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1"/>` : '';
+    const baby = g.baby ? `<g><path d="M96 230 Q96 196 110 194 Q124 196 124 230Z" fill="#f59e0b"/><circle cx="110" cy="186" r="10" fill="${SKIN}"/>
+      <path d="M102 180 L104 170 L110 176 L116 170 L118 180Z" fill="${GOLD}"/><circle cx="106" cy="186" r="1.3" fill="#1f1410"/><circle cx="114" cy="186" r="1.3" fill="#1f1410"/>
+      <path d="M107 190 q3 2 6 0" stroke="#be123c" stroke-width="1.2" fill="none"/></g>` : '';
+    const eyeFill = g.wild ? '#fff' : '#fff';
+    const vb = portrait ? '68 30 84 84' : '0 0 220 230';
+    return `<svg class="${portrait ? 'fx-portrait' : 'fx-durga'}" width="${portrait ? 54 : 220}" height="${portrait ? 54 : 230}" viewBox="${vb}" aria-label="Maa ${GODDESS[day]}">
+      <defs><radialGradient id="fxHalo${day}${portrait ? 'p' : ''}"><stop offset="0" stop-color="#fff7d6"/><stop offset=".6" stop-color="#fde68a"/><stop offset="1" stop-color="#fb923c"/></radialGradient></defs>
+      ${portrait ? '' : `<g class="fx-rays">${rays}</g>`}
+      <circle cx="110" cy="92" r="58" fill="url(#fxHalo${day}${portrait ? 'p' : ''})"/>
       <circle cx="110" cy="92" r="58" fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="2 5"/>
-      ${arms}
-      <path d="M78 66 Q72 120 70 150 L150 150 Q148 120 142 66Z" fill="#1f1410"/>
-      <path d="M68 150 Q110 132 152 150 L170 230 H50Z" fill="#dc2626"/>
-      <path d="M68 150 Q110 132 152 150 L150 158 Q110 142 70 158Z" fill="${GOLD}"/>
-      <path d="M58 214 H162 L166 230 H54Z" fill="${GOLD}"/>
-      ${[66, 82, 98, 114, 130, 146].map(x => `<circle cx="${x + 6}" cy="222" r="2.2" fill="#b91c1c"/>`).join('')}
-      <path d="M120 146 L156 230 H140 L110 150Z" fill="#b91c1c" opacity=".7"/>
-      <path d="M124 146 L160 228" stroke="${GOLD}" stroke-width="4"/>
-      <rect x="102" y="118" width="16" height="20" fill="${SKIN_D}"/>
-      <path d="M90 140 Q110 162 130 140" stroke="${GOLD}" stroke-width="4" fill="none"/>
-      <path d="M94 142 Q110 172 126 142" stroke="#f97316" stroke-width="5" fill="none" stroke-dasharray="1 6" stroke-linecap="round"/>
-      <circle cx="110" cy="160" r="5" fill="#dc2626" stroke="${GOLD}" stroke-width="2"/>
-      <ellipse cx="110" cy="98" rx="24" ry="28" fill="${SKIN}"/>
-      <path d="M86 92 Q88 66 110 64 Q132 66 134 92 Q126 76 110 76 Q94 76 86 92Z" fill="#1f1410"/>
-      <path d="M82 74 L85 40 L96 56 L110 22 L124 56 L135 40 L138 74 Q110 64 82 74Z" fill="${GOLD}" stroke="${GOLD_D}" stroke-width="1.5"/>
-      <circle cx="110" cy="46" r="5" fill="#dc2626" stroke="#fff" stroke-width="1.2"/>
-      <circle cx="96" cy="62" r="3" fill="#16a34a"/><circle cx="124" cy="62" r="3" fill="#16a34a"/>
-      <path d="M82 74 Q110 64 138 74" stroke="#dc2626" stroke-width="2.4" fill="none"/>
+      ${portrait ? '' : arms}
+      ${hair}
+      <path d="M68 150 Q110 132 152 150 L170 230 H50Z" fill="${g.saree}" ${white ? 'stroke="#e5e7eb"' : ''}/>
+      <path d="M68 150 Q110 132 152 150 L150 158 Q110 142 70 158Z" fill="${border}"/>
+      <path d="M58 214 H162 L166 230 H54Z" fill="${border}"/>
+      ${[66, 82, 98, 114, 130, 146].map(x => `<circle cx="${x + 6}" cy="222" r="2.2" fill="${white ? '#dc2626' : '#b91c1c'}"/>`).join('')}
+      <path d="M120 146 L156 230 H140 L110 150Z" fill="${white ? '#f59e0b' : '#000'}" opacity="${white ? '.35' : '.18'}"/>
+      <path d="M124 146 L160 228" stroke="${border}" stroke-width="4"/>
+      <rect x="102" y="118" width="16" height="20" fill="${skinD}"/>
+      ${g.ascetic
+        ? `<path d="M92 140 Q110 166 128 140" stroke="#92400e" stroke-width="3" fill="none" stroke-dasharray="1 4" stroke-linecap="round"/>`
+        : `<path d="M90 140 Q110 162 130 140" stroke="${GOLD}" stroke-width="4" fill="none"/>
+           <path d="M94 142 Q110 172 126 142" stroke="#f97316" stroke-width="5" fill="none" stroke-dasharray="1 6" stroke-linecap="round"/>
+           <circle cx="110" cy="160" r="5" fill="#dc2626" stroke="${GOLD}" stroke-width="2"/>`}
+      <ellipse cx="110" cy="98" rx="24" ry="28" fill="${skin}"/>
+      <path d="M86 92 Q88 66 110 64 Q132 66 134 92 Q126 76 110 76 Q94 76 86 92Z" fill="${g.wild ? '#111' : '#1f1410'}"/>
+      ${crown}${moon}
       <ellipse cx="110" cy="84" rx="2" ry="4.5" fill="#dc2626"/>
       <path d="M94 88 Q100 84 106 88 M114 88 Q120 84 126 88" stroke="#1f1410" stroke-width="2" fill="none" stroke-linecap="round"/>
-      <path d="M93 96 Q100 90 107 96 Q100 100 93 96Z M113 96 Q120 90 127 96 Q120 100 113 96Z" fill="#fff" stroke="#1f1410" stroke-width="1.8"/>
+      <path d="M93 96 Q100 90 107 96 Q100 100 93 96Z M113 96 Q120 90 127 96 Q120 100 113 96Z" fill="${eyeFill}" stroke="#1f1410" stroke-width="1.8"/>
       <circle cx="100" cy="95.5" r="2.6" fill="#1f1410"/><circle cx="120" cy="95.5" r="2.6" fill="#1f1410"/>
       <path d="M92 95 l-3 -2 M128 95 l3 -2" stroke="#1f1410" stroke-width="1.6" stroke-linecap="round"/>
-      <path d="M110 99 L108 108 Q110 110 112 108" stroke="${SKIN_D}" stroke-width="1.6" fill="none"/>
-      <circle cx="105" cy="109" r="3.6" fill="none" stroke="${GOLD}" stroke-width="1.6"/>
+      <path d="M110 99 L108 108 Q110 110 112 108" stroke="${skinD}" stroke-width="1.6" fill="none"/>
+      ${g.ascetic ? '' : `<circle cx="105" cy="109" r="3.6" fill="none" stroke="${GOLD}" stroke-width="1.6"/>`}
       <path d="M103 115 Q110 120 117 115 Q110 117 103 115Z" fill="#be123c" stroke="#be123c" stroke-width="1.6" stroke-linejoin="round"/>
-      <circle cx="86" cy="106" r="3.4" fill="${GOLD}"/><path d="M86 109 l-3 8 h6z" fill="${GOLD}"/>
-      <circle cx="134" cy="106" r="3.4" fill="${GOLD}"/><path d="M134 109 l-3 8 h6z" fill="${GOLD}"/>
+      ${g.ascetic
+        ? `<circle cx="86" cy="106" r="2.6" fill="#92400e"/><circle cx="134" cy="106" r="2.6" fill="#92400e"/>`
+        : `<circle cx="86" cy="106" r="3.4" fill="${GOLD}"/><path d="M86 109 l-3 8 h6z" fill="${GOLD}"/>
+           <circle cx="134" cy="106" r="3.4" fill="${GOLD}"/><path d="M134 109 l-3 8 h6z" fill="${GOLD}"/>`}
+      ${portrait ? '' : baby + VAHANA[g.vahana]}
     </svg>`;
   }
 
@@ -222,11 +277,11 @@ window.Festival = (function () {
     </svg>`;
   }
 
-  function sceneHTML() {
+  function sceneHTML(day) {
     const pair = (a, b, flip) => `<div class="fx-pair${flip ? ' flip' : ''}">${DANCER(true, a, b, 0)}${DANCER(false, b, a, 0.4)}</div>`;
     return `<div class="fx-scene" aria-label="Navratri — Maa Durga and garba">
       ${pair('#db2777', '#f59e0b')}
-      <div class="fx-center">${DURGA()}<div class="fx-jai">जय माता दी</div></div>
+      <div class="fx-center">${DURGA(day)}<div class="fx-jai">जय माँ ${GODDESS_HI[day]}</div></div>
       ${pair('#7e22ce', '#16a34a', true)}
     </div>`;
   }
@@ -285,7 +340,8 @@ window.Festival = (function () {
       html[data-theme="dark"] .fest-banner.dussehra { --fa: #fb923c; --fa-soft: rgba(251,146,60,.10); }
 
       .fest-icon { position: relative; z-index: 1; flex-shrink: 0; width: 54px; height: 54px; border-radius: 50%;
-        background: var(--fa-soft); display: grid; place-items: center; }
+        background: var(--fa-soft); display: grid; place-items: center; overflow: hidden; }
+      .fest-icon .fx-portrait { width: 54px; height: 54px; }
       .fest-body { position: relative; z-index: 1; flex: 1; min-width: 0; }
       .fest-title { font-size: 17px; font-weight: 700; line-height: 1.3; color: var(--text-primary, #0f172a); }
       .fest-title b { color: var(--fa); font-weight: 700; }
@@ -471,7 +527,7 @@ window.Festival = (function () {
         meta = `<div class="fest-meta"><div class="fest-days">${dots}</div><span>Today's colour · <b style="color:var(--text-primary)">${col}</b></span></div>`;
       }
       return `<div class="fest-banner navratri">
-        <div class="fest-icon">${GARBO}</div>
+        <div class="fest-icon">${DURGA(Math.max(0, f.day - 1), true)}</div>
         <div class="fest-body">
           <div class="fest-title">${title}</div>
           <div class="fest-sub">${sub}</div>${meta}
@@ -553,7 +609,7 @@ window.Festival = (function () {
     top.querySelectorAll('[data-fest-mode]').forEach(b => b.onclick = () => { setMode(b.dataset.festMode); paint(wrap, f); });
 
     if (m !== 'full') return;
-    if (f.kind === 'navratri') add(sceneHTML());
+    if (f.kind === 'navratri') add(sceneHTML(Math.max(0, f.day - 1)));
     const fx = add('');
     startParticles(fx, f.kind);
     wireRavan(top, fx);
@@ -653,6 +709,11 @@ window.Festival = (function () {
         background: radial-gradient(circle at 35% 30%, #fff 0%, var(--fest-day) 55%); box-shadow: 0 0 0 4px rgba(255,255,255,.08), 0 0 44px var(--fest-day);
         animation: festOrb 3.2s ease-in-out infinite; }
       @keyframes festOrb { 50% { box-shadow: 0 0 0 4px rgba(255,255,255,.08), 0 0 64px var(--fest-day) } }
+      #login-page .fest-lg-orb { overflow: hidden; }
+      #login-page .fest-lg-orb .fx-portrait { width: 76px; height: 76px; }
+      #login-page .fx-mini { display: flex; align-items: flex-end; gap: 4px; margin: -18px 0 0; }
+      #login-page .fx-mini .fx-dancer { width: 52px; height: 107px; }
+      @media (max-height: 760px) { #login-page .fx-mini { display: none; } }
       #login-page .fest-lg-kicker { font-size: 10.5px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: #B8D3F2; }
       #login-page .fest-lg-name { font-size: 24px; font-weight: 700; color: #fff; margin: 3px 0 2px; line-height: 1.2; }
       #login-page .fest-lg-sub { font-size: 13px; color: #A9C4E4; }
@@ -726,7 +787,7 @@ window.Festival = (function () {
     if (stage) {
       const card = document.createElement('div');
       card.className = 'fest-lg-card';
-      card.innerHTML = `<div class="fest-lg-orb">${nav ? GARBO : BOW}</div>
+      card.innerHTML = `<div class="fest-lg-orb">${nav ? DURGA(Math.max(0, f.day - 1), true) : BOW}</div>
         <div><div class="fest-lg-kicker">${kicker}</div><div class="fest-lg-name">${name}</div>
         <div class="fest-lg-sub">${sub}</div>${meta}</div>`;
       stage.replaceWith(card);
@@ -744,6 +805,15 @@ window.Festival = (function () {
     const greet = el.querySelector('.lg-greeting .lg-dot');
     if (greet) { greet.style.background = dayHex; greet.style.boxShadow = `0 0 0 3px ${dayHex}55`; }
 
+    const quipEl = el.querySelector('.lg-quip');
+    if (nav && quipEl) {
+      const line = document.createElement('div');
+      line.className = 'fx-mini';
+      line.setAttribute('aria-hidden', 'true');
+      line.innerHTML = DANCER(true, '#db2777', '#f59e0b', 0) + DANCER(false, '#f59e0b', '#db2777', 0.4)
+        + DANCER(true, '#7e22ce', '#16a34a', 0.2) + DANCER(false, '#16a34a', '#7e22ce', 0.6);
+      quipEl.after(line);
+    }
     const quips = el.querySelectorAll('.lg-quip span');
     QUIPS[f.kind].forEach((q, i) => { if (quips[i]) quips[i].innerHTML = q; });
 
