@@ -277,6 +277,40 @@ window.Festival = (function () {
     </svg>`;
   }
 
+  // Fixed to the screen's bottom corners on desktop. They fade almost out
+  // whenever the mouse comes near, so nothing under them is ever out of
+  // reach (clicks pass through — pointer-events: none).
+  function mountCorners(wrap, day) {
+    document.querySelectorAll('.fx-corner').forEach(n => n.remove());
+    const left = document.createElement('div');
+    left.className = 'fx-corner left';
+    left.innerHTML = `<div class="fx-pill">🪔 शुभ नवरात्रि</div>
+      <div class="fx-couple">${DANCER(true, '#16a34a', '#db2777', 0)}${DANCER(false, '#111827', '#dc2626', 0.4)}</div>`;
+    const right = document.createElement('div');
+    right.className = 'fx-corner right';
+    right.innerHTML = DURGA(day);
+    document.body.append(left, right);
+    wrap.classList.add('fx-pad');
+
+    let raf = 0, mx = -1e4, my = -1e4;
+    const near = () => {
+      raf = 0;
+      for (const el of [left, right]) {
+        const b = el.getBoundingClientRect();
+        el.classList.toggle('peek', mx > b.left - 30 && mx < b.right + 30 && my > b.top - 30 && my < b.bottom + 30);
+      }
+    };
+    const onMove = e => { mx = e.clientX; my = e.clientY; if (!raf) raf = requestAnimationFrame(near); };
+    document.addEventListener('mousemove', onMove, { passive: true });
+    // Body-level, so take them down ourselves once the dashboard is gone.
+    const watch = setInterval(() => {
+      if (wrap.isConnected && left.isConnected) return;
+      clearInterval(watch);
+      document.removeEventListener('mousemove', onMove);
+      left.remove(); right.remove();
+    }, 700);
+  }
+
   function sceneHTML(day) {
     const pair = (a, b, flip) => `<div class="fx-pair${flip ? ' flip' : ''}">${DANCER(true, a, b, 0)}${DANCER(false, b, a, 0.4)}</div>`;
     return `<div class="fx-scene" aria-label="Navratri — Maa Durga and garba">
@@ -308,7 +342,21 @@ window.Festival = (function () {
       @keyframes fxArmR { from { transform: rotate(14deg) } to { transform: rotate(-18deg) } }
       .fx-skirt { transform-origin: 40px 60px; animation: fxSkirt .9s ease-in-out infinite alternate; }
       @keyframes fxSkirt { from { transform: skewX(-4deg) } to { transform: skewX(4deg) } }
+      .fx-corner { position: fixed; bottom: 0; z-index: 30; pointer-events: none; transition: opacity .25s;
+        filter: drop-shadow(0 8px 14px rgba(0,0,0,.18)); }
+      .fx-corner.left { left: calc(var(--sidebar-w, 52px) + 18px); display: flex; flex-direction: column; align-items: center; }
+      .fx-corner.right { right: 18px; }
+      .fx-corner.right .fx-durga { width: 190px; height: 199px; display: block; }
+      .fx-corner.peek { opacity: .1; }
+      .fx-couple { display: flex; align-items: flex-end; margin-left: -10px; }
+      .fx-couple .fx-dancer { width: 92px; height: 189px; margin: 0 -8px; }
+      .fx-pill { font-size: 17px; font-weight: 800; color: #fff; padding: 6px 16px; border-radius: 999px; margin-bottom: 2px;
+        background: linear-gradient(90deg, #dc2626, #db2777); border: 3px solid #fbbf24; box-shadow: 0 4px 12px rgba(220,38,38,.35);
+        animation: fxPill 2.4s ease-in-out infinite; }
+      @keyframes fxPill { 50% { transform: translateY(-3px) } }
+      @media (min-width: 768px) { .fx-scene { display: none; } .fx-pad { padding-bottom: 210px; } }
       @media (max-width: 767px) {
+        .fx-corner { display: none; }
         .fx-pair.flip { display: none; }
         .fx-durga { width: 160px; height: 168px; }
         .fx-dancer { width: 64px; height: 131px; }
@@ -588,6 +636,8 @@ window.Festival = (function () {
 
   function paint(wrap, f) {
     wrap.querySelectorAll(':scope > .fest-el').forEach(n => n.remove());
+    document.querySelectorAll('.fx-corner').forEach(n => n.remove());
+    wrap.classList.remove('fx-pad');
     const m = mode();
     const add = (html, where) => {
       const t = document.createElement('div');
@@ -609,7 +659,7 @@ window.Festival = (function () {
     top.querySelectorAll('[data-fest-mode]').forEach(b => b.onclick = () => { setMode(b.dataset.festMode); paint(wrap, f); });
 
     if (m !== 'full') return;
-    if (f.kind === 'navratri') add(sceneHTML(Math.max(0, f.day - 1)));
+    if (f.kind === 'navratri') { add(sceneHTML(Math.max(0, f.day - 1))); mountCorners(wrap, Math.max(0, f.day - 1)); }
     const fx = add('');
     startParticles(fx, f.kind);
     wireRavan(top, fx);
