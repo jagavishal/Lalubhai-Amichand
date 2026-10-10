@@ -125,6 +125,141 @@ window.Festival = (function () {
     </svg>`;
   }
 
+  /* ── Navratri scene (bottom of the dashboard) ────────────────────── */
+  // Drawn in SVG so it needs no image files. It sits in the page flow at the
+  // end of the dashboard — never fixed over the content.
+  const SKIN = '#f3c08d', SKIN_D = '#d99a62', GOLD = '#f5b301', GOLD_D = '#b7791f';
+
+  function DURGA() {
+    const rays = Array.from({ length: 24 }, (_, i) =>
+      `<path d="M110 92 L106 6 L114 6Z" fill="${i % 2 ? '#fde68a' : '#fdba74'}" transform="rotate(${i * 15} 110 92)"/>`).join('');
+    // Eight arms fan out behind the body: [hand x, hand y, item]
+    const arms = [
+      [34, 62, 'trishul'], [22, 100, 'chakra'], [26, 140, 'conch'], [44, 172, 'lotus'],
+      [186, 62, 'sword'], [198, 100, 'bow'], [194, 140, 'mace'], [176, 172, 'bell'],
+    ].map(([x, y, item]) => {
+      const sx = x < 110 ? 92 : 128, sy = 146;
+      const it = {
+        trishul: `<path d="M${x} ${y + 30} V${y - 26} M${x - 9} ${y - 18} Q${x - 9} ${y - 6} ${x} ${y - 8} Q${x + 9} ${y - 6} ${x + 9} ${y - 18} M${x} ${y - 26} l-3 6 h6z" stroke="${GOLD_D}" stroke-width="2.6" fill="none" stroke-linecap="round"/>`,
+        chakra:  `<circle cx="${x}" cy="${y - 14}" r="10" fill="#fde68a" stroke="${GOLD_D}" stroke-width="2"/>${[0, 45, 90, 135].map(a => `<path d="M${x - 10} ${y - 14} H${x + 10}" stroke="${GOLD_D}" stroke-width="1.4" transform="rotate(${a} ${x} ${y - 14})"/>`).join('')}`,
+        conch:   `<path d="M${x - 8} ${y - 6} Q${x - 4} ${y - 26} ${x + 9} ${y - 18} Q${x + 4} ${y - 10} ${x + 8} ${y - 4} Q${x} ${y} ${x - 8} ${y - 6}Z" fill="#fff" stroke="#cbd5e1" stroke-width="1.4"/>`,
+        lotus:   `${[-28, 0, 28].map(a => `<ellipse cx="${x}" cy="${y - 14}" rx="5" ry="11" fill="#f9a8d4" stroke="#db2777" stroke-width="1" transform="rotate(${a} ${x} ${y - 6})"/>`).join('')}`,
+        sword:   `<path d="M${x} ${y + 6} L${x - 3} ${y - 34} L${x} ${y - 42} L${x + 3} ${y - 34}Z" fill="#e2e8f0" stroke="#94a3b8"/><path d="M${x - 7} ${y - 2} H${x + 7}" stroke="${GOLD_D}" stroke-width="3" stroke-linecap="round"/>`,
+        bow:     `<path d="M${x - 2} ${y - 34} Q${x + 18} ${y - 6} ${x - 2} ${y + 22}" stroke="#92400e" stroke-width="3" fill="none"/><path d="M${x - 2} ${y - 34} V${y + 22}" stroke="#fcd34d" stroke-width="1"/>`,
+        mace:    `<path d="M${x} ${y + 10} V${y - 18}" stroke="${GOLD_D}" stroke-width="3"/><circle cx="${x}" cy="${y - 24}" r="8" fill="${GOLD}" stroke="${GOLD_D}" stroke-width="1.5"/>`,
+        bell:    `<path d="M${x - 8} ${y - 6} Q${x - 8} ${y - 24} ${x} ${y - 24} Q${x + 8} ${y - 24} ${x + 8} ${y - 6}Z" fill="${GOLD}" stroke="${GOLD_D}"/><circle cx="${x}" cy="${y - 3}" r="2.4" fill="${GOLD_D}"/>`,
+      }[item];
+      return `<path d="M${sx} ${sy} Q${(sx + x) / 2} ${(sy + y) / 2 + 12} ${x} ${y}" stroke="${SKIN}" stroke-width="9" fill="none" stroke-linecap="round"/>
+        <path d="M${x - 5} ${y + 7} q5 4 10 0" stroke="${GOLD}" stroke-width="3" fill="none"/>
+        <circle cx="${x}" cy="${y}" r="6" fill="${SKIN}"/>${it}`;
+    }).join('');
+    return `<svg class="fx-durga" width="220" height="230" viewBox="0 0 220 230" aria-label="Maa Durga">
+      <defs><radialGradient id="fxHalo"><stop offset="0" stop-color="#fff7d6"/><stop offset=".6" stop-color="#fde68a"/><stop offset="1" stop-color="#fb923c"/></radialGradient></defs>
+      <g class="fx-rays">${rays}</g>
+      <circle cx="110" cy="92" r="58" fill="url(#fxHalo)"/>
+      <circle cx="110" cy="92" r="58" fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="2 5"/>
+      ${arms}
+      <path d="M78 66 Q72 120 70 150 L150 150 Q148 120 142 66Z" fill="#1f1410"/>
+      <path d="M68 150 Q110 132 152 150 L170 230 H50Z" fill="#dc2626"/>
+      <path d="M68 150 Q110 132 152 150 L150 158 Q110 142 70 158Z" fill="${GOLD}"/>
+      <path d="M58 214 H162 L166 230 H54Z" fill="${GOLD}"/>
+      ${[66, 82, 98, 114, 130, 146].map(x => `<circle cx="${x + 6}" cy="222" r="2.2" fill="#b91c1c"/>`).join('')}
+      <path d="M120 146 L156 230 H140 L110 150Z" fill="#b91c1c" opacity=".7"/>
+      <path d="M124 146 L160 228" stroke="${GOLD}" stroke-width="4"/>
+      <rect x="102" y="118" width="16" height="20" fill="${SKIN_D}"/>
+      <path d="M90 140 Q110 162 130 140" stroke="${GOLD}" stroke-width="4" fill="none"/>
+      <path d="M94 142 Q110 172 126 142" stroke="#f97316" stroke-width="5" fill="none" stroke-dasharray="1 6" stroke-linecap="round"/>
+      <circle cx="110" cy="160" r="5" fill="#dc2626" stroke="${GOLD}" stroke-width="2"/>
+      <ellipse cx="110" cy="98" rx="24" ry="28" fill="${SKIN}"/>
+      <path d="M86 92 Q88 66 110 64 Q132 66 134 92 Q126 76 110 76 Q94 76 86 92Z" fill="#1f1410"/>
+      <path d="M82 74 L85 40 L96 56 L110 22 L124 56 L135 40 L138 74 Q110 64 82 74Z" fill="${GOLD}" stroke="${GOLD_D}" stroke-width="1.5"/>
+      <circle cx="110" cy="46" r="5" fill="#dc2626" stroke="#fff" stroke-width="1.2"/>
+      <circle cx="96" cy="62" r="3" fill="#16a34a"/><circle cx="124" cy="62" r="3" fill="#16a34a"/>
+      <path d="M82 74 Q110 64 138 74" stroke="#dc2626" stroke-width="2.4" fill="none"/>
+      <ellipse cx="110" cy="84" rx="2" ry="4.5" fill="#dc2626"/>
+      <path d="M94 88 Q100 84 106 88 M114 88 Q120 84 126 88" stroke="#1f1410" stroke-width="2" fill="none" stroke-linecap="round"/>
+      <path d="M93 96 Q100 90 107 96 Q100 100 93 96Z M113 96 Q120 90 127 96 Q120 100 113 96Z" fill="#fff" stroke="#1f1410" stroke-width="1.8"/>
+      <circle cx="100" cy="95.5" r="2.6" fill="#1f1410"/><circle cx="120" cy="95.5" r="2.6" fill="#1f1410"/>
+      <path d="M92 95 l-3 -2 M128 95 l3 -2" stroke="#1f1410" stroke-width="1.6" stroke-linecap="round"/>
+      <path d="M110 99 L108 108 Q110 110 112 108" stroke="${SKIN_D}" stroke-width="1.6" fill="none"/>
+      <circle cx="105" cy="109" r="3.6" fill="none" stroke="${GOLD}" stroke-width="1.6"/>
+      <path d="M103 115 Q110 120 117 115 Q110 117 103 115Z" fill="#be123c" stroke="#be123c" stroke-width="1.6" stroke-linejoin="round"/>
+      <circle cx="86" cy="106" r="3.4" fill="${GOLD}"/><path d="M86 109 l-3 8 h6z" fill="${GOLD}"/>
+      <circle cx="134" cy="106" r="3.4" fill="${GOLD}"/><path d="M134 109 l-3 8 h6z" fill="${GOLD}"/>
+    </svg>`;
+  }
+
+  // One dancer. girl: chaniya choli; boy: kediyu + pagdi. Arms swing on
+  // alternating beats so the pair's sticks meet in the middle.
+  function DANCER(girl, c1, c2, beat) {
+    const head = girl
+      ? `<circle cx="40" cy="40" r="12" fill="${SKIN}"/><path d="M28 40 Q28 25 40 25 Q52 25 52 40 Q48 31 40 31 Q32 31 28 40Z" fill="#1f1410"/>
+         <circle cx="52" cy="30" r="6" fill="#1f1410"/><circle cx="40" cy="34" r="1.4" fill="#dc2626"/>
+         <circle cx="36" cy="40" r="1.3" fill="#1f1410"/><circle cx="44" cy="40" r="1.3" fill="#1f1410"/>
+         <path d="M36 45 q4 3 8 0" stroke="#be123c" stroke-width="1.4" fill="none"/><circle cx="29" cy="45" r="1.8" fill="${GOLD}"/>`
+      : `<circle cx="40" cy="40" r="12" fill="${SKIN}"/><path d="M27 36 Q28 22 40 22 Q53 22 53 36 Q40 30 27 36Z" fill="${c2}"/>
+         <path d="M52 30 Q62 36 58 50" stroke="${c2}" stroke-width="4" fill="none" stroke-linecap="round"/><circle cx="40" cy="27" r="2" fill="${GOLD}"/>
+         <circle cx="36" cy="40" r="1.3" fill="#1f1410"/><circle cx="44" cy="40" r="1.3" fill="#1f1410"/>
+         <path d="M34 44 q3 2 6 0 q3 2 6 0" stroke="#1f1410" stroke-width="1.8" fill="none" stroke-linecap="round"/><path d="M37 47 q3 2.5 6 0" stroke="#be123c" stroke-width="1.3" fill="none"/>`;
+    const body = girl
+      ? `<path d="M30 54 H50 L52 78 H28Z" fill="${c2}"/><path d="M30 54 L52 78" stroke="${GOLD}" stroke-width="3"/>
+         <path class="fx-skirt" d="M27 76 H53 L72 150 Q40 160 8 150Z" fill="${c1}"/>
+         <path d="M14 136 Q40 144 66 136 L70 148 Q40 158 10 148Z" fill="${GOLD}"/>
+         ${[[24, 100], [40, 96], [56, 100], [20, 120], [34, 118], [48, 118], [62, 120]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="2" fill="#fff" opacity=".85"/>`).join('')}
+         <path d="M30 152 v8 M50 152 v8" stroke="${SKIN_D}" stroke-width="4" stroke-linecap="round"/>`
+      : `<path class="fx-skirt" d="M29 54 H51 L64 106 H16Z" fill="${c1}"/>
+         <path d="M18 98 H62 L64 106 H16Z" fill="${GOLD}"/><path d="M40 56 V96" stroke="${GOLD}" stroke-width="2" stroke-dasharray="3 3"/>
+         <path d="M30 106 L28 152 H37 L40 110 L43 152 H52 L50 106Z" fill="#f8fafc" stroke="#e2e8f0"/>
+         <path d="M26 154 h12 M42 154 h12" stroke="#92400e" stroke-width="4" stroke-linecap="round"/>`;
+    const stick = (x, y, col) => `<path d="M${x} ${y} l14 -20" stroke="${col}" stroke-width="4" stroke-linecap="round"/>
+      <path d="M${x + 4} ${y - 6} l3 -4 M${x + 9} ${y - 13} l3 -4" stroke="${GOLD}" stroke-width="4"/>`;
+    return `<svg class="fx-dancer" width="100" height="205" viewBox="0 0 80 164" aria-hidden="true">
+      <g class="fx-bounce" style="animation-delay:${beat}s">
+        <g class="fx-arm-l" style="animation-delay:${beat}s"><path d="M31 58 Q18 50 16 34" stroke="${SKIN}" stroke-width="5" fill="none" stroke-linecap="round"/>${stick(14, 36, girl ? '#7e22ce' : '#be123c')}</g>
+        <g class="fx-arm-r" style="animation-delay:${beat}s"><path d="M49 58 Q62 50 64 34" stroke="${SKIN}" stroke-width="5" fill="none" stroke-linecap="round"/><g transform="translate(128 0) scale(-1 1)">${stick(64, 36, girl ? '#16a34a' : '#f59e0b')}</g></g>
+        ${body}${head}
+      </g>
+    </svg>`;
+  }
+
+  function sceneHTML() {
+    const pair = (a, b, flip) => `<div class="fx-pair${flip ? ' flip' : ''}">${DANCER(true, a, b, 0)}${DANCER(false, b, a, 0.4)}</div>`;
+    return `<div class="fx-scene" aria-label="Navratri — Maa Durga and garba">
+      ${pair('#db2777', '#f59e0b')}
+      <div class="fx-center">${DURGA()}<div class="fx-jai">जय माता दी</div></div>
+      ${pair('#7e22ce', '#16a34a', true)}
+    </div>`;
+  }
+
+  const SCENE_CSS = `
+      .fx-scene { position: relative; display: flex; align-items: flex-end; justify-content: center; gap: clamp(12px, 5vw, 80px);
+        margin-top: 24px; padding: 18px 16px 0; border-radius: 16px; overflow: hidden;
+        background: linear-gradient(180deg, transparent 0%, var(--color-primary-light, rgba(249,115,22,.1)) 100%);
+        border-bottom: 6px solid var(--color-primary, #c2410c); }
+      .fx-scene::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 10px; opacity: .5;
+        background: radial-gradient(circle, var(--color-primary, #c2410c) 2px, transparent 2.5px) 0 0 / 14px 10px repeat-x; }
+      .fx-pair { display: flex; align-items: flex-end; gap: 0; margin-bottom: 4px; }
+      .fx-pair.flip { transform: scaleX(-1); }
+      .fx-center { display: flex; flex-direction: column; align-items: center; }
+      .fx-jai { font-size: 15px; font-weight: 700; color: var(--color-primary, #c2410c); margin: 2px 0 10px; letter-spacing: .5px; }
+      .fx-rays { transform-origin: 110px 92px; animation: fxSpin 30s linear infinite; }
+      @keyframes fxSpin { to { transform: rotate(360deg) } }
+      .fx-durga { filter: drop-shadow(0 6px 14px rgba(0,0,0,.12)); }
+      .fx-bounce { transform-origin: 40px 150px; animation: fxBounce .9s ease-in-out infinite alternate; }
+      @keyframes fxBounce { from { transform: translateY(0) rotate(-3deg) } to { transform: translateY(-5px) rotate(3deg) } }
+      .fx-arm-l { transform-origin: 31px 58px; animation: fxArmL .9s ease-in-out infinite alternate; }
+      .fx-arm-r { transform-origin: 49px 58px; animation: fxArmR .9s ease-in-out infinite alternate; }
+      @keyframes fxArmL { from { transform: rotate(-14deg) } to { transform: rotate(18deg) } }
+      @keyframes fxArmR { from { transform: rotate(14deg) } to { transform: rotate(-18deg) } }
+      .fx-skirt { transform-origin: 40px 60px; animation: fxSkirt .9s ease-in-out infinite alternate; }
+      @keyframes fxSkirt { from { transform: skewX(-4deg) } to { transform: skewX(4deg) } }
+      @media (max-width: 767px) {
+        .fx-pair.flip { display: none; }
+        .fx-durga { width: 160px; height: 168px; }
+        .fx-dancer { width: 64px; height: 131px; }
+      }
+      @media (prefers-reduced-motion: reduce) { .fx-rays, .fx-bounce, .fx-arm-l, .fx-arm-r, .fx-skirt { animation: none; } }`;
+
   /* ── styles (injected once) ──────────────────────────────────────── */
   function injectCSS() {
     if (document.getElementById('fest-css')) return;
@@ -215,6 +350,7 @@ window.Festival = (function () {
       @media (prefers-reduced-motion: reduce) {
         .fest-toran, .fest-flame, .fest-hole { animation: none !important; }
       }`;
+    s.textContent += SCENE_CSS;
     document.head.appendChild(s);
   }
 
@@ -325,12 +461,12 @@ window.Festival = (function () {
         sub = `Ghatasthapana, ${new Date(f.row.start + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })} · Maa ${GODDESS[0]}`;
       } else {
         const col = navratriColour(f.row.start, f.day - 1);
-        title = `<b>माँ ${GODDESS_HI[f.day - 1]}</b><span>·</span>Day ${f.day} of 9${f.day === 8 ? ' · Durga Ashtami' : f.day === 9 ? ' · Maha Navami' : ''}`;
+        title = `<b>माँ ${GODDESS_HI[f.day - 1]}</b>${f.day === 8 ? '<span>·</span>Durga Ashtami' : f.day === 9 ? '<span>·</span>Maha Navami' : ''}`;
         sub = `Maa ${GODDESS[f.day - 1]} · ${GODDESS_GIFT[f.day - 1]}`;
         // One dot per day in that day's colour — the row doubles as the progress bar.
         const dots = Array.from({ length: 9 }, (_, i) => {
           const c = navratriColour(f.row.start, i);
-          return `<i title="Day ${i + 1} · ${c}" class="${i + 1 < f.day ? 'past' : i + 1 === f.day ? 'today' : ''}" style="background:${HEX[c]}"></i>`;
+          return `<i title="${c}" class="${i + 1 < f.day ? 'past' : i + 1 === f.day ? 'today' : ''}" style="background:${HEX[c]}"></i>`;
         }).join('');
         meta = `<div class="fest-meta"><div class="fest-days">${dots}</div><span>Today's colour · <b style="color:var(--text-primary)">${col}</b></span></div>`;
       }
@@ -417,6 +553,7 @@ window.Festival = (function () {
     top.querySelectorAll('[data-fest-mode]').forEach(b => b.onclick = () => { setMode(b.dataset.festMode); paint(wrap, f); });
 
     if (m !== 'full') return;
+    if (f.kind === 'navratri') add(sceneHTML());
     const fx = add('');
     startParticles(fx, f.kind);
     wireRavan(top, fx);
@@ -462,7 +599,7 @@ window.Festival = (function () {
     const g = document.createElement('div');
     g.className = 'fest-tb';
     g.innerHTML = nav
-      ? `<i style="background:${hex}"></i><b>शुभ नवरात्रि</b><span>${f.day ? `Day ${f.day} · Maa ${GODDESS[f.day - 1]}` : 'kal se shuru'}</span>`
+      ? `<i style="background:${hex}"></i><b>शुभ नवरात्रि</b><span>${f.day ? `Maa ${GODDESS[f.day - 1]}` : 'kal se shuru'}</span>`
       : `<i style="background:${hex}"></i><b>शुभ विजयादशमी</b><span>Happy Dussehra</span>`;
     bar.appendChild(g);
   }
@@ -571,7 +708,7 @@ window.Festival = (function () {
       sub = `Ghatasthapana, ${new Date(f.row.start + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}`;
     } else if (nav) {
       const i = f.day - 1;
-      kicker = `Navratri · Day ${f.day} of 9${f.day === 8 ? ' · Ashtami' : f.day === 9 ? ' · Navami' : ''}`;
+      kicker = `Navratri${f.day === 8 ? ' · Ashtami' : f.day === 9 ? ' · Navami' : ''}`;
       name = `माँ ${GODDESS_HI[i]}`;
       sub = `Maa ${GODDESS[i]} · ${GODDESS_GIFT[i]}`;
       const dots = Array.from({ length: 9 }, (_, k) => {
@@ -615,7 +752,7 @@ window.Festival = (function () {
       const chip = document.createElement('div');
       chip.className = 'fest-lg-chip';
       chip.innerHTML = nav
-        ? `<i style="background:${dayHex}"></i>शुभ नवरात्रि${f.day > 0 ? ` · Day ${f.day} · ${colour}` : ''}`
+        ? `<i style="background:${dayHex}"></i>शुभ नवरात्रि${f.day > 0 ? ` · ${colour}` : ''}`
         : `<i style="background:${dayHex}"></i>शुभ दशहरा · Happy Dussehra`;
       h1.parentNode.insertBefore(chip, h1);
     }
