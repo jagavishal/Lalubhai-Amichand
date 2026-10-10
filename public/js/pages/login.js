@@ -364,6 +364,7 @@ window.Pages.login = {
         </main>
       </div>
     `;
+    window.Festival?.decorateLogin(el);
 
     // ── Wire up interactivity ────────────────────────────────────────────────
 

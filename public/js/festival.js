@@ -60,7 +60,7 @@ window.Festival = (function () {
   function mode() {
     try { return localStorage.getItem(MODE_KEY) || 'full'; } catch { return 'full'; }
   }
-  function setMode(m) { try { localStorage.setItem(MODE_KEY, m); } catch {} }
+  function setMode(m) { try { localStorage.setItem(MODE_KEY, m); } catch {} applyTheme(); }
 
   /* ── art ─────────────────────────────────────────────────────────── */
   // One toran tile: string sag, marigold, mango leaf. Repeated across.
@@ -137,7 +137,7 @@ window.Festival = (function () {
 
       /* Card in the page's own surface colour; the festival shows in a thin
          gradient edge, a soft glow and the accent text — not a loud fill. */
-      .fest-banner { --fa: #be123c; --fa-soft: #fff1f2; --fa-edge: linear-gradient(90deg, #be123c, #f97316, #f59e0b);
+      .fest-banner { --fa: var(--fest-p, #be123c); --fa-soft: #fff1f2; --fa-edge: linear-gradient(90deg, #be123c, #f97316, #f59e0b);
         position: relative; overflow: hidden; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
         padding: 14px 18px; margin-bottom: 18px; border-radius: 14px; background: var(--surface, #fff);
         border: 1px solid rgba(190,18,60,.14); box-shadow: 0 1px 3px rgba(15,23,42,.05); }
@@ -407,5 +407,168 @@ window.Festival = (function () {
     wireRavan(top, fx);
   }
 
-  return { mount, current };
+  /* ── app-wide colour of the day ──────────────────────────────────── */
+  // Every page reads its colours from the tokens in style.css, so retinting
+  // the app is just overriding those tokens. p = button/link colour (white
+  // text must stay readable on it — hence gold for White/Yellow days), bg =
+  // light page tint, side = dark sidebar, acc = sidebar highlight.
+  const DAY_THEME = {
+    'Orange':        { p: '#c2410c', d: '#9a3412', rgb: '194,65,12',  bg: '#fff6ef', side: '#2a1206', acc: '#fdba74' },
+    'White':         { p: '#a16207', d: '#854d0e', rgb: '161,98,7',   bg: '#fbfaf6', side: '#1c1917', acc: '#fde68a' },
+    'Red':           { p: '#dc2626', d: '#b91c1c', rgb: '220,38,38',  bg: '#fdf4f4', side: '#2b0a0a', acc: '#fca5a5' },
+    'Royal Blue':    { p: '#1d4ed8', d: '#1e40af', rgb: '29,78,216',  bg: '#f2f6fe', side: '#0b1640', acc: '#93c5fd' },
+    'Yellow':        { p: '#a16207', d: '#854d0e', rgb: '161,98,7',   bg: '#fefbe8', side: '#2a2005', acc: '#fde047' },
+    'Green':         { p: '#15803d', d: '#166534', rgb: '21,128,61',  bg: '#f2fbf4', side: '#062413', acc: '#86efac' },
+    'Grey':          { p: '#4b5563', d: '#374151', rgb: '75,85,99',   bg: '#f3f4f6', side: '#1f2328', acc: '#d1d5db' },
+    'Peacock Green': { p: '#0f766e', d: '#115e59', rgb: '15,118,110', bg: '#eff9f8', side: '#04221f', acc: '#5eead4' },
+    'Purple':        { p: '#7e22ce', d: '#6b21a8', rgb: '126,34,206', bg: '#f8f3fd', side: '#1e0a33', acc: '#d8b4fe' },
+    'Dussehra':      { p: '#b91c1c', d: '#991b1b', rgb: '185,28,28',  bg: '#fff6ec', side: '#2a0d06', acc: '#fdba74' },
+  };
+
+  function dayTheme(f) {
+    if (!f) return null;
+    if (f.kind === 'dussehra') return { name: 'Dussehra', ...DAY_THEME.Dussehra };
+    if (f.day === 0) return null; // eve: banner only, app keeps its own colours
+    const name = navratriColour(f.row.start, f.day - 1);
+    return { name, ...DAY_THEME[name] };
+  }
+
+  function applyTheme() {
+    const f = current();
+    const t = mode() === 'off' ? null : dayTheme(f);
+    let s = document.getElementById('fest-theme');
+    if (!t) { s?.remove(); delete document.documentElement.dataset.fest; return; }
+    if (!s) { s = document.createElement('style'); s.id = 'fest-theme'; document.head.appendChild(s); }
+    document.documentElement.dataset.fest = f.kind;
+    s.textContent = `
+      html[data-fest] {
+        --color-primary: ${t.p}; --color-primary-dark: ${t.d}; --color-primary-strong: ${t.p};
+        --color-primary-light: rgba(${t.rgb},.10); --color-primary-ring: rgba(${t.rgb},.22);
+        --shadow-glow: 0 10px 32px rgba(${t.rgb},.30);
+        --sidebar-bg: ${t.side}; --sidebar-border: color-mix(in srgb, ${t.side}, #fff 10%);
+        --sidebar-accent: ${t.acc}; --sidebar-active-bg: rgba(${t.rgb},.28);
+        --fest-p: ${t.p}; --fest-rgb: ${t.rgb};
+      }
+      html[data-fest]:not([data-theme="dark"]) { --app-bg: ${t.bg}; }
+      html[data-fest]:not([data-theme="dark"]) #topbar { background: color-mix(in srgb, #fff 90%, ${t.p}); }
+      html[data-fest] .fest-banner.navratri { --fa-edge: linear-gradient(90deg, ${t.p}, color-mix(in srgb, ${t.p}, #fff 45%), ${t.p}); }
+      html[data-fest][data-theme="dark"] { --color-primary: ${t.acc}; --color-primary-strong: ${t.acc}; --color-primary-text: #111; }`;
+  }
+
+  /* ── login page ──────────────────────────────────────────────────── */
+  const GODDESS_HI = ['शैलपुत्री', 'ब्रह्मचारिणी', 'चंद्रघंटा', 'कूष्मांडा', 'स्कंदमाता', 'कात्यायनी', 'कालरात्रि', 'महागौरी', 'सिद्धिदात्री'];
+  const GODDESS_GIFT = ['strength & stability', 'devotion & discipline', 'courage & peace', 'energy & creativity',
+                        'care & compassion', 'determination', 'fearlessness', 'purity & calm', 'fulfilment & wisdom'];
+  const QUIPS = {
+    navratri: ['Garba raat ko, approvals abhi. &#x1F483;', 'Aaj ka rang pehna? Ab login bhi kar lijiye. &#x1F457;',
+               'Maa ka aashirwad &mdash; aur zero overdue tasks. &#x1F64F;', 'Dandiya shaam ko, pending tasks pehle. &#x1F3B6;'],
+    dussehra: ['Aaj pending tasks ka Ravan Dahan. &#x1F3F9;', 'Burai pe achchai ki jeet &mdash; overdue pe Done ki. &#x2705;',
+               'Jalebi-fafda baad mein, login pehle. &#x1F36F;', 'Das sir wale kaam bhi ek-ek karke ho jaate hain. &#x1F4CB;'],
+  };
+
+  function loginCSS() {
+    if (document.getElementById('fest-login-css')) return;
+    const s = document.createElement('style');
+    s.id = 'fest-login-css';
+    s.textContent = `
+      #login-page .fest-lg-toran { position: absolute; left: 0; right: 0; top: 0; height: 26px; z-index: 2; opacity: .95;
+        background-repeat: repeat-x; background-size: 36px 26px; pointer-events: none; }
+      #login-page .fest-lg-card { position: relative; display: flex; align-items: center; gap: 18px; max-width: 440px;
+        padding: 18px 20px; margin: 6px 0 26px; border-radius: 18px; background: rgba(255,255,255,.06);
+        border: 1px solid rgba(255,255,255,.13); backdrop-filter: blur(6px); animation: lgFadeUp .6s cubic-bezier(.16,1,.3,1) .25s both; }
+      #login-page .fest-lg-orb { flex-shrink: 0; width: 76px; height: 76px; border-radius: 50%; display: grid; place-items: center;
+        background: radial-gradient(circle at 35% 30%, #fff 0%, var(--fest-day) 55%); box-shadow: 0 0 0 4px rgba(255,255,255,.08), 0 0 44px var(--fest-day);
+        animation: festOrb 3.2s ease-in-out infinite; }
+      @keyframes festOrb { 50% { box-shadow: 0 0 0 4px rgba(255,255,255,.08), 0 0 64px var(--fest-day) } }
+      #login-page .fest-lg-kicker { font-size: 10.5px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; color: #B8D3F2; }
+      #login-page .fest-lg-name { font-size: 24px; font-weight: 700; color: #fff; margin: 3px 0 2px; line-height: 1.2; }
+      #login-page .fest-lg-sub { font-size: 13px; color: #A9C4E4; }
+      #login-page .fest-lg-meta { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 12px; color: #cfe0f5; }
+      #login-page .fest-lg-meta .fest-days i { box-shadow: inset 0 0 0 1px rgba(255,255,255,.25); }
+      #login-page .fest-lg-meta .fest-days i.today { box-shadow: 0 0 0 2px #0A2647, 0 0 0 3.5px #fff; }
+      #login-page .fest-lg-chip { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 600;
+        color: var(--color-primary); background: var(--color-primary-light); border-radius: 999px; padding: 4px 11px 4px 6px; margin-bottom: 12px; }
+      #login-page .fest-lg-chip i { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); }
+      @media (prefers-reduced-motion: reduce) { #login-page .fest-lg-orb { animation: none; } }`;
+    document.head.appendChild(s);
+  }
+
+  // Called by Pages.login.render() right after it paints. Swaps the mock-
+  // dashboard animation for today's goddess card, tints the glow blobs in the
+  // day's colour, and puts a small greeting chip on the sign-in card (the
+  // only part phones see).
+  function decorateLogin(el) {
+    const f = current();
+    if (!f || !el || mode() === 'off') return;
+    injectCSS(); loginCSS();
+    const nav = f.kind === 'navratri';
+    const colour = nav && f.day > 0 ? navratriColour(f.row.start, f.day - 1) : null;
+    const dayHex = colour ? HEX[colour] : nav ? '#f97316' : '#f59e0b';
+    el.style.setProperty('--fest-day', dayHex);
+
+    const brand = el.querySelector('.lg-brand');
+    const t = dayTheme(f);
+    if (brand && t) brand.style.background = `linear-gradient(150deg, ${t.side} 0%, color-mix(in srgb, ${t.side}, ${t.p} 40%) 52%, ${t.p} 100%)`;
+    if (brand) {
+      const tor = document.createElement('span');
+      tor.className = 'fest-lg-toran';
+      tor.style.backgroundImage = TORAN(nav ? '#fb7185' : '#f59e0b');
+      brand.appendChild(tor);
+      const b1 = brand.querySelector('.lg-blob-1'), b3 = brand.querySelector('.lg-blob-3'), b2 = brand.querySelector('.lg-blob-2');
+      if (b1) b1.style.background = dayHex + '8c';
+      if (b3) b3.style.background = dayHex + '4d';
+      if (b2) b2.style.background = nav ? 'rgba(236,72,153,.34)' : 'rgba(234,88,12,.40)';
+    }
+
+    let kicker, name, sub, meta = '';
+    if (nav && f.day === 0) {
+      kicker = 'Navratri · begins tomorrow';
+      name = 'शुभ नवरात्रि';
+      sub = `Ghatasthapana, ${new Date(f.row.start + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}`;
+    } else if (nav) {
+      const i = f.day - 1;
+      kicker = `Navratri · Day ${f.day} of 9${f.day === 8 ? ' · Ashtami' : f.day === 9 ? ' · Navami' : ''}`;
+      name = `माँ ${GODDESS_HI[i]}`;
+      sub = `Maa ${GODDESS[i]} · ${GODDESS_GIFT[i]}`;
+      const dots = Array.from({ length: 9 }, (_, k) => {
+        const c = navratriColour(f.row.start, k);
+        return `<i class="${k < i ? 'past' : k === i ? 'today' : ''}" style="background:${HEX[c]}"></i>`;
+      }).join('');
+      meta = `<div class="fest-lg-meta"><div class="fest-days">${dots}</div><span>Aaj ka rang · <b>${colour}</b></span></div>`;
+    } else {
+      kicker = 'Vijayadashami';
+      name = 'शुभ दशहरा';
+      sub = 'असत्य पर सत्य की विजय — Happy Dussehra';
+    }
+
+    const stage = el.querySelector('.lg-stage');
+    if (stage) {
+      const card = document.createElement('div');
+      card.className = 'fest-lg-card';
+      card.innerHTML = `<div class="fest-lg-orb">${nav ? GARBO : BOW}</div>
+        <div><div class="fest-lg-kicker">${kicker}</div><div class="fest-lg-name">${name}</div>
+        <div class="fest-lg-sub">${sub}</div>${meta}</div>`;
+      stage.replaceWith(card);
+    }
+
+    const greet = el.querySelector('.lg-greeting .lg-dot');
+    if (greet) { greet.style.background = dayHex; greet.style.boxShadow = `0 0 0 3px ${dayHex}55`; }
+
+    const quips = el.querySelectorAll('.lg-quip span');
+    QUIPS[f.kind].forEach((q, i) => { if (quips[i]) quips[i].innerHTML = q; });
+
+    const h1 = el.querySelector('.login-card h1');
+    if (h1) {
+      const chip = document.createElement('div');
+      chip.className = 'fest-lg-chip';
+      chip.innerHTML = nav
+        ? `<i style="background:${dayHex}"></i>शुभ नवरात्रि${f.day > 0 ? ` · Day ${f.day} · ${colour}` : ''}`
+        : `<i style="background:${dayHex}"></i>शुभ दशहरा · Happy Dussehra`;
+      h1.parentNode.insertBefore(chip, h1);
+    }
+  }
+
+  applyTheme();
+
+  return { mount, current, decorateLogin, applyTheme };
 })();
