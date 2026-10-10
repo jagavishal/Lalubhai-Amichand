@@ -74,31 +74,11 @@ window.Festival = (function () {
       <circle cx='36' cy='23' r='4.5' fill='#facc15'/><circle cx='36' cy='23' r='2' fill='#fde047'/>
     </svg>`)}")`;
 
-  const DIYA = `<svg class="fest-diya" width="52" height="46" viewBox="0 0 34 30" aria-hidden="true">
-    <path class="fest-flame" d="M17 2 C21 8 21 12 17 15 C13 12 13 8 17 2Z" fill="#fbbf24"/>
-    <path d="M17 7 C19 10 19 12 17 14 C15 12 15 10 17 7Z" fill="#fff7d6"/>
-    <path d="M2 17 H32 C30 25 24 28 17 28 C10 28 4 25 2 17Z" fill="#c2410c"/>
-    <path d="M5 19 H29" stroke="#fdba74" stroke-width="1.4" stroke-dasharray="2 2"/>
-  </svg>`;
 
   // Crossed dandiya sticks with ribbon bands.
-  const DANDIYA = `<svg width="72" height="72" viewBox="0 0 120 120" aria-hidden="true">
-    <g class="fest-sway">
-      <g transform="rotate(-35 60 60)">
-        <rect x="55" y="6" width="10" height="108" rx="5" fill="#be123c"/>
-        ${[16, 36, 56, 76, 96].map((y, i) => `<rect x="55" y="${y}" width="10" height="7" fill="${['#facc15', '#16a34a', '#2563eb', '#facc15', '#16a34a'][i]}"/>`).join('')}
-        <circle cx="60" cy="6" r="5" fill="#f59e0b"/><circle cx="60" cy="114" r="5" fill="#f59e0b"/>
-      </g>
-      <g transform="rotate(35 60 60)">
-        <rect x="55" y="6" width="10" height="108" rx="5" fill="#7e22ce"/>
-        ${[16, 36, 56, 76, 96].map((y, i) => `<rect x="55" y="${y}" width="10" height="7" fill="${['#f97316', '#facc15', '#ec4899', '#f97316', '#facc15'][i]}"/>`).join('')}
-        <circle cx="60" cy="6" r="5" fill="#f59e0b"/><circle cx="60" cy="114" r="5" fill="#f59e0b"/>
-      </g>
-    </g>
-  </svg>`;
 
   // Garba deepak — the perforated pot danced around.
-  const GARBO = `<svg width="54" height="68" viewBox="0 0 96 120" aria-hidden="true">
+  const GARBO = `<svg width="30" height="38" viewBox="0 0 96 120" aria-hidden="true">
     <path class="fest-flame" d="M48 4 C55 15 55 22 48 28 C41 22 41 15 48 4Z" fill="#fbbf24"/>
     <path d="M48 12 C51 17 51 21 48 25 C45 21 45 17 48 12Z" fill="#fff7d6"/>
     <rect x="38" y="28" width="20" height="8" rx="2" fill="#b45309"/>
@@ -108,7 +88,7 @@ window.Festival = (function () {
       .map(([x, y]) => `<circle class="fest-hole" cx="${x}" cy="${y}" r="3.2" fill="#fde68a"/>`).join('')}
   </svg>`;
 
-  const BOW = `<svg width="52" height="52" viewBox="0 0 46 46" aria-hidden="true">
+  const BOW = `<svg width="32" height="32" viewBox="0 0 46 46" aria-hidden="true">
     <path d="M10 4 C34 10 36 36 10 42" stroke="#92400e" stroke-width="3.5" fill="none" stroke-linecap="round"/>
     <path d="M10 4 L10 42" stroke="#fcd34d" stroke-width="1.2"/>
     <path d="M6 23 H42" stroke="#78350f" stroke-width="2.2"/><path d="M42 23 l-7 -4 v8z" fill="#b91c1c"/>
@@ -123,7 +103,7 @@ window.Festival = (function () {
         <circle cx="${x - 2.3}" cy="${y - 1}" r="1.2" fill="#111"/><circle cx="${x + 2.3}" cy="${y - 1}" r="1.2" fill="#111"/>
         <path d="M${x - 3} ${y + 3} q3 2 6 0" stroke="#7f1d1d" stroke-width="1.2" fill="none"/></g>`;
     }).join('');
-    return `<svg class="fest-ravan-svg" width="64" height="100" viewBox="0 0 120 190" aria-hidden="true">
+    return `<svg class="fest-ravan-svg" width="26" height="42" viewBox="0 0 120 190" aria-hidden="true">
       ${small}
       <path d="M48 14 L52 2 L56 10 L60 0 L64 10 L68 2 L72 14Z" fill="#facc15" stroke="#b45309"/>
       <circle cx="60" cy="30" r="13" fill="#ea580c"/>
@@ -151,85 +131,85 @@ window.Festival = (function () {
     const s = document.createElement('style');
     s.id = 'fest-css';
     s.textContent = `
-      .fest-toran { height: 34px; margin: -6px -4px 10px; background-repeat: repeat-x; background-size: 48px 34px;
-        animation: festSwing 4s ease-in-out infinite; transform-origin: top center; }
-      @keyframes festSwing { 0%,100% { transform: skewX(0) } 50% { transform: skewX(1.2deg) } }
+      .fest-toran { height: 24px; margin: -8px 0 12px; background-repeat: repeat-x; background-size: 34px 24px; opacity: .9;
+        animation: festSwing 5s ease-in-out infinite; transform-origin: top center; }
+      @keyframes festSwing { 0%,100% { transform: skewX(0) } 50% { transform: skewX(.8deg) } }
 
-      .fest-banner { position: relative; overflow: hidden; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-        padding: 14px 18px; border-radius: 16px; margin-bottom: 18px; color: #fff; box-shadow: 0 8px 24px rgba(0,0,0,.12); }
-      .fest-banner > svg:not(.fest-mandala) { flex-shrink: 0; position: relative; z-index: 1; }
-      .fest-banner.navratri { background: linear-gradient(115deg, #be123c 0%, #db2777 38%, #f97316 78%, #f59e0b 100%); }
-      .fest-banner.dussehra { background: linear-gradient(115deg, #7c2d12 0%, #b91c1c 40%, #ea580c 80%, #f59e0b 100%); }
-      .fest-banner::before { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .18;
-        background-image: radial-gradient(circle at 10px 10px, #fff 1.6px, transparent 2px); background-size: 22px 22px; }
-      .fest-banner .fest-mandala { position: absolute; right: -40px; top: 50%; width: 190px; height: 190px; transform: translateY(-50%);
-        opacity: .16; animation: festSpin 40s linear infinite; pointer-events: none; }
-      @keyframes festSpin { to { transform: translateY(-50%) rotate(360deg) } }
-      .fest-title { font-size: 22px; font-weight: 800; letter-spacing: .3px; line-height: 1.2; text-shadow: 0 2px 6px rgba(0,0,0,.2); }
-      .fest-sub { font-size: 13px; opacity: .95; margin-top: 3px; }
-      .fest-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; border-radius: 999px;
-        background: rgba(255,255,255,.2); font-size: 12px; font-weight: 600; margin-top: 7px; }
-      .fest-chip i { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #fff; display: inline-block; }
-      .fest-days { display: flex; gap: 4px; margin-top: 8px; }
-      .fest-days span { width: 18px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.3); }
-      .fest-days span.on { background: #fff; }
-      .fest-ctrl { position: relative; z-index: 1; display: inline-flex; background: rgba(0,0,0,.18);
-        border-radius: 999px; padding: 3px; gap: 2px; align-self: flex-start; }
-      .fest-ctrl button { border: 0; background: transparent; color: #fff; font-size: 11.5px; font-weight: 600; padding: 4px 11px;
-        border-radius: 999px; cursor: pointer; }
-      .fest-ctrl button.on { background: #fff; color: #be123c; }
-      .fest-banner.dussehra .fest-ctrl button.on { color: #b91c1c; }
+      /* Card in the page's own surface colour; the festival shows in a thin
+         gradient edge, a soft glow and the accent text — not a loud fill. */
+      .fest-banner { --fa: #be123c; --fa-soft: #fff1f2; --fa-edge: linear-gradient(90deg, #be123c, #f97316, #f59e0b);
+        position: relative; overflow: hidden; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+        padding: 14px 18px; margin-bottom: 18px; border-radius: 14px; background: var(--surface, #fff);
+        border: 1px solid rgba(190,18,60,.14); box-shadow: 0 1px 3px rgba(15,23,42,.05); }
+      .fest-banner.dussehra { --fa: #b91c1c; --fa-soft: #fff7ed; --fa-edge: linear-gradient(90deg, #7f1d1d, #dc2626, #f59e0b);
+        border-color: rgba(185,28,28,.16); }
+      .fest-banner::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--fa-edge); }
+      .fest-banner::after { content: ''; position: absolute; left: -60px; top: -80px; width: 260px; height: 220px; pointer-events: none;
+        background: radial-gradient(closest-side, rgba(249,115,22,.07), transparent); }
+      html[data-theme="dark"] .fest-banner { --fa: #fb7185; --fa-soft: rgba(251,113,133,.10); border-color: rgba(251,113,133,.18); }
+      html[data-theme="dark"] .fest-banner.dussehra { --fa: #fb923c; --fa-soft: rgba(251,146,60,.10); }
+
+      .fest-icon { position: relative; z-index: 1; flex-shrink: 0; width: 54px; height: 54px; border-radius: 50%;
+        background: var(--fa-soft); display: grid; place-items: center; }
+      .fest-body { position: relative; z-index: 1; flex: 1; min-width: 0; }
+      .fest-title { font-size: 17px; font-weight: 700; line-height: 1.3; color: var(--text-primary, #0f172a); }
+      .fest-title b { color: var(--fa); font-weight: 700; }
+      .fest-title span { color: var(--text-muted, #94a3b8); font-weight: 400; margin: 0 6px; }
+      .fest-sub { font-size: 13px; color: var(--text-secondary, #475569); margin-top: 2px; }
+      .fest-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 12px; color: var(--text-secondary, #475569); }
+      .fest-days { display: flex; gap: 5px; }
+      .fest-days i { width: 10px; height: 10px; border-radius: 50%; display: block; opacity: .28;
+        box-shadow: inset 0 0 0 1px rgba(15,23,42,.15); }
+      .fest-days i.past { opacity: .9; }
+      .fest-days i.today { opacity: 1; box-shadow: 0 0 0 2px var(--surface, #fff), 0 0 0 3.5px var(--fa); }
+
+      .fest-right { margin-left: auto; position: relative; z-index: 1; display: flex; align-items: center; gap: 12px; }
+      .fest-ctrl { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px;
+        background: var(--surface-alt, #f8fafc); border: 1px solid var(--border, #e2e8f0); }
+      .fest-ctrl button { border: 0; background: transparent; color: var(--text-muted, #64748b); font-size: 11.5px; font-weight: 600;
+        padding: 4px 11px; border-radius: 999px; cursor: pointer; }
+      .fest-ctrl button.on { background: var(--surface, #fff); color: var(--fa); box-shadow: 0 1px 3px rgba(15,23,42,.12); }
       .fest-off { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted, #64748b);
         background: none; border: 1px dashed currentColor; border-radius: 999px; padding: 3px 12px; cursor: pointer; margin-bottom: 14px; }
 
-      .fest-diya .fest-flame, .fest-art .fest-flame { transform-origin: 50% 100%; animation: festFlicker .5s ease-in-out infinite alternate; }
+      .fest-ravan { display: flex; align-items: center; gap: 8px; cursor: pointer; border: 1px solid rgba(185,28,28,.2);
+        background: var(--fa-soft); border-radius: 12px; padding: 3px 12px 3px 8px; color: var(--fa); font-size: 12px; font-weight: 600; }
+      .fest-ravan:hover { border-color: var(--fa); }
+
+      .fest-flame { transform-origin: 50% 100%; animation: festFlicker .5s ease-in-out infinite alternate; }
       @keyframes festFlicker { from { transform: scale(1, 1) } to { transform: scale(.88, 1.12) } }
       .fest-hole { animation: festGlow 1.4s ease-in-out infinite alternate; }
       .fest-hole:nth-child(3n) { animation-delay: .5s } .fest-hole:nth-child(3n+1) { animation-delay: .9s }
       @keyframes festGlow { from { opacity: .45 } to { opacity: 1 } }
-      .fest-sway { transform-origin: 60px 60px; animation: festSway 1.6s ease-in-out infinite alternate; }
-      @keyframes festSway { from { transform: rotate(-6deg) } to { transform: rotate(6deg) } }
-
-      /* Art sits inside the banner, never fixed over the page — it used to cover table rows. */
-      .fest-right { margin-left: auto; position: relative; z-index: 1; display: flex; align-items: center; gap: 14px; }
-      .fest-art { display: flex; filter: drop-shadow(0 4px 6px rgba(0,0,0,.2)); }
-      .fest-art.fest-ravan { cursor: pointer; flex-direction: column; align-items: center; margin: -8px 0; }
-      .fest-tag { white-space: nowrap; font-size: 10.5px; font-weight: 700; color: #b91c1c; background: #fff; padding: 1px 8px;
-        border-radius: 999px; margin-bottom: 2px; }
 
       .fest-fire { opacity: 0; transition: opacity .4s; }
       .fest-fire path { transform-box: fill-box; transform-origin: 50% 100%; animation: festFlicker .35s ease-in-out infinite alternate; }
       .fest-ravan.burning .fest-fire { opacity: .95; }
       .fest-ravan.burning .fest-ravan-svg { animation: festShake .2s linear infinite; }
-      .fest-ravan.burnt { opacity: 0; transform: translateY(30px) scale(.9); transition: opacity 1s, transform 1s; }
+      .fest-ravan.burnt { opacity: 0; transition: opacity 1s; pointer-events: none; }
       @keyframes festShake { 0%,100% { transform: translateX(0) } 50% { transform: translateX(1.5px) } }
-      .fest-arrow { position: fixed; z-index: 31; pointer-events: none; font-size: 0; width: 60px; height: 4px; background: #78350f; }
+      .fest-arrow { position: fixed; z-index: 31; pointer-events: none; width: 60px; height: 3px; background: #78350f; }
       .fest-arrow::after { content: ''; position: absolute; right: -10px; top: -5px; border-left: 12px solid #b91c1c;
-        border-top: 7px solid transparent; border-bottom: 7px solid transparent; }
-      .fest-victory { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%) scale(.6); z-index: 40; pointer-events: none;
-        font-size: 34px; font-weight: 900; color: #fff; background: linear-gradient(115deg, #b91c1c, #f59e0b); padding: 14px 30px;
-        border-radius: 18px; box-shadow: 0 16px 40px rgba(0,0,0,.3); opacity: 0; transition: opacity .35s, transform .35s; text-align: center; }
-      .fest-victory small { display: block; font-size: 14px; font-weight: 600; opacity: .95; }
+        border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
+      .fest-victory { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%) scale(.9); z-index: 40; pointer-events: none;
+        font-size: 28px; font-weight: 800; color: #b91c1c; background: var(--surface, #fff); padding: 16px 32px; border-radius: 16px;
+        border-top: 4px solid #f59e0b; box-shadow: 0 20px 50px rgba(15,23,42,.18); opacity: 0; transition: opacity .3s, transform .3s; text-align: center; }
+      .fest-victory small { display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary, #475569); margin-top: 2px; }
       .fest-victory.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 
       .fest-canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 25; }
 
       @media (max-width: 767px) {
-        .fest-art.deco, .fest-banner .fest-mandala { display: none; }
-        .fest-right { margin-left: 0; }
-        .fest-title { font-size: 18px; }
-        .fest-toran { margin-top: -2px; }
+        .fest-right { margin-left: 0; width: 100%; justify-content: space-between; }
+        .fest-title span { display: none; }
+        .fest-title b { display: block; }
+        .fest-icon { width: 46px; height: 46px; }
       }
       @media (prefers-reduced-motion: reduce) {
-        .fest-toran, .fest-banner .fest-mandala, .fest-sway, .fest-flame, .fest-hole { animation: none !important; }
+        .fest-toran, .fest-flame, .fest-hole { animation: none !important; }
       }`;
     document.head.appendChild(s);
   }
-
-  const MANDALA = `<svg class="fest-mandala" viewBox="0 0 100 100" aria-hidden="true">
-    ${Array.from({ length: 12 }, (_, i) => `<ellipse cx="50" cy="22" rx="7" ry="20" fill="none" stroke="#fff" stroke-width="1.6" transform="rotate(${i * 30} 50 50)"/>`).join('')}
-    <circle cx="50" cy="50" r="12" fill="none" stroke="#fff" stroke-width="2"/><circle cx="50" cy="50" r="44" fill="none" stroke="#fff" stroke-width="1.5" stroke-dasharray="3 4"/>
-  </svg>`;
 
   /* ── particles ───────────────────────────────────────────────────── */
   // Navratri: petals drifting down. Dussehra: embers rising.
@@ -246,15 +226,16 @@ window.Festival = (function () {
     addEventListener('resize', size);
 
     const COLS = kind === 'navratri' ? ['#f97316', '#fbbf24', '#e11d48', '#ec4899', '#facc15'] : ['#fbbf24', '#f97316', '#ef4444', '#fde047'];
-    const N = W < 768 ? 12 : 26;
+    const N = W < 768 ? 6 : 14;
+    const BAND = 300; // px from the top — petals/embers never drift over the tables
     const ps = Array.from({ length: N }, () => spawn(true));
     function spawn(initial) {
       const up = kind === 'dussehra';
       return {
         x: Math.random() * W,
-        y: initial ? Math.random() * H : (up ? H + 10 : -10),
-        r: up ? 1.2 + Math.random() * 2 : 3 + Math.random() * 3.5,
-        vy: up ? -(0.4 + Math.random() * 0.9) : 0.35 + Math.random() * 0.7,
+        y: initial ? Math.random() * BAND : (up ? BAND : -10),
+        r: up ? 1 + Math.random() * 1.6 : 2.5 + Math.random() * 2.5,
+        vy: up ? -(0.25 + Math.random() * 0.4) : 0.25 + Math.random() * 0.4,
         vx: (Math.random() - 0.5) * 0.4,
         a: Math.random() * Math.PI * 2, va: (Math.random() - 0.5) * 0.04,
         col: COLS[(Math.random() * COLS.length) | 0], life: 0,
@@ -268,13 +249,13 @@ window.Festival = (function () {
           const p = ps[i];
           p.life++; p.a += p.va;
           p.x += p.vx + Math.sin(p.life / 40 + i) * 0.35; p.y += p.vy;
-          if (p.y > H + 20 || p.y < -20 || p.x < -20 || p.x > W + 20) { ps[i] = spawn(false); continue; }
+          if (p.y > BAND || p.y < -20 || p.x < -20 || p.x > W + 20) { ps[i] = spawn(false); continue; }
           ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.a); ctx.fillStyle = p.col;
           if (kind === 'navratri') {
-            ctx.globalAlpha = 0.75;
+            ctx.globalAlpha = 0.7 * Math.max(0, 1 - p.y / BAND);
             ctx.beginPath(); ctx.ellipse(0, 0, p.r, p.r * 0.55, 0, 0, Math.PI * 2); ctx.fill();
           } else {
-            ctx.globalAlpha = Math.max(0, Math.min(1, p.y / H)) * 0.9;
+            ctx.globalAlpha = 0.85 * Math.max(0, Math.min(1, p.y / BAND));
             ctx.shadowColor = p.col; ctx.shadowBlur = 8;
             ctx.beginPath(); ctx.arc(0, 0, p.r, 0, Math.PI * 2); ctx.fill();
           }
@@ -325,32 +306,37 @@ window.Festival = (function () {
     </div>`;
 
     if (f.kind === 'navratri') {
-      let sub, chip = '';
+      let sub, meta = '';
       if (f.day === 0) {
-        sub = `Navratri begins tomorrow — Ghatasthapana, ${new Date(f.row.start + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}`;
+        sub = `Navratri begins tomorrow · Ghatasthapana, ${new Date(f.row.start + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}`;
       } else {
         const col = navratriColour(f.row.start, f.day - 1);
         sub = `Day ${f.day} of 9 · Maa ${GODDESS[f.day - 1]}${f.day === 8 ? ' · Durga Ashtami' : f.day === 9 ? ' · Maha Navami' : ''}`;
-        chip = `<div class="fest-chip"><i style="background:${HEX[col]}"></i>Today's colour: ${col}</div>
-          <div class="fest-days" aria-hidden="true">${Array.from({ length: 9 }, (_, i) => `<span class="${i < f.day ? 'on' : ''}"></span>`).join('')}</div>`;
+        // One dot per day in that day's colour — the row doubles as the progress bar.
+        const dots = Array.from({ length: 9 }, (_, i) => {
+          const c = navratriColour(f.row.start, i);
+          return `<i title="Day ${i + 1} · ${c}" class="${i + 1 < f.day ? 'past' : i + 1 === f.day ? 'today' : ''}" style="background:${HEX[c]}"></i>`;
+        }).join('');
+        meta = `<div class="fest-meta"><div class="fest-days">${dots}</div><span>Today's colour · <b style="color:var(--text-primary)">${col}</b></span></div>`;
       }
-      const full = m === 'full';
       return `<div class="fest-banner navratri">
-        ${MANDALA}${full ? `<span class="fest-art">${GARBO}</span>` : DIYA}
-        <div style="position:relative;z-index:1;">
-          <div class="fest-title">शुभ नवरात्रि · Happy Navratri</div>
-          <div class="fest-sub">${sub}</div>${chip}
-        </div><div class="fest-right">${full ? `<span class="fest-art deco">${DANDIYA}</span>` : ''}${ctrl}</div>
+        <div class="fest-icon">${GARBO}</div>
+        <div class="fest-body">
+          <div class="fest-title"><b>शुभ नवरात्रि</b><span>·</span>Happy Navratri</div>
+          <div class="fest-sub">${sub}</div>${meta}
+        </div>
+        <div class="fest-right">${ctrl}</div>
       </div>`;
     }
 
     return `<div class="fest-banner dussehra">
-      ${MANDALA}${BOW}
-      <div style="position:relative;z-index:1;">
-        <div class="fest-title">शुभ विजयादशमी · Happy Dussehra</div>
-        <div class="fest-sub">असत्य पर सत्य की विजय — may good always win over evil.${m === 'full' && !f.after ? ' Click Ravan to light him up!' : ''}</div>
-      </div><div class="fest-right">${m === 'full' && !f.after
-        ? `<span class="fest-art fest-ravan" role="button" tabindex="0" title="Ravan Dahan — click to shoot the arrow"><span class="fest-tag">🏹 Ravan Dahan</span>${RAVAN()}</span>`
+      <div class="fest-icon">${BOW}</div>
+      <div class="fest-body">
+        <div class="fest-title"><b>शुभ विजयादशमी</b><span>·</span>Happy Dussehra</div>
+        <div class="fest-sub">असत्य पर सत्य की विजय — may good always win over evil.</div>
+      </div>
+      <div class="fest-right">${m === 'full' && !f.after
+        ? `<button type="button" class="fest-ravan" title="Shoot the arrow">${RAVAN()}Ravan Dahan</button>`
         : ''}${ctrl}</div>
     </div>`;
   }
