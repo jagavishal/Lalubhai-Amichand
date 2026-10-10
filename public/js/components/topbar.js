@@ -135,6 +135,7 @@ window.Topbar = {
     const el = document.getElementById('topbar');
     if (!el) return;
     el.innerHTML = this._buildHTML(user);
+    window.Festival?.decorateTopbar();
     window.addEventListener('hashchange', () => this._syncTitle());
   },
 };

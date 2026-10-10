@@ -163,6 +163,13 @@ window.Festival = (function () {
       .fest-days i.past { opacity: .9; }
       .fest-days i.today { opacity: 1; box-shadow: 0 0 0 2px var(--surface, #fff), 0 0 0 3.5px var(--fa); }
 
+      .fest-tb { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center;
+        gap: 9px; white-space: nowrap; pointer-events: none; padding: 5px 16px; border-radius: 999px;
+        background: var(--color-primary-light, rgba(190,18,60,.08)); }
+      .fest-tb i { width: 10px; height: 10px; border-radius: 50%; box-shadow: 0 0 0 2px var(--surface, #fff), 0 0 0 3px var(--color-primary); }
+      .fest-tb b { font-size: 16px; font-weight: 700; color: var(--color-primary); }
+      .fest-tb span { font-size: 12.5px; font-weight: 500; color: var(--text-secondary, #475569); }
+      @media (max-width: 1100px) { .fest-tb span { display: none; } }
       .fest-right { margin-left: auto; position: relative; z-index: 1; display: flex; align-items: center; gap: 12px; }
       .fest-ctrl { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px;
         background: var(--surface-alt, #f8fafc); border: 1px solid var(--border, #e2e8f0); }
@@ -213,21 +220,27 @@ window.Festival = (function () {
 
   /* ── particles ───────────────────────────────────────────────────── */
   // Navratri: petals drifting down. Dussehra: embers rising.
-  function startParticles(host, kind) {
+  // panel = true: canvas fills `host` (position:relative) and particles use
+  // its whole height; otherwise a fixed full-window canvas, top band only.
+  function startParticles(host, kind, panel) {
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const c = document.createElement('canvas');
     c.className = 'fest-canvas';
+    if (panel) Object.assign(c.style, { position: 'absolute', width: '100%', height: '100%', zIndex: 0 });
     host.appendChild(c);
     const ctx = c.getContext('2d');
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     let W, H;
-    function size() { W = innerWidth; H = innerHeight; c.width = W * dpr; c.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+    function size() {
+      W = panel ? host.clientWidth : innerWidth; H = panel ? host.clientHeight : innerHeight;
+      c.width = W * dpr; c.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
     size();
     addEventListener('resize', size);
 
     const COLS = kind === 'navratri' ? ['#f97316', '#fbbf24', '#e11d48', '#ec4899', '#facc15'] : ['#fbbf24', '#f97316', '#ef4444', '#fde047'];
-    const N = W < 768 ? 6 : 14;
-    const BAND = 300; // px from the top — petals/embers never drift over the tables
+    const N = panel ? 22 : W < 768 ? 6 : 14;
+    const BAND = panel ? H : 300; // px from the top — on the dashboard petals/embers never drift over the tables
     const ps = Array.from({ length: N }, () => spawn(true));
     function spawn(initial) {
       const up = kind === 'dussehra';
@@ -306,12 +319,14 @@ window.Festival = (function () {
     </div>`;
 
     if (f.kind === 'navratri') {
-      let sub, meta = '';
+      let title, sub, meta = '';
       if (f.day === 0) {
-        sub = `Navratri begins tomorrow · Ghatasthapana, ${new Date(f.row.start + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}`;
+        title = '<b>Navratri begins tomorrow</b>';
+        sub = `Ghatasthapana, ${new Date(f.row.start + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })} · Maa ${GODDESS[0]}`;
       } else {
         const col = navratriColour(f.row.start, f.day - 1);
-        sub = `Day ${f.day} of 9 · Maa ${GODDESS[f.day - 1]}${f.day === 8 ? ' · Durga Ashtami' : f.day === 9 ? ' · Maha Navami' : ''}`;
+        title = `<b>माँ ${GODDESS_HI[f.day - 1]}</b><span>·</span>Day ${f.day} of 9${f.day === 8 ? ' · Durga Ashtami' : f.day === 9 ? ' · Maha Navami' : ''}`;
+        sub = `Maa ${GODDESS[f.day - 1]} · ${GODDESS_GIFT[f.day - 1]}`;
         // One dot per day in that day's colour — the row doubles as the progress bar.
         const dots = Array.from({ length: 9 }, (_, i) => {
           const c = navratriColour(f.row.start, i);
@@ -322,7 +337,7 @@ window.Festival = (function () {
       return `<div class="fest-banner navratri">
         <div class="fest-icon">${GARBO}</div>
         <div class="fest-body">
-          <div class="fest-title"><b>शुभ नवरात्रि</b><span>·</span>Happy Navratri</div>
+          <div class="fest-title">${title}</div>
           <div class="fest-sub">${sub}</div>${meta}
         </div>
         <div class="fest-right">${ctrl}</div>
@@ -332,8 +347,8 @@ window.Festival = (function () {
     return `<div class="fest-banner dussehra">
       <div class="fest-icon">${BOW}</div>
       <div class="fest-body">
-        <div class="fest-title"><b>शुभ विजयादशमी</b><span>·</span>Happy Dussehra</div>
-        <div class="fest-sub">असत्य पर सत्य की विजय — may good always win over evil.</div>
+        <div class="fest-title"><b>असत्य पर सत्य की विजय</b></div>
+        <div class="fest-sub">May good always win over evil — Happy Dussehra from Lalubhai Amichand.</div>
       </div>
       <div class="fest-right">${m === 'full' && !f.after
         ? `<button type="button" class="fest-ravan" title="Shoot the arrow">${RAVAN()}Ravan Dahan</button>`
@@ -428,12 +443,32 @@ window.Festival = (function () {
   function dayTheme(f) {
     if (!f) return null;
     if (f.kind === 'dussehra') return { name: 'Dussehra', ...DAY_THEME.Dussehra };
-    if (f.day === 0) return null; // eve: banner only, app keeps its own colours
-    const name = navratriColour(f.row.start, f.day - 1);
+    // The eve already wears Day 1's colour, so the build-up is visible.
+    const name = navratriColour(f.row.start, Math.max(0, f.day - 1));
     return { name, ...DAY_THEME[name] };
   }
 
+  // Centred greeting in the topbar, on every page. Topbar.render() calls
+  // this after it paints; applyTheme() calls it when the switch changes.
+  function decorateTopbar() {
+    const bar = document.getElementById('topbar');
+    if (!bar) return;
+    bar.querySelector('.fest-tb')?.remove();
+    const f = current();
+    if (!f || mode() === 'off') return;
+    injectCSS();
+    const nav = f.kind === 'navratri';
+    const hex = nav ? HEX[navratriColour(f.row.start, Math.max(0, f.day - 1))] : '#f59e0b';
+    const g = document.createElement('div');
+    g.className = 'fest-tb';
+    g.innerHTML = nav
+      ? `<i style="background:${hex}"></i><b>शुभ नवरात्रि</b><span>${f.day ? `Day ${f.day} · Maa ${GODDESS[f.day - 1]}` : 'kal se shuru'}</span>`
+      : `<i style="background:${hex}"></i><b>शुभ विजयादशमी</b><span>Happy Dussehra</span>`;
+    bar.appendChild(g);
+  }
+
   function applyTheme() {
+    decorateTopbar();
     const f = current();
     const t = mode() === 'off' ? null : dayTheme(f);
     let s = document.getElementById('fest-theme');
@@ -450,6 +485,7 @@ window.Festival = (function () {
         --fest-p: ${t.p}; --fest-rgb: ${t.rgb};
       }
       html[data-fest]:not([data-theme="dark"]) { --app-bg: ${t.bg}; }
+      html[data-fest] #topbar-title { color: var(--color-primary) !important; }
       html[data-fest]:not([data-theme="dark"]) #topbar { background: color-mix(in srgb, #fff 90%, ${t.p}); }
       html[data-fest] .fest-banner.navratri { --fa-edge: linear-gradient(90deg, ${t.p}, color-mix(in srgb, ${t.p}, #fff 45%), ${t.p}); }
       html[data-fest][data-theme="dark"] { --color-primary: ${t.acc}; --color-primary-strong: ${t.acc}; --color-primary-text: #111; }`;
@@ -489,6 +525,14 @@ window.Festival = (function () {
       #login-page .fest-lg-chip { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 600;
         color: var(--color-primary); background: var(--color-primary-light); border-radius: 999px; padding: 4px 11px 4px 6px; margin-bottom: 12px; }
       #login-page .fest-lg-chip i { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); }
+      #login-page .fest-lg-toran-m { display: none; }
+      @media (max-width: 1023px) {
+        #login-page .fest-lg-toran-m { display: block; }
+        #login-page .lg-panel { background:
+          radial-gradient(ellipse at 20% -10%, color-mix(in srgb, var(--fest-day) 30%, transparent) 0%, transparent 60%),
+          radial-gradient(ellipse at 90% 105%, color-mix(in srgb, var(--fest-day) 18%, transparent) 0%, transparent 55%),
+          var(--surface) !important; }
+      }
       @media (prefers-reduced-motion: reduce) { #login-page .fest-lg-orb { animation: none; } }`;
     document.head.appendChild(s);
   }
@@ -551,6 +595,15 @@ window.Festival = (function () {
       stage.replaceWith(card);
     }
 
+    if (brand) startParticles(brand, f.kind, true);
+    const panel = el.querySelector('.lg-panel');
+    if (panel) {
+      const tor = document.createElement('span');
+      tor.className = 'fest-lg-toran fest-lg-toran-m';
+      tor.style.backgroundImage = TORAN(nav ? '#fb7185' : '#f59e0b');
+      panel.appendChild(tor);
+    }
+
     const greet = el.querySelector('.lg-greeting .lg-dot');
     if (greet) { greet.style.background = dayHex; greet.style.boxShadow = `0 0 0 3px ${dayHex}55`; }
 
@@ -570,5 +623,5 @@ window.Festival = (function () {
 
   applyTheme();
 
-  return { mount, current, decorateLogin, applyTheme };
+  return { mount, current, decorateLogin, decorateTopbar, applyTheme };
 })();
