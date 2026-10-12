@@ -58,7 +58,7 @@ window.Sidebar = {
     // New Expense — a plus in a circle, the sidebar's direct shortcut into
     // Retail Dashboard's "+ New Expense" drawer.
     newexpense:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>',
-    // AMC Management — a wrench, the maintenance mark.
+    // Service Management — a wrench, the maintenance mark.
     amc:          '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
     // Company Overview — a briefcase, the plain "company/business" glyph,
     // distinct from every module's own icon since this page sits above all of them.
@@ -161,6 +161,12 @@ window.Sidebar = {
       // bookmarks keep working — see hr-leave.js.
       { route: 'announcements', label: 'Announcements',  icon: 'announcements' },
       { route: 'help-ticket',   label: 'Help Ticket',    icon: 'helpticket' },
+      // Service Management System (route 'amc' — it was AMC Management).
+      // alwaysShow: anyone may raise a service request and follow it, and the
+      // approver / Accounts must reach it from the mail link. What each person
+      // sees inside is decided by the API; the admin side (all requests,
+      // vendors, settings) is the Users → Access grant (hasAmcAccess).
+      { route: 'amc',           label: 'Service Management', icon: 'amc', alwaysShow: true },
       { route: 'profile',       label: 'Profile',        icon: 'profile' },
     ]},
     // The Export department is three desks ("Export ke andar bhi category
@@ -215,10 +221,6 @@ window.Sidebar = {
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
       { route: 'fms',           label: 'FMS',          icon: 'fms',          flag: 'fms' },
       { route: 'mis',           label: 'MIS Report',   icon: 'mis' },
-      // AMC Management. grantOnly: the owner, plus whoever Users → Access
-      // has ticked it for — being Admin/HOD (or having no saved permissions)
-      // does not show it. The API applies the same rule (hasAmcAccess).
-      { route: 'amc',           label: 'AMC Management', icon: 'amc', grantOnly: true },
       // No entry for 'developer': it is a maintenance console (reset, restore,
       // export) rather than day-to-day work, so it stays off the menu. The
       // route still resolves, so #developer reaches it when it is needed --

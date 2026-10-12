@@ -452,6 +452,10 @@ window.Pages.dashboard = (function () {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 8h12M6 13l6 8M6 13h4a4 4 0 0 0 0-8"/></svg>
               Urgent Payment
             </button>
+            <button id="db-btn-service-request" class="btn-secondary db-qa">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+              Service Request
+            </button>
             <button id="db-btn-announcement" class="btn-secondary db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
               Announcement
@@ -1566,6 +1570,9 @@ window.Pages.dashboard = (function () {
 
     const btnUrgentPayment = el.querySelector('#db-btn-urgent-payment');
     if (btnUrgentPayment) btnUrgentPayment.addEventListener('click', () => _openUrgentPaymentModal());
+    // Service Management's raise form (pages/amc.js), opened right here.
+    const btnServiceRequest = el.querySelector('#db-btn-service-request');
+    if (btnServiceRequest) btnServiceRequest.addEventListener('click', () => window.Pages?.amc?.openRaise?.());
 
     const btnAnnouncement = el.querySelector('#db-btn-announcement');
     if (btnAnnouncement) btnAnnouncement.addEventListener('click', () => _openAnnouncementModal(admin));

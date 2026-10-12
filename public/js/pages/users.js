@@ -91,7 +91,10 @@ window.Pages.users = (() => {
     { cat: 'Admin Section', key: 'fms',          label: 'FMS Master' },
     { cat: 'Admin Section', key: 'mis',          label: 'MIS Report' },
     // Grant-only (see GRANT_PAGES below): ticked per person, Admins included.
-    { cat: 'Admin Section', key: 'amc',          label: 'AMC Management', grant: true },
+    // The page itself is open to everyone (raise + follow requests); this
+    // grant makes a person a Service Management admin — every request, the
+    // vendor master and Settings.
+    { cat: 'Admin Section', key: 'amc',          label: 'Service Management (admin)', grant: true },
 
     { cat: 'HR Section', key: 'hr-employees',  label: 'Employee Master' },
     { cat: 'HR Section', key: 'hr-attendance', label: 'Attendance' },

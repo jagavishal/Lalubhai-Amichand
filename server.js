@@ -439,8 +439,8 @@ SCHEMA.push(...HR_SCHEMA);
 const { BULK_MAIL_SCHEMA, mountBulkMail } = require('./backend/bulk-mail.js');
 SCHEMA.push(...BULK_MAIL_SCHEMA);
 
-// AMC Management — maintenance contracts, renewals, expiry reminders and
-// service requests. Same arrangement again: tables appended here, routes
+// Service Management System (was AMC Management) — service requests with
+// approval, vendor, Accounts and payment. Same arrangement again: tables appended here, routes
 // mounted further down (search "mountAmc"). See backend/amc.js.
 const { AMC_SCHEMA, mountAmc } = require('./backend/amc.js');
 SCHEMA.push(...AMC_SCHEMA);
@@ -5620,11 +5620,12 @@ mountBulkMail(app, {
   requireBulkEmail: requireAdminOrPage('bulk-email'),
 });
 
-// ── AMC Management routes ─────────────────────────────────────────────────────
-// Everything under /api/amc/. The owner always; anyone else only when Users →
-// Access has ticked AMC Management for them (permissions.grants, kept apart
-// from the pages list) — being Admin/HOD is not enough on
-// its own. It runs its own half-hourly reminder sweep. See backend/amc.js.
+// ── Service Management System routes (was AMC Management) ─────────────────────
+// Everything under /api/amc/. Any logged-in user can raise and follow service
+// requests; hasAmcAccess decides who is a module ADMIN (every request, vendor
+// master, Settings): the owner always, anyone else only when Users → Access
+// has ticked it for them (permissions.grants, kept apart from the pages list).
+// See backend/amc.js for the approval → Accounts → paid flow.
 mountAmc(app, {
   q, pool, ensureSchema, requireAuth, withSeqId, getMailer,
   notifyAddressFor, istToday, appOrigin: APP_ORIGIN, useDb: USE_DB,
