@@ -7611,7 +7611,7 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po', async (req, res)
         const pr = await _erpPrLogRow(part);
         if (!pr) return res.status(400).json({ error: `${part} is not on the ERP PR Log — create the PR first, then raise the PO against it.` });
         if (['Cancelled', 'Rejected'].includes(pr.status)) return res.status(400).json({ error: `${pr.prNo} is ${pr.status.toLowerCase()} — a PO cannot be raised against it.` });
-        if (pr.party && party && _cleanPartyName(pr.party).toLowerCase() !== _cleanPartyName(party).toLowerCase()) return res.status(400).json({ error: `${pr.prNo} was raised for ${pr.party}, not ${party} — a PO can only combine PRs for the same ${cfg.partyLabel.toLowerCase()}.` });
+        if (pr.party && party && _partyKey(pr.party) !== _partyKey(party)) return res.status(400).json({ error: `${pr.prNo} was raised for ${pr.party}, not ${party} — a PO can only combine PRs for the same ${cfg.partyLabel.toLowerCase()}.` });
         canonical.push(pr.prNo);
       }
       prNo = canonical.join(', ');
