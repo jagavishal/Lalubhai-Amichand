@@ -5629,6 +5629,9 @@ mountBulkMail(app, {
 mountAmc(app, {
   q, pool, ensureSchema, requireAuth, withSeqId, getMailer,
   notifyAddressFor, istToday, appOrigin: APP_ORIGIN, useDb: USE_DB,
+  // Approve / comment / reject from the approver's mail (/sms-action) uses
+  // the same signed-token scheme and confirm page as /leave-action.
+  tokenFor: leaveTokenFor, readToken: readLeaveToken, actionPage: _leaveActionPage,
   hasAmcAccess: async (user) => {
     if (isSuperAdmin(user)) return true;
     const perms = await getUserPermissions(user?.id);

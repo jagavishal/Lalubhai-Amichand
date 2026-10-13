@@ -119,6 +119,8 @@ const S = {
   APPROVED: 'Approved', ACCOUNTS: 'With Accounts', PAID: 'Paid',
 };
 const STATUSES = Object.values(S);
+// Mail-action tokens share the leave/PO HMAC; the namespace keeps them apart.
+const TOKEN_NS = 'sms:';
 
 // Settings live in app_config as JSON.
 const CFG = {
@@ -227,7 +229,7 @@ const docsOut = (raw) => parseDocs(raw).map(({ name, size, type, kind, by, at })
 
 /* ── Mail ──────────────────────────────────────────────────────────── */
 
-function mailHtml({ heading, colour = '#0150AA', lead, rows, footer, link }) {
+function mailHtml({ heading, colour = '#0150AA', lead, rows, footer, link, actions }) {
   const cells = rows
     .filter(([, v]) => v !== undefined && v !== null && String(v) !== '')
     .map(([k, v]) => `<tr>
@@ -239,10 +241,25 @@ function mailHtml({ heading, colour = '#0150AA', lead, rows, footer, link }) {
       <h2 style="color:${colour};margin:0 0 16px;font-size:19px">${heading}</h2>
       <p style="color:#374151">${lead}</p>
       <table style="width:100%;border-collapse:collapse;margin:16px 0">${cells}</table>
+      ${actions || ''}
       ${footer ? `<p style="color:#374151">${footer}</p>` : ''}
       ${link ? `<p><a href="${escHtml(link)}" style="display:inline-block;background:#0150AA;color:#fff;padding:9px 18px;border-radius:6px;text-decoration:none;font-weight:600">Open in ERP</a></p>` : ''}
       <p style="color:#94a3b8;font-size:12px;margin-top:24px">This is an automated notification from the Lallubhai Amichand ERP — Service Management System.</p>
     </div>`;
+}
+
+/* Bulletproof-ish mail buttons (a coloured table cell around a padded link):
+   the one construction Outlook, Gmail and Apple Mail all render the same. */
+function decisionButtons(list) {
+  const btn = ([label, colour, href]) => `<td style="padding:0 8px 8px 0">
+      <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:separate">
+        <tr><td style="background:${colour};border-radius:6px">
+          <a href="${escHtml(href)}" style="display:inline-block;padding:11px 24px;font-family:Arial,sans-serif;
+             font-size:14px;font-weight:bold;color:#ffffff;text-decoration:none">${label}</a>
+        </td></tr>
+      </table>
+    </td>`;
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:18px 0 6px"><tr>${list.map(btn).join('')}</tr></table>`;
 }
 
 /* ===================================================================== */
@@ -251,6 +268,7 @@ function mountAmc(app, ctx) {
   const {
     q, pool, ensureSchema, requireAuth, hasAmcAccess,
     withSeqId, getMailer, notifyAddressFor, istToday, appOrigin, useDb,
+    tokenFor, readToken, actionPage,
   } = ctx;
 
   const today = () => istToday().iso;
@@ -430,6 +448,13 @@ function mountAmc(app, ctx) {
     ];
   }
 
+  async function quotationFiles(id) {
+    const row = (await q('SELECT documents FROM sms_requests WHERE id = $1', [id]))[0];
+    return parseDocs(row?.documents).filter((d) => (d.kind || 'quotation') === 'quotation')
+      .map((d) => ({ filename: d.name, path: path.join(UPLOAD_ROOT, id, path.basename(d.file)) }))
+      .filter((a) => fs.existsSync(a.path));
+  }
+
   // Fire-and-forget: a mail problem must never fail the step that caused it.
   function notify(s, stage, { note = '', vendor = null } = {}) {
     (async () => {
@@ -438,7 +463,7 @@ function mountAmc(app, ctx) {
       const doer = await addressesOf([s.raised_by_id]);
       const approver = await addressesOf([s.approver_id]);
       const noteRow = note ? [['Note', escHtml(note).replace(/\n/g, '<br>')]] : [];
-      let to = [], cc = [], heading, colour = '#0150AA', lead, subject, attachments = [], extra = [];
+      let to = [], cc = [], heading, colour = '#0150AA', lead, subject, attachments = [], extra = [], actions = '';
       if (stage === 'raised' || stage === 'resubmitted') {
         to = approver; cc = doer;
         heading = stage === 'raised' ? 'Service Request — Approval Needed' : 'Service Request Updated — Approval Needed';
@@ -446,6 +471,13 @@ function mountAmc(app, ctx) {
           ? `<b>${escHtml(s.raised_by_name)}</b> has raised a service request and chose you as the approver. Please approve, reject or comment on it in the ERP.`
           : `<b>${escHtml(s.raised_by_name)}</b> has updated service request <b>${escHtml(s.id)}</b> after your comment. It is waiting for your approval again.`;
         subject = `${stage === 'raised' ? 'Approval needed' : 'Updated — approval needed'}: ${s.id} ${s.service_type} [${s.priority}]`;
+        // Decide straight from the mail: each button opens a confirm page
+        // (see /sms-action) bound to this approver's address.
+        if (approver[0]) {
+          const url = (action) => `${appOrigin}/sms-action?t=${encodeURIComponent(tokenFor(TOKEN_NS + s.id, action, approver[0]))}`;
+          actions = decisionButtons([['Approve', '#16a34a', url('approve')], ['Comment', '#7c3aed', url('comment')], ['Reject', '#dc2626', url('reject')]]);
+        }
+        attachments = await quotationFiles(s.id);
       } else if (stage === 'comment') {
         to = doer; cc = approver; colour = '#d97706';
         heading = 'Service Request — Comment from Approver';
@@ -473,10 +505,7 @@ function mountAmc(app, ctx) {
             ['Bank', escHtml([vendor.account_holder, vendor.bank_name, vendor.account_no && 'A/c ' + vendor.account_no, vendor.ifsc && 'IFSC ' + vendor.ifsc].filter(Boolean).join(' · '))],
           ];
         }
-        const row = (await q('SELECT documents FROM sms_requests WHERE id = $1', [s.id]))[0];
-        attachments = parseDocs(row?.documents).filter((d) => (d.kind || 'quotation') === 'quotation')
-          .map((d) => ({ filename: d.name, path: path.join(UPLOAD_ROOT, s.id, path.basename(d.file)) }))
-          .filter((a) => fs.existsSync(a.path));
+        attachments = await quotationFiles(s.id);
       } else if (stage === 'paid') {
         to = uniqMail([...approver, ...doer]); colour = '#16a34a';
         heading = 'Service Request Paid';
@@ -498,7 +527,7 @@ function mountAmc(app, ctx) {
         from: `"Service Management" <${process.env.SMTP_USER}>`,
         to: to.join(', '), ...(cc.length ? { cc: cc.join(', ') } : {}),
         subject,
-        html: mailHtml({ heading, colour, lead, rows: [...requestRows(s), ...extra, ...noteRow], link: pageLink() }),
+        html: mailHtml({ heading, colour, lead, rows: [...requestRows(s), ...extra, ...noteRow], link: pageLink(), actions }),
         ...(attachments.length ? { attachments } : {}),
       });
       console.log('[sms]', stage, s.id, 'mailed to', to.join(', '), cc.length ? '| cc: ' + cc.join(', ') : '');
@@ -640,17 +669,119 @@ function mountAmc(app, ctx) {
     const { s } = await loadReq(req);
     if (!rights(s, req.sms).decide) bad(s.status === S.PENDING ? `Only ${s.approver_name || 'the chosen approver'} can decide this request` : `It is already ${s.status}`);
     const b = req.body || {};
-    const note = str(b.note, 4000);
-    const next = { approve: S.APPROVED, reject: S.REJECTED, comment: S.QUERY }[b.action];
+    await decide(s, b.action, str(b.note, 4000), req.sms);
+    return { ok: true };
+  }));
+
+  // One decision, from the app or from the mail (actor = { user: { id }, by }).
+  async function decide(s, action, note, actor) {
+    const next = { approve: S.APPROVED, reject: S.REJECTED, comment: S.QUERY }[action];
     if (!next) bad('Choose approve, reject or comment');
-    if (b.action !== 'approve' && !note) bad(b.action === 'reject' ? 'Give the reason for rejecting' : 'Write your comment');
+    if (action !== 'approve' && !note) bad(action === 'reject' ? 'Give the reason for rejecting' : 'Write your comment');
     // Conditional on the status so a double click cannot decide it twice.
     const r = await pool.query(`UPDATE sms_requests SET status=$1, decided_at=NOW(), updated_at=NOW() WHERE id=$2 AND status=$3`, [next, s.id, S.PENDING]);
     if (!r.rowCount) bad('This request was just decided — reload');
-    await logStep(s.id, { approve: 'Approved', reject: 'Rejected', comment: 'Comment' }[b.action], note, req.sms);
-    notify(await fresh(s.id), { approve: 'approved', reject: 'rejected', comment: 'comment' }[b.action], { note });
-    return { ok: true };
-  }));
+    await logStep(s.id, { approve: 'Approved', reject: 'Rejected', comment: 'Comment' }[action], note, actor);
+    notify(await fresh(s.id), { approve: 'approved', reject: 'rejected', comment: 'comment' }[action], { note });
+  }
+
+  /* ── Deciding from the approver's mail ─────────────────────────────
+     Outside requireAuth, like /leave-action in server.js: the signed token
+     (request + decision + the approver's address) IS the authorisation.
+     GET only shows a confirm page — mail scanners follow links — and the
+     POST from that page decides. A token stops working once the request is
+     decided or has moved to a different approver. */
+  const ACTION_WORD = { approve: 'Approve', comment: 'Comment on', reject: 'Reject' };
+
+  async function forToken(token) {
+    const claim = readToken(token);
+    if (!claim || !claim.id.startsWith(TOKEN_NS) || !ACTION_WORD[claim.decision]) {
+      return { error: 'This link is not valid. Open Service Management in the ERP instead.' };
+    }
+    const row = (await q('SELECT * FROM sms_requests WHERE id = $1', [claim.id.slice(TOKEN_NS.length)]))[0];
+    if (!row) return { error: 'That service request no longer exists.' };
+    const s = reqOut(row, await vendorMap());
+    if (s.status !== S.PENDING) return { done: s };
+    const current = (await addressesOf([s.approver_id]))[0] || '';
+    if (current.toLowerCase() !== String(claim.email || '').toLowerCase()) {
+      return { error: `This request is now with ${s.approver_name || 'another approver'} — this link belonged to an earlier mail.` };
+    }
+    return { claim, s };
+  }
+
+  const pageRows = (s) => [
+    ['Request ID', s.id], ['Type of Service', s.service_type], ['Frequency', s.frequency], ['Department', s.department],
+    ['Priority', s.priority], ['Payment Date', fmtDate(s.payment_date)], ['Raised By', s.raised_by_name], ['Remarks', s.remarks],
+  ];
+  const donePage = (s) => actionPage({
+    title: 'Already decided', tone: 'plain',
+    lead: `Service request <b>${escHtml(s.id)}</b> is already <b>${escHtml(s.status)}</b>. Nothing more to do here.`,
+    rows: pageRows(s), note: `<a href="${escHtml(pageLink())}">Open Service Management</a>`,
+  });
+  const failPage = (lead) => actionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(lead) });
+
+  function formPage(s, action, token, error = '', note = '') {
+    const tone = action === 'approve' ? 'good' : action === 'reject' ? 'bad' : 'plain';
+    const email = readToken(token).email;
+    const others = Object.keys(ACTION_WORD).filter((a) => a !== action)
+      .map((a) => `<a href="/sms-action?t=${encodeURIComponent(tokenFor(TOKEN_NS + s.id, a, email))}">${a === 'comment' ? 'Comment' : ACTION_WORD[a]} instead</a>`).join(' · ');
+    const placeholder = action === 'approve' ? 'Note (optional)' : action === 'reject' ? 'Reason for rejecting (required)' : 'Your comment (required)';
+    return actionPage({
+      title: `${ACTION_WORD[action]} ${s.id}?`, tone,
+      lead: `<b>${escHtml(s.raised_by_name)}</b> raised this service request and chose you as the approver.`
+        + (action === 'comment' ? ' Your comment goes back to them to update and send again.' : ''),
+      rows: pageRows(s),
+      form: `<form method="POST" action="/sms-action">
+          <input type="hidden" name="t" value="${escHtml(token)}">
+          ${error ? `<p style="color:#dc2626;font-weight:600;">${escHtml(error)}</p>` : ''}
+          <textarea name="note" rows="3" placeholder="${placeholder}"
+            style="width:100%;box-sizing:border-box;padding:10px;border:1.5px solid #e2e8f0;border-radius:8px;font:inherit;font-size:14px;margin:0 0 14px;">${escHtml(note)}</textarea>
+          <button type="submit">${action === 'comment' ? 'Send comment' : `Yes, ${action} it`}</button>
+        </form>`,
+      note: `${others}<br>The quotation is attached to the mail · <a href="${escHtml(pageLink())}">Open in the ERP</a>`,
+    });
+  }
+
+  app.get('/sms-action', async (req, res) => {
+    try {
+      if (!useDb) return res.status(503).send(failPage('Service Management needs the database.'));
+      await ensureSchema();
+      const r = await forToken(req.query.t);
+      if (r.error) return res.status(400).send(failPage(r.error));
+      if (r.done) return res.send(donePage(r.done));
+      res.send(formPage(r.s, r.claim.decision, String(req.query.t)));
+    } catch (e) {
+      res.status(500).send(actionPage({ title: 'Something went wrong', tone: 'bad', lead: escHtml(e.message) }));
+    }
+  });
+
+  app.post('/sms-action', async (req, res) => {
+    const token = String(req.body?.t || '');
+    const note = str(req.body?.note, 4000);
+    try {
+      if (!useDb) return res.status(503).send(failPage('Service Management needs the database.'));
+      await ensureSchema();
+      const r = await forToken(token);
+      if (r.error) return res.status(400).send(failPage(r.error));
+      if (r.done) return res.send(donePage(r.done));
+      const { s, claim } = r;
+      try {
+        await decide(s, claim.decision, note, { user: { id: s.approver_id }, by: s.approver_name || claim.email });
+      } catch (e) {
+        if (e instanceof UserError) return res.status(400).send(formPage(s, claim.decision, token, e.message, note));
+        throw e;
+      }
+      const after = await fresh(s.id);
+      res.send(actionPage({
+        title: { approve: 'Approved', reject: 'Rejected', comment: 'Comment sent' }[claim.decision],
+        tone: claim.decision === 'reject' ? 'bad' : 'good',
+        lead: `Service request <b>${escHtml(s.id)}</b> is now <b>${escHtml(after.status)}</b>. ${escHtml(s.raised_by_name)} has been emailed.`,
+        rows: pageRows(after), note: 'You can close this tab.',
+      }));
+    } catch (e) {
+      res.status(500).send(actionPage({ title: 'Could not record the decision', tone: 'bad', lead: escHtml(e.message) }));
+    }
+  });
 
   /* ── Doer: vendor + send to Accounts ───────────────────────────── */
 
