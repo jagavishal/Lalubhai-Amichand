@@ -106,9 +106,9 @@ window.Pages['office-inventory'] = (() => {
       return `<div class="oi-card" style="text-align:center;padding:36px 20px;">
         <div style="font-size:15px;font-weight:700;color:#0f172a;">No items yet</div>
         <div style="font-size:12.5px;color:#64748b;margin:6px 0 16px;">${D.manage
-          ? 'Bring in every item, purchase and consumption entry from the old “Inventory Management System” Google Sheet.'
-          : 'Ask an Admin to import the old Inventory sheet, or add an item from the Items tab.'}</div>
-        ${D.manage ? '<button class="btn-primary btn-sm" id="ls-import">Import old data from the sheet</button><div id="ls-import-out" style="font-size:12px;color:#475569;margin-top:10px;"></div>' : ''}
+          ? 'Load the item names from the old “Inventory Management System” sheet (no old stock or history), or add items from the Items tab.'
+          : 'Ask an Admin to load the item list, or add an item from the Items tab.'}</div>
+        ${D.manage ? '<button class="btn-primary btn-sm" id="ls-import">Load item list from the sheet</button><div id="ls-import-out" style="font-size:12px;color:#475569;margin-top:10px;"></div>' : ''}
       </div>`;
     }
     const f = _f.stock;
@@ -449,11 +449,11 @@ window.Pages['office-inventory'] = (() => {
           <div style="font-size:11px;color:#94a3b8;margin-top:4px;">One per line. New names typed on a form are added here automatically.</div></div>`).join('')}
       </div>
       <div style="display:flex;justify-content:flex-end;margin-top:12px;"><button class="btn-primary btn-sm" id="ls-save">Save Lists</button></div>
-      <div class="oi-card" style="margin-top:16px;border-color:#fecaca;">
-        <h3>Import from the old Google Sheet</h3>
-        <div style="font-size:12.5px;color:#475569;margin-bottom:10px;">Reads the “Inventory Management System” sheet again and <b>replaces</b> every item, purchase and consumption entry here with it.
-          Use it only until the office switches over — anything entered in the ERP since the last import is lost.</div>
-        <button class="btn-secondary btn-sm" id="ls-import" style="color:#dc2626;">Re-import from sheet</button>
+      <div class="oi-card" style="margin-top:16px;">
+        <h3>Item list from the old Google Sheet</h3>
+        <div style="font-size:12.5px;color:#475569;margin-bottom:10px;">Adds any item name (and vendor / user / category) from the old “Inventory Management System” sheet that isn’t here yet.
+          Nothing is deleted, and no old stock or history comes over — entries start fresh from 1 Oct 2026.</div>
+        <button class="btn-secondary btn-sm" id="ls-import">Load missing items from sheet</button>
         <div id="ls-import-out" style="font-size:12px;color:#475569;margin-top:10px;"></div>
       </div>`;
   }
@@ -510,23 +510,18 @@ window.Pages['office-inventory'] = (() => {
       btn.disabled = true;
       try { D.lists = await H.post(`${BASE}/lists`, body); H.toast('Lists saved'); render(); } catch (err) { btn.disabled = false; H.fail(err); }
     });
-    $('ls-import')?.addEventListener('click', (e) => runImport(e.target, true));
+    $('ls-import')?.addEventListener('click', (e) => runImport(e.target));
   }
 
-  // confirm = false on an empty page: there is nothing to replace.
-  async function runImport(btn, confirm) {
-    if (confirm && D.items.length && !(await Utils.showConfirm('Replace ALL items, purchases and consumption in the ERP with the Google Sheet’s data? Anything entered here since the last import is lost.',
-      { title: 'Re-import from sheet', confirmText: 'Replace with sheet data', danger: true }))) return;
-    if (btn) { btn.disabled = true; btn.textContent = 'Importing… (takes a few seconds)'; }
+  async function runImport(btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
     try {
       const r = await H.post(`${BASE}/import`);
       await load(); render();
       const out = document.getElementById('ls-import-out');
-      if (out) out.innerHTML = `Imported <b>${r.items}</b> items, <b>${r.purchases}</b> purchases, <b>${r.consumption}</b> consumption entries.`
-        + (r.adjustments.length ? `<br>${r.adjustments.length} stock adjustment(s) to match the sheet’s remaining stock: ${r.adjustments.map((a) => `${esc(a.item)} (${a.adjusted > 0 ? '+' : ''}${a.adjusted})`).join(', ')}.` : '')
-        + (r.warnings.length ? `<br><span style="color:#d97706;">${r.warnings.map(esc).join('<br>')}</span>` : '');
-      H.toast(`Imported ${r.items} items, ${r.purchases} purchases, ${r.consumption} consumption entries from the sheet`);
-    } catch (err) { H.fail(err); if (btn?.isConnected) { btn.disabled = false; btn.textContent = 'Try the import again'; } }
+      if (out) out.innerHTML = `${r.added} new item${r.added === 1 ? '' : 's'} added (${r.items} in the sheet).`;
+      H.toast(r.added ? `${r.added} items loaded — enter each one’s opening stock (Items tab)` : 'Every sheet item is already here');
+    } catch (err) { H.fail(err); if (btn?.isConnected) { btn.disabled = false; btn.textContent = 'Try again'; } }
   }
 
   return {
@@ -535,8 +530,8 @@ window.Pages['office-inventory'] = (() => {
       if (el) el.innerHTML = H.spinner('Opening Office Inventory…');
       try {
         await load(); render();
-        // First Admin visit on a fresh database brings the old sheet in.
-        if (!D.items.length && D.manage && _tab === 'stock') runImport(document.getElementById('ls-import'), false);
+        // First Admin visit on a fresh database loads the item names.
+        if (!D.items.length && D.manage && _tab === 'stock') runImport(document.getElementById('ls-import'));
       } catch (e) { if (el) el.innerHTML = H.empty('Could not load Office Inventory', e.message); }
     },
   };

@@ -15,10 +15,10 @@
    one row per item, repeating the invoice link); each line is still its
    own oi_purchases row, sharing a bill_ref and the invoice file.
 
-   The old data comes in through POST /api/office-inventory/import, which
-   reads the sheet with the server's service account, replaces everything
-   in the oi_* tables and reports the per-item stock against the sheet's
-   own "Current Remaining Stock" tab. Safe to re-run until the cut-over.
+   Fresh start from 1 Oct 2026: only the sheet's item names and dropdown
+   lists are brought over (POST /api/office-inventory/import, add-only);
+   its purchase/consumption history is not. Opening stock is entered per
+   item by the team.
 
    Access: the page key 'office-inventory' (Users → Access), checked by
    requireAccess (requireAdminOrPage in server.js). Deleting rows, editing
@@ -94,7 +94,6 @@ const DEFAULT_LISTS = {
   gst: ['0', '3', '5', '12', '18', '28'],
 };
 
-const ADJUST_USER = 'Stock adjustment';
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DOC_TYPES = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 
@@ -127,21 +126,6 @@ function dateIn(v, label) {
   return s;
 }
 
-/* Sheet dates. The forms wrote day/month/year; rows that went through a JS
-   Date (they carry a time, "7/22/2025 5:30:00") are month/day/year. */
-function sheetDate(raw, { mdyWithTime = false } = {}) {
-  const s = String(raw || '').trim();
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);
-  if (!m) return null;
-  let [a, b, y] = [+m[1], +m[2], +m[3]];
-  const timed = /\d:\d/.test(s);
-  let day = a, month = b;
-  if (mdyWithTime && timed) { day = b; month = a; }
-  if (month > 12 && day <= 12) [day, month] = [month, day];
-  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-}
-
 function parseDataUrl(dataUrl) {
   const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(String(dataUrl || ''));
   if (!m || !m[2]) return null;
@@ -162,6 +146,7 @@ function mountOfficeInventory(app, ctx) {
         await ensureSchema();
         const user = req.session.user;
         if (manage && !canManage(user)) return res.status(403).json({ error: 'Only an Admin/HOD can do this' });
+        await clearOldDataOnce();
         req.oi = { user, by: user?.name || user?.email || '', manage: canManage(user) };
         const out = await fn(req, res);
         if (out !== undefined && !res.headersSent) res.json(out);
@@ -173,6 +158,26 @@ function mountOfficeInventory(app, ctx) {
     };
   }
   const guard = [requireAuth, requireAccess];
+
+  /* The first release imported the sheet's whole history; the office then
+     chose a clean start from 1 Oct 2026 ("purana data hta do"). Runs once
+     per database (app_config 'oi_old_data_cleared'): drops every row that
+     came from the sheet and the openings it set. Rows entered in the ERP
+     (source 'erp') are kept. */
+  let _cleared = false;
+  async function clearOldDataOnce() {
+    if (_cleared) return;
+    const flag = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, ['oi_old_data_cleared']);
+    if (!flag.length) {
+      await q(`DELETE FROM oi_consumption WHERE source = 'sheet'`);
+      await q(`DELETE FROM oi_purchases WHERE source = 'sheet'`);
+      await q('UPDATE oi_items SET opening_qty = 0');
+      await q(`INSERT INTO app_config ("key","value") VALUES ($1,$2) ON CONFLICT ("key") DO UPDATE SET "value"=$3`,
+        ['oi_old_data_cleared', JSON.stringify(new Date().toISOString()), JSON.stringify(new Date().toISOString())]);
+      console.log('[office-inventory] old sheet purchases/consumption cleared — fresh start from 1 Oct 2026');
+    }
+    _cleared = true;
+  }
 
   /* ── Lists ─────────────────────────────────────────────────────── */
 
@@ -429,7 +434,7 @@ function mountOfficeInventory(app, ctx) {
     if (!auth) bad('Google is not configured on this server');
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const tabs = ['All Items', 'Purchase Stock', 'Opening Stock', 'Consumption', 'Helper', 'Current Remaining Stock'];
+    const tabs = ['All Items', 'Purchase Stock', 'Opening Stock', 'Consumption', 'Helper'];
     let r;
     try {
       r = await sheets.spreadsheets.values.batchGet({ spreadsheetId: SHEET_ID, ranges: tabs.map((t) => `'${t}'!A:Z`) });
@@ -441,115 +446,54 @@ function mountOfficeInventory(app, ctx) {
     return out;
   }
 
-  app.post(`${BASE}/import`, ...guard, route(async (req) => {
-    if (!isSuperAdmin(req.oi.user) && !isAdminUser(req.oi.user)) bad('Only an Admin can import');
+  /* Only the item list and the dropdowns come over — no stock, no history.
+     The office decided (13 Oct 2026) to start fresh from 1 Oct 2026 rather
+     than carry the sheet's purchases/consumption, whose remaining stock had
+     drifted from its own log. Adds what is missing, never deletes. */
+  async function seedFromSheet() {
     const d = await readSheet();
-    const warnings = [];
-    const key = (s) => str(s).toLowerCase().replace(/\s+/g, ' ');
-
-    // Items: everything named anywhere in the sheet, first spelling wins.
+    const key = (x) => str(x).toLowerCase().replace(/\s+/g, ' ');
     const items = new Map();
     const touch = (name, extra = {}) => {
       const n = str(name);
-      if (!n) return null;
+      if (!n) return;
       const k = key(n);
-      if (!items.has(k)) items.set(k, { name: n, category: '', unit: '', opening: 0 });
+      if (!items.has(k)) items.set(k, { name: n, category: '', unit: '' });
       const it = items.get(k);
-      if (extra.category) it.category = extra.category;
+      if (extra.category) it.category = extra.category[0].toUpperCase() + extra.category.slice(1);
       if (extra.unit) it.unit = extra.unit;
-      return it;
     };
     d['All Items'].forEach((r) => touch(r[0]));
     d.Helper.forEach((r) => touch(r[0]));
-    d['Opening Stock'].forEach((r) => {
-      const it = touch(r[0], { category: str(r[1]) });
-      if (it) it.opening = r3(it.opening + (num(r[2]) || 0));
-    });
+    d['Opening Stock'].forEach((r) => touch(r[0], { category: str(r[1]) }));
+    d['Purchase Stock'].forEach((r) => touch(r[4], { category: str(r[3]), unit: str(r[5]) }));
 
-    const purchases = [];
-    d['Purchase Stock'].forEach((r, i) => {
-      if (!str(r[4])) return;
-      const date = sheetDate(r[0]);
-      if (!date) { warnings.push(`Purchase row ${i + 2}: unreadable date "${r[0]}" — skipped`); return; }
-      const cat = str(r[3]);
-      const it = touch(r[4], { category: cat ? cat[0].toUpperCase() + cat.slice(1) : '', unit: str(r[5]) });
-      purchases.push({ date, branch: str(r[1]), vendor: str(r[2]), it, category: cat, unit: str(r[5]),
-        qty: num(r[6]) || 0, rate: num(r[7]) || 0, gst: num(r[8]) || 0, total: num(r[9]) || 0, url: str(r[10], 2000), by: str(r[11]) });
-    });
-    const consumption = [];
-    d.Consumption.forEach((r, i) => {
-      if (!str(r[1])) return;
-      const date = sheetDate(r[0], { mdyWithTime: true });
-      if (!date) { warnings.push(`Consumption row ${i + 2}: unreadable date "${r[0]}" — skipped`); return; }
-      consumption.push({ date, it: touch(r[1]), by: str(r[2]), qty: num(r[3]) || 0 });
-    });
-
-    // Lists from the Helper columns plus whatever the rows actually used.
+    const have = new Set((await q('SELECT name FROM oi_items')).map((r) => key(r.name)));
+    let added = 0;
+    for (const it of items.values()) {
+      if (have.has(key(it.name))) continue;
+      await withSeqId('oi_items', 'ITM', 4, (nid) => q(
+        'INSERT INTO oi_items (id, name, category, unit, opening_qty, min_qty, active) VALUES ($1,$2,$3,$4,0,0,1)',
+        [nid, it.name, it.category, it.unit || 'Pcs']));
+      added++;
+    }
     const col = (rows, i) => rows.map((r) => r[i]).filter(Boolean);
-    const lists = {
-      branches: uniq([...col(d.Helper, 6), ...purchases.map((p) => p.branch)]),
-      vendors: uniq([...col(d.Helper, 2), ...purchases.map((p) => p.vendor)]),
-      categories: uniq([...col(d.Helper, 1), ...purchases.map((p) => p.category)].filter(Boolean).map((c) => c[0].toUpperCase() + c.slice(1))),
-      users: uniq([...col(d.Helper, 3), ...consumption.map((c) => c.by)]),
-      units: uniq([...col(d.Helper, 5), ...purchases.map((p) => p.unit)]),
-      gst: uniq([...col(d.Helper, 4), ...purchases.map((p) => String(p.gst))]).sort((a, b) => num(a) - num(b)),
+    const lists = await readLists();
+    const merged = {
+      branches: uniq([...lists.branches, ...col(d.Helper, 6), ...col(d['Purchase Stock'], 1)]),
+      vendors: uniq([...lists.vendors, ...col(d.Helper, 2), ...col(d['Purchase Stock'], 2)]),
+      categories: uniq([...lists.categories, ...col(d.Helper, 1)].map((c) => c[0].toUpperCase() + c.slice(1))),
+      users: uniq([...lists.users, ...col(d.Helper, 3), ...col(d.Consumption, 2)]),
+      units: uniq([...lists.units, ...col(d.Helper, 5)]),
+      gst: uniq([...lists.gst, ...col(d.Helper, 4)]).sort((a, b) => num(a) - num(b)),
     };
+    await writeLists(merged);
+    return { items: items.size, added };
+  }
 
-    // Replace everything. Ids are minted here in order (not withSeqId) since
-    // the tables start empty.
-    await q('DELETE FROM oi_consumption');
-    await q('DELETE FROM oi_purchases');
-    await q('DELETE FROM oi_items');
-    let n = 0;
-    // Multi-row inserts, 100 at a time: ~800 single-row round trips to a
-    // remote DB were slow enough for the request to time out.
-    async function insertMany(sql, cols, rows) {
-      for (let i = 0; i < rows.length; i += 100) {
-        const chunk = rows.slice(i, i + 100);
-        let k = 0;
-        const values = chunk.map(() => `(${cols.map(() => '$' + (++k)).join(',')})`).join(',');
-        await q(`${sql} VALUES ${values}`, chunk.flat());
-      }
-    }
-    for (const it of items.values()) it.id = 'ITM' + String(++n).padStart(4, '0');
-    await insertMany('INSERT INTO oi_items (id, name, category, unit, opening_qty, min_qty, active)', [1, 2, 3, 4, 5, 6, 7],
-      [...items.values()].map((it) => [it.id, it.name, it.category, it.unit || 'Pcs', it.opening, 0, 1]));
-    // One bill_ref per invoice link (or per date+vendor when there isn't one).
-    const ref = (p) => 'S' + Buffer.from(p.url || `${p.date}|${p.vendor}`).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(-20);
-    await insertMany(`INSERT INTO oi_purchases (id, bill_ref, purchase_date, branch, vendor, bill_no, item_id, category, unit, qty, rate, gst, total, invoice_url, invoice_file, added_by, source, created_at)`,
-      Array(18).fill(0),
-      purchases.map((p, i) => ['PUR' + String(i + 1).padStart(5, '0'), ref(p), p.date, p.branch, p.vendor, '', p.it.id, p.category, p.unit,
-        p.qty, p.rate, p.gst, p.total, p.url, null, p.by, 'sheet', p.date + ' 12:00:00']));
-    await insertMany('INSERT INTO oi_consumption (id, use_date, item_id, used_by, qty, remarks, added_by, source, created_at)', Array(9).fill(0),
-      consumption.map((c, i) => ['CON' + String(i + 1).padStart(5, '0'), c.date, c.it.id, c.by, c.qty, '', 'sheet', 'sheet', c.date + ' 12:00:00']));
-    n = consumption.length;
-    await writeLists(lists);
-
-    /* The sheet's "Current Remaining Stock" is a counter its script kept,
-       not a sum of the Consumption log — rows deleted from the log after
-       the fact left the two apart. The counter is what the office has been
-       reading, so each gap becomes one labelled adjustment row (dated the
-       day of import) and the ERP opens on exactly the sheet's figures. */
-    const mine = new Map((await stockRows()).map((s) => [key(s.name), s]));
-    const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
-    const adjustments = [];
-    for (const r of d['Current Remaining Stock']) {
-      const s = mine.get(key(r[0]));
-      const want = num(r[1]);
-      if (!s || !Number.isFinite(want) || Math.abs(want - s.stock) < 1e-6) continue;
-      const diff = r3(s.stock - want);
-      if (diff > 0) {
-        await q(`INSERT INTO oi_consumption (id, use_date, item_id, used_by, qty, remarks, added_by, source) VALUES ($1,$2,$3,$4,$5,$6,'sheet','sheet')`,
-          ['CON' + String(++n).padStart(5, '0'), today, s.id, ADJUST_USER, diff, 'Sheet import: brings stock to the sheet’s "Current Remaining Stock"']);
-      } else {
-        await q('UPDATE oi_items SET opening_qty = opening_qty + $1 WHERE id = $2', [-diff, s.id]);
-      }
-      adjustments.push({ item: s.name, log: s.stock, sheet: want, adjusted: -diff });
-    }
-    return { items: items.size, purchases: purchases.length, consumption: consumption.length, lists, adjustments, warnings };
-  }));
+  app.post(`${BASE}/import`, ...guard, route(async () => seedFromSheet(), { manage: true }));
 
   return {};
 }
 
-module.exports = { OI_SCHEMA, mountOfficeInventory, _internals: { sheetDate } };
+module.exports = { OI_SCHEMA, mountOfficeInventory };
