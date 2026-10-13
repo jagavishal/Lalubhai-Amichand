@@ -445,6 +445,12 @@ SCHEMA.push(...BULK_MAIL_SCHEMA);
 const { AMC_SCHEMA, mountAmc } = require('./backend/amc.js');
 SCHEMA.push(...AMC_SCHEMA);
 
+// Office Inventory — office consumables (purchase, consumption, stock), the
+// replacement for the "Inventory Management System" sheet. Routes mounted
+// further down (search "mountOfficeInventory"). See backend/office-inventory.js.
+const { OI_SCHEMA, mountOfficeInventory } = require('./backend/office-inventory.js');
+SCHEMA.push(...OI_SCHEMA);
+
 // The factory's own department list (the numbered list the plant keeps on
 // paper), used to seed the `departments` table on a fresh DB and as the
 // fallback whenever that table can't be read. Not the live list — once seeded,
@@ -5639,6 +5645,14 @@ mountAmc(app, {
   },
 });
 
+
+// ── Office Inventory routes ───────────────────────────────────────────────────
+// Everything under /api/office-inventory/, behind the 'office-inventory' page
+// (Users → Access; Admin/HOD by default). See backend/office-inventory.js.
+mountOfficeInventory(app, {
+  q, pool, ensureSchema, requireAuth, withSeqId, isAdminUser, isSuperAdmin, getGoogleAuth, useDb: USE_DB,
+  requireAccess: requireAdminOrPage('office-inventory'),
+});
 
 /* ── Approve / reject straight from the notification email ────────────────────
    Deliberately outside requireAuth: the point is that the approver does not

@@ -90,6 +90,7 @@ window.Pages.users = (() => {
 
     { cat: 'Admin Section', key: 'fms',          label: 'FMS Master' },
     { cat: 'Admin Section', key: 'mis',          label: 'MIS Report' },
+    { cat: 'Admin Section', key: 'office-inventory', label: 'Office Inventory' },
     // Grant-only (see GRANT_PAGES below): ticked per person, Admins included.
     // The page itself is open to everyone (raise + follow requests); this
     // grant makes a person a Service Management admin — every request, the

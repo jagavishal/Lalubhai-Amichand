@@ -40,6 +40,8 @@ window.Sidebar = {
     imstrading:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h13l-3-3"/><path d="M21 16H8l3 3"/></svg>',
     // Bulk Email — an envelope with a send arrow, since the page's whole job
     // is one button that mails a folder of PDFs out.
+    // Office Inventory — a box.
+    officeinv:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>',
     bulkemail:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 13V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9"/><path d="m22 7-10 6L2 7"/><path d="M16 19h6"/><path d="m19 16 3 3-3 3"/></svg>',
     // HR module — the Leave entry reuses the existing calendar icon, so these
     // three only cover what the sidebar did not already have a mark for:
@@ -221,6 +223,10 @@ window.Sidebar = {
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
       { route: 'fms',           label: 'FMS',          icon: 'fms',          flag: 'fms' },
       { route: 'mis',           label: 'MIS Report',   icon: 'mis' },
+      // Office consumables (was the "Inventory Management System" sheet).
+      // adminOnly but grantable from Users → Access, like Bulk Email; the
+      // API gates on the same rule (requireAdminOrPage).
+      { route: 'office-inventory', label: 'Office Inventory', icon: 'officeinv', adminOnly: true },
       // No entry for 'developer': it is a maintenance console (reset, restore,
       // export) rather than day-to-day work, so it stays off the menu. The
       // route still resolves, so #developer reaches it when it is needed --
