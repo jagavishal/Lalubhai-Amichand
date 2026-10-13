@@ -214,7 +214,9 @@ window.Festival = (function () {
   let _gid = 0; // gradient ids must be unique per <svg> on the page
 
   // day: 0..8. portrait = face crop for the banner / topbar / login orb.
-  function DURGA(day, portrait) {
+  // opts.attrs replaces the outer tag's size/class (to nest her inside the
+  // riding scene); opts.noVahana drops the small mount badge at her feet.
+  function DURGA(day, portrait, opts = {}) {
     const g = NAVADURGA[Math.max(0, Math.min(8, day))];
     const id = 'dg' + (++_gid);
     const skin = g.skin || SKIN, skinD = g.skinD || SKIN_D, hairC = g.wild ? '#0b0b0b' : '#1a1110';
@@ -267,7 +269,8 @@ window.Festival = (function () {
       <path d="M${cx - 9} 97.5 Q${cx} 88 ${cx + 9} 97.5 l${dir * 3.5} -2.6" stroke="#111" stroke-width="2.2" fill="none" stroke-linecap="round"/>
       <path d="M${cx - 8} 98 Q${cx} 104 ${cx + 8} 98" stroke="#111" stroke-width=".9" fill="none"/>`;
     const vb = portrait ? '68 30 84 84' : '0 0 220 230';
-    return `<svg class="${portrait ? 'fx-portrait' : 'fx-durga'}" width="${portrait ? 54 : 220}" height="${portrait ? 54 : 230}" viewBox="${vb}" aria-label="Maa ${GODDESS[day]}">
+    const attrs = opts.attrs || `class="${portrait ? 'fx-portrait' : 'fx-durga'}" width="${portrait ? 54 : 220}" height="${portrait ? 54 : 230}"`;
+    return `<svg ${attrs} viewBox="${vb}" aria-label="Maa ${GODDESS[day]}">
       <defs>
         <radialGradient id="${id}h"><stop offset="0" stop-color="#fffbeb"/><stop offset=".55" stop-color="#fde68a"/><stop offset="1" stop-color="#fb923c"/></radialGradient>
         <radialGradient id="${id}s" cx=".42" cy=".38" r=".7"><stop offset="0" stop-color="${mix(skin, '#ffffff', 0.3)}"/><stop offset=".6" stop-color="${skin}"/><stop offset="1" stop-color="${skinD}"/></radialGradient>
@@ -310,7 +313,7 @@ window.Festival = (function () {
         : `<circle cx="104" cy="111" r="4.6" fill="none" stroke="${GOLD}" stroke-width="1.6"/><circle cx="100.2" cy="112.6" r="1.4" fill="#fff"/>
            <path d="M104 106.5 Q92 100 86 104" stroke="${GOLD}" stroke-width=".9" fill="none"/>
            ${[84, 136].map(x => `<path d="M${x - 5} 110 Q${x} 102 ${x + 5} 110Z" fill="url(#${id}g)"/>${[-4, -1.3, 1.3, 4].map(d => `<circle cx="${x + d}" cy="112.5" r="1.1" fill="#fff"/>`).join('')}`).join('')}`}
-      ${portrait ? '' : baby + VAHANA[g.vahana]}
+      ${portrait ? '' : baby + (opts.noVahana ? '' : VAHANA[g.vahana])}
     </svg>`;
   }
 
@@ -347,20 +350,91 @@ window.Festival = (function () {
     </svg>`;
   }
 
-  // Fixed to the screen's bottom corners on desktop. They fade almost out
-  // whenever the mouse comes near, so nothing under them is ever out of
-  // reach (clicks pass through — pointer-events: none).
-  function mountCorners(wrap, day) {
-    document.querySelectorAll('.fx-corner').forEach(n => n.remove());
-    const left = document.createElement('div');
-    left.className = 'fx-corner left';
-    left.innerHTML = `<div class="fx-pill">🪔 शुभ नवरात्रि</div>
-      <div class="fx-couple">${DANCER(true, '#16a34a', '#db2777', 0)}${DANCER(false, '#111827', '#dc2626', 0.4)}</div>`;
-    const right = document.createElement('div');
-    right.className = 'fx-corner right';
-    right.innerHTML = DURGA(day);
-    document.body.append(left, right);
-    peekAndWatch(wrap, [left, right]);
+  /* ── Navratri strip (end of the dashboard, in the page flow) ─────────
+     Star-and-moon backdrop, the greeting pill, a garba group round a lit
+     garba pot on the left, and the day's Maa riding her mount on the right.
+     It sits after the dashboard's content, so it never covers a row. */
+
+  // A big cat, three-quarter view, head front-left. lion = mane, no stripes.
+  function BIGCAT(lion) {
+    const fur = lion ? '#d9a54a' : '#f28c28', furD = lion ? '#b07d2c' : '#c96512', id = 'bc' + (++_gid);
+    const st = (d) => lion ? '' : `<path d="${d}" stroke="#1c1410" stroke-width="5" fill="none" stroke-linecap="round"/>`;
+    const leg = (x, back) => `<path d="M${x} 140 Q${x - 4} 176 ${x - 2} 198 H${x + 24} Q${x + 24} 172 ${x + 26} 140Z" fill="url(#${id}f)" stroke="${furD}" stroke-width="1.5"/>
+      ${st(`M${x + 2} 160 h14`)}${st(`M${x + 1} 176 h14`)}
+      <ellipse cx="${x + 11}" cy="200" rx="${back ? 15 : 16}" ry="8" fill="#fff7ed" stroke="${furD}" stroke-width="1.2"/>
+      <path d="M${x + 4} 197 v6 M${x + 11} 196 v7 M${x + 18} 197 v6" stroke="${furD}" stroke-width="1.2"/>`;
+    return `<defs>
+        <linearGradient id="${id}f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${mix(fur, '#ffffff', 0.18)}"/><stop offset="1" stop-color="${furD}"/></linearGradient>
+        <radialGradient id="${id}h" cx=".5" cy=".4" r=".6"><stop offset="0" stop-color="${mix(fur, '#ffffff', 0.25)}"/><stop offset="1" stop-color="${fur}"/></radialGradient>
+      </defs>
+      <path d="M268 112 Q300 92 292 52 Q288 36 302 30" stroke="${furD}" stroke-width="11" fill="none" stroke-linecap="round"/>
+      <path d="M268 112 Q300 92 292 52 Q288 36 302 30" stroke="${fur}" stroke-width="8" fill="none" stroke-linecap="round" ${lion ? '' : 'stroke-dasharray="10 7"'}/>
+      ${lion ? `<ellipse cx="303" cy="28" rx="8" ry="10" fill="#7c4a12"/>` : `<path d="M296 40 Q304 30 302 22" stroke="#1c1410" stroke-width="8" fill="none" stroke-linecap="round"/>`}
+      ${leg(232, 1)}${leg(258, 1)}
+      <ellipse cx="190" cy="122" rx="96" ry="52" fill="url(#${id}f)" stroke="${furD}" stroke-width="1.5"/>
+      <ellipse cx="182" cy="156" rx="72" ry="18" fill="#fff7ed" opacity=".9"/>
+      ${st('M150 72 q8 18 2 34')}${st('M174 70 q8 20 0 38')}${st('M198 71 q8 20 0 38')}${st('M222 75 q6 18 -2 34')}${st('M246 84 q6 16 -2 30')}
+      ${st('M264 100 q-2 12 -10 18')}${st('M160 112 q10 10 6 24')}${st('M206 114 q8 10 4 22')}
+      ${leg(100, 0)}${leg(138, 0)}
+      ${lion ? Array.from({ length: 20 }, (_, i) => { const a = i / 20 * Math.PI * 2; return `<ellipse cx="${(96 + Math.cos(a) * 46).toFixed(1)}" cy="${(102 + Math.sin(a) * 48).toFixed(1)}" rx="15" ry="24" fill="${i % 2 ? '#8a5216' : '#a8661c'}" transform="rotate(${(a * 180 / Math.PI + 90).toFixed(0)} ${(96 + Math.cos(a) * 46).toFixed(1)} ${(102 + Math.sin(a) * 48).toFixed(1)})"/>`; }).join('') : ''}
+      <circle cx="62" cy="64" r="15" fill="${fur}" stroke="${furD}" stroke-width="1.5"/><circle cx="62" cy="64" r="8" fill="${lion ? '#7c4a12' : '#fde7d0'}"/>
+      <circle cx="130" cy="64" r="15" fill="${fur}" stroke="${furD}" stroke-width="1.5"/><circle cx="130" cy="64" r="8" fill="${lion ? '#7c4a12' : '#fde7d0'}"/>
+      <ellipse cx="96" cy="104" rx="46" ry="44" fill="url(#${id}h)" stroke="${furD}" stroke-width="1.5"/>
+      ${lion ? '' : `<path d="M52 108 Q40 130 62 140 Q60 124 70 116Z M140 108 Q152 130 130 140 Q132 124 122 116Z" fill="#fff7ed"/>`}
+      ${st('M96 62 v16')}${st('M84 64 q2 10 6 14')}${st('M108 64 q-2 10 -6 14')}${st('M54 96 h14')}${st('M56 108 h12')}${st('M138 96 h-14')}${st('M136 108 h-12')}
+      <path d="M68 96 Q78 86 88 96 Q78 102 68 96Z" fill="#fde047" stroke="#1c1410" stroke-width="1.6"/>
+      <path d="M104 96 Q114 86 124 96 Q114 102 104 96Z" fill="#fde047" stroke="#1c1410" stroke-width="1.6"/>
+      <ellipse cx="78" cy="96" rx="2.6" ry="4.4" fill="#1c1410"/><ellipse cx="114" cy="96" rx="2.6" ry="4.4" fill="#1c1410"/>
+      <circle cx="79" cy="94" r="1" fill="#fff"/><circle cx="115" cy="94" r="1" fill="#fff"/>
+      <ellipse cx="84" cy="126" rx="14" ry="11" fill="#fff7ed"/><ellipse cx="108" cy="126" rx="14" ry="11" fill="#fff7ed"/>
+      <path d="M88 112 H104 L96 121Z" fill="#be185d"/>
+      <path d="M96 121 v6 M96 127 q-7 6 -13 1 M96 127 q7 6 13 1" stroke="#1c1410" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+      <path d="M86 136 Q96 146 106 136 Q96 140 86 136Z" fill="#9f1239"/>
+      <path d="M70 124 l-26 -4 M70 128 l-26 4 M122 124 l26 -4 M122 128 l26 4" stroke="#fff" stroke-width="1" opacity=".9"/>
+      ${[78, 86, 106, 114].map((x, i) => `<circle cx="${x}" cy="${i % 3 ? 128 : 124}" r="1.2" fill="#1c1410"/>`).join('')}`;
+  }
+
+  // Maa on her mount. Tiger/lion days ride a full big cat; the other days
+  // keep her standing figure with its own small vahana.
+  function DURGA_RIDE(day) {
+    const v = NAVADURGA[day].vahana;
+    if (v !== 'tiger' && v !== 'lion') return `<div class="fx-ride solo">${DURGA(day)}</div>`;
+    return `<svg class="fx-ride" width="360" height="340" viewBox="0 0 360 340" aria-label="Maa ${GODDESS[day]}">
+      <g transform="translate(4 118) scale(1.06)">${BIGCAT(v === 'lion')}</g>
+      ${DURGA(day, false, { noVahana: true, attrs: 'x="118" y="0" width="200" height="209"' })}
+    </svg>`;
+  }
+
+  // Garba pot (garbo) with the diya glowing on top.
+  const GARBO = () => {
+    const id = 'gb' + (++_gid);
+    return `<svg class="fx-garbo" width="96" height="150" viewBox="0 0 96 150" aria-hidden="true">
+      <defs><radialGradient id="${id}"><stop offset="0" stop-color="#fff7c2"/><stop offset=".35" stop-color="#fde047" stop-opacity=".9"/><stop offset="1" stop-color="#f59e0b" stop-opacity="0"/></radialGradient>
+        <linearGradient id="${id}p" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ea580c"/><stop offset="1" stop-color="#9a3412"/></linearGradient></defs>
+      <circle class="fx-glow" cx="48" cy="58" r="46" fill="url(#${id})"/>
+      <path d="M22 140 L30 124 H66 L74 140Z" fill="#92400e"/>
+      <path d="M48 52 C14 54 10 92 22 112 Q30 126 48 126 Q66 126 74 112 C86 92 82 54 48 52Z" fill="url(#${id}p)" stroke="${GOLD}" stroke-width="2.4"/>
+      <path d="M18 88 Q48 98 78 88 M20 104 Q48 114 76 104" stroke="${GOLD}" stroke-width="2.4" fill="none"/>
+      ${[[30, 74], [48, 70], [66, 74], [26, 96], [40, 100], [56, 100], [70, 96]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="3.2" fill="#fde047"/>`).join('')}
+      <path d="M34 52 Q48 44 62 52 L58 58 Q48 54 38 58Z" fill="${GOLD}" stroke="${GOLD_D}"/>
+      <ellipse cx="48" cy="46" rx="15" ry="6" fill="#b45309" stroke="${GOLD}" stroke-width="1.5"/>
+      <path class="fx-flame" d="M48 16 Q58 32 48 44 Q38 32 48 16Z" fill="#f59e0b"/><path class="fx-flame" d="M48 26 Q53 35 48 42 Q43 35 48 26Z" fill="#fef9c3"/>
+    </svg>`;
+  };
+
+  function bandHTML(day) {
+    const pair = (a, b, beat, cls = '') => `<div class="fx-pair ${cls}">${DANCER(true, a, b, beat)}${DANCER(false, b, a, beat + 0.4)}</div>`;
+    return `<div class="fx-band" aria-label="Navratri — garba and Maa ${GODDESS[day]}">
+      <div class="fx-band-pill">🪔 शुभ नवरात्रि · माँ ${GODDESS_HI[day]}</div>
+      <div class="fx-band-garba">
+        ${pair('#db2777', '#f59e0b', 0, 'back')}
+        ${pair('#16a34a', '#dc2626', 0.2)}
+        ${GARBO()}
+        ${pair('#7e22ce', '#f59e0b', 0.1, 'flip')}
+        ${pair('#dc2626', '#1d4ed8', 0.3, 'back flip')}
+      </div>
+      <div class="fx-band-maa">${DURGA_RIDE(day)}</div>
+    </div>`;
   }
 
   // Corner art lives on <body> (the dashboard wrapper is transformed, which
@@ -488,26 +562,41 @@ window.Festival = (function () {
     peekAndWatch(wrap, [left, right], () => { clearInterval(loop); timers.forEach(clearTimeout); window.Festival._shoot = null; });
   }
 
-  function sceneHTML(day) {
-    const pair = (a, b, flip) => `<div class="fx-pair${flip ? ' flip' : ''}">${DANCER(true, a, b, 0)}${DANCER(false, b, a, 0.4)}</div>`;
-    return `<div class="fx-scene" aria-label="Navratri — Maa Durga and garba">
-      ${pair('#db2777', '#f59e0b')}
-      <div class="fx-center">${DURGA(day)}<div class="fx-jai">जय माँ ${GODDESS_HI[day]}</div></div>
-      ${pair('#7e22ce', '#16a34a', true)}
-    </div>`;
-  }
+  const BAND_TILE = `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+    <path d="M36 24 Q38 34 48 36 Q38 38 36 48 Q34 38 24 36 Q34 34 36 24Z" fill="#a5b4fc" opacity=".35"/>
+    <path d="M100 96 a14 14 0 1 0 14 18 a11 11 0 1 1 -14 -18Z" fill="#fbbf24" opacity=".22"/>
+    <path d="M112 30 Q113 35 118 36 Q113 37 112 42 Q111 37 106 36 Q111 35 112 30Z" fill="#a5b4fc" opacity=".25"/>
+    <path d="M30 104 a10 10 0 1 0 10 13 a8 8 0 1 1 -10 -13Z" fill="#fbbf24" opacity=".16"/></svg>`;
 
   const SCENE_CSS = `
-      .fx-scene { position: relative; display: flex; align-items: flex-end; justify-content: center; gap: clamp(12px, 5vw, 80px);
-        margin-top: 24px; padding: 18px 16px 0; border-radius: 16px; overflow: hidden;
-        background: linear-gradient(180deg, transparent 0%, var(--color-primary-light, rgba(249,115,22,.1)) 100%);
-        border-bottom: 6px solid var(--color-primary, #c2410c); }
-      .fx-scene::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 10px; opacity: .5;
-        background: radial-gradient(circle, var(--color-primary, #c2410c) 2px, transparent 2.5px) 0 0 / 14px 10px repeat-x; }
-      .fx-pair { display: flex; align-items: flex-end; gap: 0; margin-bottom: 4px; }
-      .fx-pair.flip { transform: scaleX(-1); }
-      .fx-center { display: flex; flex-direction: column; align-items: center; }
-      .fx-jai { font-size: 15px; font-weight: 700; color: var(--color-primary, #c2410c); margin: 2px 0 10px; letter-spacing: .5px; }
+      .fx-band { position: relative; margin-top: 22px; height: 340px; border-radius: 16px; overflow: hidden;
+        display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 0 24px;
+        background: url("data:image/svg+xml,${encodeURIComponent(BAND_TILE)}") 0 0 / 144px 144px, var(--surface, #f7f8fe);
+        border: 1px solid rgba(var(--fest-rgb, 190,18,60), .12); }
+      html[data-theme="dark"] .fx-band { background: url("data:image/svg+xml,${encodeURIComponent(BAND_TILE)}") 0 0 / 144px 144px, var(--surface, #111827); }
+      .fx-band > .fest-canvas { pointer-events: none; }
+      .fx-band-pill { position: absolute; top: 22px; left: 34px; z-index: 2; font-size: 17px; font-weight: 800; color: #fff;
+        padding: 7px 20px; border-radius: 999px; background: linear-gradient(90deg, #1e3a8a, #6d28d9 55%, #c2410c);
+        border: 2.5px solid #fbbf24; box-shadow: 0 0 0 3px rgba(251,191,36,.25), 0 6px 16px rgba(30,58,138,.28);
+        animation: fxPill 2.6s ease-in-out infinite; white-space: nowrap; }
+      .fx-band-garba { position: relative; z-index: 1; display: flex; align-items: flex-end; margin-bottom: -6px; }
+      .fx-band-garba .fx-pair { display: flex; align-items: flex-end; }
+      .fx-band-garba .fx-pair.flip { transform: scaleX(-1); }
+      .fx-band-garba .fx-pair .fx-dancer { width: 94px; height: 193px; margin: 0 -14px; }
+      .fx-band-garba .fx-pair.back { margin-bottom: 44px; }
+      .fx-band-garba .fx-pair.back .fx-dancer { width: 74px; height: 152px; }
+      .fx-garbo { margin: 0 2px 6px; flex-shrink: 0; }
+      .fx-glow { animation: fxGlow 1.8s ease-in-out infinite alternate; transform-origin: 48px 58px; }
+      @keyframes fxGlow { from { opacity: .55; transform: scale(.92) } to { opacity: 1; transform: scale(1.08) } }
+      .fx-flame { transform-origin: 48px 44px; animation: fxFlame .5s ease-in-out infinite alternate; }
+      @keyframes fxFlame { from { transform: scale(.94, 1) rotate(-3deg) } to { transform: scale(1.04, 1.08) rotate(3deg) } }
+      .fx-band-maa { position: relative; z-index: 1; display: flex; align-items: flex-end; }
+      .fx-band-maa .fx-ride { display: block; }
+      .fx-band-maa .fx-ride.solo .fx-durga { width: 300px; height: 314px; display: block; }
+      .fx-band .fx-dancer, .fx-band .fx-ride, .fx-band .fx-garbo {
+        filter: drop-shadow(2px 0 0 #fff) drop-shadow(-2px 0 0 #fff) drop-shadow(0 2px 0 #fff) drop-shadow(0 -2px 0 #fff)
+                drop-shadow(0 8px 10px rgba(0,0,0,.18)); }
+      .fx-ride .fx-rays { transform-origin: 110px 92px; }
       .fx-rays { transform-origin: 110px 92px; animation: fxSpin 30s linear infinite; }
       @keyframes fxSpin { to { transform: rotate(360deg) } }
       .fx-durga { filter: drop-shadow(0 6px 14px rgba(0,0,0,.12)); }
@@ -541,14 +630,20 @@ window.Festival = (function () {
         background: linear-gradient(90deg, #dc2626, #db2777); border: 3px solid #fbbf24; box-shadow: 0 4px 12px rgba(220,38,38,.35);
         animation: fxPill 2.4s ease-in-out infinite; }
       @keyframes fxPill { 50% { transform: translateY(-3px) } }
-      @media (min-width: 768px) { .fx-scene { display: none; } .fx-pad { padding-bottom: 210px; } }
+      @media (min-width: 768px) { .fx-pad { padding-bottom: 210px; } }
+      @media (max-width: 1100px) { .fx-band-garba .fx-pair.back { display: none; } }
       @media (max-width: 767px) {
         .fx-corner { display: none; }
-        .fx-pair.flip { display: none; }
-        .fx-durga { width: 160px; height: 168px; }
-        .fx-dancer { width: 64px; height: 131px; }
+        .fx-band { height: 230px; padding: 0 10px; gap: 4px; }
+        .fx-band-pill { top: 12px; left: 12px; font-size: 13px; padding: 5px 13px; }
+        .fx-band-garba .fx-pair.flip, .fx-band-garba .fx-pair.back { display: none; }
+        .fx-band-garba .fx-pair .fx-dancer { width: 58px; height: 119px; margin: 0 -9px; }
+        .fx-garbo { width: 62px; height: 97px; }
+        .fx-band-maa .fx-ride { width: 212px; height: 200px; }
+        .fx-band-maa .fx-ride.solo { width: auto; height: auto; }
+        .fx-band-maa .fx-ride.solo .fx-durga { width: 180px; height: 188px; }
       }
-      @media (prefers-reduced-motion: reduce) { .fx-rays, .fx-bounce, .fx-arm-l, .fx-arm-r, .fx-skirt { animation: none; } }`;
+      @media (prefers-reduced-motion: reduce) { .fx-rays, .fx-bounce, .fx-arm-l, .fx-arm-r, .fx-skirt, .fx-glow, .fx-flame, .fx-band-pill { animation: none; } }`;
 
   /* ── styles (injected once) ──────────────────────────────────────── */
   function injectCSS() {
@@ -866,7 +961,10 @@ window.Festival = (function () {
     top.querySelectorAll('[data-fest-mode]').forEach(b => b.onclick = () => setModeAndRepaint(b.dataset.festMode));
 
     if (m !== 'full') return;
-    if (f.kind === 'navratri') { add(sceneHTML(Math.max(0, f.day - 1))); mountCorners(wrap, Math.max(0, f.day - 1)); }
+    if (f.kind === 'navratri') {
+      const band = add(bandHTML(Math.max(0, f.day - 1))).querySelector('.fx-band');
+      startParticles(band, 'navratri', true);
+    }
     if (f.kind === 'dussehra' && !f.after) mountDussehra(wrap);
     const fx = add('');
     startParticles(fx, f.kind);
