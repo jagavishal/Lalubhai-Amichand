@@ -501,24 +501,28 @@ function mountOfficeInventory(app, ctx) {
     await q('DELETE FROM oi_purchases');
     await q('DELETE FROM oi_items');
     let n = 0;
-    for (const it of items.values()) {
-      it.id = 'ITM' + String(++n).padStart(4, '0');
-      await q('INSERT INTO oi_items (id, name, category, unit, opening_qty, min_qty, active) VALUES ($1,$2,$3,$4,$5,0,1)',
-        [it.id, it.name, it.category, it.unit || 'Pcs', it.opening]);
+    // Multi-row inserts, 100 at a time: ~800 single-row round trips to a
+    // remote DB were slow enough for the request to time out.
+    async function insertMany(sql, cols, rows) {
+      for (let i = 0; i < rows.length; i += 100) {
+        const chunk = rows.slice(i, i + 100);
+        let k = 0;
+        const values = chunk.map(() => `(${cols.map(() => '$' + (++k)).join(',')})`).join(',');
+        await q(`${sql} VALUES ${values}`, chunk.flat());
+      }
     }
-    n = 0;
-    for (const p of purchases) {
-      // One bill_ref per invoice link (or per date+vendor when there isn't one).
-      const ref = 'S' + Buffer.from(p.url || `${p.date}|${p.vendor}`).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(-20);
-      await q(`INSERT INTO oi_purchases (id, bill_ref, purchase_date, branch, vendor, bill_no, item_id, category, unit, qty, rate, gst, total, invoice_url, invoice_file, added_by, source, created_at)
-               VALUES ($1,$2,$3,$4,$5,'',$6,$7,$8,$9,$10,$11,$12,$13,NULL,$14,'sheet',$15)`,
-        ['PUR' + String(++n).padStart(5, '0'), ref, p.date, p.branch, p.vendor, p.it.id, p.category, p.unit, p.qty, p.rate, p.gst, p.total, p.url, p.by, p.date + ' 12:00:00']);
-    }
-    n = 0;
-    for (const c of consumption) {
-      await q(`INSERT INTO oi_consumption (id, use_date, item_id, used_by, qty, remarks, added_by, source, created_at) VALUES ($1,$2,$3,$4,$5,'','sheet','sheet',$6)`,
-        ['CON' + String(++n).padStart(5, '0'), c.date, c.it.id, c.by, c.qty, c.date + ' 12:00:00']);
-    }
+    for (const it of items.values()) it.id = 'ITM' + String(++n).padStart(4, '0');
+    await insertMany('INSERT INTO oi_items (id, name, category, unit, opening_qty, min_qty, active)', [1, 2, 3, 4, 5, 6, 7],
+      [...items.values()].map((it) => [it.id, it.name, it.category, it.unit || 'Pcs', it.opening, 0, 1]));
+    // One bill_ref per invoice link (or per date+vendor when there isn't one).
+    const ref = (p) => 'S' + Buffer.from(p.url || `${p.date}|${p.vendor}`).toString('base64').replace(/[^A-Za-z0-9]/g, '').slice(-20);
+    await insertMany(`INSERT INTO oi_purchases (id, bill_ref, purchase_date, branch, vendor, bill_no, item_id, category, unit, qty, rate, gst, total, invoice_url, invoice_file, added_by, source, created_at)`,
+      Array(18).fill(0),
+      purchases.map((p, i) => ['PUR' + String(i + 1).padStart(5, '0'), ref(p), p.date, p.branch, p.vendor, '', p.it.id, p.category, p.unit,
+        p.qty, p.rate, p.gst, p.total, p.url, null, p.by, 'sheet', p.date + ' 12:00:00']));
+    await insertMany('INSERT INTO oi_consumption (id, use_date, item_id, used_by, qty, remarks, added_by, source, created_at)', Array(9).fill(0),
+      consumption.map((c, i) => ['CON' + String(i + 1).padStart(5, '0'), c.date, c.it.id, c.by, c.qty, '', 'sheet', 'sheet', c.date + ' 12:00:00']));
+    n = consumption.length;
     await writeLists(lists);
 
     /* The sheet's "Current Remaining Stock" is a counter its script kept,

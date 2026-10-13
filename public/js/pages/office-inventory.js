@@ -510,29 +510,34 @@ window.Pages['office-inventory'] = (() => {
       btn.disabled = true;
       try { D.lists = await H.post(`${BASE}/lists`, body); H.toast('Lists saved'); render(); } catch (err) { btn.disabled = false; H.fail(err); }
     });
-    $('ls-import')?.addEventListener('click', async (e) => {
-      const btn = e.target;
-      if (!(await Utils.showConfirm('Replace ALL items, purchases and consumption in the ERP with the Google Sheet’s data? Anything entered here since the last import is lost.',
-        { title: 'Re-import from sheet', confirmText: 'Replace with sheet data', danger: true }))) return;
-      btn.disabled = true; btn.textContent = 'Importing…';
-      try {
-        const r = await H.post(`${BASE}/import`);
-        await load(); render();
-        const out = document.getElementById('ls-import-out');
-        if (out) out.innerHTML = `Imported <b>${r.items}</b> items, <b>${r.purchases}</b> purchases, <b>${r.consumption}</b> consumption entries.`
-          + (r.adjustments.length ? `<br>${r.adjustments.length} stock adjustment(s) to match the sheet’s remaining stock: ${r.adjustments.map((a) => `${esc(a.item)} (${a.adjusted > 0 ? '+' : ''}${a.adjusted})`).join(', ')}.` : '')
-          + (r.warnings.length ? `<br><span style="color:#d97706;">${r.warnings.map(esc).join('<br>')}</span>` : '');
-        H.toast(`Imported ${r.items} items, ${r.purchases} purchases, ${r.consumption} consumption entries from the sheet`);
-      } catch (err) { H.fail(err); btn.disabled = false; btn.textContent = 'Re-import from sheet'; }
-    });
+    $('ls-import')?.addEventListener('click', (e) => runImport(e.target, true));
+  }
+
+  // confirm = false on an empty page: there is nothing to replace.
+  async function runImport(btn, confirm) {
+    if (confirm && D.items.length && !(await Utils.showConfirm('Replace ALL items, purchases and consumption in the ERP with the Google Sheet’s data? Anything entered here since the last import is lost.',
+      { title: 'Re-import from sheet', confirmText: 'Replace with sheet data', danger: true }))) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Importing… (takes a few seconds)'; }
+    try {
+      const r = await H.post(`${BASE}/import`);
+      await load(); render();
+      const out = document.getElementById('ls-import-out');
+      if (out) out.innerHTML = `Imported <b>${r.items}</b> items, <b>${r.purchases}</b> purchases, <b>${r.consumption}</b> consumption entries.`
+        + (r.adjustments.length ? `<br>${r.adjustments.length} stock adjustment(s) to match the sheet’s remaining stock: ${r.adjustments.map((a) => `${esc(a.item)} (${a.adjusted > 0 ? '+' : ''}${a.adjusted})`).join(', ')}.` : '')
+        + (r.warnings.length ? `<br><span style="color:#d97706;">${r.warnings.map(esc).join('<br>')}</span>` : '');
+      H.toast(`Imported ${r.items} items, ${r.purchases} purchases, ${r.consumption} consumption entries from the sheet`);
+    } catch (err) { H.fail(err); if (btn?.isConnected) { btn.disabled = false; btn.textContent = 'Try the import again'; } }
   }
 
   return {
     async render() {
       const el = document.getElementById('main-content');
       if (el) el.innerHTML = H.spinner('Opening Office Inventory…');
-      try { await load(); render(); }
-      catch (e) { if (el) el.innerHTML = H.empty('Could not load Office Inventory', e.message); }
+      try {
+        await load(); render();
+        // First Admin visit on a fresh database brings the old sheet in.
+        if (!D.items.length && D.manage && _tab === 'stock') runImport(document.getElementById('ls-import'), false);
+      } catch (e) { if (el) el.innerHTML = H.empty('Could not load Office Inventory', e.message); }
     },
   };
 })();
