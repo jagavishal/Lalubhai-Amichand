@@ -248,12 +248,13 @@ window.Pages['circle-requirement'] = (() => {
           <input id="cr-title" value="${esc(P.title)}" placeholder="Order no. — e.g. P00664, P00665" style="flex:1;min-width:200px;max-width:380px;padding:8px 11px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13.5px;font-weight:600;">
           <span style="flex:1;"></span>
           <button id="cr-add" class="btn-primary btn-sm">+ Line</button>
+          <label class="btn-secondary btn-sm" style="cursor:pointer;">Upload Excel<input id="cr-upload" type="file" accept=".xlsx,.xls,.csv" style="display:none;"></label>
           <button id="cr-paste" class="btn-secondary btn-sm">Paste from Excel</button>
         </div>
         <div style="overflow-x:auto;">
           <table class="cr-grid">
             <thead><tr><th>#</th><th>Order No</th><th>Item</th><th>Size</th><th>Qty</th><th>Circle</th><th style="text-align:right;">Kg</th><th></th></tr></thead>
-            <tbody>${rows || `<tr><td colspan="8" style="padding:34px;text-align:center;color:#94a3b8;">“+ Line” dabao, ya Excel se Order No · Item · Size · Qty copy karke “Paste from Excel”.</td></tr>`}
+            <tbody>${rows || `<tr><td colspan="8" style="padding:34px;text-align:center;color:#94a3b8;">“+ Line” dabao, ya order ki Excel “Upload Excel” karo (columns: Order No · Item · Size · Qty).</td></tr>`}
             ${extras ? `<tr><td colspan="8" style="background:#f8fafc;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;">Direct kg</td></tr>${extras}` : ''}</tbody>
           </table>
         </div>
@@ -407,6 +408,7 @@ window.Pages['circle-requirement'] = (() => {
       document.querySelector(`[data-f="item"][data-i="${P.lines.length - 1}"]`)?.focus();
     });
     $('cr-paste')?.addEventListener('click', pasteModal);
+    $('cr-upload')?.addEventListener('change', (e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) uploadExcel(file); });
     $('cr-extra')?.addEventListener('click', (e) => { e.preventDefault(); extraModal(-1); });
     $('cr-save')?.addEventListener('click', (e) => savePlan(e.target));
     $('cr-new')?.addEventListener('click', async () => {
@@ -527,6 +529,74 @@ window.Pages['circle-requirement'] = (() => {
     });
   }
 
+  /* Order lines from a paste or an uploaded sheet. Header rows, rows with
+     no qty, and the old planning sheets' own COVER rows are skipped — covers
+     come with their item. */
+  const isCoverRow = (item) => { const w = norm(item).split(' '); return w[0] === 'COVER' || (w.length === 2 && w[1] === 'COVER'); };
+  function addRows(rows) {
+    let found = 0, missing = 0, covers = 0;
+    for (const r of rows) {
+      const item = String(r.item ?? '').trim();
+      const size = String(r.size ?? '').trim();
+      const qty = String(r.qty ?? '').replace(/,/g, '').trim();
+      if (!item || /^item/i.test(item) || !(Number(qty) > 0)) continue;
+      if (isCoverRow(item)) { covers++; continue; }
+      const l = blankLine(String(r.order_no ?? '').trim());
+      l.item = item; l.size = size; l.qty = qty;
+      P.lines.push(l);
+      const m = findMaster(item, size);
+      if (m) {
+        const at = P.lines.length - 1;
+        const n = applyPick(at, m);
+        // Matched by words, not exactly: say what it was entered as.
+        if (m._guess) for (let k = at; k < at + n; k++) P.lines[k].pasted = item;
+        found++;
+      } else missing++;
+    }
+    touch(); render();
+    return { found, missing, covers };
+  }
+  function doneToast({ found, missing, covers }) {
+    const extra = covers ? ` · ${covers} COVER rows skipped (covers come with the item)` : '';
+    if (!found && !missing) H.toast('No item lines with a qty were found' + extra, 'error');
+    else H.toast(missing ? `${found} matched, ${missing} not in master (orange) — pick by hand${extra}` : `${found} lines added${extra}`, missing ? 'warning' : 'success');
+  }
+
+  async function loadXlsx() {
+    if (window.XLSX) return;
+    await new Promise((ok, no) => { const sc = document.createElement('script'); sc.src = '/vendor/xlsx.full.min.js'; sc.onload = ok; sc.onerror = () => no(new Error('Could not load the Excel library')); document.head.appendChild(sc); });
+  }
+
+  // Columns are found by their heading (Order No / Item / Size / Qty or
+  // Quantity) in the first rows of the first sheet that has them; a sheet
+  // without headings is read as Order No, Item, Size, Qty.
+  async function uploadExcel(file) {
+    try {
+      await loadXlsx();
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      let rows = null;
+      for (const name of wb.SheetNames) {
+        const grid = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: '' });
+        const hi = grid.slice(0, 15).findIndex((r) => r.some((c) => /item/i.test(c)) && r.some((c) => /qty|quantity/i.test(c)));
+        if (hi < 0) continue;
+        const h = grid[hi].map((c) => String(c).trim());
+        const col = (re) => h.findIndex((c) => re.test(c));
+        const C = { order_no: col(/order/i), item: col(/item/i), size: col(/^size/i), qty: col(/qty|quantity/i) };
+        rows = grid.slice(hi + 1).map((r) => ({ order_no: C.order_no >= 0 ? r[C.order_no] : '', item: r[C.item], size: C.size >= 0 ? r[C.size] : '', qty: r[C.qty] }));
+        break;
+      }
+      if (!rows) {
+        const grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
+        rows = grid.map((r) => { const [order_no, item, size, qty] = r.length >= 4 ? r : ['', ...r]; return { order_no, item, size, qty }; });
+      }
+      if (!P.title) {
+        const orders = [...new Set(rows.map((r) => String(r.order_no || '').trim()).filter(Boolean))];
+        if (orders.length && orders.length <= 6) P.title = orders.join(', ');
+      }
+      doneToast(addRows(rows));
+    } catch (e) { H.fail(e); }
+  }
+
   function pasteModal() {
     H.openModal({
       id: 'cr-paste-m', title: 'Paste lines from Excel', width: 640,
@@ -538,25 +608,9 @@ window.Pages['circle-requirement'] = (() => {
         const text = H.val('cp-text');
         const rows = text.split(/\r?\n/).map((r) => r.split('\t').map((c) => c.trim())).filter((r) => r.some(Boolean));
         if (!rows.length) throw new Error('Paste at least one row');
-        let found = 0, missing = 0;
-        for (const r of rows) {
-          let [order_no, item, size, qty] = r.length >= 4 ? r : ['', ...r];
-          qty = String(qty || '').replace(/,/g, '');
-          if (!item || /^item/i.test(item)) continue;   // header row
-          const l = blankLine(order_no);
-          l.item = item; l.size = size || ''; l.qty = qty;
-          P.lines.push(l);
-          const m = findMaster(item, size);
-          if (m) {
-            const at = P.lines.length - 1;
-            const n = applyPick(at, m);
-            // Matched by words, not exactly: say what it was pasted as.
-            if (m._guess) for (let k = at; k < at + n; k++) P.lines[k].pasted = item;
-            found++;
-          } else missing++;
-        }
-        touch(); H.closeModal('cr-paste-m'); render();
-        H.toast(missing ? `${found} matched, ${missing} not found in the master (orange) — pick those by hand` : `${found} lines added`, missing ? 'warning' : 'success');
+        const out = addRows(rows.map((r) => { const [order_no, item, size, qty] = r.length >= 4 ? r : ['', ...r]; return { order_no, item, size, qty }; }));
+        H.closeModal('cr-paste-m');
+        doneToast(out);
       },
     });
   }
@@ -607,7 +661,7 @@ window.Pages['circle-requirement'] = (() => {
     const { R, head, detail, summary } = sheetRows();
     if (!R.rows.length) { H.toast('Nothing to export yet', 'error'); return; }
     try {
-      if (!window.XLSX) await new Promise((ok, no) => { const s = document.createElement('script'); s.src = '/vendor/xlsx.full.min.js'; s.onload = ok; s.onerror = () => no(new Error('Could not load the Excel library')); document.head.appendChild(s); });
+      await loadXlsx();
       const title = (P.title || 'CIRCLE REQUIREMENT').toUpperCase();
       const ws1 = XLSX.utils.aoa_to_sheet([[`${title} — CIRCLE REQUIREMENT`], [], head, ...detail]);
       ws1['!cols'] = [6, 11, 34, 10, 7, 18, 10, 10, 14, 14, 14].map((w) => ({ wch: w }));
