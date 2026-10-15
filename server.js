@@ -451,6 +451,13 @@ SCHEMA.push(...AMC_SCHEMA);
 const { OI_SCHEMA, mountOfficeInventory } = require('./backend/office-inventory.js');
 SCHEMA.push(...OI_SCHEMA);
 
+// Circle Requirement — kg of aluminium circle to order for an export order
+// (was the hand-made "ORDER NO. ... PLANNING" sheets), with its own item
+// master. Routes mounted further down (search "mountCircleRequirement").
+// See backend/circle-requirement.js.
+const { CR_SCHEMA, mountCircleRequirement } = require('./backend/circle-requirement.js');
+SCHEMA.push(...CR_SCHEMA);
+
 // The factory's own department list (the numbered list the plant keeps on
 // paper), used to seed the `departments` table on a fresh DB and as the
 // fallback whenever that table can't be read. Not the live list — once seeded,
@@ -5652,6 +5659,15 @@ mountAmc(app, {
 mountOfficeInventory(app, {
   q, pool, ensureSchema, requireAuth, withSeqId, isAdminUser, isSuperAdmin, getGoogleAuth, useDb: USE_DB,
   requireAccess: requireAdminOrPage('office-inventory'),
+});
+
+// ── Circle Requirement routes ─────────────────────────────────────────────────
+// Everything under /api/circle-requirement/, behind the 'circle-requirement'
+// page (Users → Access). Changing the master needs Admin/HOD. Works in local
+// JSON mode too. See backend/circle-requirement.js.
+mountCircleRequirement(app, {
+  q, ensureSchema, requireAuth, isAdminUser, isSuperAdmin, getGoogleAuth, useDb: USE_DB,
+  requireAccess: requireAdminOrPage('circle-requirement'),
 });
 
 /* ── Approve / reject straight from the notification email ────────────────────
