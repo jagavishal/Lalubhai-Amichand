@@ -225,8 +225,15 @@ window.Pages['circle-requirement'] = (() => {
         : `<select data-pick="${i}"><option value="">${choices.length ? 'size…' : '—'}</option>
             ${choices.map((r) => `<option value="${esc(r.id)}"${r.id === l.master_id ? ' selected' : ''}>${esc(choiceLabel(r, choices))}</option>`).join('')}</select>`;
       const guess = l.pasted ? `<div class="cr-sub" style="color:#2563eb;" title="Pasted as: ${esc(l.pasted)}">pasted as “${esc(l.pasted)}” — check</div>` : '';
-      const noMaster = l.item && !m && !l.grp && l.src !== 'file' ? `<div class="cr-sub" style="color:#d97706;">not in master — set circles with ✎</div>` : '';
-      const emptySet = m && m.kind === 'set' && !partsOf(m.id).length ? `<div class="cr-sub" style="color:#d97706;">set sizes not in master — add them (Master tab) or ✎</div>` : '';
+      const noMaster = l.item && !m && !l.grp && l.src !== 'file' ? `<div class="cr-sub" style="color:#d97706;">not in master — set circles with ✎${manage ? ` · <a href="#" data-tomaster="${i}" style="color:var(--color-primary);">add to master</a>` : ''}</div>` : '';
+      // A line still on a set (not opened into sizes): sizes not there yet, or there and waiting to be opened.
+      const nParts = m && m.kind === 'set' ? partsOf(m.id).length : 0;
+      const addSize = manage ? ` · <a href="#" data-addsize="${i}" style="color:var(--color-primary);">+ add a size</a>` : '';
+      const emptySet = m && m.kind === 'set'
+        ? (nParts
+          ? `<div class="cr-sub" style="color:#2563eb;">${nParts} size${nParts > 1 ? 's' : ''} in master · <a href="#" data-expand="${i}" style="color:var(--color-primary);font-weight:700;">open into sizes</a>${addSize}</div>`
+          : `<div class="cr-sub" style="color:#d97706;">set sizes not in master${manage ? addSize : ' — ask an Admin, or ✎'}</div>`)
+        : '';
       return `<tr data-row="${i}">
         <td style="width:28px;color:#94a3b8;">${i + 1}</td>
         <td style="width:100px;"><input data-f="order_no" data-i="${i}" value="${esc(l.order_no)}" placeholder="P00664" /></td>
@@ -254,6 +261,7 @@ window.Pages['circle-requirement'] = (() => {
           <button id="cr-add" class="btn-primary btn-sm">+ Line</button>
           <label class="btn-secondary btn-sm" style="cursor:pointer;">Upload Excel<input id="cr-upload" type="file" accept=".xlsx,.xls,.csv" style="display:none;"></label>
           <button id="cr-paste" class="btn-secondary btn-sm">Paste from Excel</button>
+          ${manage ? '<button id="cr-madd" class="btn-secondary btn-sm">+ Add item / set</button>' : ''}
         </div>
         <div style="overflow-x:auto;">
           <table class="cr-grid">
@@ -412,6 +420,33 @@ window.Pages['circle-requirement'] = (() => {
       document.querySelector(`[data-f="item"][data-i="${P.lines.length - 1}"]`)?.focus();
     });
     $('cr-paste')?.addEventListener('click', pasteModal);
+    $('cr-madd')?.addEventListener('click', () => masterModal(null));
+    // Saved to the master, the line takes it at once (a set opens into its sizes).
+    document.querySelectorAll('[data-tomaster]').forEach((a) => a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const i = +a.getAttribute('data-tomaster');
+      const l = P.lines[i];
+      masterModal({ item: l.item, size: l.size, unit: l.body.unit || 'in',
+        body_dia: l.body.dia, body_w: l.body.w, body_t: l.body.t, body_wt: l.body.wt,
+        cover_dia: l.cover.dia, cover_w: l.cover.w, cover_t: l.cover.t, cover_wt: l.cover.wt }, (id) => {
+        const m = byId.get(id);
+        if (m && P.lines[i] === l) { l.pasted = ''; applyPick(i, m); touch(); }
+      });
+    }));
+    document.querySelectorAll('[data-expand]').forEach((a) => a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const i = +a.getAttribute('data-expand');
+      const set = byId.get(P.lines[i].master_id);
+      if (set) { applyPick(i, set); touch(); render(); }
+    }));
+    document.querySelectorAll('[data-addsize]').forEach((a) => a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const i = +a.getAttribute('data-addsize');
+      const l = P.lines[i];
+      const set = byId.get(l.master_id);
+      if (!set) return;
+      masterModal({ kind: 'part', parent_id: set.id, item: set.item, size: '', unit: 'in', swg: set.swg });
+    }));
     $('cr-upload')?.addEventListener('change', (e) => { const file = e.target.files?.[0]; e.target.value = ''; if (file) uploadExcel(file); });
     $('cr-extra')?.addEventListener('click', (e) => { e.preventDefault(); extraModal(-1); });
     $('cr-save')?.addEventListener('click', (e) => savePlan(e.target));
@@ -833,7 +868,7 @@ window.Pages['circle-requirement'] = (() => {
     H.toast('Master imported');
   }
 
-  function masterModal(r) {
+  function masterModal(r, onSaved) {
     const isNew = !r || !r.id;
     const m = { kind: 'item', unit: 'in', ...(r || {}) };
     const isPart = m.kind === 'part';
@@ -868,9 +903,11 @@ window.Pages['circle-requirement'] = (() => {
         };
         // Store the worked-out weight so the master reads like the sheet.
         for (const w of ['body', 'cover']) if (!body[`${w}_wt`]) body[`${w}_wt`] = formulaWt({ unit: body.unit, dia: body[`${w}_dia`], w: body[`${w}_w`], t: body[`${w}_t`] });
-        await H.post(`${BASE}/master`, body);
+        const res = await H.post(`${BASE}/master`, body);
         H.closeModal('cr-m');
-        await loadMaster(); render();
+        await loadMaster();
+        if (onSaved) onSaved(res.id);
+        render();
         H.toast('Master saved');
       },
     });
