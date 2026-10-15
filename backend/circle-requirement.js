@@ -482,6 +482,7 @@ function mountCircleRequirement(app, ctx) {
     const lines = (Array.isArray(b.lines) ? b.lines : []).slice(0, 1000).map((l) => ({
       order_no: str(l.order_no, 64), master_id: str(l.master_id, 16), grp: str(l.grp, 32),
       item: str(l.item), size: str(l.size, 64), qty: Math.max(0, num(l.qty)), remark: str(l.remark, 255),
+      src: l.src === 'file' ? 'file' : '',
       body: LINE_PART(l.body), cover: LINE_PART(l.cover),
     })).filter((l) => l.item || l.qty);
     const extras = (Array.isArray(b.extras) ? b.extras : []).slice(0, 100).map((x) => ({

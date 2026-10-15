@@ -117,8 +117,12 @@ window.Pages['circle-requirement'] = (() => {
     for (const r of rows) {
       if (!(r.req > 0)) continue;
       const g = groups.get(r.t) || { t: r.t, items: new Map(), total: 0 };
-      const it = g.items.get(r.key) || { label: r.label, dia: r.dia, w: r.w, unit: r.unit, kg: 0 };
+      const it = g.items.get(r.key) || { label: r.label, dia: r.dia, w: r.w, unit: r.unit, kg: 0, net: 0, qty: 0, n: 0, used: new Set() };
       it.kg += r.req;
+      it.net += r.kg;
+      it.qty += r.qty;
+      it.n += 1;
+      it.used.add(r.which === 'cover' ? `${P.lines[r.line].item} cover` : r.item);
       g.total += r.req;
       g.items.set(r.key, it);
       groups.set(r.t, g);
@@ -221,12 +225,12 @@ window.Pages['circle-requirement'] = (() => {
         : `<select data-pick="${i}"><option value="">${choices.length ? 'size…' : '—'}</option>
             ${choices.map((r) => `<option value="${esc(r.id)}"${r.id === l.master_id ? ' selected' : ''}>${esc(choiceLabel(r, choices))}</option>`).join('')}</select>`;
       const guess = l.pasted ? `<div class="cr-sub" style="color:#2563eb;" title="Pasted as: ${esc(l.pasted)}">pasted as “${esc(l.pasted)}” — check</div>` : '';
-      const noMaster = l.item && !m && !l.grp ? `<div class="cr-sub" style="color:#d97706;">not in master — set circles with ✎</div>` : '';
+      const noMaster = l.item && !m && !l.grp && l.src !== 'file' ? `<div class="cr-sub" style="color:#d97706;">not in master — set circles with ✎</div>` : '';
       const emptySet = m && m.kind === 'set' && !partsOf(m.id).length ? `<div class="cr-sub" style="color:#d97706;">set sizes not in master — add them (Master tab) or ✎</div>` : '';
       return `<tr data-row="${i}">
         <td style="width:28px;color:#94a3b8;">${i + 1}</td>
         <td style="width:100px;"><input data-f="order_no" data-i="${i}" value="${esc(l.order_no)}" placeholder="P00664" /></td>
-        <td style="min-width:220px;"><input data-f="item" data-i="${i}" value="${esc(l.item)}" list="cr-items" placeholder="type item name…" />${setPart}${guess}${noMaster}${emptySet}</td>
+        <td style="min-width:220px;" title="${l.src === 'file' ? 'Circle from the uploaded sheet' : ''}"><input data-f="item" data-i="${i}" value="${esc(l.item)}" list="cr-items" placeholder="type item name…" />${setPart}${guess}${noMaster}${emptySet}</td>
         <td style="width:150px;">${sizeCtl}</td>
         <td style="width:84px;"><input data-f="qty" data-i="${i}" value="${esc(l.qty)}" type="number" min="0" step="1" placeholder="0" /></td>
         <td style="min-width:150px;">${circleCell(l)}</td>
@@ -424,7 +428,7 @@ window.Pages['circle-requirement'] = (() => {
       if (f === 'item') {
         inp.addEventListener('change', () => {
           l.item = inp.value.trim();
-          l.master_id = ''; l.grp = ''; l.pasted = '';
+          l.master_id = ''; l.grp = ''; l.pasted = ''; l.src = '';
           const ch = choicesFor(l.item);
           // One size only (e.g. a single Dallah set): take it straight away.
           if (ch.length === 1) applyPick(i, ch[0]);
@@ -540,9 +544,18 @@ window.Pages['circle-requirement'] = (() => {
       const size = String(r.size ?? '').trim();
       const qty = String(r.qty ?? '').replace(/,/g, '').trim();
       if (!item || /^item/i.test(item) || !(Number(qty) > 0)) continue;
-      if (isCoverRow(item)) { covers++; continue; }
       const l = blankLine(String(r.order_no ?? '').trim());
       l.item = item; l.size = size; l.qty = qty;
+      if (r.circle) {
+        // The sheet says which circle: use it as it stands.
+        l.src = 'file';
+        l.body = { mode: r.stock ? 'stock' : 'need', ...r.circle, wt: r.wt || 0 };
+        l.cover = { ...emptyPart(), mode: 'skip' };
+        P.lines.push(l);
+        found++;
+        continue;
+      }
+      if (isCoverRow(item)) { covers++; continue; }
       P.lines.push(l);
       const m = findMaster(item, size);
       if (m) {
@@ -558,6 +571,7 @@ window.Pages['circle-requirement'] = (() => {
   }
   function doneToast({ found, missing, covers }) {
     const extra = covers ? ` · ${covers} COVER rows skipped (covers come with the item)` : '';
+    if (P.lines.some((l) => l.src === 'file')) { H.toast(`${found} lines added with the circle sizes from the file`, 'success'); return; }
     if (!found && !missing) H.toast('No item lines with a qty were found' + extra, 'error');
     else H.toast(missing ? `${found} matched, ${missing} not in master (orange) — pick by hand${extra}` : `${found} lines added${extra}`, missing ? 'warning' : 'success');
   }
@@ -570,6 +584,22 @@ window.Pages['circle-requirement'] = (() => {
   // Columns are found by their heading (Order No / Item / Size / Qty or
   // Quantity) in the first rows of the first sheet that has them; a sheet
   // without headings is read as Order No, Item, Size, Qty.
+  // "10 X 18G", "13.75 X 17 X 18G", "360 X 410 X 4MM", "7.5 X 20" (= 20G).
+  function parseCircle(text) {
+    const parts = String(text || '').toUpperCase().replace(/SWG/g, 'G').split(/\s*[X×*]\s*/).map((x) => x.trim()).filter(Boolean);
+    if (parts.length < 2 || parts.length > 3) return null;
+    const last = parts.pop();
+    let t = 0, unit = 'in';
+    const g = /^(\d+(?:\.\d+)?)\s*G?$/.exec(last);
+    const mm = /^(\d+(?:\.\d+)?)\s*MM$/.exec(last);
+    if (mm) { t = +mm[1]; if (parts.some((x) => /MM$/.test(x))) unit = 'mm'; }
+    else if (g) { const row = SWG.find(([, n]) => n === +g[1]); if (!row) return null; t = row[0]; }
+    else return null;
+    const n = parts.map((x) => parseFloat(x));
+    if (n.some((x) => !(x > 0))) return null;
+    return { unit, dia: n[0], w: n[1] || 0, t };
+  }
+
   async function uploadExcel(file) {
     try {
       await loadXlsx();
@@ -581,8 +611,13 @@ window.Pages['circle-requirement'] = (() => {
         if (hi < 0) continue;
         const h = grid[hi].map((c) => String(c).trim());
         const col = (re) => h.findIndex((c) => re.test(c));
-        const C = { order_no: col(/order/i), item: col(/item/i), size: col(/^size/i), qty: col(/qty|quantity/i) };
-        rows = grid.slice(hi + 1).map((r) => ({ order_no: C.order_no >= 0 ? r[C.order_no] : '', item: r[C.item], size: C.size >= 0 ? r[C.size] : '', qty: r[C.qty] }));
+        const C = { order_no: col(/order/i), item: col(/item/i), size: col(/^size/i), qty: col(/qty|quantity/i),
+          circle: col(/circle/i), wt: col(/per\s*pc|pc\s*wt/i), remark: col(/remark/i) };
+        rows = grid.slice(hi + 1).map((r) => ({
+          order_no: C.order_no >= 0 ? r[C.order_no] : '', item: r[C.item], size: C.size >= 0 ? r[C.size] : '', qty: r[C.qty],
+          circle: C.circle >= 0 ? parseCircle(r[C.circle]) : null, wt: C.wt >= 0 ? Number(String(r[C.wt]).replace(/,/g, '')) || 0 : 0,
+          stock: C.remark >= 0 && /AVAIL|STOCK/i.test(r[C.remark] || ''),
+        }));
         break;
       }
       if (!rows) {
@@ -644,15 +679,21 @@ window.Pages['circle-requirement'] = (() => {
     const pct = Number(P.extra_pct) || 0;
     const head = ['SR NO.', 'ORDER NO.', 'ITEM NAME', 'SIZE', 'SWG', 'CIRCLE SIZE', 'QUANTITY', 'PER PC WT.', 'TOTAL WEIGHT (KGS)', `${pct}% ADD+R.OFF`, 'REMARK'];
     const detail = R.rows.map((r, k) => [k + 1, r.order_no || '', r.item, r.size, r.t || '', r.label, r.qty || '', r.wt ? Number(kg3(r.wt)) : '', r.kg ? Number(kg3(r.kg)) : '', r.req || '', r.remark || '']);
-    const summary = [];
+    const r2 = (n) => Math.round(n * 100) / 100;
+    const summary = [['GAUGE', 'CIRCLE SIZE', 'NO. OF LINES', 'TOTAL QTY (PCS)', 'TOTAL WT (KG)', `FINAL WT (${pct}% ADD+R.OFF)`, 'USED FOR']];
+    const all = { n: 0, qty: 0, net: 0 };
     for (const g of R.summary) {
-      summary.push([gaugeLong(g.t).toUpperCase(), '']);
-      g.items.forEach((it) => summary.push([it.label, it.kg]));
-      summary.push(['TOTAL', g.total], ['', '']);
+      const gName = gaugeOf(g.t);
+      summary.push([`${gaugeLong(g.t).toUpperCase()}`]);
+      const sub = { n: 0, qty: 0, net: 0 };
+      g.items.forEach((it) => {
+        summary.push([gName, it.label, it.n, it.qty, r2(it.net), it.kg, [...it.used].sort().join(', ')]);
+        sub.n += it.n; sub.qty += it.qty; sub.net += it.net;
+      });
+      summary.push([`Sub-total ${gName}`, '', sub.n, sub.qty, r2(sub.net), g.total], []);
+      all.n += sub.n; all.qty += sub.qty; all.net += sub.net;
     }
-    summary.push(['TOTAL SUMMARY', '']);
-    R.summary.forEach((g) => summary.push([gaugeOf(g.t).replace('G', ' SWG'), g.total]));
-    summary.push(['G. TOTAL', R.order]);
+    summary.push(['GRAND TOTAL', '', all.n, all.qty, r2(all.net), R.order]);
     return { R, head, detail, summary };
   }
 
@@ -666,7 +707,7 @@ window.Pages['circle-requirement'] = (() => {
       const ws1 = XLSX.utils.aoa_to_sheet([[`${title} — CIRCLE REQUIREMENT`], [], head, ...detail]);
       ws1['!cols'] = [6, 11, 34, 10, 7, 18, 10, 10, 14, 14, 14].map((w) => ({ wch: w }));
       const ws2 = XLSX.utils.aoa_to_sheet([[`${title} — SUMMARY (KGS)`], [], ...summary]);
-      ws2['!cols'] = [{ wch: 26 }, { wch: 12 }];
+      ws2['!cols'] = [12, 20, 12, 15, 14, 22, 60].map((w) => ({ wch: w }));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws1, 'Requirement');
       XLSX.utils.book_append_sheet(wb, ws2, 'Summary');
