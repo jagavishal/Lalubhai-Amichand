@@ -6862,7 +6862,10 @@ const PO_FORMAT_CONFIG = {
     partyLabel: 'CUSTOMER NAME',
     hasShipTo: true,
     header: { poNo: 'J7', date: 'J6', prNo: 'J8', department: 'J9', party: 'A13', shipTo: 'G13', deliverySchedule: 'A16', poValidity: 'C16', paymentTerms: 'G16', poMadeBy: 'J16' },
-    items: { firstRow: 18, lastRow: 58, clearCols: ['A', 'J'], fields: { itemCode: 'A', hsnCode: 'D', uom: 'E', qty: 'F', unitPrice: 'G', gst: 'H' } },
+    items: { firstRow: 18, lastRow: 58, clearCols: ['A', 'J'], fields: { itemCode: 'A', hsnCode: 'D', uom: 'E', qty: 'F', unitPrice: 'G', gst: 'H' },
+      // Read back before the PDF is made (see _assertPoLookupsFilled). Size is
+      // not required here: ~126 general-store catalog items have no size.
+      lookupCols: { description: 'B' } },
     summary: { fields: { freightCharges: 'I61', packingCharges: 'I62', discount: 'I63' }, totalCell: 'I64' },
     // These 3 sit in cells the live template has always reserved for them
     // (label already printed, value cell left blank) but the ERP never wrote
@@ -6887,7 +6890,8 @@ const PO_FORMAT_CONFIG = {
     // every ENR PO up to PO396 silently lost its first item (and its amount
     // from the total). The header formulas' spill still lines up row-for-row
     // with column A, so row 27 picks up description/size/total as normal.
-    items: { firstRow: 27, lastRow: 55, clearCols: ['A', 'J'], fields: { itemCode: 'A', customerCodeRef: 'D', barcode: 'E', stickerQty: 'G', rate: 'H', taxPercent: 'I' } },
+    items: { firstRow: 27, lastRow: 55, clearCols: ['A', 'J'], fields: { itemCode: 'A', customerCodeRef: 'D', barcode: 'E', stickerQty: 'G', rate: 'H', taxPercent: 'I' },
+      lookupCols: { description: 'B', size: 'C' } },
     summary: { fields: { shipping: 'J57', other: 'J58', discountPercent: 'I59' }, totalCell: 'J60' },
     approvalCell: 'H66',   // the H66:J69 signature merge above "Director/Authorized Signatory"
   },
@@ -6901,7 +6905,8 @@ const PO_FORMAT_CONFIG = {
     // not a spill from the header (unlike PurchaseOrder/ENR PO's amount
     // columns) — clearing over it would delete it for good the first time
     // this format is ever submitted. Confirmed still intact; keep it that way.
-    items: { firstRow: 27, lastRow: 55, clearCols: ['A', 'K'], fields: { itemCode: 'A', boxQty: 'H', boxRate: 'I', plateQty: 'J', plateRate: 'K' } },
+    items: { firstRow: 27, lastRow: 55, clearCols: ['A', 'K'], fields: { itemCode: 'A', boxQty: 'H', boxRate: 'I', plateQty: 'J', plateRate: 'K' },
+      lookupCols: { description: 'B', size: 'C' } },
     summary: { fields: { gstPercent: 'J57', shipping: 'K58', other: 'K59', discountPercent: 'J60' }, totalCell: 'K61' },
     approvalCell: 'H66',   // the H66:L69 signature merge above "Director/Authorized Signatory"
   },
@@ -7468,12 +7473,69 @@ const _cleanPoItemNum = (v) => {
   return Number.isFinite(n) ? n : '';
 };
 
-async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetIdByTitle, approvalStamp) {
+// The template's description/size columns are VLOOKUPs into ITEM_CODES, so a
+// code missing from that catalog prints blank, while the PO itself looks
+// fine (PO404: PAC-B-542/543 were on the PR sheet's box catalog, which feeds
+// the Diamond PO picker, but not yet in ITEM_CODES!Q:Z, which feeds its
+// PDF). Read the filled rows back and refuse to make the PDF instead
+// ("bina Description or Size ke PDF nahi banna chahiye").
+async function _assertPoLookupsFilled(sheets, cfg, items) {
+  const cols = cfg.items.lookupCols;
+  if (!cols || !items.length) return;
+  const { firstRow } = cfg.items;
+  const lastRow = firstRow + items.length - 1;
+  const res = await sheets.spreadsheets.values.batchGet({
+    spreadsheetId: PO_CREATION_SHEET_ID,
+    ranges: Object.values(cols).map(c => `'${cfg.tabName}'!${c}${firstRow}:${c}${lastRow}`),
+    valueRenderOption: 'FORMATTED_VALUE',
+  });
+  const fields = Object.keys(cols);
+  const missing = [];
+  items.forEach((it, i) => {
+    const blank = fields.filter((f, k) => !String(res.data.valueRanges?.[k]?.values?.[i]?.[0] ?? '').trim());
+    if (blank.length) missing.push(`${it.itemCode} (${blank.join(' & ')})`);
+  });
+  if (missing.length) {
+    throw new Error(`PO not created: no ${fields.join('/')} found on the PO sheet's ITEM_CODES catalog for ${missing.join(', ')}. Add it to ITEM_CODES in the PO sheet, then create the PO again.`);
+  }
+}
+
+// ITEM_CODES!Q:Z (what the Diamond PO template's VLOOKUPs read) is a static
+// copy of the PR sheet's ITEM_CODE(PACKING_BOX) A:J — a sheet formula can't
+// reach another spreadsheet. Box codes added on the PR side after that copy
+// are appended here before the fill, so the PDF picks them up.
+async function _syncDiamondPoItemCodes(sheets, items) {
+  const codes = [...new Set(items.map(it => String(it.itemCode || '').trim()).filter(Boolean))];
+  if (!codes.length) return;
+  const [poRes, prRes] = await Promise.all([
+    sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'ITEM_CODES'!Q1:Q6000` }),
+    sheets.spreadsheets.values.get({ spreadsheetId: PR_SHEET_ID, range: `'ITEM_CODE(PACKING_BOX)'!A2:J6000` }),
+  ]);
+  const poCol = poRes.data.values || [];
+  const have = new Set(poCol.map(r => String(r[0] || '').trim()).filter(Boolean));
+  const add = (prRes.data.values || []).filter(r => codes.includes(String(r[0] || '').trim()) && !have.has(String(r[0]).trim()));
+  if (!add.length) return;
+  let lastRow = poCol.length;
+  while (lastRow > 0 && !String(poCol[lastRow - 1]?.[0] || '').trim()) lastRow--;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: PO_CREATION_SHEET_ID,
+    range: `'ITEM_CODES'!Q${lastRow + 1}:Z${lastRow + add.length}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: add.map(r => Array.from({ length: 10 }, (_, k) => r[k] ?? '')) },
+  });
+  console.log('[po-creation] ITEM_CODES!Q:Z: appended', add.map(r => r[0]).join(', '), 'from the PR box catalog');
+}
+
+async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetIdByTitle, approvalStamp, { checkLookups = false } = {}) {
   const { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, summary, termsAndConditions, comments, testCertificateRequired } = form;
   const cleanItems = Array.isArray(form.items) ? form.items : [];
   const tab = cfg.tabName;
   const sourceSheetId = sheetIdByTitle[tab];
   if (sourceSheetId === undefined) throw new Error(`Template tab "${tab}" not found in the PO sheet`);
+  // Here rather than in the create route: the approval re-stamp re-fills the
+  // same template, and PO415 was approved (re-exported) with PAC-B-542/543
+  // still missing from ITEM_CODES — blank description/size on the PDF.
+  if (tab === 'Diamond PO') await _syncDiamondPoItemCodes(sheets, cleanItems);
   // The item block grows to fit (see _withItemRows); every cell below it is
   // addressed through `at` for the length of this fill.
   return _withItemRows(sheets, PO_CREATION_SHEET_ID, sourceSheetId, cfg.items, cleanItems.length, async (at, extra) => {
@@ -7565,6 +7627,8 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
       const totalRes = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${tab}'!${at(cfg.summary.totalCell)}`, valueRenderOption: 'UNFORMATTED_VALUE' });
       totalAmount = totalRes.data.values?.[0]?.[0] ?? null;
     } catch (e) { console.error('[po-creation] total read-back failed:', e.message); }
+
+    if (checkLookups) await _assertPoLookupsFilled(sheets, cfg, cleanItems);
 
     // 4) Export this fill as a PDF and save it to Drive — replaces the old
     // per-PO archive-tab approach. A PDF/Drive hiccup must never block the
@@ -7667,7 +7731,7 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po', async (req, res)
     if (sheetIdByTitle[tab] === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the PO sheet` });
     const { totalAmount, pdfLink } = await _fillPoTemplateAndExport(sheets, cfg,
       { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary, termsAndConditions, comments, testCertificateRequired },
-      poNoFormatted, sheetIdByTitle, '');
+      poNoFormatted, sheetIdByTitle, '', { checkLookups: true });
 
     // 5) Log this PO so the ERP can list it (the sheet is still the database —
     // this is just another tab in it, same pattern as the existing Monitoring/
