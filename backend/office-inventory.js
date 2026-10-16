@@ -147,6 +147,7 @@ function mountOfficeInventory(app, ctx) {
         const user = req.session.user;
         if (manage && !canManage(user)) return res.status(403).json({ error: 'Only an Admin/HOD can do this' });
         await clearOldDataOnce();
+        await setOpeningOnce();
         req.oi = { user, by: user?.name || user?.email || '', manage: canManage(user) };
         const out = await fn(req, res);
         if (out !== undefined && !res.headersSent) res.json(out);
@@ -177,6 +178,36 @@ function mountOfficeInventory(app, ctx) {
       console.log('[office-inventory] old sheet purchases/consumption cleared — fresh start from 1 Oct 2026');
     }
     _cleared = true;
+  }
+
+  /* The office's physical count of 1 Oct 2026 (handwritten list) becomes
+     the opening stock of the fresh start. Runs once per database (app_config
+     'oi_opening_2026_10_01'); an item missing from the master is added.
+     Dettol Handwash "2 + 15" = 2 bottles + 15 refill packets. */
+  const OPENING_2026_10_01 = [
+    ['Toilet Brush', 3], ['Harpic (1 ltr)', 4], ['Phenyl Trestol', 4], ['Lizol (1 ltr)', 4],
+    ['Toilet Roll (10 in 1)', 50], ['Tissue', 52], ['Air Fresher', 2], ['Dettol Handwash', 17],
+    ['Garbage (19 x 21) Small', 3], ['Garbage (29 x 39) Big', 4], ['Colin (500 mL)', 1],
+    ['Rin Powder (500 gr)', 1], ['Sanicube (300 gr)', 10], ['Broom', 2],
+  ];
+  let _opened = false;
+  async function setOpeningOnce() {
+    if (_opened) return;
+    const flag = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, ['oi_opening_2026_10_01']);
+    if (!flag.length) {
+      const have = new Map((await q('SELECT id, name FROM oi_items')).map((r) => [r.name.toLowerCase().replace(/\s+/g, ' '), r.id]));
+      for (const [name, qty] of OPENING_2026_10_01) {
+        const id = have.get(name.toLowerCase());
+        if (id) await q('UPDATE oi_items SET opening_qty = $1 WHERE id = $2', [qty, id]);
+        else await withSeqId('oi_items', 'ITM', 4, (nid) => q(
+          'INSERT INTO oi_items (id, name, category, unit, opening_qty, min_qty, active) VALUES ($1,$2,$3,$4,$5,0,1)',
+          [nid, name, 'Cleaning', 'Pcs', qty]));
+      }
+      const now = JSON.stringify(new Date().toISOString());
+      await q(`INSERT INTO app_config ("key","value") VALUES ($1,$2) ON CONFLICT ("key") DO UPDATE SET "value"=$3`, ['oi_opening_2026_10_01', now, now]);
+      console.log('[office-inventory] opening stock of 1 Oct 2026 set for', OPENING_2026_10_01.length, 'items');
+    }
+    _opened = true;
   }
 
   /* ── Lists ─────────────────────────────────────────────────────── */
