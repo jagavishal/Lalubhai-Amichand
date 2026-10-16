@@ -41,6 +41,7 @@ window.Sidebar = {
     // Bulk Email — an envelope with a send arrow, since the page's whole job
     // is one button that mails a folder of PDFs out.
     // Office Inventory — a box.
+    prodnorms:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>',
     circlereq:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/></svg>',
     officeinv:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>',
     bulkemail:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 13V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9"/><path d="m22 7-10 6L2 7"/><path d="M16 19h6"/><path d="m19 16 3 3-3 3"/></svg>',
@@ -193,6 +194,8 @@ window.Sidebar = {
       { route: 'ims-accessories', label: 'IMS Accessories', icon: 'imsaccess', group: 'Factory' },
       // Kg of circle to order for an export order (was the planning sheets).
       { route: 'circle-requirement', label: 'Circle Requirement', icon: 'circlereq', group: 'Factory' },
+      // Piece-rate norms, daily production per worker and the wage report.
+      { route: 'production-norms', label: 'Production Norms', icon: 'prodnorms', group: 'Factory' },
       { route: 'proforma-invoice', label: 'Proforma Invoice', icon: 'picreation', group: 'Marketing' },
       // The Proforma Invoice page's Order Sheets / Packing List tabs on their
       // own, for the packing desk — granted without the PI's prices. Anyone

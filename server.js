@@ -458,6 +458,12 @@ SCHEMA.push(...OI_SCHEMA);
 const { CR_SCHEMA, mountCircleRequirement } = require('./backend/circle-requirement.js');
 SCHEMA.push(...CR_SCHEMA);
 
+// Production Norms — piece-rate norms per department (was the "PRODUCTION
+// NORMS ..." workbooks) and the daily production booked against them.
+// Routes mounted further down (search "mountProductionNorms").
+const { PN_SCHEMA, mountProductionNorms } = require('./backend/production-norms.js');
+SCHEMA.push(...PN_SCHEMA);
+
 // The factory's own department list (the numbered list the plant keeps on
 // paper), used to seed the `departments` table on a fresh DB and as the
 // fallback whenever that table can't be read. Not the live list — once seeded,
@@ -5668,6 +5674,15 @@ mountOfficeInventory(app, {
 mountCircleRequirement(app, {
   q, ensureSchema, requireAuth, isAdminUser, isSuperAdmin, getGoogleAuth, useDb: USE_DB,
   requireAccess: requireAdminOrPage('circle-requirement'),
+});
+
+// ── Production Norms routes ───────────────────────────────────────────────────
+// Everything under /api/production-norms/, behind the 'production-norms' page
+// (Users → Access). Changing the norms needs Admin/HOD. Works in local JSON
+// mode too. See backend/production-norms.js.
+mountProductionNorms(app, {
+  q, ensureSchema, requireAuth, isAdminUser, isSuperAdmin, useDb: USE_DB,
+  requireAccess: requireAdminOrPage('production-norms'),
 });
 
 /* ── Approve / reject straight from the notification email ────────────────────
