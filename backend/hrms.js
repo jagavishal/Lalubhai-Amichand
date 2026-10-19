@@ -966,6 +966,7 @@ function mountHrms(app, ctx) {
       [status, decidedBy || '', leaveId, lv.status],
     );
     if (!guard.rowCount) return { alreadyDecided: true };
+    if (nowApproved && ctx.onLeaveApproved) ctx.onLeaveApproved();
 
     if (lv.employee_id && code !== 'LWP' && days) {
       if (!wasApproved && nowApproved) await bumpUsed(lv.employee_id, year, code, days);

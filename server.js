@@ -4509,6 +4509,57 @@ function leaveOn(leaveCtx, name, dateStr) {
   return days ? (days.get(dateStr) || null) : null;
 }
 
+/* A weekly / monthly / quarterly / yearly occurrence that lands on the doer's
+   approved leave still has to be done — an MSME-1 filing does not go away
+   because the person was out on the day it was scheduled. So instead of being
+   read as "on leave" it is moved to the doer's first working day back (past
+   week-offs, holidays and the rest of the leave), the same way week-offs and
+   holidays shift these frequencies at generation time. A daily occurrence is
+   not moved: that day's task is simply not owed, and moving it would stack it
+   on the next day's own occurrence — it stays "on leave". Leave is approved
+   after the series exists, so this runs whenever a leave is approved, after a
+   checklist task is created, hourly (CSV-imported leave) and at startup.
+   Looks back 45 days so a leave approved after the fact still brings the task
+   back as pending. If the target day already holds an occurrence of the same
+   series, the row is left where it is (on leave). */
+let _shiftLeaveRunning = Promise.resolve();
+function shiftLeaveDayTasks() {
+  const run = _shiftLeaveRunning.then(() => _shiftLeaveDayTasks());
+  _shiftLeaveRunning = run.catch(() => {});
+  return run;
+}
+async function _shiftLeaveDayTasks() {
+  if (!USE_DB) return { moved: 0 };
+  await ensureSchema();
+  const leaveCtx = await getLeaveDayContext();
+  if (!leaveCtx.size) return { moved: 0 };
+  const since = _checklistPlusDays(todayIST(), -45);
+  const rows = await q(`SELECT m.id, m.task, m.assigned_to, m.frequency, m.start_date FROM masters m
+                         WHERE m.start_date >= $1 AND LOWER(COALESCE(m.frequency, 'daily')) <> 'daily'
+                           AND NOT EXISTS (SELECT 1 FROM checklist_completions c WHERE c.master_id = m.id)`, [since]);
+  const due = rows.filter(r => leaveOn(leaveCtx, r.assigned_to, toDateStr(r.start_date)));
+  if (!due.length) return { moved: 0 };
+  const workCtx = await getWorkingDayContext();
+  const norm = (v) => String(v || '').trim().toLowerCase();
+  const seriesKey = (r, d) => norm(r.assigned_to) + '||' + norm(r.task) + '||' + d;
+  const occupied = new Set((await q('SELECT task, assigned_to, start_date FROM masters WHERE start_date >= $1', [since]))
+    .map(r => seriesKey(r, toDateStr(r.start_date))));
+  let moved = 0;
+  for (const r of due) {
+    const from = toDateStr(r.start_date);
+    let d = from, hops = 0;
+    while (hops < 90 && (d === from || nonWorkingReason(d, workCtx, r.assigned_to) || leaveOn(leaveCtx, r.assigned_to, d))) { d = _checklistPlusDays(d, 1); hops++; }
+    if (hops >= 90 || occupied.has(seriesKey(r, d))) continue;
+    await pool.query('UPDATE masters SET start_date=$1 WHERE id=$2', [d, r.id]);
+    occupied.delete(seriesKey(r, from));
+    occupied.add(seriesKey(r, d));
+    moved++;
+  }
+  if (moved) console.log(`[leave-shift] ${moved} checklist occurrence(s) moved off approved leave`);
+  return { moved };
+}
+setInterval(() => { shiftLeaveDayTasks().catch((e) => console.error('[leave-shift]', e.message)); }, 60 * 60 * 1000);
+
 const CHECKLIST_SHIFT_FREQS = new Set(['weekly', 'alternative_week', 'alternate_week', 'monthly', 'quarterly', 'yearly']);
 function skipNonWorkingDays(dates, freq, ctx, assignedTo) {
   const shift = CHECKLIST_SHIFT_FREQS.has(String(freq || '').toLowerCase());
@@ -4664,6 +4715,8 @@ app.post('/api/masters', requireAuth, async (req, res) => {
     for (let i = 0; i < dates.length; i++) {
       await pool.query('INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,department,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())', [ids[i], task, assignedTo, frequency, dates[i], null, remarks, department]);
     }
+    // A series started inside the doer's approved leave: move those occurrences now.
+    await shiftLeaveDayTasks().catch((e) => console.error('[leave-shift]', e.message));
     return res.status(201).json({ success:true, id: ids[0], count: ids.length });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -5620,6 +5673,8 @@ const hrms = mountHrms(app, {
   // same way the mailers are: the matrix is company policy and belongs with the
   // rest of it here, while the HR module owns only the decision to consult it.
   leaveAuthorityFor,
+  // Approving a leave moves the doer's non-daily checklist tasks off those days.
+  onLeaveApproved: () => shiftLeaveDayTasks().catch((e) => console.error('[leave-shift]', e.message)),
   // The HR module stores departments in its own tables (hr_employees, hr_payslips)
   // but must spell them the way the rest of the app does — so it shares this
   // file's canonicaliser and the departments master behind it, rather than
@@ -14599,5 +14654,6 @@ async function seedJsonFallback() {
 app.listen(process.env.PORT || 3000, async () => {
   console.log('Server on http://localhost:' + (process.env.PORT || 3000));
   await seedJsonFallback();
+  shiftLeaveDayTasks().catch((e) => console.error('[leave-shift]', e.message));
   shiftNonWorkingTasksOnce();
 });
