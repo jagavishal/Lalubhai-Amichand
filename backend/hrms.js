@@ -678,6 +678,7 @@ function mountHrms(app, ctx) {
         await applyAccountsLeaveOnce().catch((e) => console.error('[hrms] accounts leave update failed:', e.message));
         await applyJayeshTreeOnce().catch((e) => console.error('[hrms] tree under Jayesh failed:', e.message));
         await applyLeaveHierarchyOnce().catch((e) => console.error('[hrms] leave hierarchy update failed:', e.message));
+        await applyMahendraTeamLeaveOnce().catch((e) => console.error('[hrms] Mahendra team leave update failed:', e.message));
       }
       if (!_assetImportChecked) { _assetImportChecked = true; await importSheetAssetsOnce(); }
     } catch (e) {
@@ -1059,6 +1060,52 @@ function mountHrms(app, ctx) {
     }
     await setSetting(LEAVE_HIERARCHY_FLAG, JSON.stringify({ at: new Date().toISOString(), log }));
     console.log('[hrms] leave hierarchy 2026-10-21c:', log.join(' | '));
+  }
+
+  /* Added to the list the same evening: "Mahendra shah — Nathuram & Sharad",
+     i.e. Mahendra Shah approves their leave. Set as their logins' Leave
+     Approver; anyone of them who falls in a department tier is put on that
+     tier's exempt list too, so a long request is not routed past him. */
+  const MAHENDRA_TEAM_FLAG = 'hr_leave_mahendra_team_20261021d';
+  async function applyMahendraTeamLeaveOnce() {
+    const done = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [MAHENDRA_TEAM_FLAG]).catch(() => []);
+    if (done.length) return;
+    const log = [];
+    const logins = await q(`SELECT id, name, department FROM users WHERE active = 1`);
+    const words = (n) => String(n || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim().split(' ').filter(Boolean);
+    const find = (rows, tokens) => {
+      const hit = rows.filter((r) => { const w = words(r.name); return tokens.every((t) => w.some((x) => x.startsWith(t))); });
+      return hit.length === 1 ? hit[0] : null;
+    };
+    const mahendra = find(logins, ['mahendra', 'shah']) || find(logins, ['mahendra']);
+    if (!mahendra) {
+      log.push('not changed — Mahendra Shah: no single active login found');
+    } else {
+      const row = (await q(`SELECT "value" FROM app_config WHERE "key" = 'leave_authority'`).catch(() => []))[0];
+      let matrix = null;
+      try { matrix = row ? JSON.parse(row.value) : null; } catch {}
+      let matrixChanged = false;
+      for (const tokens of [['nathuram'], ['sharad']]) {
+        const u = find(logins, tokens);
+        if (!u) { log.push(`${tokens[0]}: no single active login found`); continue; }
+        await pool.query(`UPDATE users SET leave_approver = $1 WHERE id = $2`, [mahendra.id, u.id]);
+        log.push(`leave approver of login ${u.name} → ${mahendra.name}`);
+        const dept = String(u.department || '').toLowerCase();
+        const t = Array.isArray(matrix) && dept ? matrix.find((x) => {
+          const want = String(x.department || '').toLowerCase().trim();
+          const stem = want.replace(/s$/, '');
+          return want && (dept.includes(want) || (stem.length >= 4 && dept.includes(stem)));
+        }) : null;
+        if (t) {
+          t.exempt = [...new Set([...(Array.isArray(t.exempt) ? t.exempt : []), u.name])];
+          matrixChanged = true;
+          log.push(`${u.name} exempt from the ${t.department} tier`);
+        }
+      }
+      if (matrixChanged) await setSetting('leave_authority', JSON.stringify(matrix));
+    }
+    await setSetting(MAHENDRA_TEAM_FLAG, JSON.stringify({ at: new Date().toISOString(), log }));
+    console.log('[hrms] Mahendra team leave 2026-10-21d:', log.join(' | '));
   }
 
   /* Tree, revised the same day: the Accounts team (and Obaidulla) report to
