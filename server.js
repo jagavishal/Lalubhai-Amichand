@@ -3161,15 +3161,17 @@ app.delete('/api/delegations', requireAuth, async (req, res) => {
 const DEFAULT_LEAVE_AUTHORITY = [
   {
     department: 'Accounts',        // matched case-insensitively, as a substring
-    // 21 Oct 2026: Jayesh Udani approves the team's leave; more than 3 days
-    // needs Shival Sir too (Jayesh, then Shival), and Jayesh's own goes
-    // straight to Shival. (Was Paresh Sir as the second stage, and Rajesh
-    // Joshi straight to Paresh.) Existing installs get this through the
-    // one-off hr_accounts_leave_20261021b in backend/hrms.js.
+    // Management's updated hierarchy, 21 Oct 2026: Jayesh Udani approves the
+    // team's leave; up to 2 days his approval is enough, 3 days or more needs
+    // Shival Sir after him, and Jayesh's own goes straight to Shival. Rajesh
+    // Joshi and Mahendra Shah are outside the tier — Paresh Sir approves
+    // theirs, as their Leave Approver on the Users page. Existing installs get
+    // this through the one-off hr_leave_authority_20261021c in backend/hrms.js.
     withinTeamApprover: 'Jayesh Udani',
-    escalateFromDays: 3,           // 0 = never escalates
+    escalateFromDays: 2,           // 0 = never escalates
     escalateTo: 'Shival Shah',
     directToEscalation: [],
+    exempt: ['Rajesh Joshi', 'Mahendra Shah'],
   },
 ];
 
@@ -3291,6 +3293,11 @@ async function leaveAuthorityFor(department, days, applicantIdentity) {
      requests have nobody above them in this matrix, so no tier applies. */
   if (applicant || applicantEmail || applicantId) {
     if (await matches(tier.escalateTo)) return null;
+    // Named outside the tier altogether — their own Leave Approver decides,
+    // at any length (Rajesh Joshi and Mahendra Shah → Paresh Sir).
+    for (const named of Array.isArray(tier.exempt) ? tier.exempt : []) {
+      if (await matches(named)) return null;
+    }
     let direct = await matches(tier.withinTeamApprover);
     for (const named of directToEscalationOf(tier)) {
       if (direct) break;
@@ -3415,6 +3422,11 @@ app.put('/api/approval-authority', requireAuth, requireAdmin, async (req, res) =
       await writeAuthority('expense_authority', rows);
     }
     if (Array.isArray(body.leave)) {
+      // The editor has no column for `exempt`, so a row it saves keeps the
+      // stored list for its department rather than wiping it.
+      const stored = await readAuthority('leave_authority', DEFAULT_LEAVE_AUTHORITY);
+      const exemptOf = (dept) => (stored.find((s) =>
+        String(s.department || '').trim().toLowerCase() === String(dept || '').trim().toLowerCase()) || {}).exempt;
       const rows = body.leave
         .map((r) => ({
           department:         String(r.department || '').trim(),
@@ -3423,6 +3435,7 @@ app.put('/api/approval-authority', requireAuth, requireAdmin, async (req, res) =
           escalateTo:         String(r.escalateTo || '').trim(),
           directToEscalation: (Array.isArray(r.directToEscalation) ? r.directToEscalation : String(r.directToEscalation || '').split(','))
             .map((n) => String(n).trim()).filter(Boolean),
+          ...(Array.isArray(r.exempt) ? { exempt: r.exempt } : Array.isArray(exemptOf(r.department)) ? { exempt: exemptOf(r.department) } : {}),
         }))
         .filter((r) => r.department);
       await writeAuthority('leave_authority', rows);

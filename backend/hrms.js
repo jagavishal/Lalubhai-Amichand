@@ -677,6 +677,7 @@ function mountHrms(app, ctx) {
         await applyOrgUpdateOnce().catch((e) => console.error('[hrms] org update failed:', e.message));
         await applyAccountsLeaveOnce().catch((e) => console.error('[hrms] accounts leave update failed:', e.message));
         await applyJayeshTreeOnce().catch((e) => console.error('[hrms] tree under Jayesh failed:', e.message));
+        await applyLeaveHierarchyOnce().catch((e) => console.error('[hrms] leave hierarchy update failed:', e.message));
       }
       if (!_assetImportChecked) { _assetImportChecked = true; await importSheetAssetsOnce(); }
     } catch (e) {
@@ -997,6 +998,67 @@ function mountHrms(app, ctx) {
     }
     await setSetting(ACCOUNTS_LEAVE_FLAG, JSON.stringify({ at: new Date().toISOString(), log }));
     console.log('[hrms] accounts leave 2026-10-21b:', log.join(' | '));
+  }
+
+  /* Management's written hierarchy, later on 21 Oct, on top of the above:
+       · Paresh Sir approves Rajesh Joshi and Mahendra Shah — their logins'
+         Leave Approver, and both put outside the Accounts tier (`exempt`) so
+         a 3-day request is not pulled into Jayesh → Shival
+       · Shival Sir approves Jayesh Udani
+       · Accounts: Jayesh first; up to 2 days that is enough, 3 days or more
+         needs Shival Sir after him (escalateFromDays 2 = more than 2) */
+  const LEAVE_HIERARCHY_FLAG = 'hr_leave_authority_20261021c';
+  async function applyLeaveHierarchyOnce() {
+    const done = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [LEAVE_HIERARCHY_FLAG]).catch(() => []);
+    if (done.length) return;
+    const log = [];
+    const logins = await q(`SELECT id, name, department, leave_approver FROM users WHERE active = 1`);
+    const words = (n) => String(n || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim().split(' ').filter(Boolean);
+    const find = (rows, tokens) => {
+      const hit = rows.filter((r) => { const w = words(r.name); return tokens.every((t) => w.some((x) => x.startsWith(t))); });
+      return hit.length === 1 ? hit[0] : null;
+    };
+    const accounts = logins.filter((u) => /account/i.test(u.department || ''));
+    const jayesh = find(logins, ['jayesh', 'udani']) || find(accounts, ['jayesh']) || find(logins, ['jayesh']);
+    const shival = find(logins, ['shival']);
+    const paresh = find(logins, ['paresh']);
+    const rajesh = find(logins, ['rajesh', 'joshi']);
+    const mahendra = find(logins, ['mahendra', 'shah']) || find(logins, ['mahendra']);
+    for (const [label, u] of [['Jayesh', jayesh], ['Shival', shival], ['Paresh', paresh], ['Rajesh Joshi', rajesh], ['Mahendra Shah', mahendra]]) {
+      if (!u) log.push(`${label}: no single active login found`);
+    }
+    const setApprover = async (u, to) => {
+      if (!u || !to || u.id === to.id) return;
+      await pool.query(`UPDATE users SET leave_approver = $1 WHERE id = $2`, [to.id, u.id]);
+      log.push(`leave approver of login ${u.name} → ${to.name}`);
+    };
+    await setApprover(rajesh, paresh);
+    await setApprover(mahendra, paresh);
+    await setApprover(jayesh, shival);
+
+    if (jayesh && shival) {
+      const row = (await q(`SELECT "value" FROM app_config WHERE "key" = 'leave_authority'`).catch(() => []))[0];
+      let matrix = null;
+      try { matrix = row ? JSON.parse(row.value) : null; } catch {}
+      const t = Array.isArray(matrix) ? matrix.find((x) => /account/i.test(x.department || '')) : null;
+      if (t) {
+        Object.assign(t, {
+          withinTeamApprover: jayesh.name, escalateFromDays: 2, escalateTo: shival.name, directToEscalation: [],
+          exempt: [rajesh?.name || 'Rajesh Joshi', mahendra?.name || 'Mahendra Shah'],
+        });
+        await setSetting('leave_authority', JSON.stringify(matrix));
+        log.push(`leave authority: Accounts → ${jayesh.name}, 3+ days → then ${shival.name}; exempt ${t.exempt.join(', ')}`);
+      } else {
+        log.push('leave authority: no Accounts row (the seed applies)');
+      }
+      // Everyone else in Accounts still pointed at Shival by the first update.
+      for (const u of accounts) {
+        if ([jayesh, shival, rajesh, mahendra].some((x) => x && x.id === u.id)) continue;
+        if (String(u.leave_approver || '') === String(shival.id)) await setApprover(u, jayesh);
+      }
+    }
+    await setSetting(LEAVE_HIERARCHY_FLAG, JSON.stringify({ at: new Date().toISOString(), log }));
+    console.log('[hrms] leave hierarchy 2026-10-21c:', log.join(' | '));
   }
 
   /* Tree, revised the same day: the Accounts team (and Obaidulla) report to
