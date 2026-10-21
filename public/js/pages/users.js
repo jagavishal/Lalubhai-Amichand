@@ -64,7 +64,8 @@ window.Pages.users = (() => {
     { cat: 'Basic', key: 'profile',       label: 'Profile' },
 
     // The Export department's three desks, in the sidebar's own order (see
-    // sidebar.js): Factory, Marketing, Documentation.
+    // sidebar.js): FMS above them, then Factory, Marketing, Documentation.
+    { cat: 'Export Department', key: 'fms', label: 'FMS Master' },
     { cat: 'Export — Factory', key: 'pr-creation',   label: 'PR Creation' },
     { cat: 'Export — Factory', key: 'po-creation',   label: 'PO Creation' },
     { cat: 'Export — Factory', key: 'grn-creation',  label: 'GRN Creation' },
@@ -90,7 +91,6 @@ window.Pages.users = (() => {
 
     { cat: 'Retail', key: 'retail-dashboard', label: 'Retail Dashboard' },
 
-    { cat: 'Admin Section', key: 'fms',          label: 'FMS Master' },
     { cat: 'Admin Section', key: 'mis',          label: 'MIS Report' },
     { cat: 'Admin Section', key: 'office-inventory', label: 'Office Inventory' },
     // Grant-only (see GRANT_PAGES below): ticked per person, Admins included.

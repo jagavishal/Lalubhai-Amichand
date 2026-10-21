@@ -178,6 +178,9 @@ window.Sidebar = {
     // does the proforma and consignees, and Documentation does the customs
     // paper set. `group` draws a small sub-heading before each run of items.
     { title: 'Export Department', items: [
+      // FMS workflows run across the Export desks (stores approval, lead to
+      // order, order to dispatch), so it heads the section above the groups.
+      { route: 'fms',            label: 'FMS',            icon: 'fms',         flag: 'fms' },
       { route: 'pr-creation',    label: 'PR Creation',    icon: 'prcreation',  group: 'Factory' },
       { route: 'po-creation',    label: 'PO Creation',    icon: 'pocreation',  group: 'Factory' },
       { route: 'grn-creation',   label: 'GRN Creation',   icon: 'grncreation', group: 'Factory' },
@@ -227,7 +230,6 @@ window.Sidebar = {
       // is not grantable from Users → Access. The API gate is requireTrueAdmin.
       { route: 'company-overview', label: 'CEO Dashboard', icon: 'companyoverview', adminOnly: true, trueAdminOnly: true },
       { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
-      { route: 'fms',           label: 'FMS',          icon: 'fms',          flag: 'fms' },
       { route: 'mis',           label: 'MIS Report',   icon: 'mis' },
       // Office consumables (was the "Inventory Management System" sheet).
       // adminOnly but grantable from Users → Access, like Bulk Email; the
