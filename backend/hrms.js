@@ -676,6 +676,7 @@ function mountHrms(app, ctx) {
         _orgUpdateChecked = true;
         await applyOrgUpdateOnce().catch((e) => console.error('[hrms] org update failed:', e.message));
         await applyAccountsLeaveOnce().catch((e) => console.error('[hrms] accounts leave update failed:', e.message));
+        await applyJayeshTreeOnce().catch((e) => console.error('[hrms] tree under Jayesh failed:', e.message));
       }
       if (!_assetImportChecked) { _assetImportChecked = true; await importSheetAssetsOnce(); }
     } catch (e) {
@@ -996,6 +997,38 @@ function mountHrms(app, ctx) {
     }
     await setSetting(ACCOUNTS_LEAVE_FLAG, JSON.stringify({ at: new Date().toISOString(), log }));
     console.log('[hrms] accounts leave 2026-10-21b:', log.join(' | '));
+  }
+
+  /* Tree, revised the same day: the Accounts team (and Obaidulla) report to
+     Jayesh Udani, who reports to Shival — the update above had put them all
+     beside Jayesh under Shival ("ye sab jayesh udani ke niche hai sath mai
+     nhi"). Named people only; anyone not found is logged, not guessed. */
+  const JAYESH_TREE_FLAG = 'hr_tree_under_jayesh_20261021';
+  async function applyJayeshTreeOnce() {
+    const done = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [JAYESH_TREE_FLAG]).catch(() => []);
+    if (done.length) return;
+    const log = [];
+    const emps = await q(`SELECT id, name FROM hr_employees`);
+    const logins = await q(`SELECT id, name FROM users`);
+    const words = (n) => String(n || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim().split(' ').filter(Boolean);
+    const find = (rows, tokens) => {
+      const hit = rows.filter((r) => { const w = words(r.name); return tokens.every((t) => w.some((x) => x.startsWith(t))); });
+      return hit.length === 1 ? hit[0] : null;
+    };
+    const jayeshEmp = find(emps, ['jayesh', 'udani']);
+    const jayesh = jayeshEmp ? jayeshEmp.id : (find(logins, ['jayesh', 'udani']) || {}).name;
+    if (!jayesh) {
+      log.push('not changed — Jayesh Udani not found');
+    } else {
+      for (const tokens of [['rajesh', 'joshi'], ['obaidulla'], ['shailesh', 'mane'], ['shravan', 'passi'], ['sushil', 'kaloya'], ['trupti', 'koli']]) {
+        const e = find(emps, tokens);
+        if (!e) { log.push(`${tokens.join(' ')}: no single employee found`); continue; }
+        await pool.query(`UPDATE hr_employees SET reporting_to = $1 WHERE id = $2`, [jayesh, e.id]);
+        log.push(`${e.name} → Jayesh Udani`);
+      }
+    }
+    await setSetting(JAYESH_TREE_FLAG, JSON.stringify({ at: new Date().toISOString(), log }));
+    console.log('[hrms] tree under Jayesh 2026-10-21:', log.join(' | '));
   }
 
   /* Assets from the old HRMS sheet's Assets tab. Insert-only: a code that is
