@@ -7353,12 +7353,17 @@ async function _resolvePoVendorName(party) {
     const hit = names.find(v => _cleanPartyName(v).toLowerCase() === lower)
       || names.find(v => _partyKey(v) && _partyKey(v) === _partyKey(clean));
     if (hit) return hit;
+    // The PR's short spelling of a Vendor Details name — "ANAYRA WATER
+    // SOLUTION" for "ANAYRA WATER SOLUTIONS" printed PO435 with no address.
+    // Taken only when exactly one vendor fits, and never for a short stub.
+    const k = _partyKey(clean);
+    const near = [...new Set(names.map(_partyKey).filter(v => v && (v.startsWith(k) || k.startsWith(v)) && Math.min(v.length, k.length) >= 8))];
+    if (near.length === 1) return names.find(v => _partyKey(v) === near[0]);
   } catch (e) {
     console.error('[po-creation] Vendor Details read for name match failed:', e.message);
   }
   return clean;
 }
-
 // Is a PR's party the same vendor as the PO's? The PR's vendor list is a
 // different sheet, so its name can be a shortened spelling of the Vendor
 // Details row — PR "SHUBHASH METAL" vs PO "SHUBHASH METAL INDUSTRIES", which
@@ -7950,17 +7955,26 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const [result, fmsPending] = await Promise.all([
+    const [result, fmsPending, poApprover] = await Promise.all([
       sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:N`, valueRenderOption: 'FORMATTED_VALUE' }),
       _fmsPendingByPr(),
+      _configuredApprover('po_approver'),
     ]);
+    // A PO on this log has been created, whatever the FMS's "Create PO" Form
+    // says (it is no longer filled) — the PO showed "Pending with Khurshid /
+    // Ashish / Ashok · Create PO" right after Khurshid made it. Until the
+    // approver decides, it is on the approver's desk; once approved, the
+    // next step is issuing it to the vendor.
+    const issueStep = FMS_PO_STEPS.find(s => s.key === 'S6');
     const rows = (result.data.values || []).filter(r => r[0]).map(r => {
       let form = null;
       try { form = JSON.parse(r[10] || 'null'); } catch { form = null; }
       const status = r[11] || 'Active';
       // Where the PO's PR now sits in the Stores FMS, and whose step it is.
-      const pendingAt = ['Cancelled', 'Rejected'].includes(status) || !fmsPending ? null
+      let pendingAt = ['Cancelled', 'Rejected'].includes(status) || !fmsPending ? null
         : _prNosFromCell(r[9]).map(k => fmsPending.get(k)).find(Boolean) || null;
+      if (status === 'Active') pendingAt = { label: 'PO Approval', owner: poApprover };
+      else if (pendingAt && pendingAt.key === 'S5') pendingAt = issueStep;
       return {
         poNo: r[0] || '', format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', department: r[4] || '',
         total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', createdAt: r[8] || '', prNo: r[9] || '', form,

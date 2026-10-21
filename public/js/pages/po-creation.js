@@ -431,7 +431,7 @@ window.Pages['po-creation'] = (() => {
   function _fillPrIntoForm(pr) {
     const partyInput = document.getElementById('poc-party');
     if (partyInput && pr.party) {
-      const hit = _matchVendor(pr.party);
+      const hit = _matchVendor(pr.party) || _uniqueNearVendor(pr.party);
       partyInput.value = hit || pr.party;
       // Locked to the PR's party only once it is a name the template can find;
       // otherwise left open so the right Vendor Details name can be picked.
@@ -504,6 +504,14 @@ window.Pages['po-creation'] = (() => {
       prev = cur;
     }
     return prev[b.length];
+  }
+  // The PR's short spelling of exactly one Vendor Details name ("ANAYRA WATER
+  // SOLUTION" → "ANAYRA WATER SOLUTIONS"). Same rule as server.js
+  // _resolvePoVendorName's fallback.
+  function _uniqueNearVendor(name) {
+    const k = _vendorKey(name);
+    const near = [...new Set(_vendors.map(_vendorKey).filter(v => v && (v.startsWith(k) || k.startsWith(v)) && Math.min(v.length, k.length) >= 8))];
+    return near.length === 1 ? _vendors.find(v => _vendorKey(v) === near[0]) : '';
   }
   function _vendorSuggestions(name) {
     const k = _vendorKey(name);
