@@ -672,7 +672,11 @@ function mountHrms(app, ctx) {
       if (ctx.ensureSchema) await ctx.ensureSchema();
       await seedReferenceData();
       if (!_leaveSeedChecked) { _leaveSeedChecked = true; await applyLeaveBalanceSeedOnce(); }
-      if (!_orgUpdateChecked) { _orgUpdateChecked = true; await applyOrgUpdateOnce().catch((e) => console.error('[hrms] org update failed:', e.message)); }
+      if (!_orgUpdateChecked) {
+        _orgUpdateChecked = true;
+        await applyOrgUpdateOnce().catch((e) => console.error('[hrms] org update failed:', e.message));
+        await applyAccountsLeaveOnce().catch((e) => console.error('[hrms] accounts leave update failed:', e.message));
+      }
       if (!_assetImportChecked) { _assetImportChecked = true; await importSheetAssetsOnce(); }
     } catch (e) {
       console.error('[hrms] bootstrap failed:', e.message);
@@ -946,6 +950,52 @@ function mountHrms(app, ctx) {
 
     await setSetting(ORG_UPDATE_FLAG, JSON.stringify({ at: new Date().toISOString(), log }));
     console.log('[hrms] org update 2026-10-21:', log.join(' | '));
+  }
+
+  /* Accounts leave, revised the same day: Jayesh Udani approves the team's
+     leave, and more than 3 days needs Shival Sir as well (Jayesh first, then
+     Shival — the tier's two-stage route). Jayesh's own requests go straight to
+     Shival. Undoes the "Shival at any length" half of the update above; the
+     tree (reporting to Shival) stays. Only logins whose Leave Approver that
+     update set to Shival are moved, so Mahesh → Dhiren and anything HR has
+     picked since are left alone. */
+  const ACCOUNTS_LEAVE_FLAG = 'hr_accounts_leave_20261021b';
+  async function applyAccountsLeaveOnce() {
+    const done = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [ACCOUNTS_LEAVE_FLAG]).catch(() => []);
+    if (done.length) return;
+    const log = [];
+    const logins = await q(`SELECT id, name, department, leave_approver FROM users WHERE active = 1`);
+    const words = (n) => String(n || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim().split(' ').filter(Boolean);
+    const find = (rows, tokens) => {
+      const hit = rows.filter((r) => { const w = words(r.name); return tokens.every((t) => w.some((x) => x.startsWith(t))); });
+      return hit.length === 1 ? hit[0] : null;
+    };
+    const accounts = logins.filter((u) => /account/i.test(u.department || ''));
+    const jayesh = find(logins, ['jayesh', 'udani']) || find(accounts, ['jayesh']) || find(logins, ['jayesh']);
+    const shival = find(logins, ['shival']);
+    if (!jayesh || !shival) {
+      log.push(`not changed — ${!jayesh ? 'Jayesh' : 'Shival'} login not found`);
+    } else {
+      const row = (await q(`SELECT "value" FROM app_config WHERE "key" = 'leave_authority'`).catch(() => []))[0];
+      let matrix = null;
+      try { matrix = row ? JSON.parse(row.value) : null; } catch {}
+      const t = Array.isArray(matrix) ? matrix.find((x) => /account/i.test(x.department || '')) : null;
+      if (t) {
+        Object.assign(t, { withinTeamApprover: jayesh.name, escalateFromDays: 3, escalateTo: shival.name, directToEscalation: [] });
+        await setSetting('leave_authority', JSON.stringify(matrix));
+        log.push(`leave authority: Accounts → ${jayesh.name}, more than 3 days → then ${shival.name}`);
+      } else {
+        log.push('leave authority: no Accounts row (the seed applies)');
+      }
+      // Jayesh himself keeps Shival — his own requests go there anyway.
+      for (const u of accounts) {
+        if (u.id === jayesh.id || u.id === shival.id || String(u.leave_approver || '') !== String(shival.id)) continue;
+        await pool.query(`UPDATE users SET leave_approver = $1 WHERE id = $2`, [jayesh.id, u.id]);
+        log.push(`leave approver of login ${u.name} → ${jayesh.name}`);
+      }
+    }
+    await setSetting(ACCOUNTS_LEAVE_FLAG, JSON.stringify({ at: new Date().toISOString(), log }));
+    console.log('[hrms] accounts leave 2026-10-21b:', log.join(' | '));
   }
 
   /* Assets from the old HRMS sheet's Assets tab. Insert-only: a code that is

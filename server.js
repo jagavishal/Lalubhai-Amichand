@@ -3161,14 +3161,14 @@ app.delete('/api/delegations', requireAuth, async (req, res) => {
 const DEFAULT_LEAVE_AUTHORITY = [
   {
     department: 'Accounts',        // matched case-insensitively, as a substring
-    // Management, 21 Oct 2026: the whole Accounts team moves under Shival Sir,
-    // who approves their leave whatever its length — no Paresh Sir stage.
-    // (Was: Jayesh Udani in-team, more than 3 days → Paresh Sir, and Rajesh
-    // Joshi straight to Paresh Sir.) Existing installs get this through the
-    // one-off hr_org_update_20261021 in backend/hrms.js.
-    withinTeamApprover: 'Shival Shah',
-    escalateFromDays: 0,           // 0 = never escalates
-    escalateTo: '',
+    // 21 Oct 2026: Jayesh Udani approves the team's leave; more than 3 days
+    // needs Shival Sir too (Jayesh, then Shival), and Jayesh's own goes
+    // straight to Shival. (Was Paresh Sir as the second stage, and Rajesh
+    // Joshi straight to Paresh.) Existing installs get this through the
+    // one-off hr_accounts_leave_20261021b in backend/hrms.js.
+    withinTeamApprover: 'Jayesh Udani',
+    escalateFromDays: 3,           // 0 = never escalates
+    escalateTo: 'Shival Shah',
     directToEscalation: [],
   },
 ];
