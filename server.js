@@ -7359,6 +7359,31 @@ async function _resolvePoVendorName(party) {
   return clean;
 }
 
+// Is a PR's party the same vendor as the PO's? The PR's vendor list is a
+// different sheet, so its name can be a shortened spelling of the Vendor
+// Details row — PR "SHUBHASH METAL" vs PO "SHUBHASH METAL INDUSTRIES", which
+// the page offers as "Did you mean" and then refused to save. A PR name that
+// is not itself in Vendor Details is accepted when the PO's party is the only
+// Vendor Details name it is a prefix of (same rule as the page's suggestions).
+async function _prPartyMatchesPo(prParty, poParty) {
+  const pk = _partyKey(prParty), ok = _partyKey(poParty);
+  if (!pk || !ok || pk === ok) return true;
+  const resolved = _partyKey(await _resolvePoVendorName(prParty));
+  if (resolved === ok) return true;
+  try {
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() });
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:A`, valueRenderOption: 'FORMATTED_VALUE' });
+    const keys = [...new Set((res.data.values || []).map(r => _partyKey(r[0])).filter(Boolean))];
+    if (keys.includes(pk)) return false;
+    const near = keys.filter(k => (k.startsWith(pk) || pk.startsWith(k)) && Math.min(k.length, pk.length) >= 5);
+    return near.length === 1 && near[0] === ok;
+  } catch (e) {
+    console.error('[po-creation] Vendor Details read for PR party match failed:', e.message);
+    return false;
+  }
+}
+
 // GET /api/po-creation/masters — vendor list, ship-to locations (PurchaseOrder
 // only) and the next PO number, all read live off the sheet (no local mirror),
 // plus departments — which no longer come from the sheet's own Vendor Details!
@@ -7835,7 +7860,7 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po', async (req, res)
         const pr = await _erpPrLogRow(part);
         if (!pr) return res.status(400).json({ error: `${part} is not on the ERP PR Log — create the PR first, then raise the PO against it.` });
         if (['Cancelled', 'Rejected'].includes(pr.status)) return res.status(400).json({ error: `${pr.prNo} is ${pr.status.toLowerCase()} — a PO cannot be raised against it.` });
-        if (pr.party && party && _partyKey(pr.party) !== _partyKey(party)) return res.status(400).json({ error: `${pr.prNo} was raised for ${pr.party}, not ${party} — a PO can only combine PRs for the same ${cfg.partyLabel.toLowerCase()}.` });
+        if (pr.party && party && !(await _prPartyMatchesPo(pr.party, party))) return res.status(400).json({ error: `${pr.prNo} was raised for ${pr.party}, not ${party} — a PO can only combine PRs for the same ${cfg.partyLabel.toLowerCase()}.` });
         canonical.push(pr.prNo);
       }
       prNo = canonical.join(', ');
