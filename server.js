@@ -1812,24 +1812,28 @@ async function sendPoApprovalEmail({ poNumber, format, party, department, prNo, 
 
 /* Tells whoever raised the PO how the approver decided — the mirror of the
    mail above, so the store team is not left refreshing PO List. */
-// Who is told, besides whoever raised it, when a SERVICE PO is approved — the
-// store, the factory office and Khurshid, who act on it. Goods POs keep going
-// to their creator alone.
 // Whose dashboard lists draft PIs as "Add price" tasks. Everyone with the
 // set_price feature can still price from the Proforma Invoice page itself;
 // this only decides whose Recent Activity carries the reminder rows.
 const PI_DASHBOARD_PRICER_EMAILS = (process.env.PI_DASHBOARD_PRICER_EMAILS || 'shivalshah@laltd.in')
   .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-const SERVICE_PO_APPROVED_NOTIFY = ['khurshidalam@laltd.in', 'factory.ahd@laltd.in', 'store@laltd.in'];
+// Who is told, besides whoever raised it, when any PR or PO is approved — the
+// store, the factory office, packing and Khurshid, who act on it (Khurshid,
+// 2026-10-21: approved mails were reaching only the creator's own id).
+// app_config 'po_approved_notify' overrides the list without a deploy.
+const PO_APPROVED_NOTIFY = ['store@laltd.in', 'factory.ahd@laltd.in', 'khurshidalam@laltd.in', 'packing@laltd.in'];
+async function _approvedRecipients(creatorEmail) {
+  const to = creatorEmail ? [String(creatorEmail).toLowerCase()] : [];
+  for (const a of await _notifyRecipients('po_approved_notify', PO_APPROVED_NOTIFY)) if (!to.includes(a)) to.push(a);
+  return to;
+}
 
 async function sendPoDecisionEmail({ poNumber, format, party, department, totalAmount, pdfLink, createdBy, status, decidedBy }) {
   const mailer = getMailer();
   if (!mailer) return;
   const approved = status === 'Approved';
   const who = await userByName(createdBy);
-  const to = [];
-  if (who?.email) to.push(who.email);
-  if (approved && format === 'Service PO') SERVICE_PO_APPROVED_NOTIFY.forEach(a => { if (!to.some(t => t.toLowerCase() === a.toLowerCase())) to.push(a); });
+  const to = approved ? await _approvedRecipients(who?.email) : (who?.email ? [who.email] : []);
   if (!to.length) { console.log('[email] PO decision mail skipped — no login/email for creator:', createdBy); return; }
   const n = Number(totalAmount);
   await mailer.sendMail({
@@ -1908,17 +1912,18 @@ async function sendPrDecisionEmail({ prNumber, format, party, department, reques
   const mailer = getMailer();
   if (!mailer) return;
   const who = (await userByName(createdBy)) || (await userByName(requestedBy));
-  if (!who || !who.email) { console.log('[email] PR decision mail skipped — no login/email for creator:', createdBy); return; }
   const approved = status === 'Approved';
+  const to = approved ? await _approvedRecipients(who?.email) : (who?.email ? [who.email] : []);
+  if (!to.length) { console.log('[email] PR decision mail skipped — no login/email for creator:', createdBy); return; }
   const n = Number(totalAmount);
   await mailer.sendMail({
     from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
-    to: who.email,
+    to: to.join(', '),
     subject: `${prNumber} ${approved ? 'approved' : 'rejected'}${party ? ' — ' + party : ''}`,
     html: _leaveMailHtml({
       heading: `Purchase Requisition ${status}`,
       colour: approved ? '#15803d' : '#b91c1c',
-      lead: `Hi <b>${who.name}</b>, <b>${decidedBy || 'the approver'}</b> has <b>${status.toLowerCase()}</b> ${prNumber}.`,
+      lead: `${who?.name ? 'Hi <b>' + who.name + '</b>, ' : ''}<b>${decidedBy || 'the approver'}</b> has <b>${status.toLowerCase()}</b> ${prNumber}.`,
       rows: [['PR No', prNumber], ['Format', format], ['Vendor / Party', party], ['Department', department], ['Total', Number.isFinite(n) && String(totalAmount ?? '').trim() !== '' ? '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '']],
       actions: pdfLink ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open PR PDF</a></td></tr></table>` : '',
       footer: approved ? 'You can raise the PO against it in PO Creation.' : 'Speak to the approver before raising it again.',
