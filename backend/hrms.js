@@ -666,11 +666,14 @@ function mountHrms(app, ctx) {
      after its first call, exactly as the rest of server.js relies on) and then
      this module's reference data. Both are no-ops from the second request on. */
   let _leaveSeedChecked = false;
+  let _orgUpdateChecked = false, _assetImportChecked = false;
   async function hrReady(req, res, next) {
     try {
       if (ctx.ensureSchema) await ctx.ensureSchema();
       await seedReferenceData();
       if (!_leaveSeedChecked) { _leaveSeedChecked = true; await applyLeaveBalanceSeedOnce(); }
+      if (!_orgUpdateChecked) { _orgUpdateChecked = true; await applyOrgUpdateOnce().catch((e) => console.error('[hrms] org update failed:', e.message)); }
+      if (!_assetImportChecked) { _assetImportChecked = true; await importSheetAssetsOnce(); }
     } catch (e) {
       console.error('[hrms] bootstrap failed:', e.message);
     }
@@ -843,6 +846,173 @@ function mountHrms(app, ctx) {
     console.log('[hrms] leave balances loaded from sheet:', r.applied.length, 'matched;', r.unmatched.length, 'unmatched;', r.ambiguous.length, 'ambiguous');
     if (r.unmatched.length) console.log('[hrms]   unmatched:', r.unmatched.join(', '));
     if (r.ambiguous.length) console.log('[hrms]   ambiguous:', r.ambiguous.join(', '));
+  }
+
+  /* Company tree and Accounts leave approval, as management asked on 21 Oct
+     2026. One-off, flagged like the seed above so a later boot never undoes
+     what HR changes afterwards. Every name is matched on word starts and must
+     hit exactly one row — otherwise it is logged and left alone, never guessed.
+       · Accounts team → reports to Shival Sir, who approves their leave
+         (their logins' Leave Approver too, since a picked approver outranks
+         the department tier)
+       · Archana → under Saloni;  Mahesh B. Shah → under Dhiren Sir
+       · Geeta, Ramchandra, Ravindra, Vinayak have left → Inactive (off the
+         tree, which only draws Active rows) and their logins disabled */
+  const ORG_UPDATE_FLAG = 'hr_org_update_20261021';
+  async function applyOrgUpdateOnce() {
+    const done = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [ORG_UPDATE_FLAG]).catch(() => []);
+    if (done.length) return;
+    const log = [];
+    const emps = await q(`SELECT id, name, department, status, user_id FROM hr_employees`);
+    const logins = await q(`SELECT id, name, department FROM users`);
+    const words = (n) => String(n || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim().split(' ').filter(Boolean);
+    const find = (rows, tokens) => {
+      const hit = rows.filter((r) => { const w = words(r.name); return tokens.every((t) => w.some((x) => x.startsWith(t))); });
+      return hit.length === 1 ? hit[0] : null;
+    };
+    // A manager as reporting_to holds: their employee code when they have a
+    // row, else their login name — the org chart resolves either.
+    const managerRef = (tokens, label) => {
+      const e = find(emps, tokens);
+      if (e) return e.id;
+      const u = find(logins, tokens);
+      if (u) return u.name;
+      log.push(`${label}: no single employee or login found`);
+      return '';
+    };
+    const setReporting = async (e, ref, label) => {
+      await pool.query(`UPDATE hr_employees SET reporting_to = $1 WHERE id = $2`, [ref, e.id]);
+      log.push(`${e.name} → ${label}`);
+    };
+
+    const shival = managerRef(['shival'], 'Shival');
+    const saloni = managerRef(['saloni'], 'Saloni');
+    const dhiren = managerRef(['dhiren'], 'Dhiren');
+    const mahesh = find(emps, ['mahesh', 'shah']);
+    const shivalEmp = find(emps, ['shival']);
+
+    if (shival) {
+      for (const e of emps) {
+        if (!/account/i.test(e.department || '') || /^inactive$/i.test(e.status || '')) continue;
+        if (e === mahesh || e === shivalEmp) continue;
+        await setReporting(e, shival, 'Shival');
+      }
+    }
+    const archana = find(emps, ['archana']);
+    if (archana && saloni) await setReporting(archana, saloni, 'Saloni'); else log.push('Archana/Saloni: not moved');
+    if (mahesh && dhiren) await setReporting(mahesh, dhiren, 'Dhiren'); else log.push('Mahesh Shah/Dhiren: not moved');
+
+    for (const tokens of [['geeta'], ['ramchandra'], ['ravindra'], ['vinayak']]) {
+      const e = find(emps, tokens);
+      if (!e) { log.push(`${tokens[0]}: no single employee found`); continue; }
+      await pool.query(`UPDATE hr_employees SET status = 'Inactive' WHERE id = $1`, [e.id]);
+      log.push(`${e.name} → Inactive`);
+      const login = (e.user_id && logins.find((u) => String(u.id) === String(e.user_id))) || find(logins, words(e.name).slice(0, 2));
+      if (login) {
+        await pool.query(`UPDATE users SET active = 0 WHERE id = $1`, [login.id]);
+        log.push(`login ${login.name} disabled`);
+      }
+    }
+
+    // Leave approval: the Accounts tier → Shival Sir for any length …
+    const shivalLogin = find(logins, ['shival']);
+    if (shivalLogin) {
+      const row = (await q(`SELECT "value" FROM app_config WHERE "key" = 'leave_authority'`).catch(() => []))[0];
+      let matrix = null;
+      try { matrix = row ? JSON.parse(row.value) : null; } catch {}
+      if (Array.isArray(matrix)) {
+        const t = matrix.find((x) => /account/i.test(x.department || ''));
+        if (t) {
+          Object.assign(t, { withinTeamApprover: shivalLogin.name, escalateFromDays: 0, escalateTo: '', directToEscalation: [] });
+          await setSetting('leave_authority', JSON.stringify(matrix));
+          log.push(`leave authority: Accounts → ${shivalLogin.name}`);
+        }
+      }
+      // … and the Accounts logins' own Leave Approver, which outranks the tier.
+      const dhirenLogin = find(logins, ['dhiren']);
+      const maheshLoginId = mahesh?.user_id || find(logins, ['mahesh', 'shah'])?.id || '';
+      const accountsLogins = new Set(logins.filter((u) => /account/i.test(u.department || '')).map((u) => String(u.id)));
+      for (const e of emps) if (e.user_id && /account/i.test(e.department || '')) accountsLogins.add(String(e.user_id));
+      for (const id of accountsLogins) {
+        if (id === String(shivalLogin.id)) continue;
+        const to = id === String(maheshLoginId) ? dhirenLogin?.id : shivalLogin.id;
+        if (!to) continue;
+        await pool.query(`UPDATE users SET leave_approver = $1 WHERE id = $2`, [to, id]);
+        log.push(`leave approver of login ${(logins.find((u) => String(u.id) === id) || {}).name || id} → ${to === shivalLogin.id ? shivalLogin.name : dhirenLogin.name}`);
+      }
+    } else {
+      log.push('Shival login not found — leave approval not changed');
+    }
+
+    await setSetting(ORG_UPDATE_FLAG, JSON.stringify({ at: new Date().toISOString(), log }));
+    console.log('[hrms] org update 2026-10-21:', log.join(' | '));
+  }
+
+  /* Assets from the old HRMS sheet's Assets tab. Insert-only: a code that is
+     already here is left exactly as HR has it (the full Import from Sheet
+     overwrites, and also re-imports employees — which would undo the tree
+     changes above). Runs once on its own; POST /api/hr/assets/import-sheet
+     repeats it for anything added to the sheet later. Dates on that tab are
+     mostly m/d/yyyy with some d/m/yyyy rows, read the way the full importer
+     reads them. */
+  const ASSET_IMPORT_FLAG = 'hr_assets_sheet_import_2026';
+  async function importSheetAssets({ dryRun = false } = {}) {
+    const auth = ctx.getGoogleAuth ? ctx.getGoogleAuth() : null;
+    if (!auth) throw new Error('Google service account is not configured on the server');
+    const settings = await getSettings();
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const resp = await sheets.spreadsheets.values.get({
+      spreadsheetId: settings.hr_sheet_id, range: `'Assets'!A1:Z2000`, valueRenderOption: 'FORMATTED_VALUE',
+    });
+    const v = resp.data.values || [];
+    const head = v[0] || [];
+    const val = (r, k) => { const i = head.indexOf(k); const x = String(i < 0 ? '' : (r[i] ?? '')).trim(); return x === '#N/A' || x === '-' ? '' : x; };
+    const flexDate = (d) => sheetDate(d, 'mdy') || sheetDate(d, 'dmy');
+    const have = new Set((await q(`SELECT id FROM hr_assets`)).map((r) => String(r.id).toUpperCase()));
+    const empIds = new Set((await q(`SELECT id FROM hr_employees`)).map((r) => String(r.id).toUpperCase()));
+    const added = [], skipped = [];
+    for (const r of v.slice(1)) {
+      const code = val(r, 'Unique Code').toUpperCase();
+      const name = val(r, 'Asset Name');
+      if (!code || !name) continue;
+      if (have.has(code)) { skipped.push(code); continue; }
+      const empId = val(r, 'Assigned To').toUpperCase();
+      const holder = val(r, 'Assigned To Name');
+      const stillHeld = !!(empId || holder) && !flexDate(val(r, 'Returned On'));
+      let status = val(r, 'Status') || (stillHeld ? 'Assigned' : 'Available');
+      if (!stillHeld && /^assigned$/i.test(status)) status = 'Available';
+      const fields = {
+        category: val(r, 'Category'), asset_type: val(r, 'Asset Type'), name,
+        serial_no: val(r, 'Serial No'), asset_condition: val(r, 'Condition') || 'Good', status,
+        assigned_to: stillHeld && empIds.has(empId) ? empId : '',
+        assigned_name: stillHeld ? holder : '',
+        assigned_on: stillHeld ? flexDate(val(r, 'Assigned On')) : null,
+        notes: val(r, 'Notes'),
+      };
+      if (!dryRun) {
+        const keys = Object.keys(fields);
+        await pool.query(
+          `INSERT INTO hr_assets (id, ${keys.join(', ')}) VALUES ($1, ${keys.map((_, i) => '$' + (i + 2)).join(', ')})`,
+          [code, ...keys.map((k) => fields[k])],
+        );
+      }
+      have.add(code);
+      added.push(code);
+    }
+    return { dryRun, added: added.length, alreadyThere: skipped.length, codes: added };
+  }
+  async function importSheetAssetsOnce() {
+    const done = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [ASSET_IMPORT_FLAG]).catch(() => []);
+    if (done.length) return;
+    try {
+      const r = await importSheetAssets();
+      await setSetting(ASSET_IMPORT_FLAG, JSON.stringify({ at: new Date().toISOString(), added: r.added, alreadyThere: r.alreadyThere }));
+      console.log('[hrms] assets imported from the HRMS sheet:', r.added, 'added,', r.alreadyThere, 'already there');
+    } catch (e) {
+      // Not flagged: the next boot tries again (a sharing or quota problem clears).
+      console.error('[hrms] asset import from sheet failed:', e.message);
+    }
   }
 
   /* The employee record behind a login.
@@ -1837,14 +2007,59 @@ function mountHrms(app, ctx) {
         if (!(days > 0)) return res.status(400).json({ error: 'This request works out to zero leave days' });
         if (days > 365) return res.status(400).json({ error: 'A single leave request cannot exceed 365 days' });
 
-        // Warn, but do not block: a genuine emergency should not be stopped by
-        // an exhausted balance — payroll turns the excess into loss of pay.
+        /* Leave policy (management, 21 Oct 2026) — these refuse the request
+           rather than warn:
+           1. Not more than the year's balance of that type. Requests already
+              pending against it count, or three pending requests could each
+              pass on their own. EL (no quota — it is for emergencies) and LWP
+              sit outside this.
+           2. PL is applied for at least 3 weeks (21 days) before it starts.
+              HR raising one on somebody's behalf is recording it, often after
+              the fact, so that is exempt.
+           3. PL cannot follow PL: when the applicant's previous leave was PL,
+              this one has to be another type. */
         let warning = null;
-        if (employeeId) {
-          const bal = await ensureBalance(employeeId, yearOf(from), code);
-          const available = balanceOf(bal);
-          if (code !== 'LWP' && days > available) {
-            warning = `Only ${available} ${code} left — ${money(days - available)} day(s) will be treated as loss of pay.`;
+        const dmy = (iso) => String(iso || '').split('-').reverse().join('-');
+        const onBehalf = isAdminUser(user) && !!employeeId && (await selfEmployee(user))?.id !== employeeId;
+        if (code === 'PL' && !onBehalf) {
+          const today = isoDate(new Date());
+          if (from < addDays(today, 21)) {
+            return res.status(400).json({
+              error: `Privilege Leave must be applied for at least 3 weeks in advance — the earliest PL start date today is ${dmy(addDays(today, 21))}.`,
+            });
+          }
+        }
+        if (code === 'PL') {
+          // "Last" is the leave this one would follow — the latest starting
+          // before it, not whatever happens to be booked furthest ahead.
+          const who = employeeId
+            ? ['employee_id = $2', [employeeId]]
+            : ['(user_id = $2 OR LOWER(user_name) = LOWER($3))', [user?.id || '', user?.name || '']];
+          const last = (await q(
+            `SELECT leave_type, from_date, to_date FROM leaves
+              WHERE from_date < $1 AND ${who[0]} AND LOWER(COALESCE(status, '')) NOT IN ('rejected','cancelled','canceled','withdrawn')
+              ORDER BY from_date DESC LIMIT 1`, [from, ...who[1]]).catch(() => []))[0];
+          if (last && String(last.leave_type || '').toUpperCase() === 'PL') {
+            const lf = isoDate(last.from_date), lt = isoDate(last.to_date);
+            return res.status(400).json({
+              error: `The last leave on record (${dmy(lf)}${lt && lt !== lf ? ' to ' + dmy(lt) : ''}) was Privilege Leave — PL cannot be taken twice in a row. Please apply for another leave type.`,
+            });
+          }
+        }
+        if (employeeId && code !== 'EL' && code !== 'LWP') {
+          const yr = yearOf(from);
+          const available = balanceOf(await ensureBalance(employeeId, yr, code));
+          const pend = (await q(
+            `SELECT COALESCE(SUM(total_days), 0) AS d FROM leaves
+              WHERE employee_id = $1 AND leave_type = $2 AND LOWER(status) = 'pending'
+                AND from_date >= $3 AND from_date <= $4`,
+            [employeeId, code, `${yr}-01-01`, `${yr}-12-31`]).catch(() => []))[0];
+          const pending = money(pend?.d);
+          const free = money(available - pending);
+          if (days > free) {
+            return res.status(400).json({
+              error: `Only ${Math.max(0, free)} ${code} day(s) left for ${yr}${pending ? ` (${pending} more already waiting for approval)` : ''} — this request is for ${days}. Apply for fewer days or another leave type.`,
+            });
           }
         }
         /* Who this request goes to. The approver picked on the applicant's
@@ -3177,6 +3392,14 @@ function mountHrms(app, ctx) {
        already in their hands, so the row lands assigned to them on the spot.
        An employee cannot name somebody else — the self-assignment comes from
        their own linked employee record, not from the request body. */
+    // Assets added to the old HRMS sheet since the one-off import. Insert-only;
+    // { dryRun: true } previews. See importSheetAssets.
+    app.post('/api/hr/assets/import-sheet', requireAuth, requireSuperAdmin, hrReady, async (req, res) => {
+      try {
+        res.json({ success: true, ...(await importSheetAssets({ dryRun: !!(req.body || {}).dryRun })) });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.post('/api/hr/assets', requireAuth, hrReady, async (req, res) => {
       try {
         const b = req.body || {};

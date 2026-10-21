@@ -1544,6 +1544,51 @@ const poActionUrl = (poNo, decision, email) =>
 const LEAVE_REQUEST_CC = (process.env.LEAVE_REQUEST_CC || 'inquiry@laltd.in').trim();
 
 // Sent to the approver the moment a request is raised.
+/* What an approver needs beside the request itself (management, Oct 2026):
+   what the applicant has left this year, per leave type, and the last leave
+   they took. Read off the stored row, so the level-2 mail carries it too. */
+async function leaveMailContext(leaveId) {
+  if (!leaveId || !USE_DB) return {};
+  try {
+    const lv = (await q('SELECT id, employee_id, user_id, user_name, from_date FROM leaves WHERE id = $1', [leaveId]))[0];
+    if (!lv) return {};
+    const year = Number(toDateStr(lv.from_date).slice(0, 4)) || new Date().getFullYear();
+    let balance = '';
+    if (lv.employee_id) {
+      const rows = await q('SELECT type_code, opening, accrued, used FROM hr_leave_balances WHERE employee_id = $1 AND year = $2 ORDER BY type_code', [lv.employee_id, year]);
+      // Other requests still waiting are not booked against the balance yet,
+      // so they are shown beside it rather than silently left out.
+      const pend = new Map((await q(
+        `SELECT leave_type, SUM(total_days) AS d FROM leaves
+          WHERE employee_id = $1 AND id <> $2 AND LOWER(status) = 'pending' AND from_date >= $3 AND from_date <= $4
+          GROUP BY leave_type`, [lv.employee_id, leaveId, `${year}-01-01`, `${year}-12-31`])).map((r) => [r.leave_type, Number(r.d || 0)]));
+      const r2 = (n) => Math.round(n * 100) / 100;
+      balance = rows
+        .filter((r) => Number(r.opening || 0) + Number(r.accrued || 0) || Number(r.used || 0))
+        .map((r) => `${r.type_code}: ${r2(Number(r.opening || 0) + Number(r.accrued || 0) - Number(r.used || 0))} left`
+          + (pend.get(r.type_code) ? ` (${r2(pend.get(r.type_code))} more pending)` : ''))
+        .join(' · ');
+    }
+    // The leave this one follows: the latest starting before it.
+    const who = lv.employee_id
+      ? ['employee_id = $3', [lv.employee_id]]
+      : ['(user_id = $3 OR LOWER(user_name) = LOWER($4))', [lv.user_id || '', lv.user_name || '']];
+    const last = (await q(
+      `SELECT leave_type, from_date, to_date, total_days, status FROM leaves
+        WHERE id <> $1 AND from_date < $2 AND ${who[0]} AND LOWER(COALESCE(status, '')) NOT IN ('rejected','cancelled','canceled','withdrawn')
+        ORDER BY from_date DESC LIMIT 1`, [leaveId, toDateStr(lv.from_date), ...who[1]]))[0];
+    let lastLeave = 'None on record';
+    if (last) {
+      const f = toDateStr(last.from_date), t = toDateStr(last.to_date);
+      lastLeave = `${last.leave_type || 'Leave'} — ${f}${t && t !== f ? ' to ' + t : ''} (${Number(last.total_days || 0)} day(s), ${last.status})`;
+    }
+    return { balance: balance ? `${balance} — ${year}, before this request` : '', lastLeave };
+  } catch (e) {
+    console.error('[email] leave mail context failed:', e.message);
+    return {};
+  }
+}
+
 async function sendLeaveRequestEmail({ leaveId, toEmail, toName, applicantName, leaveType, fromDate, toDate, days, halfDay, reason, balanceNote, nextApproverName, firstApprovedBy }) {
   const mailer = getMailer();
   const cc = LEAVE_REQUEST_CC && LEAVE_REQUEST_CC.toLowerCase() !== String(toEmail || '').toLowerCase()
@@ -1552,6 +1597,7 @@ async function sendLeaveRequestEmail({ leaveId, toEmail, toName, applicantName, 
     console.log('[email] leave request not sent — mailer:', !!mailer, '| to:', toEmail || '(none)');
     return;
   }
+  const extra = await leaveMailContext(leaveId);
   const subject = `Leave Request from ${applicantName} — ${leaveType} ${fromDate}${toDate && toDate !== fromDate ? ' to ' + toDate : ''}`;
   const rows = [
     ['Employee', applicantName],
@@ -1561,6 +1607,8 @@ async function sendLeaveRequestEmail({ leaveId, toEmail, toName, applicantName, 
     ['Days', String(days) + (halfDay && halfDay !== 'full' ? ` (half day — ${halfDay} half)` : '')],
     ['Reason', reason],
     ['Balance', balanceNote],
+    ['Leave Balance', extra.balance],
+    ['Last Leave', extra.lastLeave],
     // Two-signature requests: the level-1 mail says who signs after
     // them, the level-2 mail says whose signature it already carries.
     ['Final Approval', nextApproverName ? `${nextApproverName} — after your approval` : ''],
@@ -3108,12 +3156,15 @@ app.delete('/api/delegations', requireAuth, async (req, res) => {
 const DEFAULT_LEAVE_AUTHORITY = [
   {
     department: 'Accounts',        // matched case-insensitively, as a substring
-    withinTeamApprover: 'Jayesh Udani',
-    escalateFromDays: 3,           // escalates strictly ABOVE this — 3 days stays in-team
-    escalateTo: 'Paresh Sir',
-    // Treated like the within-team approver: every request, any length, goes
-    // to escalateTo alone (management, Oct 2026: Rajesh Joshi → Paresh Sir only).
-    directToEscalation: ['RAJESH NATVARLAL JOSHI'],
+    // Management, 21 Oct 2026: the whole Accounts team moves under Shival Sir,
+    // who approves their leave whatever its length — no Paresh Sir stage.
+    // (Was: Jayesh Udani in-team, more than 3 days → Paresh Sir, and Rajesh
+    // Joshi straight to Paresh Sir.) Existing installs get this through the
+    // one-off hr_org_update_20261021 in backend/hrms.js.
+    withinTeamApprover: 'Shival Shah',
+    escalateFromDays: 0,           // 0 = never escalates
+    escalateTo: '',
+    directToEscalation: [],
   },
 ];
 
