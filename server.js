@@ -3229,7 +3229,19 @@ async function userByName(name) {
   if (exact[0]) return exact[0];
   const first = raw.split(' ')[0];
   if (first.length < 3) return null;
-  const like = await q('SELECT id, name, email FROM users WHERE LOWER(name) LIKE LOWER($1)', [first + '%']).catch(() => []);
+  let like = await q('SELECT id, name, email FROM users WHERE LOWER(name) LIKE LOWER($1)', [first + '%']).catch(() => []);
+  // Another word given has to fit too — "MAHESH SONI", a requester with no
+  // login, matched "Mahesh B. Shah" on the first word alone and the PR341
+  // approval mail went to the other factory. One is enough ("Jayesh U.
+  // Sudani" is still Jayesh Udani), but a login's bare initial never stands in
+  // for a whole surname. Titles are not part of a name.
+  const rest = raw.toLowerCase().split(' ').slice(1).map(w => w.replace(/[^a-z0-9]/g, '')).filter(w => w && !/^(sir|bhai|ji|sirji|madam|mam|maam|mr|mrs|ms)$/.test(w));
+  if (rest.length) {
+    like = like.filter(u => {
+      const words = String(u.name || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+      return rest.some(w => words.some(x => x.startsWith(w) || (x.length > 1 && w.startsWith(x))));
+    });
+  }
   return like.length === 1 ? like[0] : null;
 }
 
