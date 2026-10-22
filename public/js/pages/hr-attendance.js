@@ -291,7 +291,17 @@ window.Pages['hr-attendance'] = (() => {
   /* The eSSL agent on the office PC posts punches every few minutes; this
      says when it last did and which machine codes it could not place. */
   function bioStrip() {
-    if (!_bio || (!_bio.configured && !_bio.last)) return '';
+    if (!_bio) return '';
+    const keyBtn = _bio.mode === 'push' && _bio.keyEditable
+      ? `<button id="hra-bio-key" class="btn-ghost btn-sm">Sync key</button>` : '';
+    if (!_bio.configured && !_bio.last) {
+      return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#475569;
+          background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:8px 12px;margin-bottom:11px;">
+        <span style="width:8px;height:8px;border-radius:50%;background:#f97316;"></span>
+        <span><b>Biometric (eSSL)</b> not connected — paste the sync key from the office PC to start.</span>
+        <span style="margin-left:auto;">${keyBtn}</span>
+      </div>`;
+    }
     const last = _bio.last;
     const mins = last ? Math.round((Date.now() - new Date(last.at).getTime()) / 60000) : null;
     const stale = mins === null || mins > 30 || !!(_bio.error && (!last || _bio.error.at > last.at));
@@ -309,7 +319,8 @@ window.Pages['hr-attendance'] = (() => {
       <span style="width:8px;height:8px;border-radius:50%;background:${stale ? '#f97316' : '#22c55e'};"></span>
       <span><b>Biometric (eSSL)</b> last synced ${H.esc(ago)}${last ? ` · ${last.days} day-rows, ${last.created} new, ${last.updated} updated` : ''}${unText}
         ${err ? `<br><span style="color:#b91c1c;">Can't reach the eSSL database: ${H.esc(err.message)}</span>` : ''}</span>
-      <button id="hra-bio-refresh" class="btn-ghost btn-sm" style="margin-left:auto;">${_bio.mode === 'pull' ? 'Sync now' : 'Refresh'}</button>
+      <span style="margin-left:auto;"></span>${keyBtn}
+      <button id="hra-bio-refresh" class="btn-ghost btn-sm">${_bio.mode === 'pull' ? 'Sync now' : 'Refresh'}</button>
     </div>`;
   }
 
@@ -366,6 +377,22 @@ window.Pages['hr-attendance'] = (() => {
     on('hra-year', 'change', (e) => { _year = Number(e.target.value); reloadMuster(); });
     on('hra-branch', 'change', (e) => { _branch = e.target.value; reloadMuster(); });
     on('hra-export', 'click', exportMuster);
+    on('hra-bio-key', 'click', () => {
+      H.openModal({
+        id: 'hra-bio-keyform',
+        title: 'Biometric sync key',
+        subtitle: 'From essl-sync.config.json on the office PC (the "syncKey" value)',
+        width: 520,
+        bodyHTML: H.field('hra-bio-key-in', 'Sync key', '', { span: 2, placeholder: 'e.g. 406d6e61…' }),
+        confirmText: 'Save',
+        onConfirm: async () => {
+          await H.post('/api/hr/attendance/biometric/key', { key: H.val('hra-bio-key-in') });
+          H.closeModal('hra-bio-keyform');
+          H.toast('Sync key saved — attendance arrives within 5 minutes');
+          reloadMuster();
+        },
+      });
+    });
     on('hra-bio-refresh', 'click', async (e) => {
       if (_bio?.mode === 'pull') {
         e.target.disabled = true;

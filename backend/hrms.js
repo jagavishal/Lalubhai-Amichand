@@ -2125,8 +2125,15 @@ function mountHrms(app, ctx) {
        recomputed from scratch. A day HR marked by hand keeps its status —
        the machine only fills in times that are still blank there. */
     const BIO_BY = 'Biometric';
-    function bioKeyOk(req) {
-      const want = String(process.env.BIOMETRIC_SYNC_KEY || '');
+    // The push key: BIOMETRIC_SYNC_KEY in the env, or else the one an Admin
+    // pasted on the muster roll (app_config), so setting it up needs no
+    // access to the server.
+    async function bioSyncKey() {
+      if (process.env.BIOMETRIC_SYNC_KEY) return String(process.env.BIOMETRIC_SYNC_KEY);
+      const row = (await q(`SELECT "value" FROM app_config WHERE "key" = $1`, ['hr_bio_sync_key']).catch(() => []))[0];
+      return String((row && row.value) || '');
+    }
+    function bioKeyOk(req, want) {
       const got = String(req.headers['x-sync-key'] || '');
       if (want.length < 16 || !got) return false;
       const a = Buffer.from(want), b = Buffer.from(got);
@@ -2302,8 +2309,9 @@ function mountHrms(app, ctx) {
 
     app.post('/api/hr/attendance/biometric', hrReady, async (req, res) => {
       try {
-        if (!process.env.BIOMETRIC_SYNC_KEY) return res.status(503).json({ error: 'BIOMETRIC_SYNC_KEY is not set on the server' });
-        if (!bioKeyOk(req)) return res.status(401).json({ error: 'Bad sync key' });
+        const want = await bioSyncKey();
+        if (!want) return res.status(503).json({ error: 'No sync key is set — HR → Attendance → Muster Roll → Sync key' });
+        if (!bioKeyOk(req, want)) return res.status(401).json({ error: 'Bad sync key' });
         const b = req.body || {};
         const punches = Array.isArray(b.punches) ? b.punches : [];
         if (punches.length > 50000) return res.status(400).json({ error: 'Send at most 50,000 punches at a time' });
@@ -2319,14 +2327,26 @@ function mountHrms(app, ctx) {
       } catch (e) { res.status(502).json({ error: 'Could not read the eSSL database: ' + e.message }); }
     });
 
+    app.post('/api/hr/attendance/biometric/key', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        if (process.env.BIOMETRIC_SYNC_KEY) return res.status(400).json({ error: 'The key is fixed in the server settings (BIOMETRIC_SYNC_KEY)' });
+        const key = String(req.body?.key || '').trim();
+        if (!/^[A-Za-z0-9_-]{16,128}$/.test(key)) return res.status(400).json({ error: 'Paste the syncKey value from essl-sync.config.json on the office PC' });
+        await setSetting('hr_bio_sync_key', key);
+        res.json({ success: true });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // Last sync, for the strip above the muster roll.
     app.get('/api/hr/attendance/biometric', requireAuth, requireAdmin, hrReady, async (req, res) => {
       try {
+        const keySet = !!(await bioSyncKey());
         const rows = await q(`SELECT "key", "value" FROM app_config WHERE "key" IN ($1, $2)`, ['hr_bio_last_sync', 'hr_bio_pull_error']).catch(() => []);
         const val = (k) => { try { const r = rows.find((x) => x.key === k); return r && r.value ? JSON.parse(r.value) : null; } catch { return null; } };
         res.json({
-          configured: esslPullOn() || !!process.env.BIOMETRIC_SYNC_KEY,
+          configured: esslPullOn() || keySet,
           mode: esslPullOn() ? 'pull' : 'push',
+          keyEditable: !process.env.BIOMETRIC_SYNC_KEY,
           last: val('hr_bio_last_sync'),
           error: esslPullOn() ? val('hr_bio_pull_error') : null,
         });
