@@ -1423,7 +1423,7 @@ function mountHrms(app, ctx) {
           // user_id rides along so the Users list can show which login each
           // employee record belongs to. Names and departments only — the
           // salary-bearing columns stay behind /api/hr/employees.
-          q(`SELECT id, user_id, name, designation, department, branch, status FROM hr_employees ORDER BY name ASC`),
+          q(`SELECT id, user_id, name, designation, department, branch, status, bio_code FROM hr_employees ORDER BY name ASC`),
           leaveTypes(),
           getSettings(),
           // The app-wide departments master, so the HR Department dropdown offers

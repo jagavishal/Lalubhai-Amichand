@@ -310,8 +310,8 @@ window.Pages['hr-attendance'] = (() => {
     const err = _bio.error && (!last || _bio.error.at > last.at) ? _bio.error : null;
     const un = (last && last.unmatched) || [];
     const unText = un.length
-      ? ` · <span style="color:#b45309;" title="${H.esc(un.map((u) => `${u.code || '—'} ${u.name || ''} (${u.punches})`).join(', '))}">
-          ${un.length} machine ${un.length === 1 ? 'ID' : 'IDs'} not linked to an employee — set Biometric Code on the employee</span>`
+      ? ` · <span id="hra-bio-link" style="color:#b45309;cursor:pointer;text-decoration:underline;" title="${H.esc(un.map((u) => `${u.code || '—'} ${u.name || ''} (${u.punches})`).join(', '))}">
+          ${un.length} machine ${un.length === 1 ? 'ID' : 'IDs'} not linked to an employee — click to link</span>`
       : '';
     return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#475569;
         background:${stale ? '#fff7ed' : '#f0fdf4'};border:1px solid ${stale ? '#fed7aa' : '#bbf7d0'};
@@ -322,6 +322,55 @@ window.Pages['hr-attendance'] = (() => {
       <span style="margin-left:auto;"></span>${keyBtn}
       <button id="hra-bio-refresh" class="btn-ghost btn-sm">${_bio.mode === 'pull' ? 'Sync now' : 'Refresh'}</button>
     </div>`;
+  }
+
+  /* Every machine ID the last sync could not place, each with a pick of
+     employee. Saving writes the Biometric Code on the picked employees; the
+     office PC's next run (within 5 minutes) then brings their punches in.
+     A guess is pre-selected when exactly one employee's name starts with
+     the name the machine has. */
+  function linkBioIds() {
+    const un = (_bio && _bio.last && _bio.last.unmatched) || [];
+    const emps = (_masters.employees || []).filter((e) => e.status !== 'Inactive');
+    const norm = (v) => String(v || '').toLowerCase().replace(/[^a-z]/g, '');
+    const guess = (name) => {
+      const n = norm(name);
+      if (n.length < 3 || /^\d*$/.test(String(name || '').trim())) return '';
+      const hits = emps.filter((e) => !e.bio_code && norm(e.name).startsWith(n.slice(0, Math.min(n.length, 6))));
+      return hits.length === 1 ? hits[0].id : '';
+    };
+    const opts = emps.map((e) => ({ value: e.id, label: `${e.name} (${e.id})${e.bio_code ? ' · has ' + e.bio_code : ''}` }));
+    const rows = un.map((u, i) => `
+      <tr>
+        <td style="${H.TD}font-weight:700;white-space:nowrap;">${H.esc(u.code || '—')}</td>
+        <td style="${H.TD}">${H.esc(u.name || '—')}<div style="font-size:10.5px;color:#94a3b8;">${u.punches} punches</div></td>
+        <td style="${H.TD}min-width:230px;">${H.select('hra-link-' + i, '', guess(u.name), opts, { placeholder: '— skip —' })}</td>
+      </tr>`).join('');
+    H.openModal({
+      id: 'hra-bio-linkform',
+      title: 'Link machine IDs to employees',
+      subtitle: 'Pick who each biometric ID belongs to. Leave "skip" for IDs nobody uses any more.',
+      width: 680,
+      bodyHTML: `<div style="grid-column:1/-1;max-height:60vh;overflow:auto;">
+        <table style="border-collapse:collapse;width:100%;">
+          <thead><tr><th style="${H.TH}">Machine ID</th><th style="${H.TH}">Name on machine</th><th style="${H.TH}">ERP employee</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`,
+      confirmText: 'Save links',
+      onConfirm: async () => {
+        const picks = un.map((u, i) => ({ code: u.code, id: H.val('hra-link-' + i) })).filter((x) => x.id && x.code);
+        const seen = new Set();
+        for (const x of picks) {
+          if (seen.has(x.id)) throw new Error(`${emps.find((e) => e.id === x.id)?.name || x.id} is picked for two machine IDs`);
+          seen.add(x.id);
+        }
+        for (const x of picks) await H.patch('/api/hr/employees', { id: x.id, bio_code: x.code });
+        H.closeModal('hra-bio-linkform');
+        H.toast(`${picks.length} linked — their attendance arrives with the next sync (within 5 minutes)`);
+        _masters.employees = [];
+        await loadMasters();
+      },
+    });
   }
 
   /* ── Mark a whole day ─────────────────────────────────────────────── */
@@ -377,6 +426,7 @@ window.Pages['hr-attendance'] = (() => {
     on('hra-year', 'change', (e) => { _year = Number(e.target.value); reloadMuster(); });
     on('hra-branch', 'change', (e) => { _branch = e.target.value; reloadMuster(); });
     on('hra-export', 'click', exportMuster);
+    on('hra-bio-link', 'click', linkBioIds);
     on('hra-bio-key', 'click', () => {
       H.openModal({
         id: 'hra-bio-keyform',
