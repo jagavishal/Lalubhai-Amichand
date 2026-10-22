@@ -19,6 +19,7 @@ window.Pages['hr-attendance'] = (() => {
   let _tab = 'me';
   let _me = null;
   let _muster = null;
+  let _bio = null;      // last eSSL biometric sync, shown above the muster
   let _masters = { employees: [], attendanceStatuses: [], branches: [] };
   let _month = now.getMonth() + 1;
   let _year = now.getFullYear();
@@ -38,7 +39,10 @@ window.Pages['hr-attendance'] = (() => {
   const loadMuster = async () => {
     const p = new URLSearchParams({ month: _month, year: _year });
     if (_branch !== 'All') p.set('branch', _branch);
-    _muster = await H.api('/api/hr/attendance?' + p.toString());
+    [_muster, _bio] = await Promise.all([
+      H.api('/api/hr/attendance?' + p.toString()),
+      H.api('/api/hr/attendance/biometric').catch(() => null),
+    ]);
   };
 
   /* ── Render ───────────────────────────────────────────────────────── */
@@ -236,7 +240,7 @@ window.Pages['hr-attendance'] = (() => {
           if (!c.status) return `<td style="${H.TD}padding:3px 1px;text-align:center;background:#fcfcfd;"></td>`;
           const s = styleOf(c.status);
           const title = [c.date, s.label, c.leaveType ? `(${c.leaveType})` : '', c.name || '',
-            c.in ? 'in ' + H.fmtTime(c.in) : '', c.late ? 'late' : ''].filter(Boolean).join(' · ');
+            c.in ? 'in ' + H.fmtTime(c.in) : '', c.out ? 'out ' + H.fmtTime(c.out) : '', c.late ? 'late' : ''].filter(Boolean).join(' · ');
           return `<td style="${H.TD}padding:3px 1px;text-align:center;">
             <button class="hra-cell" data-emp="${H.esc(r.id)}" data-date="${H.esc(c.date)}" data-status="${H.esc(c.status)}"
               title="${H.esc(title)}"
@@ -264,6 +268,7 @@ window.Pages['hr-attendance'] = (() => {
         { label: 'Leave Days', value: totals.leave, color: '#7c3aed' },
         { label: 'Late Marks', value: totals.late, color: '#d97706' },
       ])}
+      ${bioStrip()}
       <div style="margin-bottom:11px;">${legend}
         <span style="font-size:11.5px;color:#94a3b8;">· click any cell to correct it</span></div>
       <div class="hra-muster" style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
@@ -281,6 +286,31 @@ window.Pages['hr-attendance'] = (() => {
           </table>
         </div>
       </div>`;
+  }
+
+  /* The eSSL agent on the office PC posts punches every few minutes; this
+     says when it last did and which machine codes it could not place. */
+  function bioStrip() {
+    if (!_bio || (!_bio.configured && !_bio.last)) return '';
+    const last = _bio.last;
+    const mins = last ? Math.round((Date.now() - new Date(last.at).getTime()) / 60000) : null;
+    const stale = mins === null || mins > 30 || !!(_bio.error && (!last || _bio.error.at > last.at));
+    const ago = mins === null ? 'never' : mins < 1 ? 'just now' : mins < 60 ? `${mins} min ago`
+      : mins < 1440 ? `${Math.round(mins / 60)} h ago` : `${Math.round(mins / 1440)} days ago`;
+    const err = _bio.error && (!last || _bio.error.at > last.at) ? _bio.error : null;
+    const un = (last && last.unmatched) || [];
+    const unText = un.length
+      ? ` · <span style="color:#b45309;" title="${H.esc(un.map((u) => `${u.code || '—'} ${u.name || ''} (${u.punches})`).join(', '))}">
+          ${un.length} machine ${un.length === 1 ? 'ID' : 'IDs'} not linked to an employee — set Biometric Code on the employee</span>`
+      : '';
+    return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#475569;
+        background:${stale ? '#fff7ed' : '#f0fdf4'};border:1px solid ${stale ? '#fed7aa' : '#bbf7d0'};
+        border-radius:10px;padding:8px 12px;margin-bottom:11px;">
+      <span style="width:8px;height:8px;border-radius:50%;background:${stale ? '#f97316' : '#22c55e'};"></span>
+      <span><b>Biometric (eSSL)</b> last synced ${H.esc(ago)}${last ? ` · ${last.days} day-rows, ${last.created} new, ${last.updated} updated` : ''}${unText}
+        ${err ? `<br><span style="color:#b91c1c;">Can't reach the eSSL database: ${H.esc(err.message)}</span>` : ''}</span>
+      <button id="hra-bio-refresh" class="btn-ghost btn-sm" style="margin-left:auto;">${_bio.mode === 'pull' ? 'Sync now' : 'Refresh'}</button>
+    </div>`;
   }
 
   /* ── Mark a whole day ─────────────────────────────────────────────── */
@@ -336,6 +366,17 @@ window.Pages['hr-attendance'] = (() => {
     on('hra-year', 'change', (e) => { _year = Number(e.target.value); reloadMuster(); });
     on('hra-branch', 'change', (e) => { _branch = e.target.value; reloadMuster(); });
     on('hra-export', 'click', exportMuster);
+    on('hra-bio-refresh', 'click', async (e) => {
+      if (_bio?.mode === 'pull') {
+        e.target.disabled = true;
+        e.target.textContent = 'Syncing…';
+        try {
+          const r = await H.post('/api/hr/attendance/biometric/pull', {});
+          H.toast(`Synced ${r.punches} punches · ${r.created} new, ${r.updated} updated`);
+        } catch (err) { H.fail(err); }
+      }
+      reloadMuster();
+    });
 
     document.querySelectorAll('.hra-cell').forEach((b) => b.addEventListener('click', () => openCell(b.dataset)));
 

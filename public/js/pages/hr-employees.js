@@ -230,6 +230,7 @@ window.Pages['hr-employees'] = (() => {
       ${H.field('hre-emergency_phone', 'Emergency Contact No', e.emergency_phone || '')}
 
       ${H.sectionTitle('Statutory & Bank')}
+      ${H.field('hre-bio_code', 'Biometric Code', e.bio_code || '', { placeholder: 'eSSL machine ID' })}
       ${H.field('hre-uan', 'UAN', e.uan || '')}
       ${H.field('hre-aadhar_no', 'Aadhar No', e.aadhar_no || '')}
       ${H.field('hre-pan_no', 'PAN', e.pan_no || '')}
@@ -245,7 +246,7 @@ window.Pages['hr-employees'] = (() => {
     const FIELDS = ['user_id', 'name', 'email', 'phone', 'designation', 'department', 'branch', 'emp_type', 'doj', 'status',
       'reporting_to', 'probation_months', 'confirmed_on', 'dol', 'dob', 'gender', 'marital_status', 'blood_group',
       'qualification', 'experience', 'address', 'emergency_name', 'emergency_phone', 'uan', 'aadhar_no', 'pan_no',
-      'bank_name', 'account_no', 'ifsc', 'aadhar_url', 'pan_url', 'avatar_url', 'notes'];
+      'bank_name', 'account_no', 'ifsc', 'aadhar_url', 'pan_url', 'avatar_url', 'notes', 'bio_code'];
 
     H.openModal({
       id: 'hre-form',
@@ -363,6 +364,7 @@ window.Pages['hr-employees'] = (() => {
           ${H.readout('Blood Group', e.blood_group)}
           ${H.readout('Qualification', e.qualification)}
           <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--color-primary);margin:16px 0 8px;">Statutory & Bank</div>
+          ${H.readout('Biometric Code', e.bio_code)}
           ${H.readout('UAN', e.uan)}
           ${H.readout('Aadhar', e.aadhar_no)}
           ${H.readout('PAN', e.pan_no)}

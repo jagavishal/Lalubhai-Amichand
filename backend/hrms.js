@@ -249,6 +249,11 @@ const HR_SCHEMA = [
   `ALTER TABLE hr_employees MODIFY reporting_to VARCHAR(255) DEFAULT ''`,
   `ALTER TABLE hr_employees ALTER COLUMN reporting_to TYPE VARCHAR(255)`,
 
+  /* The number the eSSL biometric machine knows a person by (its UserId /
+     EmployeeCode). Blank means the sync falls back to the ERP code, then to
+     an exact name. */
+  `ALTER TABLE hr_employees ADD COLUMN IF NOT EXISTS bio_code VARCHAR(32) DEFAULT ''`,
+
   /* The Leave Tracker predates the HRMS and its rows must keep working, so the
      leave request table is extended rather than replaced: `type` stays whatever
      the old page wrote, `leave_type` carries the HRMS's PL/CL/SL/EL/LWP. */
@@ -720,6 +725,30 @@ function mountHrms(app, ctx) {
     return prefix + Date.now().toString(36).toUpperCase() + pad(_seq, 3);
   }
 
+  /* Who a CSV row means: the employee code when it is one, otherwise the
+     name — but only an exact, unique name. pickByName's first-name fallback
+     is right for an approver lookup and wrong here, where a stranger's row
+     would land on whichever single "Rahul" the master happens to hold. */
+  function csvEmployee(code, name, emps) {
+    code = String(code || '').trim();
+    name = String(name || '').replace(/\s+/g, ' ').trim();
+    if (code) {
+      const hit = emps.find((e) => String(e.id).toLowerCase() === code.toLowerCase());
+      if (hit) return { emp: hit };
+      if (!name) return { error: `No employee with code ${code}` };
+    }
+    const key = name.toLowerCase();
+    const hits = emps.filter((e) => String(e.name || '').replace(/\s+/g, ' ').trim().toLowerCase() === key);
+    if (hits.length === 1) return { emp: hits[0] };
+    return { error: hits.length ? `Two employees are named ${name} — use the employee code` : `No employee matches ${code || name}` };
+  }
+
+  // 'YYYY-MM' of every finalised payroll month.
+  async function finalisedMonths() {
+    const rows = await q(`SELECT year, month FROM hr_payroll_runs WHERE status = 'finalised'`).catch(() => []);
+    return new Set(rows.map((r) => `${r.year}-${pad(r.month, 2)}`));
+  }
+
   /* ── Employee helpers ─────────────────────────────────────────────── */
 
   const EMP_FIELDS = [
@@ -728,7 +757,7 @@ function mountHrms(app, ctx) {
     'marital_status', 'experience', 'qualification', 'reporting_to',
     'emergency_name', 'emergency_phone', 'uan', 'aadhar_no', 'aadhar_url',
     'pan_no', 'pan_url', 'bank_name', 'account_no', 'ifsc', 'avatar_url', 'notes',
-    'probation_months', 'confirmed_on',
+    'probation_months', 'confirmed_on', 'bio_code',
   ];
   const EMP_DATE_FIELDS = new Set(['doj', 'dol', 'dob', 'confirmed_on']);
 
@@ -2079,6 +2108,228 @@ function mountHrms(app, ctx) {
           saved += 1;
         }
         res.json({ success: true, saved });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    /* Live feed from the eSSL biometric machines. The eSSL database is a SQL
+       Server on the office PC. Two ways in, same processing:
+         pull — ESSL_SQL_HOST is set: the ERP itself connects to that SQL
+                Server by IP (office public IP, port forwarded, firewall
+                limited to this server) every ESSL_POLL_MINUTES.
+         push — the office PC can't be reached from outside: an agent there
+                (tools/essl-sync/essl-sync.ps1) posts the punches here, with
+                a shared key (BIOMETRIC_SYNC_KEY) instead of a login.
+       Either way every punch of a short window (today and yesterday, by
+       default) is processed each time, so a missed run or a repeated one
+       changes nothing: the day's first punch is In, the last is Out,
+       recomputed from scratch. A day HR marked by hand keeps its status —
+       the machine only fills in times that are still blank there. */
+    const BIO_BY = 'Biometric';
+    function bioKeyOk(req) {
+      const want = String(process.env.BIOMETRIC_SYNC_KEY || '');
+      const got = String(req.headers['x-sync-key'] || '');
+      if (want.length < 16 || !got) return false;
+      const a = Buffer.from(want), b = Buffer.from(got);
+      return a.length === b.length && require('crypto').timingSafeEqual(a, b);
+    }
+    const bioCode = (v) => String(v ?? '').trim().replace(/^0+(?=\d)/, '').toLowerCase();
+    // DATETIME columns come back as a Date from the driver, or a string from
+    // the JSON store — either way compare them as 'YYYY-MM-DD HH:MM:SS'.
+    const stampOf = (v) => {
+      if (!v) return null;
+      if (v instanceof Date) return `${isoDate(v)} ${pad(v.getHours(), 2)}:${pad(v.getMinutes(), 2)}:${pad(v.getSeconds(), 2)}`;
+      return String(v).replace('T', ' ').slice(0, 19);
+    };
+
+    // punches: [{ code, name, time: 'YYYY-MM-DD HH:MM:SS' }] → muster rows.
+    async function ingestPunches(punches, source) {
+      const emps = await q(`SELECT id, name, bio_code, doj, dol FROM hr_employees`);
+      const byBio = new Map(), byId = new Map();
+      for (const e of emps) {
+        if (e.bio_code) byBio.set(bioCode(e.bio_code), e);
+        byId.set(String(e.id).toLowerCase(), e);
+      }
+      const unmatched = new Map();
+      const days = new Map();           // employee|date → { emp, date, first, last, n }
+      let bad = 0;
+      for (const p of punches) {
+        const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(:\d{2})?/.exec(String(p.time || '').trim());
+        if (!m) { bad += 1; continue; }
+        const code = String(p.code ?? '').trim();
+        let emp = (code && (byBio.get(bioCode(code)) || byId.get(code.toLowerCase()))) || null;
+        if (!emp && p.name) emp = csvEmployee('', p.name, emps).emp || null;
+        if (!emp) {
+          const k = code || String(p.name || '');
+          const u = unmatched.get(k) || { code, name: String(p.name || ''), punches: 0 };
+          u.punches += 1;
+          unmatched.set(k, u);
+          continue;
+        }
+        const date = m[1], hms = m[2] + (m[3] || ':00');
+        const key = emp.id + '|' + date;
+        const d = days.get(key) || { emp, date, first: hms, last: hms, n: 0 };
+        if (hms < d.first) d.first = hms;
+        if (hms > d.last) d.last = hms;
+        d.n += 1;
+        days.set(key, d);
+      }
+
+      const s = await getSettings();
+      const lateAfter = hhmmToMinutes(s.hr_shift_start) + num(s.hr_grace_minutes);
+      const closed = await finalisedMonths();
+      const list = [...days.values()];
+      const dates = list.map((d) => d.date).sort();
+      const existing = dates.length ? await q(
+        `SELECT * FROM hr_attendance WHERE att_date BETWEEN $1 AND $2`, [dates[0], dates[dates.length - 1]]) : [];
+      const exByKey = {};
+      for (const a of existing) exByKey[a.employee_id + '|' + isoDate(a.att_date)] = a;
+
+      let created = 0, updated = 0, unchanged = 0, kept = 0, closedDays = 0, outside = 0;
+      for (const d of list) {
+        const doj = isoDate(d.emp.doj), dol = isoDate(d.emp.dol);
+        if ((doj && d.date < doj) || (dol && d.date > dol)) { outside += 1; continue; }
+        // A finalised month's payslips are out; reopen it to take machine data.
+        if (closed.has(d.date.slice(0, 7))) { closedDays += 1; continue; }
+        const inAt = `${d.date} ${d.first}`;
+        const outAt = d.last !== d.first ? `${d.date} ${d.last}` : null;
+        const hours = outAt ? Math.round(((new Date(outAt.replace(' ', 'T')) - new Date(inAt.replace(' ', 'T'))) / 3600000) * 100) / 100 : 0;
+        const late = hhmmToMinutes(d.first.slice(0, 5)) > lateAfter ? 1 : 0;
+        const ex = exByKey[d.emp.id + '|' + d.date];
+
+        if (!ex) {
+          await pool.query(
+            `INSERT INTO hr_attendance (id, employee_id, att_date, check_in, check_out, working_hours, late_mark, status, device, marked_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            [rowId('ATT'), d.emp.id, d.date, inAt, outAt, hours, late, 'Present', 'eSSL', BIO_BY],
+          );
+          created += 1;
+        } else if (ex.marked_by === BIO_BY) {
+          if (stampOf(ex.check_in) === inAt && stampOf(ex.check_out) === outAt) { unchanged += 1; continue; }
+          await pool.query(
+            `UPDATE hr_attendance SET check_in = $1, check_out = $2, working_hours = $3, late_mark = $4 WHERE id = $5`,
+            [inAt, outAt, hours, late, ex.id],
+          );
+          updated += 1;
+        } else if (!ex.check_in && !ex.check_out) {
+          // Marked by HR, a CSV or the web punch: their status stands; only
+          // blank times are filled from the machine.
+          await pool.query(
+            `UPDATE hr_attendance SET check_in = $1, check_out = $2, working_hours = $3 WHERE id = $4`,
+            [inAt, outAt, hours, ex.id],
+          );
+          updated += 1;
+        } else kept += 1;
+      }
+
+      const result = {
+        at: new Date().toISOString(), source: String(source || '').slice(0, 80),
+        punches: punches.length, days: list.length, created, updated, unchanged, kept, closedDays, outside, bad,
+        unmatched: [...unmatched.values()].sort((x, y) => y.punches - x.punches).slice(0, 100),
+      };
+      await setSetting('hr_bio_last_sync', JSON.stringify(result)).catch(() => {});
+      return result;
+    }
+
+    /* ── Pull: read the eSSL SQL Server directly ──────────────────────
+       ESSL_SQL_HOST       office public IP (or DNS name)
+       ESSL_SQL_PORT       fixed TCP port of the instance (default 1433), or
+       ESSL_SQL_INSTANCE   instance name (SQLEXPRESS) when it runs on a dynamic
+                           port behind SQL Browser — UDP 1434 must be open too
+       ESSL_SQL_USER / ESSL_SQL_PASSWORD / ESSL_SQL_DB (etimetracklite1)
+       ESSL_POLL_MINUTES (5), ESSL_SYNC_DAYS (2) */
+    const esslPullOn = () => !!process.env.ESSL_SQL_HOST;
+    async function pullEssl(daysBack) {
+      const mssql = require('mssql');
+      const env = process.env;
+      const options = { encrypt: true, trustServerCertificate: true };
+      const cfg = {
+        server: env.ESSL_SQL_HOST, user: env.ESSL_SQL_USER, password: env.ESSL_SQL_PASSWORD,
+        database: env.ESSL_SQL_DB || 'etimetracklite1', options,
+        connectionTimeout: 15000, requestTimeout: 60000, pool: { max: 1, min: 0 },
+      };
+      // A port and an instance name are exclusive in the driver: a fixed port wins.
+      if (env.ESSL_SQL_PORT || !env.ESSL_SQL_INSTANCE) cfg.port = Number(env.ESSL_SQL_PORT) || 1433;
+      else options.instanceName = env.ESSL_SQL_INSTANCE;
+
+      const days = Math.max(1, Math.min(62, Number(daysBack) || Number(env.ESSL_SYNC_DAYS) || 2));
+      const start = new Date();
+      start.setDate(start.getDate() - days);   // one day spare: this server's clock may be UTC, the machines' IST
+      const from = `${isoDate(start)} 00:00:00`;
+
+      const cp = await new mssql.ConnectionPool(cfg).connect();
+      try {
+        const hasCol = async (table, col) => (await cp.request().input('t', table).input('c', col)
+          .query(`SELECT 1 AS x FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @t AND COLUMN_NAME = @c`)).recordset.length > 0;
+        const codeCol = (await hasCol('Employees', 'EmployeeCodeInDevice')) ? 'EmployeeCodeInDevice' : 'EmployeeCode';
+        const punches = [];
+        for (let m = new Date(start.getFullYear(), start.getMonth(), 1); m <= new Date(); m.setMonth(m.getMonth() + 1)) {
+          const tbl = `DeviceLogs_${m.getMonth() + 1}_${m.getFullYear()}`;
+          const ok = (await cp.request().input('t', tbl).query(`SELECT OBJECT_ID(@t) AS id`)).recordset[0].id;
+          if (!ok) continue;
+          const rows = (await cp.request().input('from', mssql.VarChar(19), from).query(
+            `SELECT CAST(L.UserId AS varchar(50)) AS code, CONVERT(varchar(19), L.LogDate, 120) AS time, E.EmployeeName AS name
+               FROM [${tbl}] L
+               LEFT JOIN Employees E ON CAST(E.${codeCol} AS varchar(50)) = CAST(L.UserId AS varchar(50))
+              WHERE L.LogDate >= CONVERT(datetime, @from, 120)`)).recordset;
+          for (const r of rows) punches.push({ code: r.code, name: r.name || '', time: r.time });
+        }
+        return punches;
+      } finally { await cp.close().catch(() => {}); }
+    }
+
+    let _pulling = null;
+    function runEsslPull(daysBack) {
+      if (_pulling) return _pulling;      // one at a time; a click during a timer run shares it
+      _pulling = (async () => {
+        try {
+          await new Promise((resolve) => hrReady(null, null, resolve));
+          const result = await ingestPunches(await pullEssl(daysBack), 'SQL ' + process.env.ESSL_SQL_HOST);
+          await setSetting('hr_bio_pull_error', '').catch(() => {});
+          return result;
+        } catch (e) {
+          await setSetting('hr_bio_pull_error', JSON.stringify({ at: new Date().toISOString(), message: e.message })).catch(() => {});
+          throw e;
+        } finally { _pulling = null; }
+      })();
+      return _pulling;
+    }
+    if (esslPullOn()) {
+      const every = Math.max(1, Number(process.env.ESSL_POLL_MINUTES) || 5) * 60 * 1000;
+      const tick = () => runEsslPull().catch((e) => console.error('[essl] pull failed:', e.message));
+      setTimeout(tick, 20 * 1000).unref?.();
+      setInterval(tick, every).unref?.();
+    }
+
+    app.post('/api/hr/attendance/biometric', hrReady, async (req, res) => {
+      try {
+        if (!process.env.BIOMETRIC_SYNC_KEY) return res.status(503).json({ error: 'BIOMETRIC_SYNC_KEY is not set on the server' });
+        if (!bioKeyOk(req)) return res.status(401).json({ error: 'Bad sync key' });
+        const b = req.body || {};
+        const punches = Array.isArray(b.punches) ? b.punches : [];
+        if (punches.length > 50000) return res.status(400).json({ error: 'Send at most 50,000 punches at a time' });
+        res.json({ success: true, ...(await ingestPunches(punches, b.source)) });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // "Sync now" from the muster roll, or a backfill: { days: 31 }.
+    app.post('/api/hr/attendance/biometric/pull', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        if (!esslPullOn()) return res.status(400).json({ error: 'Direct pull is not set up (ESSL_SQL_HOST is blank)' });
+        res.json({ success: true, ...(await runEsslPull(req.body?.days)) });
+      } catch (e) { res.status(502).json({ error: 'Could not read the eSSL database: ' + e.message }); }
+    });
+
+    // Last sync, for the strip above the muster roll.
+    app.get('/api/hr/attendance/biometric', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        const rows = await q(`SELECT "key", "value" FROM app_config WHERE "key" IN ($1, $2)`, ['hr_bio_last_sync', 'hr_bio_pull_error']).catch(() => []);
+        const val = (k) => { try { const r = rows.find((x) => x.key === k); return r && r.value ? JSON.parse(r.value) : null; } catch { return null; } };
+        res.json({
+          configured: esslPullOn() || !!process.env.BIOMETRIC_SYNC_KEY,
+          mode: esslPullOn() ? 'pull' : 'push',
+          last: val('hr_bio_last_sync'),
+          error: esslPullOn() ? val('hr_bio_pull_error') : null,
+        });
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

@@ -32,3 +32,7 @@ uploads/
 
 # express-session file-store leftovers (no longer used)
 sessions/
+
+# eSSL sync agent - real config holds the SQL password and sync key
+tools/essl-sync/essl-sync.config.json
+tools/essl-sync/essl-sync.log*

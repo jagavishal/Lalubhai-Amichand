@@ -1,0 +1,9 @@
+{
+  "sqlServer": "SERVER\\SQLEXPRESS",
+  "database": "etimetracklite1",
+  "sqlUser": "essl",
+  "sqlPassword": "",
+  "erpUrl": "https://laltdoffice.com",
+  "syncKey": "",
+  "days": 2
+}
