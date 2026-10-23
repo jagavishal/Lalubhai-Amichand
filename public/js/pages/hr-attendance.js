@@ -233,8 +233,11 @@ window.Pages['hr-attendance'] = (() => {
       <tr>
         <td style="${H.TD}position:sticky;left:0;background:#fff;z-index:2;white-space:nowrap;min-width:190px;
              box-shadow:1px 0 0 #e2e8f0;">
-          <div style="font-weight:600;color:#0f172a;">${H.esc(r.name)}</div>
-          <div style="font-size:10.5px;color:#94a3b8;">${H.esc(r.id)} · ${H.esc(r.department || '—')}</div>
+          <button type="button" class="hra-emp" data-emp="${H.esc(r.id)}" title="See this month's in / out timings"
+            style="background:none;border:none;padding:0;cursor:pointer;text-align:left;font:inherit;">
+            <div style="font-weight:600;color:#0f172a;text-decoration:underline dotted;text-underline-offset:3px;">${H.esc(r.name)}</div>
+            <div style="font-size:10.5px;color:#94a3b8;">${H.esc(r.id)} · ${H.esc(r.department || '—')}</div>
+          </button>
         </td>
         ${r.cells.map((c) => {
           if (!c.status) return `<td style="${H.TD}padding:3px 1px;text-align:center;background:#fcfcfd;"></td>`;
@@ -243,6 +246,7 @@ window.Pages['hr-attendance'] = (() => {
             c.in ? 'in ' + H.fmtTime(c.in) : '', c.out ? 'out ' + H.fmtTime(c.out) : '', c.late ? 'late' : ''].filter(Boolean).join(' · ');
           return `<td style="${H.TD}padding:3px 1px;text-align:center;">
             <button class="hra-cell" data-emp="${H.esc(r.id)}" data-date="${H.esc(c.date)}" data-status="${H.esc(c.status)}"
+              data-in="${H.esc(c.in || '')}" data-out="${H.esc(c.out || '')}" data-late="${c.late ? '1' : ''}" data-hours="${H.esc(c.hours || '')}"
               title="${H.esc(title)}"
               style="width:23px;height:23px;border-radius:5px;border:none;cursor:pointer;font-size:9px;font-weight:800;
                 background:${s.bg};color:${s.fg};${c.late ? 'box-shadow:inset 0 -2.5px 0 #f59e0b;' : ''}">
@@ -458,6 +462,7 @@ window.Pages['hr-attendance'] = (() => {
     on('hra-import', 'click', importMuster);
 
     document.querySelectorAll('.hra-cell').forEach((b) => b.addEventListener('click', () => openCell(b.dataset)));
+    document.querySelectorAll('.hra-emp').forEach((b) => b.addEventListener('click', () => openTimings(b.dataset.emp)));
 
     on('hra-mark-date', 'change', (e) => { _markDate = e.target.value; render(); });
     on('hra-mark-all-present', 'click', () => {
@@ -493,11 +498,20 @@ window.Pages['hr-attendance'] = (() => {
   function openCell(data) {
     const emp = (_masters.employees || []).find((e) => e.id === data.emp);
     const opts = (_masters.attendanceStatuses || []).map((s) => ({ value: s.key, label: s.label }));
-    const body = H.grid(`
+    // The day's punches as recorded (biometric or marked) — the modal used to
+    // open with the time boxes blank, so nobody could see when someone came in.
+    const punch = data.in || data.out
+      ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          ${timingChip('In', H.fmtTime(data.in))}${timingChip('Out', H.fmtTime(data.out))}
+          ${timingChip('Hours', H.num(data.hours) ? H.num(data.hours).toFixed(2) : '—')}
+          ${data.late ? timingChip('Late', 'Yes', '#b45309') : ''}
+        </div>`
+      : '<div style="font-size:12px;color:#94a3b8;margin-bottom:12px;">No check-in / check-out recorded for this day.</div>';
+    const body = punch + H.grid(`
       ${H.select('hrac-status', 'Status', data.status, opts)}
       ${H.field('hrac-notes', 'Note', '', { placeholder: 'Optional' })}
-      ${H.field('hrac-in', 'Check In', '', { type: 'time' })}
-      ${H.field('hrac-out', 'Check Out', '', { type: 'time' })}
+      ${H.field('hrac-in', 'Check In', hhmm(data.in), { type: 'time' })}
+      ${H.field('hrac-out', 'Check Out', hhmm(data.out), { type: 'time' })}
     `);
     H.openModal({
       id: 'hrac', title: H.fmtDate(data.date), subtitle: `${emp?.name || data.emp} · ${data.emp}`,
@@ -527,6 +541,55 @@ window.Pages['hr-attendance'] = (() => {
         await loadMuster();
         render();
       },
+    });
+  }
+
+  // A stored DATETIME → "HH:MM" for a time box, in the browser's (office) time.
+  function hhmm(v) {
+    if (!v) return '';
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+  function timingChip(label, value, colour = '#0f172a') {
+    return `<div style="flex:1;min-width:80px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:7px 10px;">
+      <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;">${label}</div>
+      <div style="font-size:15px;font-weight:700;color:${colour};">${H.esc(value)}</div></div>`;
+  }
+
+  // One employee's month on a single sheet: every day's status with its in,
+  // out, hours and late mark, from the muster already loaded.
+  function openTimings(empId) {
+    const r = (_muster?.rows || []).find((x) => x.id === empId);
+    if (!r) return;
+    const days = r.cells.filter((c) => c.status);
+    const totalHrs = days.reduce((sum, c) => sum + H.num(c.hours), 0);
+    const tr = days.map((c) => {
+      const st = styleOf(c.status);
+      const dt = new Date(c.date + 'T00:00:00Z');
+      return `<tr style="border-top:1px solid #f1f5f9;${dt.getUTCDay() === 0 ? 'background:#f8fafc;' : ''}">
+        <td style="padding:6px 8px;white-space:nowrap;">${H.fmtDate(c.date)} <span style="color:#94a3b8;font-size:11px;">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dt.getUTCDay()]}</span></td>
+        <td style="padding:6px 8px;"><span style="display:inline-block;padding:1px 7px;border-radius:5px;font-size:10.5px;font-weight:700;background:${st.bg};color:${st.fg};">${H.esc(st.label)}${c.leaveType ? ' · ' + H.esc(c.leaveType) : ''}</span></td>
+        <td style="padding:6px 8px;white-space:nowrap;">${c.in ? H.fmtTime(c.in) : '—'}</td>
+        <td style="padding:6px 8px;white-space:nowrap;">${c.out ? H.fmtTime(c.out) : '—'}</td>
+        <td style="padding:6px 8px;text-align:right;">${H.num(c.hours) ? H.num(c.hours).toFixed(2) : '—'}</td>
+        <td style="padding:6px 8px;color:#b45309;font-weight:700;">${c.late ? 'Late' : ''}</td>
+      </tr>`;
+    }).join('');
+    const body = `
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+        ${timingChip('Present', String(r.tally.Present + r.tally.Remote), '#15803d')}${timingChip('Absent', String(r.tally.Absent), '#b91c1c')}
+        ${timingChip('Leave', String(r.tally.Leave), '#5b21b6')}${timingChip('Late', String(r.tally.late), '#b45309')}
+        ${timingChip('Hours', totalHrs ? totalHrs.toFixed(1) : '—')}
+      </div>
+      <div style="overflow:auto;max-height:60vh;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+        <thead><tr style="text-align:left;font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;">
+          <th style="padding:6px 8px;position:sticky;top:0;background:#fff;">Date</th><th style="padding:6px 8px;position:sticky;top:0;background:#fff;">Status</th>
+          <th style="padding:6px 8px;position:sticky;top:0;background:#fff;">In</th><th style="padding:6px 8px;position:sticky;top:0;background:#fff;">Out</th>
+          <th style="padding:6px 8px;text-align:right;position:sticky;top:0;background:#fff;">Hours</th><th style="padding:6px 8px;position:sticky;top:0;background:#fff;"></th>
+        </tr></thead><tbody>${tr}</tbody></table></div>`;
+    H.openModal({
+      id: 'hrat', title: `${r.name} — timings`, subtitle: `${r.id} · ${H.MONTHS[_month - 1] || ''} ${_year}`,
+      width: 680, hideConfirm: true, cancelText: 'Close', bodyHTML: body,
     });
   }
 
