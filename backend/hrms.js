@@ -545,6 +545,12 @@ const inr = (n) => num(n).toLocaleString('en-IN', { minimumFractionDigits: 2, ma
    instead of an empty string keeps the query shape identical and returns
    nothing, rather than quietly widening to every row. */
 const NO_MATCH = '-no-such-employee';
+/* Management — the old sheet's Directors tab (DIR001…, emp_type Director) —
+   is kept off every employee list: Employee Master, the HR dropdowns, the
+   muster roll, balances, reports ("emp name mai kahi bhi management ka name
+   nhi aana chahiye"). The rows stay for the Company Tree, which hangs the
+   teams under them, and for payroll. */
+const NOT_MANAGEMENT = `COALESCE(emp_type, '') <> 'Director'`;
 
 /* Rupees in words, the way a payslip prints them. Indian grouping, so
    1,25,000 reads "One Lakh Twenty Five Thousand". */
@@ -1523,7 +1529,7 @@ function mountHrms(app, ctx) {
           // user_id rides along so the Users list can show which login each
           // employee record belongs to. Names and departments only — the
           // salary-bearing columns stay behind /api/hr/employees.
-          q(`SELECT id, user_id, name, designation, department, branch, status, bio_code FROM hr_employees ORDER BY name ASC`),
+          q(`SELECT id, user_id, name, designation, department, branch, status, bio_code FROM hr_employees WHERE ${NOT_MANAGEMENT} ORDER BY name ASC`),
           leaveTypes(),
           getSettings(),
           // The app-wide departments master, so the HR Department dropdown offers
@@ -1566,7 +1572,7 @@ function mountHrms(app, ctx) {
     app.get('/api/hr/employees', requireAuth, empMaster, hrReady, async (req, res) => {
       try {
         const { status, branch, department, q: search } = req.query;
-        const where = [];
+        const where = [NOT_MANAGEMENT];
         const params = [];
         if (status && status !== 'All')         { params.push(status);      where.push(`status = $${params.length}`); }
         if (branch && branch !== 'All')         { params.push(branch);      where.push(`branch = $${params.length}`); }
@@ -2131,7 +2137,7 @@ function mountHrms(app, ctx) {
         const emps = await q(
           `SELECT id, name, designation, department, branch, doj, dol, status FROM hr_employees
             WHERE (dol IS NULL OR dol >= $1) AND (doj IS NULL OR doj <= $2) ${branch ? 'AND branch = $3' : ''}
-              AND COALESCE(emp_type, '') <> 'Director'
+              AND ${NOT_MANAGEMENT}
             ORDER BY id ASC`,
           branch ? [from, to, branch] : [from, to],
         );
@@ -3391,7 +3397,7 @@ function mountHrms(app, ctx) {
           : ((await selfEmployee(req.session?.user))?.id || NO_MATCH);
         const emps = scopedId
           ? await q(`SELECT id, name, department, branch FROM hr_employees WHERE id = $1`, [scopedId])
-          : await q(`SELECT id, name, department, branch FROM hr_employees WHERE status = 'Active' ORDER BY id ASC`);
+          : await q(`SELECT id, name, department, branch FROM hr_employees WHERE status = 'Active' AND ${NOT_MANAGEMENT} ORDER BY id ASC`);
         const stored = await q(`SELECT * FROM hr_leave_balances WHERE year = $1`, [year]).catch(() => []);
         const byKey = {};
         for (const s of stored) byKey[s.employee_id + '|' + s.type_code] = s;
@@ -3898,7 +3904,7 @@ function mountHrms(app, ctx) {
         const type = String(req.query.type || 'summary');
         const year = Number(req.query.year) || now.getFullYear();
         const month = Number(req.query.month) || (now.getMonth() + 1);
-        const emps = (await q(`SELECT * FROM hr_employees ORDER BY id ASC`)).map(shapeEmployee);
+        const emps = (await q(`SELECT * FROM hr_employees WHERE ${NOT_MANAGEMENT} ORDER BY id ASC`)).map(shapeEmployee);
         const active = emps.filter((e) => e.status === 'Active');
 
         if (type === 'summary') {
