@@ -18,6 +18,20 @@ window.Pages['hr-leave'] = (() => {
   let _tab = 'requests';
   let _year = now.getFullYear();
   let _statusFilter = 'All';
+  // Narrowing within the loaded year, done here rather than on the server:
+  // type, a date window (any overlap counts) and, for HR, a name search.
+  let _typeFilter = 'All', _fromFilter = '', _toFilter = '', _searchFilter = '';
+  function filteredLeaves() {
+    const q = _searchFilter.trim().toLowerCase();
+    return _leaves.filter((l) => {
+      if (_typeFilter !== 'All' && (l.leave_type || '') !== _typeFilter) return false;
+      const from = String(l.from_date || '').slice(0, 10), to = String(l.to_date || l.from_date || '').slice(0, 10);
+      if (_fromFilter && to < _fromFilter) return false;
+      if (_toFilter && from > _toFilter) return false;
+      if (q && !`${l.employee_name || l.user_name || ''} ${l.employee_id || ''}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }
   let _leaves = [];
   let _balances = null;
   let _holidays = [];
@@ -158,7 +172,7 @@ window.Pages['hr-leave'] = (() => {
   }
 
   function requestsView(admin) {
-    const rows = _leaves.map((l) => {
+    const rows = filteredLeaves().map((l) => {
       const pending = /pending/i.test(l.status);
       const actions = admin
         ? `<div style="display:flex;gap:5px;white-space:nowrap;">
@@ -196,8 +210,12 @@ window.Pages['hr-leave'] = (() => {
       ${myBalanceStrip()}
       <div class="hrl-filt" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:13px 15px;margin-bottom:14px;
            display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px;align-items:end;">
+        ${admin ? H.field('hrl-f-search', 'Employee', _searchFilter, { placeholder: 'Name or code' }) : ''}
+        ${H.select('hrl-f-type', 'Type', _typeFilter, ['All', ...(_types.length ? _types.map((t) => t.code) : ['PL', 'CL', 'SL', 'EL', 'LWP'])])}
         ${H.select('hrl-f-status', 'Status', _statusFilter, ['All', ...STATUSES])}
         ${H.select('hrl-f-year', 'Year', _year, H.yearList())}
+        ${H.field('hrl-f-from', 'From', _fromFilter, { type: 'date' })}
+        ${H.field('hrl-f-to', 'To', _toFilter, { type: 'date' })}
         <div><button id="hrl-export" class="btn-secondary btn-sm" style="width:100%;">Export CSV</button></div>
       </div>
       ${H.table(shownCols, shownRows,
@@ -325,6 +343,12 @@ window.Pages['hr-leave'] = (() => {
     on('hrl-apply', 'click', openApply);
     on('hrl-import', 'click', importLeaves);
     on('hrl-f-status', 'change', (e) => { _statusFilter = e.target.value; reload(loadRequests); });
+    on('hrl-f-type', 'change', (e) => { _typeFilter = e.target.value; render(); });
+    on('hrl-f-from', 'change', (e) => { _fromFilter = e.target.value; render(); });
+    on('hrl-f-to', 'change', (e) => { _toFilter = e.target.value; render(); });
+    // Re-rendering on every key would drop the cursor out of the box, so the
+    // search applies on Enter or when the box is left.
+    on('hrl-f-search', 'change', (e) => { _searchFilter = e.target.value; render(); });
     // An employee's balance strip sits on the Requests tab, so changing the
     // year has to refetch it here too — not only on the admin Balances tab.
     on('hrl-f-year', 'change', (e) => {
@@ -759,7 +783,7 @@ window.Pages['hr-leave'] = (() => {
   function exportRequests() {
     H.downloadCsv(`Leave Requests ${_year}.csv`,
       ['Leave ID', 'Employee Code', 'Employee', 'Type', 'From', 'To', 'Days', 'Half Day', 'Reason', 'Status', 'Balance After'],
-      _leaves.map((l) => [l.id, l.employee_id || '', l.employee_name || l.user_name || '', l.leave_type || '',
+      filteredLeaves().map((l) => [l.id, l.employee_id || '', l.employee_name || l.user_name || '', l.leave_type || '',
         l.from_date || '', l.to_date || '', H.num(l.total_days), l.half_day || 'full',
         l.reason || '', l.status || '', l.balance_after ?? '']));
     H.toast('Leave requests exported');
