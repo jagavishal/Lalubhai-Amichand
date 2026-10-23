@@ -2071,9 +2071,12 @@ function mountHrms(app, ctx) {
         const s = await getSettings();
         const offs = new Set(String(s.hr_week_off || '').split(',').map((x) => x.trim()).filter(Boolean));
 
+        // Management (the Directors tab, DIR001…) does not keep attendance —
+        // a month of red A's against Paresh Sir and the rest helped nobody.
         const emps = await q(
           `SELECT id, name, designation, department, branch, doj, dol, status FROM hr_employees
             WHERE (dol IS NULL OR dol >= $1) AND (doj IS NULL OR doj <= $2) ${branch ? 'AND branch = $3' : ''}
+              AND COALESCE(emp_type, '') <> 'Director'
             ORDER BY id ASC`,
           branch ? [from, to, branch] : [from, to],
         );
