@@ -141,7 +141,7 @@ window.Pages['hr-attendance'] = (() => {
           <div style="font-size:16px;font-weight:700;color:#0f172a;">${H.esc(_me.employee.name)}</div>
           <div style="font-size:12.5px;color:#64748b;">${H.esc(_me.employee.designation || '')} · ${H.esc(_me.employee.id)}</div>
           <div style="font-size:11.5px;color:#94a3b8;margin-top:5px;">
-            Shift ${H.esc(s.hr_shift_start || '09:00')} – ${H.esc(s.hr_shift_end || '18:00')},
+            Shift ${H.esc(s.hr_shift_start || '09:30')} – ${H.esc(s.hr_shift_end || '18:00')},
             ${H.esc(s.hr_grace_minutes || '15')} min grace
           </div>
         </div>
@@ -159,7 +159,7 @@ window.Pages['hr-attendance'] = (() => {
       </div>
       ${t?.late_mark ? `<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:10px 14px;
            margin-bottom:14px;font-size:12.5px;color:#92400e;">Today is marked late — you checked in after
-           ${H.esc(s.hr_shift_start || '09:00')} plus the ${H.esc(s.hr_grace_minutes || '15')} minute grace.</div>` : ''}
+           ${H.esc(s.hr_shift_start || '09:30')} plus the ${H.esc(s.hr_grace_minutes || '15')} minute grace.</div>` : ''}
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--color-primary);margin-bottom:9px;">
         This Month</div>
       <div class="hra-month">
@@ -547,6 +547,8 @@ window.Pages['hr-attendance'] = (() => {
   // A stored DATETIME → "HH:MM" for a time box, in the browser's (office) time.
   function hhmm(v) {
     if (!v) return '';
+    const w = String(v).match(/^\d{4}-\d{2}-\d{2}[ T](\d{2}:\d{2})/);
+    if (w && !/Z|[+-]\d{2}:?\d{2}$/.test(String(v))) return w[1];
     const d = new Date(v);
     return isNaN(d.getTime()) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }

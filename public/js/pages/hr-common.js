@@ -104,6 +104,13 @@ window.HR = (function () {
   };
   const fmtTime = (v) => {
     if (!v) return '—';
+    // A punch comes as the office's wall clock with no zone
+    // ('2026-10-23 09:37:12') — read it as written, not through a zone.
+    const w = String(v).match(/^\d{4}-\d{2}-\d{2}[ T](\d{2}):(\d{2})(?::\d{2})?$/);
+    if (w) {
+      const h = +w[1];
+      return `${String(h % 12 || 12).padStart(2, '0')}:${w[2]} ${h < 12 ? 'am' : 'pm'}`;
+    }
     const d = new Date(v);
     if (isNaN(d.getTime())) return '—';
     return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });

@@ -407,6 +407,30 @@ const daysInMonth = (year, month) => new Date(Date.UTC(year, month, 0)).getUTCDa
 // <input type="date"> (ISO), MySQL (a Date object), and the old sheet
 // (dd/mm/yyyy or m/d/yyyy). Everything is normalised to ISO yyyy-mm-dd on the
 // way in so a comparison is always a string comparison.
+/* A check-in/out exactly as the office clock read it, 'YYYY-MM-DD HH:MM:SS'.
+   The columns hold India wall-clock time with no zone (that is what the
+   biometric machine sends); the driver turns them into a Date in the
+   server's own zone, which is UTC on the host, so sent as-is they reached
+   the browser as UTC and showed 5:30 late — 09:37 in read as 03:07 pm.
+   Rebuilt from the same local fields the driver used, the value is the
+   wall clock again whatever zone the server runs in. */
+function wallClock(v) {
+  if (!v) return null;
+  if (v instanceof Date) {
+    if (isNaN(v.getTime())) return null;
+    return `${isoDate(v)} ${pad(v.getHours(), 2)}:${pad(v.getMinutes(), 2)}:${pad(v.getSeconds(), 2)}`;
+  }
+  return String(v).replace('T', ' ').slice(0, 19);
+}
+
+// India time now, as the same wall-clock string — for punches made in the app.
+function istNow() {
+  const d = new Date(Date.now() + 330 * 60000);
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1, 2)}-${pad(d.getUTCDate(), 2)} `
+    + `${pad(d.getUTCHours(), 2)}:${pad(d.getUTCMinutes(), 2)}:${pad(d.getUTCSeconds(), 2)}`;
+}
+const wallMs = (s) => Date.parse(String(s).replace(' ', 'T') + 'Z');
+
 function isoDate(v) {
   if (!v) return null;
   if (v instanceof Date) {
@@ -637,7 +661,7 @@ function mountHrms(app, ctx) {
      Defaults are the company's own: the sheet's Settings tab recorded a
      09:00–18:00 day and Lallubhai Amichand's registered address. ─────── */
   const HR_DEFAULTS = {
-    hr_shift_start: '09:00',
+    hr_shift_start: '09:30',             // office day 09:30–18:00 (HR, 23 Oct 2026)
     hr_shift_end: '18:00',
     hr_grace_minutes: '15',
     hr_week_off: '0',                    // comma-separated JS weekdays; 0 = Sunday
@@ -729,6 +753,7 @@ function mountHrms(app, ctx) {
         await applyOrgUpdateOnce().catch((e) => console.error('[hrms] org update failed:', e.message));
         await applyAccountsLeaveOnce().catch((e) => console.error('[hrms] accounts leave update failed:', e.message));
         await applyJayeshTreeOnce().catch((e) => console.error('[hrms] tree under Jayesh failed:', e.message));
+        await applyShift0930Once().catch((e) => console.error('[hrms] shift 09:30 update failed:', e.message));
         await applyLeaveHierarchyOnce().catch((e) => console.error('[hrms] leave hierarchy update failed:', e.message));
         await applyMahendraTeamLeaveOnce().catch((e) => console.error('[hrms] Mahendra team leave update failed:', e.message));
       }
@@ -1216,6 +1241,34 @@ function mountHrms(app, ctx) {
     console.log('[hrms] tree under Jayesh 2026-10-21:', log.join(' | '));
   }
 
+  /* The office day is 09:30–18:00 with 15 minutes' grace, not the old
+     sheet's 09:00 — everyone in at 09:30 was being marked late. Sets the
+     shift once and re-judges the late mark on every day already recorded in
+     a month that is not finalised (finalised payslips are left as issued). */
+  const SHIFT_FLAG = 'hr_shift_0930_20261023';
+  async function applyShift0930Once() {
+    const done = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [SHIFT_FLAG]).catch(() => []);
+    if (done.length) return;
+    await setSetting('hr_shift_start', '09:30');
+    await setSetting('hr_shift_end', '18:00');
+    await setSetting('hr_grace_minutes', '15');
+    const lateAfter = 9 * 60 + 30 + 15;
+    const minutes = (t) => Number(t.slice(11, 13)) * 60 + Number(t.slice(14, 16));
+    const closed = await finalisedMonths();
+    const rows = await q(`SELECT id, att_date, check_in, late_mark FROM hr_attendance WHERE check_in IS NOT NULL`);
+    let changed = 0;
+    for (const r of rows) {
+      if (closed.has(String(isoDate(r.att_date)).slice(0, 7))) continue;
+      const t = wallClock(r.check_in);
+      const late = t && minutes(t) > lateAfter ? 1 : 0;
+      if (late === (Number(r.late_mark) ? 1 : 0)) continue;
+      await pool.query(`UPDATE hr_attendance SET late_mark = $1 WHERE id = $2`, [late, r.id]);
+      changed += 1;
+    }
+    await setSetting(SHIFT_FLAG, JSON.stringify({ at: new Date().toISOString(), lateMarksChanged: changed }));
+    console.log('[hrms] shift 09:30–18:00 set; late marks re-judged:', changed);
+  }
+
   /* Assets from the old HRMS sheet's Assets tab. Insert-only: a code that is
      already here is left exactly as HR has it (the full Import from Sheet
      overwrites, and also re-imports employees — which would undo the tree
@@ -1551,9 +1604,9 @@ function mountHrms(app, ctx) {
         if (!e) return res.json({ linked: false });
 
         const now = new Date();
-        const year = now.getFullYear();
-        const monthStart = `${year}-${pad(now.getMonth() + 1, 2)}-01`;
-        const today = isoDate(now);
+        const today = istNow().slice(0, 10);
+        const year = Number(today.slice(0, 4));
+        const monthStart = today.slice(0, 8) + '01';
 
         const [types, structure, att, slips, docs, team, exits, settings] = await Promise.all([
           leaveTypes(),
@@ -1634,7 +1687,7 @@ function mountHrms(app, ctx) {
             const t = att.find((a) => isoDate(a.att_date) === today);
             return t ? {
               date: today, status: t.status, late: !!t.late_mark,
-              check_in: t.check_in || null, check_out: t.check_out || null,
+              check_in: wallClock(t.check_in), check_out: wallClock(t.check_out),
               working_hours: money(t.working_hours),
             } : null;
           })(),
@@ -1994,12 +2047,12 @@ function mountHrms(app, ctx) {
       try {
         const emp = await selfEmployee(req.session?.user);
         if (!emp) return res.json({ employee: null, today: null, month: [] });
-        const today = isoDate(new Date());
+        const today = istNow().slice(0, 10);
         const monthStart = today.slice(0, 8) + '01';
-        const rows = await q(
+        const rows = (await q(
           `SELECT * FROM hr_attendance WHERE employee_id = $1 AND att_date BETWEEN $2 AND $3 ORDER BY att_date DESC`,
           [emp.id, monthStart, today],
-        );
+        )).map((r) => ({ ...r, check_in: wallClock(r.check_in), check_out: wallClock(r.check_out) }));
         res.json({
           employee: { id: emp.id, name: emp.name, designation: emp.designation, branch: emp.branch },
           today: rows.find((r) => isoDate(r.att_date) === today) || null,
@@ -2019,16 +2072,18 @@ function mountHrms(app, ctx) {
         const emp = await selfEmployee(user);
         if (!emp) return res.status(400).json({ error: 'No employee record is linked to your login — ask HR to link it.' });
         const s = await getSettings();
-        const now = new Date();
-        const today = isoDate(now);
-        const stamp = `${today} ${pad(now.getHours(), 2)}:${pad(now.getMinutes(), 2)}:${pad(now.getSeconds(), 2)}`;
+        // India time, the zone the biometric rows are in — the server's own
+        // clock is UTC, which stamped app punches 5:30 early and judged late
+        // against the wrong hour.
+        const stamp = istNow();
+        const today = stamp.slice(0, 10);
         const device = String(req.headers['user-agent'] || '').slice(0, 250);
         const existing = (await q(`SELECT * FROM hr_attendance WHERE employee_id = $1 AND att_date = $2`, [emp.id, today]))[0];
 
         if (String(b.type || 'in') === 'out') {
           if (!existing) return res.status(400).json({ error: 'You have not checked in today' });
-          const inAt = existing.check_in ? new Date(existing.check_in) : null;
-          const hours = inAt ? Math.max(0, Math.round(((now - inAt) / 3600000) * 100) / 100) : 0;
+          const inAt = wallClock(existing.check_in);
+          const hours = inAt ? Math.max(0, Math.round(((wallMs(stamp) - wallMs(inAt)) / 3600000) * 100) / 100) : 0;
           await pool.query(
             `UPDATE hr_attendance SET check_out = $1, out_lat = $2, out_lon = $3, working_hours = $4 WHERE id = $5`,
             [stamp, String(b.lat || ''), String(b.lon || ''), hours, existing.id],
@@ -2038,7 +2093,7 @@ function mountHrms(app, ctx) {
 
         if (existing && existing.check_in) return res.status(409).json({ error: 'Already checked in today' });
         const lateAfter = hhmmToMinutes(s.hr_shift_start) + num(s.hr_grace_minutes);
-        const late = (now.getHours() * 60 + now.getMinutes()) > lateAfter ? 1 : 0;
+        const late = hhmmToMinutes(stamp.slice(11, 16)) > lateAfter ? 1 : 0;
         if (existing) {
           await pool.query(
             `UPDATE hr_attendance SET check_in = $1, in_lat = $2, in_lon = $3, device = $4, late_mark = $5, status = $6 WHERE id = $7`,
@@ -2105,7 +2160,7 @@ function mountHrms(app, ctx) {
         const rows = emps.map((e) => {
           const cells = days.map((d) => {
             const a = attByKey[e.id + '|' + d];
-            if (a) return { date: d, status: a.status, in: a.check_in, out: a.check_out, late: !!a.late_mark, hours: num(a.working_hours), id: a.id };
+            if (a) return { date: d, status: a.status, in: wallClock(a.check_in), out: wallClock(a.check_out), late: !!a.late_mark, hours: num(a.working_hours), id: a.id };
             const lv = leaveByKey[e.id + '|' + d];
             if (lv) return { date: d, status: 'Leave', leaveType: lv };
             const hol = holByDate[d];
