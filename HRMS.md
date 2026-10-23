@@ -59,6 +59,17 @@ written) → finish marking attendance → **Generate** → check the register �
 **Finalise**. Staff can only see their own slips once a month is finalised, and
 only the owner account can reopen one.
 
+**CSV uploads** — Attendance → Muster Roll → *Upload CSV* takes either the
+muster grid (Code, Name, day columns 1–31 with P/A/H/R/L — exactly what
+*Export CSV* writes, read as the month picked) or one row per day (Code, Date,
+Status, In, Out, Notes). Leave Management → *Upload CSV* takes Code, Leave
+Type, From, To, Half Day, Reason and saves each line as an **approved** leave
+that books the balance, with no mail. Both show a dry-run preview first;
+problem rows are listed and left out, the rest import. Dates are read
+DD-MM-YYYY only (never guessed), names must match exactly, WO/HO grid cells are
+skipped (they come from the calendar), and a leave overlapping one already on
+file is refused.
+
 **HR Reports** — Overview, Headcount, Joiners & Leavers, Attendance Summary,
 Leave Register, Salary Register, Statutory Deductions, Birthdays &
 Anniversaries. Every report comes back in one `{ title, summary, columns, rows }`

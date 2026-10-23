@@ -4390,6 +4390,136 @@ app.get('/api/retail-dashboard/summary', requireAuth, requireAdminOrPage('retail
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
+/* ── Monthly Expense Report mail ─────────────────────────────────────────────
+   On the 5th of every month, one mail per retail branch with the previous
+   month's expenses — the "Monthly Expense Report - <Branch> - <Mon-YYYY>"
+   the old Expense Tracker sheet used to send, now off the ERP's own entries.
+   Recipients live in app_config (retail_report_to / retail_report_cc) so a
+   change of inbox is not a code change. */
+const RETAIL_REPORT_DAY = 5;
+const RETAIL_REPORT_HOUR = 10; // IST — the old sheet's mail went out mid-morning
+const DEFAULT_RETAIL_REPORT_TO = ['factory@laltd.in'];
+const DEFAULT_RETAIL_REPORT_CC = ['accounts@laltd.in', 'retail@laltd.in', 'salonianchan@laltd.in'];
+const _MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+// '2026-09' → 'Sep-2026'
+const _rrMonthLabel = (key) => `${_MONTH_ABBR[+key.slice(5, 7) - 1]}-${key.slice(0, 4)}`;
+// The month before the IST date `iso` ('2026-10-05' → '2026-09').
+function _rrPrevMonthKey(iso) {
+  let y = +iso.slice(0, 4), m = +iso.slice(5, 7) - 1;
+  if (m === 0) { m = 12; y--; }
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
+
+function _rrHtml(branch, monthKey, rows) {
+  const e = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const money = (n) => `₹${Number(n || 0).toFixed(2)}`;
+  const label = _rrMonthLabel(monthKey);
+  const total = rows.reduce((n, r) => n + r.amount, 0);
+  const th = 'padding:6px 10px;color:#9ca3af;font-weight:600;text-align:left;';
+  const td = 'padding:6px 10px;border:1px solid #111;';
+  const body = rows.length
+    ? rows.map((r) => `<tr>
+        <td style="${td}">${e(r.entry_date)}</td><td style="${td}">${e(r.person_name)}</td><td style="${td}">${e(r.item_name)}</td>
+        <td style="${td}">${e(r.category)}</td><td style="${td}">${money(r.amount)}</td><td style="${td}">${e(r.payment_type)}</td></tr>`).join('')
+    : `<tr><td colspan="6" style="${td}text-align:center;color:#6b7280;">No expenses recorded for ${e(label)}.</td></tr>`;
+  return `<div style="font-family:Arial,sans-serif;color:#111;max-width:860px;">
+    <h1 style="font-size:24px;margin:0 0 12px;">Monthly Expense Report</h1>
+    <h2 style="font-size:19px;margin:0 0 12px;">${e(branch)} - ${e(label)}</h2>
+    <p style="margin:0 0 10px;">Branch: ${e(branch)}</p>
+    <p style="margin:0 0 10px;">Please find below the expense details for ${e(label)}:</p>
+    <table style="border-collapse:collapse;font-size:13px;width:100%;">
+      <thead><tr><th style="${th}">Date</th><th style="${th}">Person</th><th style="${th}">Item</th><th style="${th}">Category</th><th style="${th}">Amount (₹)</th><th style="${th}">Payment Type</th></tr></thead>
+      <tbody>${body}
+        <tr><td colspan="4" style="${td}font-weight:700;">Total</td><td style="${td}font-weight:700;">${money(total)}</td><td style="${td}"></td></tr>
+      </tbody>
+    </table>
+    <p style="margin:12px 0 6px;">Total Expenses: ${money(total)}</p>
+    <p style="margin:0 0 6px;">This is an automated email sent from the Lallubhai Amichand ERP.</p>
+  </div>`;
+}
+
+/* Sends the month's report for each branch — every branch on the master list
+   (a quiet month still gets its "no expenses" mail) plus any other branch name
+   that turns up on that month's entries, so nothing is silently left out.
+   `onlyBranch` narrows it to one. Returns [{ branch, count, total }]. */
+async function sendRetailMonthlyReports(monthKey, onlyBranch = '') {
+  const mailer = getMailer();
+  if (!mailer) throw new Error('SMTP is not configured on this server');
+  const [to, cc, branches] = await Promise.all([
+    readAuthority('retail_report_to', DEFAULT_RETAIL_REPORT_TO),
+    readAuthority('retail_report_cc', DEFAULT_RETAIL_REPORT_CC),
+    _rdBranches(),
+  ]);
+  const rows = (await _rdAllRows()).map(rdOut).filter((r) => r.entry_date.slice(0, 7) === monthKey);
+  const names = [...branches];
+  for (const r of rows) {
+    const b = r.branch_name || 'Unspecified';
+    if (!names.some((n) => n.toLowerCase() === b.toLowerCase())) names.push(b);
+  }
+  const sent = [];
+  for (const branch of names) {
+    if (onlyBranch && branch.toLowerCase() !== onlyBranch.toLowerCase()) continue;
+    const list = rows
+      .filter((r) => (r.branch_name || 'Unspecified').toLowerCase() === branch.toLowerCase())
+      .sort((a, b) => a.entry_date.localeCompare(b.entry_date) || String(a.created_at).localeCompare(String(b.created_at)));
+    await mailer.sendMail({
+      from: `"Expense Tracker" <${process.env.SMTP_USER}>`,
+      to: to.join(', '),
+      ...(cc.length ? { cc: cc.join(', ') } : {}),
+      subject: `Monthly Expense Report - ${branch} - ${_rrMonthLabel(monthKey)}`,
+      html: _rrHtml(branch, monthKey, list),
+    });
+    sent.push({ branch, count: list.length, total: list.reduce((n, r) => n + r.amount, 0) });
+  }
+  return sent;
+}
+
+// Same claim-then-send sweep as the daily greetings: checked every half hour
+// because a deploy restarts the process and would lose a one-shot timer.
+// Late is fine (server down on the 5th → it goes the next time it's up that
+// month); twice is not, so the month is claimed before anything is sent.
+async function retailMonthlyReportSweep() {
+  if (!USE_DB) return;
+  const { iso, hour } = istToday();
+  if (+iso.slice(8, 10) < RETAIL_REPORT_DAY || hour < RETAIL_REPORT_HOUR) return;
+  const monthKey = _rrPrevMonthKey(iso);
+  try {
+    const last = await q(`SELECT "value" FROM app_config WHERE "key" = 'retail_report_last_month'`);
+    if (last[0] && last[0].value >= monthKey) return;
+    await pool.query(
+      `INSERT INTO app_config ("key","value") VALUES ('retail_report_last_month',$1) ON CONFLICT ("key") DO UPDATE SET "value"=$2`,
+      [monthKey, monthKey],
+    );
+    // First run ever: the month just gone was already mailed by the old
+    // Expense Tracker sheet, so only mark it — the first ERP mail is next month's.
+    if (!last[0]) { console.log('[retail-report] armed; first report will be for the month after', monthKey); return; }
+  } catch (e) {
+    console.error('[retail-report] could not claim', monthKey, '—', e.message);
+    return;
+  }
+  try {
+    const sent = await sendRetailMonthlyReports(monthKey);
+    console.log('[retail-report] sent', monthKey, sent.map((s) => `${s.branch}: ${s.count}`).join(', '));
+  } catch (e) {
+    console.error('[retail-report] send failed for', monthKey, '—', e.message);
+  }
+}
+setInterval(() => { retailMonthlyReportSweep().catch((e) => console.error('[retail-report]', e.message)); }, 30 * 60 * 1000);
+setTimeout(() => { retailMonthlyReportSweep().catch((e) => console.error('[retail-report]', e.message)); }, 90 * 1000);
+
+// Manual send / resend from the Retail Dashboard (admins): body { month: 'YYYY-MM', branch? }.
+app.post('/api/retail-dashboard/monthly-report', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await ensureSchema();
+    const month = String(req.body?.month || '');
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: 'Pick a month' });
+    const sent = await sendRetailMonthlyReports(month, String(req.body?.branch || '').trim());
+    if (!sent.length) return res.status(404).json({ error: 'No such branch' });
+    return res.json({ sent });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/announcements', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
@@ -4920,6 +5050,94 @@ async function shiftNonWorkingTasksOnce() {
   } catch (e) { console.error('[shift-nonworking]', e.message); }
 }
 
+/* Rolling series. A checklist series is generated one year ahead when it is
+   created, and nothing used to add to it afterwards — so a yearly task had a
+   single occurrence, and once that was done All Tasks showed "All done" with
+   no next date, and the task quietly stopped coming back. Whenever a series has
+   nothing left to do from today on (every remaining occurrence is done, on the
+   doer's leave, or already past), its next year is generated the same way the
+   create route does: measured from the series' first date (so month-end and
+   anchor days hold), week-offs/holidays shifted. A series is the client's own
+   Master-view grouping — same doer + same task text. Left alone: series with an
+   end date somebody set, unknown frequencies, and series whose last occurrence
+   is over 400 days old (abandoned, not running out). Runs at startup, every six
+   hours, and for the one series right after an occurrence is marked done. */
+const CHECKLIST_ROLLING_FREQS = new Set(['daily', 'weekly', 'alternative_week', 'alternate_week', 'monthly', 'quarterly', 'yearly']);
+let _extendChecklistRunning = Promise.resolve();
+function extendChecklistSeries(only) {
+  const run = _extendChecklistRunning.then(() => _extendChecklistSeries(only));
+  _extendChecklistRunning = run.catch(() => {});
+  return run;
+}
+async function _extendChecklistSeries(only) {
+  if (!USE_DB) return { created: 0, seriesCount: 0 };
+  await ensureSchema();
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const rows = only
+    ? await q('SELECT id, task, assigned_to, frequency, start_date, end_date, remarks, department FROM masters WHERE start_date IS NOT NULL AND LOWER(TRIM(assigned_to)) = $1 AND LOWER(TRIM(task)) = $2', [norm(only.assignedTo), norm(only.task)])
+    : await q('SELECT id, task, assigned_to, frequency, start_date, end_date, remarks, department FROM masters WHERE start_date IS NOT NULL');
+  if (!rows.length) return { created: 0, seriesCount: 0 };
+  const done = new Set((await q('SELECT DISTINCT master_id FROM checklist_completions')).map(r => r.master_id));
+  const [workCtx, leaveCtx] = await Promise.all([getWorkingDayContext(), getLeaveDayContext()]);
+  const today = todayIST();
+  const staleBefore = _checklistPlusDays(today, -400);
+
+  const series = new Map();
+  for (const r of rows) {
+    const key = norm(r.assigned_to) + '||' + norm(r.task);
+    if (!series.has(key)) series.set(key, []);
+    series.get(key).push({ ...r, date: toDateStr(r.start_date) });
+  }
+
+  const base = Date.now().toString(36).toUpperCase();
+  let created = 0, seriesCount = 0;
+  for (const occ of series.values()) {
+    if (occ.some(o => o.end_date)) continue;
+    occ.sort((a, b) => a.date.localeCompare(b.date));
+    const first = occ[0], last = occ[occ.length - 1];
+    const freq = norm(last.frequency);
+    if (!CHECKLIST_ROLLING_FREQS.has(freq)) continue;
+    if (last.date < staleBefore) continue;
+    const upcoming = occ.some(o => o.date >= today && !done.has(o.id) && !leaveOn(leaveCtx, o.assigned_to, o.date));
+    if (upcoming) continue;
+
+    // First occurrence of the series after its current last date and not in the past.
+    let i = 1, next = null;
+    for (; i < 5000; i++) {
+      const d = checklistDateAt(first.date, freq, i);
+      if (d > last.date && d >= today) { next = d; break; }
+    }
+    if (!next) continue;
+    const end = defaultChecklistSeriesEnd(next);
+    const raw = [];
+    for (let k = i; raw.length < CHECKLIST_MAX_OCCURRENCES; k++) {
+      const d = checklistDateAt(first.date, freq, k);
+      if (d > end) break;
+      raw.push(d);
+    }
+    const have = new Set(occ.map(o => o.date));
+    const dates = skipNonWorkingDays(raw, freq, workCtx, last.assigned_to).filter(d => d > last.date && !have.has(d));
+    for (const date of dates) {
+      const id = 'CHK' + base + created.toString(36).padStart(4, '0').toUpperCase();
+      await pool.query('INSERT INTO masters (id,task,assigned_to,frequency,start_date,end_date,remarks,department,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())',
+        [id, last.task, last.assigned_to, last.frequency, date, null, last.remarks || '', last.department || '']);
+      created++;
+    }
+    if (dates.length) seriesCount++;
+  }
+  if (created) console.log(`[checklist-extend] ${created} occurrence(s) added across ${seriesCount} series`);
+  return { created, seriesCount };
+}
+setInterval(() => { extendChecklistSeries().catch((e) => console.error('[checklist-extend]', e.message)); }, 6 * 60 * 60 * 1000);
+
+app.post('/api/masters/extend-series', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    if (!USE_DB) return res.status(400).json({ error: 'Database mode only' });
+    const result = await extendChecklistSeries();
+    return res.json({ success: true, ...result });
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/masters', requireAuth, async (req, res) => {
   try {
     const body = req.body;
@@ -5084,7 +5302,7 @@ app.post('/api/checklist-completions', requireAuth, async (req, res) => {
     if (!USE_DB) return res.json({ success:true });
     await ensureSchema();
     const sessUser = req.session?.user;
-    const [master] = await q('SELECT assigned_to FROM masters WHERE id = $1', [masterId]);
+    const [master] = await q('SELECT assigned_to, task FROM masters WHERE id = $1', [masterId]);
     if (!master) return res.status(404).json({ error:'Checklist task not found' });
     if (!canWriteMaster(sessUser, master)) return res.status(403).json(FORBIDDEN);
     // Who completed it is the signed-in user, not whatever the request claimed —
@@ -5093,6 +5311,9 @@ app.post('/api/checklist-completions', requireAuth, async (req, res) => {
     const doer = sessUser?.name || '';
     await withSeqId('checklist_completions', 'CC', 3, (id) =>
       pool.query('INSERT INTO checklist_completions (id,master_id,doer,completed_at,date) VALUES ($1,$2,$3,NOW(),CURRENT_DATE)', [id,masterId,doer||'']));
+    // That may have been the series' last open occurrence — roll it forward
+    // before replying so All Tasks shows the next due date on its refresh.
+    await extendChecklistSeries({ assignedTo: master.assigned_to, task: master.task }).catch((e) => console.error('[checklist-extend]', e.message));
     return res.json({ success:true });
   } catch (err) { return res.status(500).json({ error:err.message }); }
 });
@@ -11284,16 +11505,25 @@ app.post('/api/proforma-invoice/revise', requireAuth, sheetSerialised('pi', asyn
     // stored form, never off this request. A line keeps its rate only when its
     // model + size + name matches exactly one line of the parent — anything
     // added, ambiguous or re-specced comes through unpriced and goes back
-    // through Add Price.
+    // through Add Price. Rewording only a line's description must not cost it
+    // its rate, so a miss on model + size + name falls back to model + size
+    // when that too matches exactly one parent line.
     const rateKey = (it) => [it.modelNo, it.size, it.itemName].map(v => String(v || '').trim().toLowerCase()).join('|');
+    const looseKey = (it) => [it.modelNo, it.size].map(v => String(v || '').trim().toLowerCase()).join('|');
     const parentRates = new Map();
+    const parentLoose = new Map();
     (Array.isArray(parentForm.items) ? parentForm.items : []).forEach(it => {
       const k = rateKey(it);
       parentRates.set(k, parentRates.has(k) ? null : (it.rate ?? ''));
+      if (String(it.modelNo || '').trim()) {
+        const lk = looseKey(it);
+        parentLoose.set(lk, parentLoose.has(lk) ? null : (it.rate ?? ''));
+      }
     });
     let allPriced = true;
     cleanItems.forEach(it => {
-      const carried = parentRates.get(rateKey(it));
+      let carried = parentRates.get(rateKey(it));
+      if (carried == null && String(it.modelNo || '').trim()) carried = parentLoose.get(looseKey(it));
       it.rate = (carried == null ? '' : carried);
       if (!String(it.rate).trim()) allPriced = false;
     });
@@ -11357,7 +11587,9 @@ app.get('/api/proforma-invoice/list', requireAuth, async (req, res) => {
       return {
         piNo: r[0] || '', date: _sheetDateToIso(r[1]), buyer: r[2] || '', total: r[3] || '', pdfLink: r[4] || '',
         createdBy: r[5] || '', createdAt: r[6] || '', pricedBy: r[7] || '', pricedAt: r[8] || '',
-        form, status, canSetPrice: canSetPrice && status === 'Draft',
+        // Draft → Add Price in place; Priced → Edit Price, which re-issues
+        // the PI as its next revision (see PUT /price).
+        form, status, canSetPrice: canSetPrice && (status === 'Draft' || status === 'Priced'),
         // Only the live copy of a PI can be revised — not a cancelled one, and
         // not one that has already been superseded by its own revision.
         canRevise: status === 'Draft' || status === 'Priced',
@@ -11756,15 +11988,12 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi', async 
     const rowVals = rowRes.data.values?.[0] || [];
     const piStatus = rowVals[10] || 'Draft';
     if (piStatus === 'Cancelled') return res.status(400).json({ error: 'This Proforma Invoice has been cancelled' });
-    // The frontend already only shows "Add Price" for a Draft PI (canSetPrice
-    // && status === 'Draft') — that was a UI hint only, so this route itself
-    // would happily overwrite an already-Priced PI's rate/total with no
-    // record of what it was before. Revise is the path that keeps history
-    // (it supersedes the old row rather than overwriting it); this route
-    // no longer allows silently re-pricing straight over a Priced PI.
-    if (piStatus === 'Priced') {
-      return res.status(400).json({ error: 'This Proforma Invoice is already Priced — use Revise to change its price, which keeps the old version.' });
-    }
+    if (piStatus === 'Superseded') return res.status(400).json({ error: `${piNo} has already been revised — edit the price on its latest revision instead` });
+    // Re-pricing a Priced PI (a wrong rate, a charge added afterwards) must
+    // not silently overwrite a document the buyer may already hold, so it is
+    // issued as the next revision instead — same as Revise, which keeps the
+    // old row and PDF as Superseded. A Draft is still priced in place.
+    const asRevision = piStatus === 'Priced';
     let existingForm = {};
     try { existingForm = rowVals[9] ? JSON.parse(rowVals[9]) : {}; } catch {}
 
@@ -11778,10 +12007,18 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi', async 
     // Drafts raised before the export format existed carry itemCode/description
     // instead of modelNo/itemName. Map them across rather than printing a PI
     // with two blank columns.
+    // The item description is editable on this screen too — the pricer is
+    // often the one who spots a wording fix, and it does not touch the rate.
+    // Blank means "keep what it was", never "erase the description".
+    const nameByIndex = {};
+    (Array.isArray(req.body?.items) ? req.body.items : []).forEach(it => {
+      const name = String(it?.itemName ?? '').trim();
+      if (it && it.index != null && name) nameByIndex[parseInt(it.index, 10)] = name;
+    });
     const mergedItems = (existingForm.items || []).map((it, i) => ({
       ...it,
       modelNo: it.modelNo || it.itemCode || '',
-      itemName: it.itemName || it.description || '',
+      itemName: nameByIndex[i] || it.itemName || it.description || '',
       rate: rateByIndex[i] ?? it.rate,
     }));
 
@@ -11845,6 +12082,36 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi', async 
       discountLabel: _piChargesLabel(discountLines, 'Special Discount'),
       discountAmount: discountTotal,
     };
+
+    if (asRevision) {
+      const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:A`, valueRenderOption: 'FORMATTED_VALUE' });
+      const base = _piBaseNo(piNo);
+      const nextRev = (logRes.data.values || []).reduce((n, r) => Math.max(n, _piBaseNo(r[0]) === base ? _piRevNo(r[0]) : 0), 0) + 1;
+      const newPiNo = `${base} R${nextRev}`;
+      pricedForm.revisionOf = piNo;
+      pricedForm.revisionNo = nextRev;
+      pricedForm.revisionNote = 'Price revised';
+
+      const meta = await _piSheetMeta(_piFyLabel(existingForm.date));
+      await _ensurePiTemplate(sheets, meta);
+      const { templateSheetId } = meta;
+      await _fillPiTemplate(sheets, { ...pricedForm, piNo: newPiNo }, templateSheetId);
+      const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, newPiNo, templateSheetId, PI_FMT.priceLabels(pricedForm.priceType, pricedForm.currency), mergedItems.length);
+
+      await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, PI_LOG_HEADER);
+      await appendLogRow(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, [
+        "'" + newPiNo, "'" + (existingForm.date || rowVals[1] || ''), pricedForm.buyerName || rowVals[2] || '', totalAmount ?? '', pdfLink || '',
+        rowVals[5] || '', _timestampForSheet(), req.session.user.name || '', _timestampForSheet(),
+        JSON.stringify(pricedForm), 'Priced',
+      ]);
+      // Only once the revision is safely logged — same order as the revise
+      // route, so a failure above leaves the parent live.
+      await _setLogRowStatus(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo, 'K', 'Superseded');
+      _piPricingCache = null;
+      // The tracker's "Add Pricing" step closed when the parent was first
+      // priced — nothing to close again.
+      return res.json({ success: true, piNo: newPiNo, revisedFrom: piNo, totalAmount, pdfLink, fmsStepDone: false });
+    }
 
     const meta = await _piSheetMeta(_piFyLabel(existingForm.date));
     await _ensurePiTemplate(sheets, meta);
@@ -14947,5 +15214,6 @@ app.listen(process.env.PORT || 3000, async () => {
   console.log('Server on http://localhost:' + (process.env.PORT || 3000));
   await seedJsonFallback();
   shiftLeaveDayTasks().catch((e) => console.error('[leave-shift]', e.message));
-  shiftNonWorkingTasksOnce();
+  await shiftNonWorkingTasksOnce();
+  extendChecklistSeries().catch((e) => console.error('[checklist-extend]', e.message));
 });

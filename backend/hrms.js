@@ -423,6 +423,53 @@ function isoDate(v) {
   return isNaN(d.getTime()) ? null : isoDate(d);
 }
 
+/* ── CSV import helpers ──────────────────────────────────────────────
+   The attendance and leave uploads read whatever the office's Excel saved,
+   so headers are compared as bare lowercase letters/digits ("Employee Code",
+   "employee_code" and "EmployeeCode" are one column), and dates are read in
+   the Indian order. Unlike isoDate, csvDate never falls back to new Date():
+   that would quietly read 03/04 as 4 March, and a CSV that names the wrong
+   day is worse than one that is refused. */
+const csvKey = (h) => String(h == null ? '' : h).replace(/^﻿/, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const CSV_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+function csvDate(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return null;
+  const yy = (y) => (y.length === 2 ? 2000 + Number(y) : Number(y));
+  const ok = (y, mo, d) => (mo >= 1 && mo <= 12 && d >= 1 && d <= daysInMonth(y, mo) ? `${y}-${pad(mo, 2)}-${pad(d, 2)}` : null);
+  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T].*)?$/);
+  if (m) return ok(+m[1], +m[2], +m[3]);
+  m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2}|\d{4})$/);                 // dd-mm-yyyy
+  if (m) return ok(yy(m[3]), +m[2], +m[1]);
+  m = s.match(/^(\d{1,2})[-\s/.]([A-Za-z]{3,9})[-\s/.,]*(\d{2}|\d{4})$/);    // 05-Oct-2026
+  if (m) { const mo = CSV_MONTHS[m[2].slice(0, 3).toLowerCase()]; return mo ? ok(yy(m[3]), mo, +m[1]) : null; }
+  return null;
+}
+// "9:30", "09.30", "6:05 PM" → "HH:MM"; '' when blank, null when unreadable.
+function csvTime(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  const m = s.match(/^(\d{1,2})[:.](\d{2})(?::\d{2})?\s*([ap])?\.?m?\.?$/i);
+  if (!m) return null;
+  let h = +m[1];
+  const mi = +m[2];
+  if (m[3]) {
+    const pm = /p/i.test(m[3]);
+    if (h === 12) h = pm ? 12 : 0; else if (pm) h += 12;
+  }
+  return h > 23 || mi > 59 ? null : `${pad(h, 2)}:${pad(mi, 2)}`;
+}
+// The muster roll's own short codes plus the words people actually type.
+const ATT_CSV_ALIASES = {
+  p: 'Present', present: 'Present',
+  a: 'Absent', ab: 'Absent', absent: 'Absent',
+  h: 'Half Day', hd: 'Half Day', half: 'Half Day', halfday: 'Half Day',
+  r: 'Remote', wfh: 'Remote', remote: 'Remote',
+  l: 'Leave', leave: 'Leave', onleave: 'Leave',
+  ho: 'Holiday', holiday: 'Holiday',
+  wo: 'Week Off', weekoff: 'Week Off', off: 'Week Off',
+};
+
 // The sheet is not consistent: EmployeeDetails writes dd/mm/yyyy while Leave
 // and Attendance write m/d/yyyy. The importer says which it is reading.
 function sheetDate(v, order = 'dmy') {
@@ -2087,27 +2134,173 @@ function mountHrms(app, ctx) {
         const by = req.session?.user?.name || '';
         let saved = 0;
         for (const m of marks) {
-          const employeeId = String(m.employeeId || m.employee_id || '').trim();
-          const date = isoDate(m.date || m.att_date);
-          if (!employeeId || !date) continue;
-          const status = ATT_STATUS[m.status] ? m.status : 'Present';
-          const checkIn  = m.check_in  ? `${date} ${String(m.check_in).slice(0, 5)}:00`  : null;
-          const checkOut = m.check_out ? `${date} ${String(m.check_out).slice(0, 5)}:00` : null;
-          let hours = num(m.working_hours);
-          if (!hours && checkIn && checkOut) {
-            hours = Math.max(0, Math.round(((new Date(checkOut) - new Date(checkIn)) / 3600000) * 100) / 100);
-          }
-          await pool.query(
-            `INSERT INTO hr_attendance (id, employee_id, att_date, check_in, check_out, working_hours, late_mark, status, notes, marked_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-             ON CONFLICT (employee_id, att_date) DO UPDATE SET
-               check_in = $11, check_out = $12, working_hours = $13, late_mark = $14, status = $15, notes = $16, marked_by = $17`,
-            [rowId('ATT'), employeeId, date, checkIn, checkOut, hours, m.late_mark ? 1 : 0, status, m.notes || '', by,
-             checkIn, checkOut, hours, m.late_mark ? 1 : 0, status, m.notes || '', by],
-          );
-          saved += 1;
+          if (await upsertAttendance(m, by)) saved += 1;
         }
         res.json({ success: true, saved });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // One day for one employee, upserted on (employee, date). Shared by
+    // marking, the muster cell editor and the CSV upload.
+    async function upsertAttendance(m, by) {
+      const employeeId = String(m.employeeId || m.employee_id || '').trim();
+      const date = isoDate(m.date || m.att_date);
+      if (!employeeId || !date) return false;
+      const status = ATT_STATUS[m.status] ? m.status : 'Present';
+      const checkIn  = m.check_in  ? `${date} ${String(m.check_in).slice(0, 5)}:00`  : null;
+      const checkOut = m.check_out ? `${date} ${String(m.check_out).slice(0, 5)}:00` : null;
+      let hours = num(m.working_hours);
+      if (!hours && checkIn && checkOut) {
+        hours = Math.max(0, Math.round(((new Date(checkOut) - new Date(checkIn)) / 3600000) * 100) / 100);
+      }
+      await pool.query(
+        `INSERT INTO hr_attendance (id, employee_id, att_date, check_in, check_out, working_hours, late_mark, status, notes, marked_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (employee_id, att_date) DO UPDATE SET
+           check_in = $11, check_out = $12, working_hours = $13, late_mark = $14, status = $15, notes = $16, marked_by = $17`,
+        [rowId('ATT'), employeeId, date, checkIn, checkOut, hours, m.late_mark ? 1 : 0, status, m.notes || '', by,
+         checkIn, checkOut, hours, m.late_mark ? 1 : 0, status, m.notes || '', by],
+      );
+      return true;
+    }
+
+    /* CSV upload of a month's attendance. Two layouts are read:
+         grid — Code, Name, then one column per day (1–31) holding the muster
+                roll's short codes; exactly what Muster Roll → Export CSV
+                writes, so export → fill in → upload round-trips. The month
+                comes from the request, since the sheet does not carry it.
+         rows — one line per employee per day: Code/Name, Date, Status and
+                optionally In, Out, Notes (a biometric export, typically).
+       dryRun (the default) validates and reports without writing anything;
+       the page shows that preview and only then sends dryRun: false. Rows
+       with problems are reported and left out — the rest still import. */
+    app.post('/api/hr/attendance/import', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        const b = req.body || {};
+        const dryRun = b.dryRun !== false;
+        const header = (Array.isArray(b.header) ? b.header : []).map(csvKey);
+        const lines = Array.isArray(b.rows) ? b.rows : [];
+        if (!header.length || !lines.length) return res.status(400).json({ error: 'The file has no rows under its header line' });
+        if (lines.length > 5000) return res.status(400).json({ error: 'Upload at most 5,000 lines at a time' });
+
+        const col = (...names) => header.findIndex((h) => names.includes(h));
+        const cCode = col('code', 'empcode', 'employeecode', 'employeeid', 'empid', 'id', 'employeeno', 'empno');
+        const cName = col('name', 'employeename', 'employee', 'empname');
+        if (cCode < 0 && cName < 0) return res.status(400).json({ error: 'The file needs an Employee Code (or Name) column' });
+        const cDate = col('date', 'attdate', 'attendancedate');
+        const cStatus = col('status', 'attendance', 'mark');
+        const cIn = col('in', 'checkin', 'intime', 'timein', 'punchin');
+        const cOut = col('out', 'checkout', 'outtime', 'timeout', 'punchout');
+        const cNotes = col('notes', 'note', 'remarks', 'remark');
+        const dayCols = header.map((h, i) => (/^\d{1,2}$/.test(h) && +h >= 1 && +h <= 31 ? { i, day: +h } : null)).filter(Boolean);
+        const format = cDate >= 0 ? 'rows' : (dayCols.length ? 'grid' : '');
+        if (!format) {
+          return res.status(400).json({ error: 'Could not read the layout — the file needs either a Date column, or day columns 1–31 like the Muster Roll export.' });
+        }
+        if (format === 'rows' && cStatus < 0) return res.status(400).json({ error: 'The file has a Date column but no Status column' });
+        const month = Number(b.month), year = Number(b.year);
+        if (format === 'grid' && !(month >= 1 && month <= 12 && year >= 2000)) {
+          return res.status(400).json({ error: 'Pick the month this sheet is for' });
+        }
+
+        const emps = await q(`SELECT id, name, doj, dol FROM hr_employees`);
+        const closed = await finalisedMonths();
+        const s = await getSettings();
+        const lateAfter = hhmmToMinutes(s.hr_shift_start) + num(s.hr_grace_minutes);
+        const today = isoDate(new Date());
+        const errors = [], warnings = [];
+        const marks = new Map();        // employee|date → mark
+        let skipped = 0;
+        const closedHit = new Set();
+
+        const add = (rowNo, emp, date, status, extra = {}) => {
+          const doj = isoDate(emp.doj), dol = isoDate(emp.dol);
+          if (date > today) return errors.push({ row: rowNo, message: `${emp.id} ${date}: a future date cannot be marked` });
+          if (doj && date < doj) return errors.push({ row: rowNo, message: `${emp.id} ${date}: before ${emp.name} joined (${doj})` });
+          if (dol && date > dol) return errors.push({ row: rowNo, message: `${emp.id} ${date}: after ${emp.name} left (${dol})` });
+          const ym = date.slice(0, 7);
+          if (closed.has(ym) && !closedHit.has(ym)) {
+            closedHit.add(ym);
+            warnings.push({ row: rowNo, message: `${ym} payroll is already finalised — its payslips will not change unless the month is reopened and regenerated` });
+          }
+          const key = emp.id + '|' + date;
+          if (marks.has(key)) warnings.push({ row: rowNo, message: `${emp.id} ${date} appears twice — row ${rowNo} wins over row ${marks.get(key).row}` });
+          marks.set(key, { row: rowNo, employeeId: emp.id, date, status, ...extra });
+        };
+
+        lines.forEach((line, idx) => {
+          const rowNo = idx + 2;   // line 1 is the header
+          if (!Array.isArray(line) || !line.some((v) => String(v ?? '').trim())) return;
+          const cell = (i) => (i >= 0 ? String(line[i] ?? '').trim() : '');
+          if (format === 'rows' && !cell(cDate) && !cell(cStatus)) return;
+          const who = csvEmployee(cell(cCode), cell(cName), emps);
+          if (!who.emp) {
+            if (format === 'grid' && !dayCols.some((d) => cell(d.i))) return;   // a blank template line
+            return errors.push({ row: rowNo, message: who.error });
+          }
+          const emp = who.emp;
+
+          if (format === 'grid') {
+            for (const d of dayCols) {
+              const raw = cell(d.i);
+              if (!raw) continue;
+              if (d.day > daysInMonth(year, month)) { errors.push({ row: rowNo, message: `Day ${d.day} does not exist in ${MONTHS[month - 1]} ${year}` }); continue; }
+              const status = ATT_CSV_ALIASES[csvKey(raw)];
+              if (!status) { errors.push({ row: rowNo, message: `${emp.id} day ${d.day}: "${raw}" is not a status (use P, A, H, R, L, WO, HO)` }); continue; }
+              // Week-offs and holidays come from the settings and the holiday
+              // calendar; writing them as rows would freeze today's calendar
+              // into the muster for good.
+              if (status === 'Week Off' || status === 'Holiday') { skipped += 1; continue; }
+              add(rowNo, emp, `${year}-${pad(month, 2)}-${pad(d.day, 2)}`, status);
+            }
+            return;
+          }
+
+          const date = csvDate(cell(cDate));
+          if (!date) return errors.push({ row: rowNo, message: `${emp.id}: "${cell(cDate)}" is not a date (use DD-MM-YYYY)` });
+          const status = ATT_CSV_ALIASES[csvKey(cell(cStatus))];
+          if (!status) return errors.push({ row: rowNo, message: `${emp.id} ${date}: "${cell(cStatus)}" is not a status (use P, A, H, R, L, WO, HO)` });
+          const tin = csvTime(cell(cIn)), tout = csvTime(cell(cOut));
+          if (tin === null || tout === null) return errors.push({ row: rowNo, message: `${emp.id} ${date}: unreadable time "${tin === null ? cell(cIn) : cell(cOut)}"` });
+          add(rowNo, emp, date, status, {
+            check_in: tin, check_out: tout, notes: cell(cNotes).slice(0, 255),
+            late_mark: tin && hhmmToMinutes(tin) > lateAfter ? 1 : 0,
+          });
+        });
+
+        /* An "L" with an approved leave behind it is already on the muster —
+           nothing to write. One without is written (HR said so) but flagged:
+           it is paid and neither docks a balance nor counts as loss of pay. */
+        const leaveMarks = [...marks.values()].filter((m) => m.status === 'Leave');
+        if (leaveMarks.length) {
+          const dates = leaveMarks.map((m) => m.date).sort();
+          const approved = await q(
+            `SELECT employee_id, from_date, to_date FROM leaves
+              WHERE status = 'Approved' AND employee_id IS NOT NULL AND to_date >= $1 AND from_date <= $2`,
+            [dates[0], dates[dates.length - 1]],
+          ).catch(() => []);
+          const covered = new Set();
+          for (const l of approved) for (const d of dateRange(isoDate(l.from_date), isoDate(l.to_date))) covered.add(l.employee_id + '|' + d);
+          for (const m of leaveMarks) {
+            const key = m.employeeId + '|' + m.date;
+            if (covered.has(key)) { marks.delete(key); skipped += 1; continue; }
+            warnings.push({ row: m.row, message: `${m.employeeId} ${m.date}: marked Leave but no approved leave exists — it will be paid without touching the leave balance. Upload it through the Leave CSV to deduct it.` });
+          }
+        }
+
+        const summary = {};
+        for (const m of marks.values()) summary[m.status] = (summary[m.status] || 0) + 1;
+        let saved = 0;
+        if (!dryRun) {
+          const by = (req.session?.user?.name || '') + ' (CSV)';
+          for (const m of marks.values()) if (await upsertAttendance(m, by)) saved += 1;
+        }
+        res.json({
+          dryRun, format, ready: marks.size, saved, skipped, summary,
+          employees: new Set([...marks.values()].map((m) => m.employeeId)).size,
+          errors: errors.slice(0, 300), errorCount: errors.length,
+          warnings: warnings.slice(0, 300), warningCount: warnings.length,
+        });
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -2813,6 +3006,166 @@ function mountHrms(app, ctx) {
         // and is the applicant's problem, a notice explains why the request
         // went somewhere other than their usual approver.
         res.json({ success: true, id, days, warning, notice: tierNote, approver: approverName });
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    /* CSV upload of leave HR already knows about — a paper register, the
+       factory floor that has no login, a month being caught up. Each line
+       lands as an APPROVED request decided by the uploader and books the
+       balance exactly as an approval would; no approval or decision mail
+       goes out, since nobody is being asked anything. Columns: Code/Name,
+       Leave Type, From, To (defaults to From), optional Half Day, Days,
+       Reason, Status. A Status column that says anything but Approved skips
+       the line, so an exported register can be uploaded as it stands.
+       dryRun (the default) only validates — same contract as the attendance
+       upload. Overlaps with an existing request are refused rather than
+       guessed at: deleting the old one is a decision for HR to make. */
+    app.post('/api/hr/leaves/import', requireAuth, requireAdmin, hrReady, async (req, res) => {
+      try {
+        const b = req.body || {};
+        const dryRun = b.dryRun !== false;
+        const header = (Array.isArray(b.header) ? b.header : []).map(csvKey);
+        const lines = Array.isArray(b.rows) ? b.rows : [];
+        if (!header.length || !lines.length) return res.status(400).json({ error: 'The file has no rows under its header line' });
+        if (lines.length > 3000) return res.status(400).json({ error: 'Upload at most 3,000 lines at a time' });
+
+        const col = (...names) => header.findIndex((h) => names.includes(h));
+        const cCode = col('code', 'empcode', 'employeecode', 'employeeid', 'empid', 'id', 'employeeno', 'empno');
+        const cName = col('name', 'employeename', 'employee', 'empname');
+        const cType = col('leavetype', 'type', 'leavecode', 'leave');
+        const cFrom = col('from', 'fromdate', 'startdate', 'start', 'date', 'leavedate');
+        const cTo = col('to', 'todate', 'enddate', 'end', 'tilldate');
+        const cHalf = col('halfday', 'half', 'session');
+        const cDays = col('days', 'totaldays', 'noofdays', 'numberofdays');
+        const cReason = col('reason', 'remarks', 'remark', 'notes');
+        const cStatus = col('status');
+        if (cCode < 0 && cName < 0) return res.status(400).json({ error: 'The file needs an Employee Code (or Name) column' });
+        if (cType < 0 || cFrom < 0) return res.status(400).json({ error: 'The file needs Leave Type and From Date columns' });
+
+        const emps = await q(`SELECT id, name, branch, user_id, doj, dol FROM hr_employees`);
+        const types = await leaveTypes();
+        const typeOf = (raw) => {
+          const k = csvKey(raw);
+          if (!k) return null;
+          return types.find((t) => csvKey(t.code) === k || csvKey(t.name) === k
+            || csvKey(String(t.name || '').replace(/\s*leave$/i, '')) === k) || null;
+        };
+        const halfOf = (raw) => {
+          const k = csvKey(raw);
+          if (!k || ['full', 'fullday', 'no', 'n', '0', 'none'].includes(k)) return 'full';
+          if (['first', '1st', 'firsthalf', '1sthalf', 'fh', '1', 'yes', 'y', 'half', 'morning'].includes(k)) return 'first';
+          if (['second', '2nd', 'secondhalf', '2ndhalf', 'sh', '2', 'afternoon'].includes(k)) return 'second';
+          return null;
+        };
+        const closed = await finalisedMonths();
+        const errors = [], warnings = [], ready = [];
+        let skipped = 0;
+
+        for (let idx = 0; idx < lines.length; idx++) {
+          const line = lines[idx];
+          const rowNo = idx + 2;
+          if (!Array.isArray(line)) continue;
+          const cell = (i) => (i >= 0 ? String(line[i] ?? '').trim() : '');
+          // A template line that only carries the employee — nothing to book.
+          if (!cell(cType) && !cell(cFrom) && !cell(cTo)) continue;
+          if (cStatus >= 0 && cell(cStatus) && !/^approved$/i.test(cell(cStatus))) { skipped += 1; continue; }
+
+          const who = csvEmployee(cell(cCode), cell(cName), emps);
+          if (!who.emp) { errors.push({ row: rowNo, message: who.error }); continue; }
+          const emp = who.emp;
+          const type = typeOf(cell(cType));
+          if (!type) { errors.push({ row: rowNo, message: `${emp.id}: "${cell(cType)}" is not a leave type (${types.map((t) => t.code).join(', ')})` }); continue; }
+          const from = csvDate(cell(cFrom));
+          const to = cell(cTo) ? csvDate(cell(cTo)) : from;
+          if (!from || !to) { errors.push({ row: rowNo, message: `${emp.id}: unreadable date "${!from ? cell(cFrom) : cell(cTo)}" (use DD-MM-YYYY)` }); continue; }
+          if (to < from) { errors.push({ row: rowNo, message: `${emp.id}: To (${to}) is before From (${from})` }); continue; }
+          const half = halfOf(cell(cHalf));
+          if (!half) { errors.push({ row: rowNo, message: `${emp.id}: Half Day "${cell(cHalf)}" — use Full, First or Second` }); continue; }
+          if (half !== 'full' && to !== from) { errors.push({ row: rowNo, message: `${emp.id}: a half day must start and end on the same date` }); continue; }
+          const doj = isoDate(emp.doj), dol = isoDate(emp.dol);
+          if ((doj && from < doj) || (dol && to > dol)) { errors.push({ row: rowNo, message: `${emp.id} ${from}–${to}: outside ${emp.name}'s employment` }); continue; }
+          let days = num(cell(cDays));
+          if (cell(cDays) && !(days > 0 && days <= 365)) { errors.push({ row: rowNo, message: `${emp.id}: Days "${cell(cDays)}" is not a number of days` }); continue; }
+          if (!days) days = await leaveDayCount(from, to, half, emp.branch);
+          if (!(days > 0)) { errors.push({ row: rowNo, message: `${emp.id} ${from}–${to}: works out to zero leave days (all week-offs/holidays?)` }); continue; }
+          ready.push({ row: rowNo, emp, code: type.code, from, to, half, days, reason: cell(cReason).slice(0, 1000) });
+        }
+
+        /* Overlaps — with what is already on file (anything not rejected or
+           withdrawn), and between two lines of this same upload. Two half
+           days on one date (first + second) are not an overlap. */
+        const clash = (a, b2) => a.from <= b2.to && b2.from <= a.to
+          && !(a.from === a.to && b2.from === b2.to && a.half !== 'full' && b2.half !== 'full' && a.half !== b2.half);
+        if (ready.length) {
+          const lo = ready.reduce((m, r) => (r.from < m ? r.from : m), ready[0].from);
+          const hi = ready.reduce((m, r) => (r.to > m ? r.to : m), ready[0].to);
+          const existing = (await q(
+            `SELECT id, employee_id, from_date, to_date, half_day, status FROM leaves
+              WHERE employee_id IS NOT NULL AND to_date >= $1 AND from_date <= $2`, [lo, hi],
+          ).catch(() => [])).filter((l) => !/reject|cancel|withdraw/i.test(String(l.status || '')))
+            .map((l) => ({ id: l.id, employeeId: l.employee_id, from: isoDate(l.from_date), to: isoDate(l.to_date), half: l.half_day || 'full', status: l.status }));
+          const kept = [];
+          for (const r of ready) {
+            const old = existing.find((l) => l.employeeId === r.emp.id && clash(r, l));
+            if (old) { errors.push({ row: r.row, message: `${r.emp.id} ${r.from}–${r.to}: overlaps ${old.id} (${old.from}–${old.to}, ${old.status}) already on file` }); continue; }
+            const twin = kept.find((k) => k.emp.id === r.emp.id && clash(r, k));
+            if (twin) { errors.push({ row: r.row, message: `${r.emp.id} ${r.from}–${r.to}: overlaps row ${twin.row} of this file` }); continue; }
+            kept.push(r);
+          }
+          ready.length = 0;
+          ready.push(...kept);
+        }
+
+        // Balance check, running through the file so two lines for the same
+        // person draw down one balance. A warning — payroll makes it LOP.
+        const used = {};
+        const closedHit = new Set();
+        for (const r of ready) {
+          for (const ym of new Set([r.from.slice(0, 7), r.to.slice(0, 7)])) {
+            if (closed.has(ym) && !closedHit.has(ym)) {
+              closedHit.add(ym);
+              warnings.push({ row: r.row, message: `${ym} payroll is already finalised — its payslips will not change unless the month is reopened and regenerated` });
+            }
+          }
+          if (r.code === 'LWP') continue;
+          const yr = Number(r.from.slice(0, 4));
+          const key = `${r.emp.id}|${yr}|${r.code}`;
+          if (used[key] === undefined) used[key] = 0;
+          const available = balanceOf(await ensureBalance(r.emp.id, yr, r.code)) - used[key];
+          if (r.days > available) {
+            warnings.push({ row: r.row, message: `${r.emp.id} ${r.code}: only ${money(Math.max(0, available))} left — ${money(r.days - Math.max(0, available))} day(s) go below zero` });
+          }
+          used[key] += r.days;
+        }
+
+        const summary = {};
+        for (const r of ready) summary[r.code] = money((summary[r.code] || 0) + r.days);
+        let saved = 0;
+        if (!dryRun) {
+          const by = (req.session?.user?.name || '') + ' (CSV)';
+          for (const r of ready) {
+            const id = await withSeqId('leaves', 'LV', 4, (newId) => pool.query(
+              `INSERT INTO leaves (id, user_id, user_name, employee_id, type, leave_type, half_day, total_days,
+                                   from_date, to_date, reason, status, approver, approver_name, decided_at, decided_by)
+               VALUES ($1,$2,$3,$4,'Leave',$5,$6,$7,$8,$9,$10,'Approved',$11,$12,NOW(),$13)`,
+              [newId, r.emp.user_id || null, r.emp.name || r.emp.id, r.emp.id, r.code, r.half, r.days,
+               r.from, r.to, r.reason, by, by, by],
+            ));
+            if (r.code !== 'LWP') {
+              const yr = Number(r.from.slice(0, 4));
+              await bumpUsed(r.emp.id, yr, r.code, r.days);
+              const after = balanceOf(await ensureBalance(r.emp.id, yr, r.code));
+              await pool.query(`UPDATE leaves SET balance_after = $1 WHERE id = $2`, [after, id]);
+            }
+            saved += 1;
+          }
+        }
+        res.json({
+          dryRun, ready: ready.length, saved, skipped, summary,
+          employees: new Set(ready.map((r) => r.emp.id)).size,
+          errors: errors.slice(0, 300), errorCount: errors.length,
+          warnings: warnings.slice(0, 300), warningCount: warnings.length,
+        });
       } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

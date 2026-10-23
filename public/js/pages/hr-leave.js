@@ -72,7 +72,8 @@ window.Pages['hr-leave'] = (() => {
         </style>
         ${H.header('Leave Management',
           admin ? 'Requests, approvals, balances and the holiday calendar' : 'Apply for leave and track your balance',
-          `<button id="hrl-apply" class="btn-primary btn-sm">+ Apply for Leave</button>`)}
+          (admin ? `<button id="hrl-import" class="btn-secondary btn-sm">Upload CSV</button>` : '')
+          + `<button id="hrl-apply" class="btn-primary btn-sm">+ Apply for Leave</button>`)}
         ${admin && pending ? `<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:11px 14px;
            margin-bottom:14px;font-size:12.5px;color:#92400e;">
            ${pending} leave request${pending === 1 ? '' : 's'} waiting on a decision.</div>` : ''}
@@ -317,6 +318,7 @@ window.Pages['hr-leave'] = (() => {
     };
 
     on('hrl-apply', 'click', openApply);
+    on('hrl-import', 'click', importLeaves);
     on('hrl-f-status', 'change', (e) => { _statusFilter = e.target.value; reload(loadRequests); });
     // An employee's balance strip sits on the Requests tab, so changing the
     // year has to refetch it here too — not only on the admin Balances tab.
@@ -714,6 +716,33 @@ window.Pages['hr-leave'] = (() => {
           return [H.num(c.opening) + H.num(c.accrued), H.num(c.used), H.num(c.balance)];
         })]));
     H.toast('Balances exported');
+  }
+
+  /* Upload leave HR already knows about. Every line lands approved and
+     books the balance; nobody is mailed (see /api/hr/leaves/import). */
+  function importLeaves() {
+    const codes = _types.map((t) => t.code).join(', ') || 'CL, SL, EL, LWP';
+    H.csvImport({
+      id: 'hrl-imp', title: 'Upload Leave CSV', subtitle: 'Each line is saved as an approved leave',
+      endpoint: '/api/hr/leaves/import',
+      help: `Columns: <b>Code</b> (or Name), <b>Leave Type</b> (${H.esc(codes)}), <b>From</b>, <b>To</b>,
+        and optionally <b>Half Day</b> (First / Second), <b>Days</b>, <b>Reason</b>. Dates as DD-MM-YYYY;
+        To can be left blank for a single day. Days is worked out from the dates when left blank.<br>
+        Each line is saved as <b>Approved</b> and deducted from the balance — no approval mail goes out.
+        A line that overlaps a leave already on file is refused, and lines whose Status says anything
+        other than Approved are skipped.`,
+      template: () => ({
+        name: 'Leave upload.csv',
+        columns: ['Code', 'Name', 'Leave Type', 'From', 'To', 'Half Day', 'Reason'],
+        rows: (_masters.employees || []).filter((e) => e.status === 'Active').map((e) => [e.id, e.name, '', '', '', '', '']),
+      }),
+      onDone: async () => {
+        _balances = null;
+        await loadRequests();
+        await loadMyBalances();
+        render();
+      },
+    });
   }
 
   return {

@@ -421,6 +421,110 @@ window.HR = (function () {
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 300);
   }
 
+  /* Reads a CSV the way Excel writes one: quoted cells, doubled quotes,
+     CRLF, a BOM, and — on machines set to a European locale — semicolons
+     instead of commas. Returns { header, rows } with every cell a string. */
+  function parseCsv(text) {
+    const src = String(text || '').replace(/^﻿/, '');
+    const first = src.split(/\r?\n/, 1)[0] || '';
+    const count = (ch) => first.split(ch).length - 1;
+    const sep = [',', ';', '\t'].reduce((best, ch) => (count(ch) > count(best) ? ch : best), ',');
+    const out = [];
+    let row = [], cell = '', quoted = false;
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (quoted) {
+        if (c === '"' && src[i + 1] === '"') { cell += '"'; i++; }
+        else if (c === '"') quoted = false;
+        else cell += c;
+      } else if (c === '"') quoted = true;
+      else if (c === sep) { row.push(cell); cell = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && src[i + 1] === '\n') i++;
+        row.push(cell); out.push(row); row = []; cell = '';
+      } else cell += c;
+    }
+    if (cell || row.length) { row.push(cell); out.push(row); }
+    const rows = out.filter((r) => r.some((v) => v.trim()));
+    return { header: (rows.shift() || []).map((h) => h.trim()), rows };
+  }
+
+  /* The upload dialog shared by the attendance and leave CSV imports.
+     Picking a file sends it to `endpoint` as a dry run and shows what would
+     happen — counts, every problem row, every warning; Import then sends the
+     same rows for real. `help` is trusted HTML written by the page. */
+  function csvImport({ id, title, subtitle = '', endpoint, extra = () => ({}), help = '', template, onDone }) {
+    let parsed = null;
+    const box = (bg, bd, fg, head, items, total) => !items.length ? '' : `
+      <div style="background:${bg};border:1px solid ${bd};border-radius:10px;padding:10px 13px;margin-top:10px;font-size:12px;color:${fg};">
+        <div style="font-weight:700;margin-bottom:5px;">${esc(head)}</div>
+        <div style="max-height:180px;overflow:auto;line-height:1.6;">
+          ${items.map((x) => `<div>Row ${esc(x.row)}: ${esc(x.message)}</div>`).join('')}
+          ${total > items.length ? `<div style="font-style:italic;">…and ${total - items.length} more</div>` : ''}
+        </div></div>`;
+    const setOk = (n) => {
+      [document.getElementById(`${id}-ok`), document.getElementById(`${id}-ok-top`)].filter(Boolean).forEach((b) => {
+        b.disabled = !n;
+        b.textContent = n ? `Import ${n} ${n === 1 ? 'entry' : 'entries'}` : 'Import';
+      });
+    };
+    const send = (dryRun) => post(endpoint, { ...extra(), header: parsed.header, rows: parsed.rows, dryRun });
+
+    openModal({
+      id, title, subtitle, width: 640, confirmText: 'Import',
+      bodyHTML: `
+        <div style="font-size:12.5px;color:#475569;line-height:1.6;margin-bottom:13px;">${help}</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input type="file" id="${id}-file" accept=".csv,text/csv" style="font-size:12.5px;flex:1;min-width:0;">
+          ${template ? `<button type="button" id="${id}-tpl" class="btn-ghost btn-sm">Download template</button>` : ''}
+        </div>
+        <div id="${id}-result"></div>`,
+      onOpen: () => {
+        setOk(0);
+        document.getElementById(`${id}-tpl`)?.addEventListener('click', () => {
+          const t = typeof template === 'function' ? template() : template;
+          downloadCsv(t.name, t.columns, t.rows || []);
+        });
+        document.getElementById(`${id}-file`)?.addEventListener('change', async (e) => {
+          const file = e.target.files && e.target.files[0];
+          const out = document.getElementById(`${id}-result`);
+          setOk(0);
+          parsed = null;
+          if (!file || !out) return;
+          out.innerHTML = `<div style="font-size:12.5px;color:#94a3b8;margin-top:12px;">Checking ${esc(file.name)}…</div>`;
+          try {
+            parsed = parseCsv(await file.text());
+            if (!parsed.rows.length) throw new Error('No rows found under the header line');
+            const r = await send(true);
+            const chips = Object.entries(r.summary || {}).map(([k, v]) => pill(`${k}: ${v}`, 'neutral')).join(' ');
+            out.innerHTML = `
+              <div style="margin-top:14px;padding:12px 14px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;font-size:12.5px;color:#334155;">
+                <div><b>${esc(r.ready)}</b> ${r.ready === 1 ? 'entry' : 'entries'} ready for <b>${esc(r.employees)}</b> employee${r.employees === 1 ? '' : 's'}
+                  ${r.format ? ` · ${r.format === 'grid' ? 'muster grid layout' : 'one row per day layout'}` : ''}
+                  ${r.skipped ? ` · ${esc(r.skipped)} skipped (already covered / not needed)` : ''}
+                  ${r.errorCount ? ` · <span style="color:#b91c1c;font-weight:700;">${esc(r.errorCount)} with problems — these will be left out</span>` : ''}</div>
+                ${chips ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">${chips}</div>` : ''}
+              </div>
+              ${box('#fef2f2', '#fecaca', '#991b1b', 'Problems (not imported)', r.errors || [], r.errorCount || 0)}
+              ${box('#fffbeb', '#fde68a', '#92400e', 'Check before importing', r.warnings || [], r.warningCount || 0)}`;
+            setOk(r.ready);
+          } catch (err) {
+            parsed = null;
+            out.innerHTML = `<div style="margin-top:12px;font-size:12.5px;color:#b91c1c;">${esc(err?.message || 'Could not read that file')}</div>`;
+          }
+        });
+      },
+      onConfirm: async () => {
+        if (!parsed) throw new Error('Choose a CSV file first');
+        const r = await send(false);
+        closeModal(id);
+        toast(`Imported ${r.saved} ${r.saved === 1 ? 'entry' : 'entries'}`
+          + (r.errorCount ? ` — ${r.errorCount} row${r.errorCount === 1 ? '' : 's'} left out` : ''));
+        if (onDone) await onDone(r);
+      },
+    });
+  }
+
   // Year options for the HR filters: next year down to 2020.
   const yearList = () => {
     const y = new Date().getFullYear();
@@ -434,7 +538,7 @@ window.HR = (function () {
     api, post, patch, del, toast, fail,
     header, tabs, stats, table, pill, statusPill, TH, TD,
     field, select, textarea, readout, grid, sectionTitle,
-    openModal, closeModal, val, spinner, empty, monthYearPicker, downloadCsv,
+    openModal, closeModal, val, spinner, empty, monthYearPicker, downloadCsv, parseCsv, csvImport,
     LABEL, CONTROL,
   };
 })();

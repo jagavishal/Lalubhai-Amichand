@@ -938,8 +938,12 @@ window.Pages['proforma-invoice'] = (() => {
   // A preview either way: the server assigns the real one at submit.
   function _piNoDisplay() {
     if (!_reviseOf) return _nextPiNumber || 'Loading…';
-    const m = /^(.*?)\s+R(\d+)$/i.exec(_reviseOf.piNo);
-    return m ? m[1] + ' R' + (parseInt(m[2], 10) + 1) : _reviseOf.piNo + ' R1';
+    return _nextRevNo(_reviseOf.piNo);
+  }
+
+  function _nextRevNo(piNo) {
+    const m = /^(.*?)\s+R(\d+)$/i.exec(piNo);
+    return m ? m[1] + ' R' + (parseInt(m[2], 10) + 1) : piNo + ' R1';
   }
 
   function _startRevise(row) {
@@ -1038,7 +1042,7 @@ window.Pages['proforma-invoice'] = (() => {
         + '<div style="font-size:13px;font-weight:700;color:#1e40af;">Revising ' + esc(_reviseOf.piNo) + '</div>'
         + '<div style="font-size:12px;color:#3b6fc4;margin-top:2px;">Saving issues the next revision of this same number. '
           + esc(_reviseOf.piNo) + ' is marked Superseded and keeps its own PDF as the record of what was first offered'
-          + (_reviseOf.status === 'Priced' ? '. Rates carry over for every line you leave unchanged; a new or re-specced line comes through unpriced.' : '.')
+          + (_reviseOf.status === 'Priced' ? '. Rates carry over for every line whose model and size you leave unchanged (rewording the item name is fine); a new or re-specced line comes through unpriced. To change a rate, use Edit Price instead.' : '.')
         + '</div>'
       + '</div>'
       + '<button type="button" id="pic-revise-cancel" style="padding:6px 12px;border-radius:8px;background:#fff;border:1.5px solid #bfdbfe;color:#1e40af;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Start a new PI instead</button>'
@@ -1421,12 +1425,15 @@ window.Pages['proforma-invoice'] = (() => {
     // editing a PI they already hold a copy of.
     const revise = (r.canRevise && r.form)
       ? '<button type="button" class="pic-revise-btn btn-secondary btn-sm" data-pi="' + pi + '">Revise</button>' : '';
+    // A wrong rate or a charge added afterwards — out in the open rather than
+    // behind "More", since it is the usual reason to touch a priced PI.
+    const editPrice = (canPrice && r.status === 'Priced')
+      ? '<button type="button" class="pic-price-btn btn-secondary btn-sm" data-pi="' + pi + '">Edit Price</button>' : '';
     const menu = [
-      (canPrice && r.status === 'Priced') ? '<button type="button" role="menuitem" class="pil-mi pic-price-btn" data-pi="' + pi + '">Edit Price</button>' : '',
       live ? '<button type="button" role="menuitem" class="pil-mi pic-cancel-btn" data-pi="' + pi + '">Cancel PI</button>' : '',
       Utils.ownerDeleteBtn('pic-delete-btn pil-mi pil-mi-danger', 'pi', r.piNo).replace('<button ', '<button role="menuitem" '),
     ].join('');
-    return primary + revise + _moreMenuHtml(menu, 'More actions for PI ' + r.piNo);
+    return primary + editPrice + revise + _moreMenuHtml(menu, 'More actions for PI ' + r.piNo);
   }
 
   // A "⋯" button and its menu; '' when there is nothing to put in it.
@@ -1760,6 +1767,11 @@ window.Pages['proforma-invoice'] = (() => {
           + '</button>'
         + '</div>'
         + '<div class="pi-sheet-body" style="padding:22px 24px;max-height:82vh;overflow-y:auto;display:flex;flex-direction:column;gap:16px;">'
+          + (row.status === 'Priced'
+              ? '<div style="padding:10px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;font-size:12.5px;color:#1e40af;">'
+                + 'This PI is already priced, so saving issues it again as <b>' + esc(_nextRevNo(row.piNo)) + '</b> with a new PDF. '
+                + esc(row.piNo) + ' is marked Superseded and keeps its own PDF as the record of what was first offered.</div>'
+              : '')
           // Basis and currency come first because everything under them is
           // read in those terms — and because they relabel the PI itself, not
           // just this screen.
@@ -1806,7 +1818,9 @@ window.Pages['proforma-invoice'] = (() => {
                   // a Draft raised before the switch still has to be priceable.
                   + '<td class="m-card-title" style="padding:6px 8px;font-size:12.5px;">' + esc(it.modelNo || it.itemCode || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.clientCode || '—') + '</td>'
-                  + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.itemName || it.description || '—') + '</td>'
+                  // Editable here: a description fix should not need a whole
+                  // revision of the PI. Blank keeps the stored one.
+                  + '<td data-label="Item Name" style="padding:6px 8px;"><input type="text" class="pipm-name" aria-label="Item Name" value="' + esc(it.itemName || it.description || '') + '" placeholder="Item Name" style="width:100%;min-width:170px;box-sizing:border-box;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:12.5px;" /></td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;">' + esc(it.size || '—') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;text-align:right;">' + esc(it.qty || '') + '</td>'
                   + '<td style="padding:6px 8px;font-size:12.5px;color:#64748b;text-align:right;">' + (weightPc ? esc(weightPc) : '—') + '</td>'
@@ -1957,6 +1971,7 @@ window.Pages['proforma-invoice'] = (() => {
     const items = Array.from(modal.querySelectorAll('.pipm-item-row')).map(row => ({
       index: parseInt(row.dataset.index, 10),
       rate: row.querySelector('.pipm-rate').value.trim(),
+      itemName: row.querySelector('.pipm-name').value.trim(),
     }));
     const chargeLines = (kind) => Array.from(modal.querySelectorAll('.pipm-charge-row[data-kind="' + kind + '"]')).map(row => ({
       label: row.querySelector('.pipm-charge-label').value.trim(),
@@ -1980,7 +1995,7 @@ window.Pages['proforma-invoice'] = (() => {
       });
       // The server closes the tracker's "Add Pricing" step as part of this
       // save, so say so — that step is why the user is on this screen at all.
-      Utils.showToast('PI ' + piNo + ' priced'
+      Utils.showToast((result.revisedFrom ? 'Price revised — issued as PI ' + result.piNo : 'PI ' + piNo + ' priced')
         + (result.pdfLink ? ' — PDF updated on Drive' : '')
         + (result.fmsStepDone ? ' · Add Pricing step marked done' : ''), 'success');
       const returnTo = _priceReturnHash;
@@ -3449,12 +3464,13 @@ window.Pages['proforma-invoice'] = (() => {
     if (!row) return { ok: false, reason: 'PI ' + wanted + ' is not in the PI log' };
     if (row.status === 'Cancelled') return { ok: false, reason: 'PI ' + wanted + ' has been cancelled' };
     // canSetPrice is the server's own verdict — the 'set_price' feature AND
-    // still-a-Draft. Anything else and the PUT would come back 403 or 400.
+    // a live (Draft or Priced) PI. Anything else and the PUT would come back
+    // 403 or 400.
     if (!row.canSetPrice) {
       return {
         ok: false,
-        reason: row.status === 'Priced'
-          ? 'PI ' + wanted + ' is already priced'
+        reason: row.status === 'Superseded'
+          ? 'PI ' + wanted + ' has been revised — price its latest revision'
           : 'You do not have permission to price a Proforma Invoice',
       };
     }

@@ -224,6 +224,35 @@ window.Pages['retail-dashboard'] = (() => {
   }
 
   /* ── Manage Lists modal ───────────────────────────────────────────── */
+  /* Monthly Expense Report — goes out by itself on the 5th for the month
+     before (one mail per branch, see sendRetailMonthlyReports in server.js).
+     This sends one now: a resend, or a month the schedule didn't cover. */
+  function openReport() {
+    const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
+    const prev = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    H.openModal({
+      id: 'rdr', title: 'Email Monthly Expense Report', subtitle: 'Sent automatically on the 5th for the previous month',
+      width: 440, confirmText: 'Send',
+      bodyHTML: `<div style="display:flex;flex-direction:column;gap:12px;">
+          <label style="font-size:12px;font-weight:600;color:#475569;">Month
+            <input type="month" id="rdr-month" value="${prev}" style="${H.CONTROL}margin-top:4px;" /></label>
+          <label style="font-size:12px;font-weight:600;color:#475569;">Branch
+            <select id="rdr-branch" style="${H.CONTROL}margin-top:4px;">
+              <option value="">All branches (one mail each)</option>
+              ${(_config.branches || []).map((b) => `<option value="${H.esc(b)}">${H.esc(b)}</option>`).join('')}
+            </select></label>
+          <div style="font-size:11.5px;color:#94a3b8;">To factory@laltd.in · CC accounts@, retail@, salonianchan@laltd.in</div>
+        </div>`,
+      onConfirm: async () => {
+        const month = H.val('rdr-month');
+        if (!month) throw new Error('Pick a month');
+        const r = await H.post('/api/retail-dashboard/monthly-report', { month, branch: H.val('rdr-branch') });
+        H.closeModal('rdr');
+        H.toast('Sent: ' + r.sent.map((x) => `${x.branch} (${x.count})`).join(', '));
+      },
+    });
+  }
+
   function openLists() {
     const section = (type, title, singular, list) => `
       <div style="margin-bottom:16px;">
@@ -327,7 +356,8 @@ window.Pages['retail-dashboard'] = (() => {
       </style>
       <div id="rd-wrap" class="animate-fade-in">
         ${H.header('Retail Dashboard', 'Branch expenses — logged, tracked and summarised',
-          `<button id="rd-lists" class="btn-secondary btn-sm">Manage Lists</button>
+          `${H.isAdmin() ? '<button id="rd-report" class="btn-secondary btn-sm">Email Report</button>' : ''}
+           <button id="rd-lists" class="btn-secondary btn-sm">Manage Lists</button>
            <button id="rd-new" class="btn-primary btn-sm">+ New Expense</button>`)}
         ${H.tabs('rd', [{ key: 'dashboard', label: 'Dashboard' }, { key: 'expenses', label: 'Expenses' }], _tab)}
         <div id="rd-tab-body">${_tab === 'dashboard' ? dashboardTab() : (_expenses ? expensesTab() : H.spinner('Loading expenses…'))}</div>
@@ -340,6 +370,7 @@ window.Pages['retail-dashboard'] = (() => {
     document.querySelectorAll('[data-rd-tab]').forEach((btn) => btn.addEventListener('click', () => switchTab(btn.dataset.rdTab)));
     on('rd-new', 'click', openNew);
     on('rd-lists', 'click', openLists);
+    on('rd-report', 'click', openReport);
     if (_tab === 'expenses') {
       on('rd-month', 'change', (e) => { _filters.month = e.target.value; reloadExpenses(); });
       on('rd-branch', 'change', (e) => { _filters.branch = e.target.value; reloadExpenses(); });

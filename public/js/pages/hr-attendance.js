@@ -260,6 +260,7 @@ window.Pages['hr-attendance'] = (() => {
         ${H.monthYearPicker('hra', _month, _year)}
         ${H.select('hra-branch', 'Branch', _branch, ['All', ...(_masters.branches || [])])}
         <div><button id="hra-export" class="btn-secondary btn-sm" style="width:100%;">Export CSV</button></div>
+        <div><button id="hra-import" class="btn-secondary btn-sm" style="width:100%;">Upload CSV</button></div>
       </div>
       ${H.stats([
         { label: 'Employees', value: (_muster.rows || []).length },
@@ -454,6 +455,7 @@ window.Pages['hr-attendance'] = (() => {
       }
       reloadMuster();
     });
+    on('hra-import', 'click', importMuster);
 
     document.querySelectorAll('.hra-cell').forEach((b) => b.addEventListener('click', () => openCell(b.dataset)));
 
@@ -539,6 +541,31 @@ window.Pages['hr-attendance'] = (() => {
     ]);
     H.downloadCsv(`Muster Roll ${H.MONTHS[_month - 1]} ${_year}.csv`, cols, rows);
     H.toast('Muster roll exported');
+  }
+
+  /* Upload a month's attendance. The muster grid is its own template:
+     export (or download the blank sheet), fill in the codes, upload. */
+  function importMuster() {
+    const label = `${H.MONTHS[_month - 1]} ${_year}`;
+    const days = _muster?.days || [];
+    H.csvImport({
+      id: 'hra-imp', title: 'Upload Attendance CSV', subtitle: `Grid layout is read as ${label}`,
+      endpoint: '/api/hr/attendance/import',
+      extra: () => ({ month: _month, year: _year }),
+      help: `Two layouts work:<br>
+        <b>Muster grid</b> — Code, Name, then one column per day (1–31) with
+        <b>P</b> Present, <b>A</b> Absent, <b>H</b> Half Day, <b>R</b> Remote, <b>L</b> Leave.
+        This is what <i>Export CSV</i> gives, and it is read as <b>${H.esc(label)}</b> (the month picked above).<br>
+        <b>One row per day</b> — Code, Date, Status, and optionally In, Out, Notes. Dates as DD-MM-YYYY.<br>
+        Blank cells are left untouched. WO/HO come from the holiday calendar and are skipped.
+        Approved leave should go through Leave Management → Upload CSV so the balance is deducted.`,
+      template: () => ({
+        name: `Attendance ${label}.csv`,
+        columns: ['Code', 'Name', ...days.map((d) => String(Number(d.slice(8))))],
+        rows: (_muster?.rows || []).map((r) => [r.id, r.name, ...days.map(() => '')]),
+      }),
+      onDone: async () => { await loadMuster(); render(); },
+    });
   }
 
   return {
