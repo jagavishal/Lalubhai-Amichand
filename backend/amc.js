@@ -464,8 +464,12 @@ function mountAmc(app, ctx) {
       const approver = await addressesOf([s.approver_id]);
       const noteRow = note ? [['Note', escHtml(note).replace(/\n/g, '<br>')]] : [];
       let to = [], cc = [], heading, colour = '#0150AA', lead, subject, attachments = [], extra = [], actions = '';
+      // A no-buttons copy for someone who must hear about it but not act on it.
+      let copy = null;
       if (stage === 'raised' || stage === 'resubmitted') {
-        to = approver; cc = doer;
+        // The buttons go to the approver alone — the doer gets their own
+        // copy below, so they can never approve their own request.
+        to = approver;
         heading = stage === 'raised' ? 'Service Request — Approval Needed' : 'Service Request Updated — Approval Needed';
         lead = stage === 'raised'
           ? `<b>${escHtml(s.raised_by_name)}</b> has raised a service request and chose you as the approver. Please approve, reject or comment on it in the ERP.`
@@ -478,6 +482,12 @@ function mountAmc(app, ctx) {
           actions = decisionButtons([['Approve', '#16a34a', url('approve')], ['Comment', '#7c3aed', url('comment')], ['Reject', '#dc2626', url('reject')]]);
         }
         attachments = await quotationFiles(s.id);
+        copy = {
+          to: doer.filter((e) => !approver.some((a) => a.toLowerCase() === e.toLowerCase())),
+          heading: stage === 'raised' ? 'Service Request Raised' : 'Service Request Sent Back for Approval',
+          lead: `Your service request <b>${escHtml(s.id)}</b> is with <b>${escHtml(s.approver_name)}</b> for approval. You will be mailed once they decide.`,
+          subject: `${stage === 'raised' ? 'Raised' : 'Updated'}: ${s.id} ${s.service_type} — with ${s.approver_name} for approval`,
+        };
       } else if (stage === 'comment') {
         to = doer; cc = approver; colour = '#d97706';
         heading = 'Service Request — Comment from Approver';
@@ -519,18 +529,30 @@ function mountAmc(app, ctx) {
       to = uniqMail(to);
       cc = uniqMail(cc).filter((e) => !to.some((t) => t.toLowerCase() === e.toLowerCase()));
       if (!to.length && cc.length) to.push(cc.shift());
+      // No approver address on file: the doer still hears, without buttons.
+      if (copy && !to.length) { ({ to, heading, lead, subject } = copy); copy = null; actions = ''; attachments = []; }
       if (!mailer || !to.length) {
         console.log('[sms] mail not sent —', stage, s.id, '| mailer:', !!mailer, '| to:', to.join(', ') || '(none)');
         return;
       }
+      const rows = [...requestRows(s), ...extra, ...noteRow];
       await mailer.sendMail({
         from: `"Service Management" <${process.env.SMTP_USER}>`,
         to: to.join(', '), ...(cc.length ? { cc: cc.join(', ') } : {}),
         subject,
-        html: mailHtml({ heading, colour, lead, rows: [...requestRows(s), ...extra, ...noteRow], link: pageLink(), actions }),
+        html: mailHtml({ heading, colour, lead, rows, link: pageLink(), actions }),
         ...(attachments.length ? { attachments } : {}),
       });
       console.log('[sms]', stage, s.id, 'mailed to', to.join(', '), cc.length ? '| cc: ' + cc.join(', ') : '');
+      if (copy?.to.length) {
+        await mailer.sendMail({
+          from: `"Service Management" <${process.env.SMTP_USER}>`,
+          to: uniqMail(copy.to).join(', '),
+          subject: copy.subject,
+          html: mailHtml({ heading: copy.heading, colour: '#64748b', lead: copy.lead, rows, link: pageLink() }),
+        });
+        console.log('[sms]', stage, s.id, 'copy (no buttons) mailed to', copy.to.join(', '));
+      }
     })().catch((e) => console.error('[sms] mail', stage, s.id, '—', e.message));
   }
 

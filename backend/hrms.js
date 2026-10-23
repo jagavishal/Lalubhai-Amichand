@@ -2476,36 +2476,41 @@ function mountHrms(app, ctx) {
               pending against it count, or three pending requests could each
               pass on their own. EL (no quota — it is for emergencies) and LWP
               sit outside this.
-           2. PL is applied for at least 3 weeks (21 days) before it starts.
-              HR raising one on somebody's behalf is recording it, often after
-              the fact, so that is exempt.
-           3. PL cannot follow PL: when the applicant's previous leave was PL,
-              this one has to be another type. */
+           2. PL of more than 4 days is applied for at least 3 weeks (21
+              days) before it starts. HR raising one on somebody's behalf is
+              recording it, often after the fact, so that is exempt.
+           3. A PL of more than 4 days cannot follow another PL of more than
+              4 days: when the applicant's previous leave was such a PL, this
+              one has to be shorter or another type.
+           Rules 2 and 3 apply to long PL only (23 Oct 2026) — a PL of up to
+           4 days needs no notice and may follow a PL. */
         let warning = null;
         const dmy = (iso) => String(iso || '').split('-').reverse().join('-');
         const onBehalf = isAdminUser(user) && !!employeeId && (await selfEmployee(user))?.id !== employeeId;
-        if (code === 'PL' && !onBehalf) {
+        const PL_LONG = 4;   // days — rules 2 and 3 apply above this
+        const longPl = code === 'PL' && days > PL_LONG;
+        if (longPl && !onBehalf) {
           const today = isoDate(new Date());
           if (from < addDays(today, 21)) {
             return res.status(400).json({
-              error: `Privilege Leave must be applied for at least 3 weeks in advance — the earliest PL start date today is ${dmy(addDays(today, 21))}.`,
+              error: `Privilege Leave of more than ${PL_LONG} days must be applied for at least 3 weeks in advance — the earliest start date for it today is ${dmy(addDays(today, 21))}. A PL of up to ${PL_LONG} days needs no notice.`,
             });
           }
         }
-        if (code === 'PL') {
+        if (longPl) {
           // "Last" is the leave this one would follow — the latest starting
           // before it, not whatever happens to be booked furthest ahead.
           const who = employeeId
             ? ['employee_id = $2', [employeeId]]
             : ['(user_id = $2 OR LOWER(user_name) = LOWER($3))', [user?.id || '', user?.name || '']];
           const last = (await q(
-            `SELECT leave_type, from_date, to_date FROM leaves
+            `SELECT leave_type, from_date, to_date, total_days FROM leaves
               WHERE from_date < $1 AND ${who[0]} AND LOWER(COALESCE(status, '')) NOT IN ('rejected','cancelled','canceled','withdrawn')
               ORDER BY from_date DESC LIMIT 1`, [from, ...who[1]]).catch(() => []))[0];
-          if (last && String(last.leave_type || '').toUpperCase() === 'PL') {
+          if (last && String(last.leave_type || '').toUpperCase() === 'PL' && Number(last.total_days) > PL_LONG) {
             const lf = isoDate(last.from_date), lt = isoDate(last.to_date);
             return res.status(400).json({
-              error: `The last leave on record (${dmy(lf)}${lt && lt !== lf ? ' to ' + dmy(lt) : ''}) was Privilege Leave — PL cannot be taken twice in a row. Please apply for another leave type.`,
+              error: `The last leave on record (${dmy(lf)}${lt && lt !== lf ? ' to ' + dmy(lt) : ''}, ${Number(last.total_days)} days) was a Privilege Leave of more than ${PL_LONG} days — two such PLs cannot be taken one after the other. Apply for ${PL_LONG} days or fewer, or another leave type.`,
             });
           }
         }

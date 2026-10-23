@@ -445,6 +445,12 @@ SCHEMA.push(...BULK_MAIL_SCHEMA);
 const { AMC_SCHEMA, mountAmc } = require('./backend/amc.js');
 SCHEMA.push(...AMC_SCHEMA);
 
+// Quotation & Payment Approval — 3 quotations → Director approves one →
+// Admin forwards to Accounts → payments. Routes mounted further down (search
+// "mountQuotationApproval"). See backend/quotation-approval.js.
+const { QA_SCHEMA, mountQuotationApproval } = require('./backend/quotation-approval.js');
+SCHEMA.push(...QA_SCHEMA);
+
 // Office Inventory — office consumables (purchase, consumption, stock), the
 // replacement for the "Inventory Management System" sheet. Routes mounted
 // further down (search "mountOfficeInventory"). See backend/office-inventory.js.
@@ -3694,36 +3700,49 @@ async function urgentPaymentRecipients(requester) {
     return like.length === 1 ? like[0] : null;
   };
   const seen = new Set();
-  const resolve = async (list) => {
+  // The CC people are the approvers: each one, with the name a decision made
+  // from their mail is recorded under.
+  const approvers = [];
+  const resolve = async (list, named) => {
     const out = [];
-    const add = (email) => {
+    const add = (email, name) => {
       const e = String(email || '').trim();
-      if (!e || !e.includes('@') || seen.has(e.toLowerCase())) return;
+      if (!e || !e.includes('@')) return;
+      if (named && !approvers.some(a => a.email.toLowerCase() === e.toLowerCase())) approvers.push({ email: e, name: name || e });
+      if (seen.has(e.toLowerCase())) return;
       seen.add(e.toLowerCase());
       out.push(e);
     };
     for (const entry of list) {
       const s = String(entry || '').trim();
       if (!s) continue;
-      if (s.includes('@')) add(s);
+      if (s.includes('@')) add(s, (users.find(u => String(u.email || '').toLowerCase() === s.toLowerCase()) || {}).name);
       else {
         const u = byName(s);
-        if (u) add(await notifyAddressFor(u.id, u.email));
+        if (u) add(await notifyAddressFor(u.id, u.email), u.name);
         else console.log('[urgent-payment] no user matches mail entry:', s);
       }
     }
     return out;
   };
-  const to = await resolve(toCfg);
-  const cc = await resolve(ccCfg);
+  const to = await resolve(toCfg, false);
+  const cc = await resolve(ccCfg, true);
+  let requesterEmail = '';
   if (requester) {
-    const e = String(await notifyAddressFor(requester.id, requester.email) || '').trim();
+    requesterEmail = String(await notifyAddressFor(requester.id, requester.email) || '').trim();
+    const e = requesterEmail;
     if (e && e.includes('@') && !seen.has(e.toLowerCase())) { seen.add(e.toLowerCase()); cc.push(e); }
   }
-  return { to, cc };
+  return { to, cc, approvers, requesterEmail };
 }
 
-async function sendUrgentPaymentEmail({ to, cc, row, stage }) {
+/* Approve / Reject from the mail rides on the leave links' signed-token
+   scheme, namespaced ("up:UP0012") so no other module's token replays here. */
+const UP_TOKEN_NS = 'up:';
+const upActionUrl = (id, decision, email) =>
+  `${APP_ORIGIN}/up-action?t=${encodeURIComponent(leaveTokenFor(UP_TOKEN_NS + id, decision, email))}`;
+
+async function sendUrgentPaymentEmail({ to, cc, approvers = [], requesterEmail = '', row, stage }) {
   const mailer = getMailer();
   to = Array.isArray(to) ? to : [];
   cc = Array.isArray(cc) ? cc : [];
@@ -3771,7 +3790,53 @@ async function sendUrgentPaymentEmail({ to, cc, row, stage }) {
       }));
     }
   }
+  const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
   try {
+    if (!decided) {
+      /* Like a leave request: each approver gets their own mail with the
+         Approve / Reject buttons, bound to their address. Everyone else —
+         Accounts and the person who raised it — gets a copy without buttons,
+         so nobody can approve their own request from the mail. */
+      const deciders = approvers.filter(a => !same(a.email, requesterEmail));
+      for (const a of deciders) {
+        await mailer.sendMail({
+          from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+          to: a.email,
+          subject,
+          attachments,
+          html: _leaveMailHtml({
+            heading: 'Urgent Payment — Awaiting Your Approval',
+            colour: '#dc2626',
+            lead: `Hi <b>${esc(a.name)}</b>, <b>${esc(row.requested_by)}</b> has raised an urgent payment request.`,
+            rows,
+            actions: _decisionButtons(upActionUrl(row.id, 'Approved', a.email), upActionUrl(row.id, 'Rejected', a.email)),
+            footer: 'Either button opens a page asking you to confirm — no login needed. You can also decide it under <b>Approvals → Urgent Payment</b> in the ERP.',
+          }),
+        });
+        console.log('[email] urgent payment approval mail sent to:', a.email);
+      }
+      const copyTo = to.filter(e => !deciders.some(a => same(a.email, e)));
+      const copyCc = cc.filter(e => !deciders.some(a => same(a.email, e)) && !copyTo.some(t => same(t, e)));
+      if (!copyTo.length && copyCc.length) copyTo.push(copyCc.shift());
+      if (copyTo.length) {
+        await mailer.sendMail({
+          from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+          to: copyTo.join(', '),
+          cc: copyCc.length ? copyCc.join(', ') : undefined,
+          subject,
+          attachments,
+          html: _leaveMailHtml({
+            heading: 'Urgent Payment Request',
+            colour: '#64748b',
+            lead: `<b>${esc(row.requested_by)}</b> has raised an urgent payment request. ${deciders.length ? `It is with <b>${deciders.map(a => esc(a.name)).join('</b> / <b>')}</b> for approval.` : 'It is waiting for approval under <b>Approvals → Urgent Payment</b> in the ERP.'}`,
+            rows,
+            footer: 'This copy is for records — the Approve/Reject buttons were sent to the approvers alone. You will be mailed once it is decided.',
+          }),
+        });
+        console.log('[email] urgent payment copy (no buttons) sent to:', copyTo.join(', '), '| cc:', copyCc.join(', ') || '(none)');
+      }
+      return;
+    }
     await mailer.sendMail({
       from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
       to: to.join(', '),
@@ -3917,6 +3982,45 @@ app.get('/api/urgent-payments/:id/documents/:n', requireAuth, async (req, res) =
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
+/* Records an Approved / Rejected on a still-pending request and mails
+   everyone — shared by the Approvals tab and the buttons in the mail.
+   Returns { saved } or { status, error, row }. */
+async function decideUrgentPayment(id, decision, decidedBy, decisionNote) {
+  let current;
+  if (USE_DB) {
+    current = (await q('SELECT * FROM urgent_payments WHERE id=$1', [id]))[0];
+    if (!current) return { status: 404, error: 'Request not found' };
+    if (current.status !== 'pending') return { status: 409, error: `Already ${current.status}`, row: current };
+    // The status check above and this UPDATE used to be two separate
+    // steps with nothing tying them together — two admins deciding the
+    // same request within the same read window could both pass the check
+    // and both write, so whichever UPDATE ran last silently won (a
+    // Rejected could overwrite an already-mailed Approved, or vice versa).
+    // Making the UPDATE itself conditional on status still being 'pending'
+    // closes that window: only the first of the two can ever affect a row.
+    const upd = await pool.query(
+      `UPDATE urgent_payments SET status=$1, decided_by=$2, decided_at=NOW(), decision_note=$3 WHERE id=$4 AND status='pending'`,
+      [decision, decidedBy, decisionNote, id]);
+    current = (await q('SELECT * FROM urgent_payments WHERE id=$1', [id]))[0];
+    if (!upd.rowCount) return { status: 409, error: 'This request was just decided by someone else', row: current };
+  } else {
+    const store = await readStore();
+    current = (store.urgentPayments || []).find(r => r.id === id);
+    if (!current) return { status: 404, error: 'Request not found' };
+    if (current.status !== 'pending') return { status: 409, error: `Already ${current.status}`, row: current };
+    Object.assign(current, { status: decision, decided_by: decidedBy, decided_at: new Date().toISOString(), decision_note: decisionNote });
+    await writeStore(store);
+  }
+  const saved = upOut(current);
+  (async () => {
+    let requester = null;
+    try { requester = ((await readStore()).users || []).find(u => u.id === saved.requested_by_id) || null; } catch {}
+    const rcpt = await urgentPaymentRecipients(requester);
+    await sendUrgentPaymentEmail({ ...rcpt, row: saved, stage: 'decided' });
+  })().catch((e) => console.error('[urgent-payment] decision mail failed:', e.message));
+  return { saved };
+}
+
 app.patch('/api/urgent-payments', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
@@ -3926,42 +4030,92 @@ app.patch('/api/urgent-payments', requireAuth, async (req, res) => {
     if (!id) return res.status(400).json({ error: 'id required' });
     const decision = /^approved$/i.test(status) ? 'Approved' : /^rejected$/i.test(status) ? 'Rejected' : null;
     if (!decision) return res.status(400).json({ error: 'status must be Approved or Rejected' });
-    const decidedBy = user.name || user.email || '';
-    const decisionNote = String(note || '').trim();
-    let current;
-    if (USE_DB) {
-      current = (await q('SELECT * FROM urgent_payments WHERE id=$1', [id]))[0];
-      if (!current) return res.status(404).json({ error: 'Request not found' });
-      if (current.status !== 'pending') return res.status(409).json({ error: `Already ${current.status}` });
-      // The status check above and this UPDATE used to be two separate
-      // steps with nothing tying them together — two admins deciding the
-      // same request within the same read window could both pass the check
-      // and both write, so whichever UPDATE ran last silently won (a
-      // Rejected could overwrite an already-mailed Approved, or vice versa).
-      // Making the UPDATE itself conditional on status still being 'pending'
-      // closes that window: only the first of the two can ever affect a row.
-      const upd = await pool.query(
-        `UPDATE urgent_payments SET status=$1, decided_by=$2, decided_at=NOW(), decision_note=$3 WHERE id=$4 AND status='pending'`,
-        [decision, decidedBy, decisionNote, id]);
-      if (!upd.rowCount) return res.status(409).json({ error: 'This request was just decided by someone else' });
-      current = (await q('SELECT * FROM urgent_payments WHERE id=$1', [id]))[0];
-    } else {
-      const store = await readStore();
-      current = (store.urgentPayments || []).find(r => r.id === id);
-      if (!current) return res.status(404).json({ error: 'Request not found' });
-      if (current.status !== 'pending') return res.status(409).json({ error: `Already ${current.status}` });
-      Object.assign(current, { status: decision, decided_by: decidedBy, decided_at: new Date().toISOString(), decision_note: decisionNote });
-      await writeStore(store);
-    }
-    const saved = upOut(current);
-    (async () => {
-      let requester = null;
-      try { requester = ((await readStore()).users || []).find(u => u.id === saved.requested_by_id) || null; } catch {}
-      const rcpt = await urgentPaymentRecipients(requester);
-      await sendUrgentPaymentEmail({ ...rcpt, row: saved, stage: 'decided' });
-    })().catch((e) => console.error('[urgent-payment] decision mail failed:', e.message));
-    return res.json(saved);
+    const out = await decideUrgentPayment(id, decision, user.name || user.email || '', String(note || '').trim());
+    if (out.error) return res.status(out.status).json({ error: out.error });
+    return res.json(out.saved);
   } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+/* ── Deciding an urgent payment from the email ────────────────────────────────
+   Same shape as /leave-action: outside requireAuth (the signed token is the
+   authorisation), GET only shows a confirm page, POST decides. The token is
+   bound to the approver's address, and that address must still be one of the
+   approvers (urgent_payment_mail_cc) when it is used. */
+async function _upForToken(token) {
+  const claim = readLeaveToken(token);
+  if (!claim || !String(claim.id).startsWith(UP_TOKEN_NS)) {
+    return { error: 'This link is not valid. It may have been altered in transit — open Approvals → Urgent Payment in the ERP instead.' };
+  }
+  const id = claim.id.slice(UP_TOKEN_NS.length);
+  let row;
+  if (USE_DB) row = (await q('SELECT * FROM urgent_payments WHERE id=$1', [id]).catch(() => []))[0];
+  else row = ((await readStore()).urgentPayments || []).find(r => r.id === id);
+  if (!row) return { error: 'That urgent payment request no longer exists.' };
+  const { approvers } = await urgentPaymentRecipients(null);
+  const approver = approvers.find(a => a.email.toLowerCase() === String(claim.email || '').toLowerCase());
+  if (!approver) return { error: 'This link belongs to someone who is no longer an urgent-payment approver.' };
+  return { claim, row: upOut(row), approver };
+}
+
+const _upRows = (row) => [
+  ['Request No.', row.id],
+  ['Requested By', row.requested_by + (row.department ? ` (${row.department})` : '')],
+  ['Pay To', row.payee],
+  ['Amount', '₹' + Number(row.amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })],
+  ['Purpose', row.purpose],
+  ['Required By', row.required_by],
+];
+
+const _upAlreadyPage = (row) => _leaveActionPage({
+  title: 'Already decided', tone: 'plain',
+  lead: `This request was already marked <b>${escHtml(row.status)}</b>${row.decided_by ? ' by ' + escHtml(row.decided_by) : ''}. Nothing more to do.`,
+  rows: _upRows(row),
+});
+
+app.get('/up-action', async (req, res) => {
+  try {
+    await ensureSchema();
+    const { error, claim, row } = await _upForToken(req.query.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    if (row.status !== 'pending') return res.send(_upAlreadyPage(row));
+    const good = /^approved$/i.test(claim.decision);
+    const other = good ? 'Rejected' : 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? `Approve ${row.id}?` : `Reject ${row.id}?`,
+      tone: good ? 'good' : 'bad',
+      lead: `You are about to mark <b>${escHtml(row.requested_by)}</b>'s urgent payment request as <b>${escHtml(claim.decision)}</b>.`,
+      rows: _upRows(row),
+      form: `<form method="POST" action="/up-action">
+               <input type="hidden" name="t" value="${escHtml(String(req.query.t))}">
+               <button type="submit">Yes, ${good ? 'approve' : 'reject'} it</button>
+             </form>`,
+      note: `Meant to do the opposite? <a href="/up-action?t=${encodeURIComponent(leaveTokenFor(UP_TOKEN_NS + row.id, other, claim.email))}">Switch to ${other}</a>.`,
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Something went wrong', tone: 'bad', lead: escHtml(e.message) }));
+  }
+});
+
+app.post('/up-action', async (req, res) => {
+  try {
+    await ensureSchema();
+    const { error, claim, row, approver } = await _upForToken(req.body?.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    if (row.status !== 'pending') return res.send(_upAlreadyPage(row));
+    const status = /^approved$/i.test(claim.decision) ? 'Approved' : 'Rejected';
+    const out = await decideUrgentPayment(row.id, status, approver.name, '');
+    if (out.error) return res.send(_upAlreadyPage(out.row ? upOut(out.row) : row));
+    const good = status === 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? 'Approved' : 'Rejected',
+      tone: good ? 'good' : 'bad',
+      lead: `Urgent payment <b>${escHtml(row.id)}</b> has been marked <b>${status.toLowerCase()}</b>. Accounts and <b>${escHtml(row.requested_by)}</b> have been emailed.`,
+      rows: _upRows(row),
+      note: 'You can close this tab.',
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Could not record the decision', tone: 'bad', lead: escHtml(e.message) }));
+  }
 });
 
 // ── Announcements ─────────────────────────────────────────────────────────────
@@ -5794,6 +5948,24 @@ mountAmc(app, {
   },
 });
 
+
+// ── Quotation & Payment Approval routes ───────────────────────────────────────
+// Everything under /api/quotation-approval/ plus /qa-action (the Director's
+// approve-from-mail page). Admins = whoever can open the 'quotation-approval'
+// page (Admin/HOD, or a Users → Access grant); Directors and Accounts come from
+// the page's own Settings. See backend/quotation-approval.js.
+mountQuotationApproval(app, {
+  q, pool, ensureSchema, requireAuth, withSeqId, getMailer, notifyAddressFor,
+  istToday, appOrigin: APP_ORIGIN, useDb: USE_DB, isAdminUser,
+  tokenFor: leaveTokenFor, readToken: readLeaveToken, actionPage: _leaveActionPage,
+  // Same rule as requireAdminOrPage('quotation-approval'), as a yes/no.
+  canOpenPage: async (user) => {
+    if (isSuperAdmin(user)) return true;
+    const perms = await getUserPermissions(user?.id);
+    if (isAdminUser(user)) return !perms || !perms.pages || perms.pages.includes('quotation-approval');
+    return !!(perms && perms.pages && perms.pages.includes('quotation-approval'));
+  },
+});
 
 // ── Office Inventory routes ───────────────────────────────────────────────────
 // Everything under /api/office-inventory/, behind the 'office-inventory' page
