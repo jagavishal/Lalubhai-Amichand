@@ -175,7 +175,10 @@ window.Pages['hr-leave'] = (() => {
         `${H.num(l.total_days)}${l.half_day && l.half_day !== 'full' ? `<div style="font-size:10px;color:#b45309;">${H.esc(l.half_day)} half</div>` : ''}`,
         `<div style="max-width:220px;">${H.esc(l.reason || '—')}</div>`,
         H.statusPill(l.status),
-        l.balance_after == null ? '—' : H.num(l.balance_after),
+        // Only an approval takes days off. A rejected/cancelled row's stored
+        // figure is just what was left when it was decided, and next to
+        // "Rejected" it read as if the leave had been deducted anyway.
+        l.balance_after == null || !/^approved$/i.test(l.status || '') ? '—' : H.num(l.balance_after),
         actions,
       ];
     });
