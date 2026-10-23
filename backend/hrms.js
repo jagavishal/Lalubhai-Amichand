@@ -3301,6 +3301,27 @@ function mountHrms(app, ctx) {
 
     /* ── Balances ─────────────────────────────────────────────────── */
 
+    /* The approved leaves behind one employee's balance for a year — the
+       Balances tab's cells open this ("dekh sake ki kab kab leave li hai").
+       Same scoping as the balances themselves: Admin any employee, everyone
+       else only their own. */
+    app.get('/api/hr/leave-balances/history', requireAuth, hrReady, async (req, res) => {
+      try {
+        const year = Number(req.query.year) || new Date().getFullYear();
+        const empId = isAdminUser(req.session?.user) && String(req.query.employeeId || '') !== 'me'
+          ? String(req.query.employeeId || '')
+          : ((await selfEmployee(req.session?.user))?.id || NO_MATCH);
+        const rows = await q(
+          `SELECT id, leave_type, from_date, to_date, total_days, half_day, reason, decided_by, decided_at
+             FROM leaves
+            WHERE employee_id = $1 AND status = 'Approved' AND from_date >= $2 AND from_date <= $3
+            ORDER BY from_date DESC`,
+          [empId, `${year}-01-01`, `${year}-12-31`],
+        );
+        res.json(rows.map((r) => ({ ...r, from_date: isoDate(r.from_date), to_date: isoDate(r.to_date) })));
+      } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.get('/api/hr/leave-balances', requireAuth, hrReady, async (req, res) => {
       try {
         const year = Number(req.query.year) || new Date().getFullYear();

@@ -224,7 +224,9 @@ window.Pages['hr-leave'] = (() => {
         const c = r.cells[t.code] || { accrued: 0, used: 0, balance: 0 };
         const entitled = H.num(c.opening) + H.num(c.accrued);
         const low = c.balance <= 0;
-        return `<b title="${entitled} entitled, ${H.num(c.used)} used" style="color:${low ? '#b91c1c' : '#15803d'};">${H.num(c.balance)}</b>`;
+        return `<button type="button" class="hrl-balhist" data-id="${H.esc(r.id)}" data-name="${H.esc(r.name)}" data-code="${H.esc(t.code)}"
+          title="${entitled} entitled, ${H.num(c.used)} used — click to see the dates"
+          style="background:none;border:none;padding:0;cursor:pointer;font:inherit;font-weight:700;text-decoration:underline dotted;text-underline-offset:3px;color:${low ? '#b91c1c' : '#15803d'};">${H.num(c.balance)}</button>`;
       }),
       `<button class="btn-ghost btn-xs hrl-editbal" data-id="${H.esc(r.id)}" data-name="${H.esc(r.name)}">Adjust</button>`,
     ]);
@@ -347,6 +349,7 @@ window.Pages['hr-leave'] = (() => {
     document.querySelectorAll('.hrl-no').forEach((b) => b.addEventListener('click', () => decide(b.dataset.id, 'Rejected')));
     document.querySelectorAll('.hrl-reopen').forEach((b) => b.addEventListener('click', () => openDecision(b.dataset.id)));
     document.querySelectorAll('.hrl-editbal').forEach((b) => b.addEventListener('click', () => openBalance(b.dataset.id, b.dataset.name)));
+    document.querySelectorAll('.hrl-balhist').forEach((b) => b.addEventListener('click', () => openBalanceHistory(b.dataset.id, b.dataset.name, b.dataset.code)));
     document.querySelectorAll('.hrl-type-edit').forEach((b) => b.addEventListener('click', () => openType(_types.find((t) => t.code === b.dataset.code))));
     document.querySelectorAll('.hrl-hol-del').forEach((b) => b.addEventListener('click', async () => {
       if (!await Utils.showConfirm('Remove this holiday from the calendar?', { title: 'Remove Holiday', confirmText: 'Remove', danger: true })) return;
@@ -565,6 +568,60 @@ window.Pages['hr-leave'] = (() => {
         await loadRequests();
         render();
       },
+    });
+  }
+
+  /* Which days make up a balance: every approved leave of that type this
+     year, newest first. "Used" can be larger than what is listed — the
+     leave sheet loaded in September carried days taken before the ERP, as
+     totals with no dates — so that remainder is called out on its own. */
+  async function openBalanceHistory(employeeId, name, code) {
+    const row = (_balances.rows || []).find((r) => r.id === employeeId);
+    const c = row?.cells[code] || { opening: 0, accrued: 0, used: 0, balance: 0 };
+    const typeName = ((_balances.types || []).find((t) => t.code === code) || {}).name || code;
+    H.openModal({
+      id: 'hrlh', title: `${code} taken — ${name}`, subtitle: `${employeeId} · ${_year}`,
+      width: 600, hideConfirm: true, cancelText: 'Close', bodyHTML: H.spinner(),
+    });
+    let list = [];
+    try {
+      list = (await H.api(`/api/hr/leave-balances/history?year=${_year}&employeeId=${encodeURIComponent(employeeId)}`) || [])
+        .filter((l) => (l.leave_type || 'CL') === code);
+    } catch (e) {
+      H.openModal({
+        id: 'hrlh', title: `${code} taken — ${name}`, subtitle: `${employeeId} · ${_year}`, width: 600, hideConfirm: true, cancelText: 'Close',
+        bodyHTML: `<div style="color:#b91c1c;">${H.esc(e.message || 'Could not load the leave history')}</div>`,
+      });
+      return;
+    }
+    const listed = list.reduce((s, l) => s + H.num(l.total_days), 0);
+    const undated = Math.round((H.num(c.used) - listed) * 100) / 100;
+    const entitled = H.num(c.opening) + H.num(c.accrued);
+    const stat = (label, v, colour) => `<div style="flex:1;min-width:90px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:8px 10px;">
+        <div style="font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;">${label}</div>
+        <div style="font-size:18px;font-weight:700;color:${colour};">${H.num(v)}</div></div>`;
+    const rowsHtml = list.map((l) => `<tr style="border-top:1px solid #f1f5f9;">
+        <td style="padding:7px 8px;white-space:nowrap;">${H.fmtDate(l.from_date)}${l.to_date && l.to_date !== l.from_date ? ` – ${H.fmtDate(l.to_date)}` : ''}</td>
+        <td style="padding:7px 8px;text-align:right;white-space:nowrap;">${H.num(l.total_days)}${l.half_day && l.half_day !== 'full' ? ` <span style="font-size:10.5px;color:#b45309;">(${H.esc(l.half_day)} half)</span>` : ''}</td>
+        <td style="padding:7px 8px;color:#475569;">${H.esc(l.reason || '—')}</td>
+        <td style="padding:7px 8px;color:#94a3b8;font-size:11.5px;">${H.esc(l.decided_by || '')}</td>
+      </tr>`).join('');
+    const body = `
+      <div style="font-size:12px;color:#64748b;margin-bottom:10px;">${H.esc(typeName)}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+        ${stat('Entitled', entitled, '#0f172a')}${stat('Used', c.used, '#b45309')}${stat('Left', c.balance, H.num(c.balance) <= 0 ? '#b91c1c' : '#15803d')}
+      </div>
+      ${list.length ? `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+        <thead><tr style="text-align:left;font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;">
+          <th style="padding:6px 8px;">Dates</th><th style="padding:6px 8px;text-align:right;">Days</th><th style="padding:6px 8px;">Reason</th><th style="padding:6px 8px;">Approved by</th>
+        </tr></thead><tbody>${rowsHtml}</tbody></table></div>`
+        : `<div style="color:#94a3b8;font-size:12.5px;padding:6px 0;">No approved ${H.esc(code)} in the ERP for ${_year}.</div>`}
+      ${undated > 0 ? `<div style="margin-top:12px;font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px;">
+        ${H.num(undated)} day(s) of the Used figure were taken before the ERP — they came as a total from the office leave sheet, without dates.</div>` : ''}
+      ${undated < 0 ? `<div style="margin-top:12px;font-size:12px;color:#92400e;">The listed days add up to more than Used (${H.num(c.used)}) — the balance was adjusted by hand after these were approved.</div>` : ''}`;
+    H.openModal({
+      id: 'hrlh', title: `${code} taken — ${name}`, subtitle: `${employeeId} · ${_year}`,
+      width: 600, hideConfirm: true, cancelText: 'Close', bodyHTML: body,
     });
   }
 
