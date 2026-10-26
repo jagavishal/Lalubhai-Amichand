@@ -19,5 +19,8 @@
     "nodemailer": "^10.0.15",
     "pg": "^8.21.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "overrides": {
+    "@azure/msal-node": "^7.1.1"
   }
 }
