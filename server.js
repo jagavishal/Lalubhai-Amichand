@@ -6055,6 +6055,143 @@ app.get('/api/scheduler', requireAuth, async (req, res) => {
 // ever hands it back to the organizer and the named attendees, never the
 // whole company. Cancelling one is restricted below to the organizer (or an
 // Admin/HOD) so one attendee can't pull a meeting somebody else called.
+/* ── Meeting links + invites ────────────────────────────────────────────────
+   "Scheduler se bhi meeting link create kr sake — Zoom ya Meet pe link create
+   ho jaye and attendees ko mail chala jaye" (26 Oct 2026). A meeting saved
+   with the link box blank gets one made for it:
+   - Zoom, when a Server-to-Server OAuth app is configured
+     (ZOOM_ACCOUNT_ID / ZOOM_CLIENT_ID / ZOOM_CLIENT_SECRET, optional
+     ZOOM_USER_ID, default "me");
+   - otherwise Google Meet, when the service account has Workspace
+     domain-wide delegation for calendar.events and GOOGLE_MEET_ORGANIZER
+     names the mailbox it acts as (the event lands on that calendar);
+   - otherwise none, and the meeting is saved as typed.
+   A recurring series shares one link. Then every attendee with an email gets
+   an invite with the link and an .ics, which adds it to their own calendar. */
+const _IST_MIN = 330;
+function _meetingStartEnd(date, startTime, endTime) {
+  const st = /^\d{1,2}:\d{2}/.test(startTime || '') ? startTime : '10:00';
+  const [y, m, d] = date.split('-').map(Number);
+  const [sh, sm] = st.split(':').map(Number);
+  const startUtc = new Date(Date.UTC(y, m - 1, d, sh, sm) - _IST_MIN * 60000);
+  let mins = 60;
+  if (/^\d{1,2}:\d{2}/.test(endTime || '')) {
+    const [eh, em] = endTime.split(':').map(Number);
+    const diff = (eh * 60 + em) - (sh * 60 + sm);
+    if (diff > 0) mins = diff;
+  }
+  return { startUtc, endUtc: new Date(startUtc.getTime() + mins * 60000), mins, local: `${date}T${String(sh).padStart(2, '0')}:${String(sm).padStart(2, '0')}:00` };
+}
+
+let _zoomToken = { value: '', exp: 0 };
+async function _zoomMeetingLink({ title, date, startTime, endTime, notes }) {
+  const { ZOOM_ACCOUNT_ID: acct, ZOOM_CLIENT_ID: id, ZOOM_CLIENT_SECRET: secret } = process.env;
+  if (!acct || !id || !secret) return null;
+  if (!_zoomToken.value || Date.now() > _zoomToken.exp) {
+    const r = await fetch(`https://zoom.us/oauth/token?grant_type=account_credentials&account_id=${encodeURIComponent(acct)}`, {
+      method: 'POST', headers: { Authorization: 'Basic ' + Buffer.from(`${id}:${secret}`).toString('base64') },
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.access_token) throw new Error('Zoom sign-in failed: ' + (j.reason || j.error || r.status));
+    _zoomToken = { value: j.access_token, exp: Date.now() + (Number(j.expires_in || 3600) - 120) * 1000 };
+  }
+  const t = _meetingStartEnd(date, startTime, endTime);
+  const r = await fetch(`https://api.zoom.us/v2/users/${encodeURIComponent(process.env.ZOOM_USER_ID || 'me')}/meetings`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + _zoomToken.value, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic: title.slice(0, 200), type: 2, start_time: t.local, timezone: 'Asia/Kolkata', duration: t.mins, agenda: (notes || '').slice(0, 2000),
+      settings: { join_before_host: true, waiting_room: false } }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.join_url) throw new Error('Zoom meeting create failed: ' + (j.message || r.status));
+  return { provider: 'Zoom', link: j.join_url };
+}
+
+async function _googleMeetLink({ title, date, startTime, endTime, notes }) {
+  const organizer = process.env.GOOGLE_MEET_ORGANIZER;
+  const { email, key } = _resolveGoogleCredentials();
+  if (!organizer || !email || !key) return null;
+  const { google } = require('googleapis');
+  const auth = new google.auth.JWT({ email, key, scopes: ['https://www.googleapis.com/auth/calendar.events'], subject: organizer });
+  const cal = google.calendar({ version: 'v3', auth });
+  const t = _meetingStartEnd(date, startTime, endTime);
+  const ev = await cal.events.insert({
+    calendarId: 'primary', conferenceDataVersion: 1, sendUpdates: 'none',
+    requestBody: {
+      summary: title, description: notes || '',
+      start: { dateTime: t.local, timeZone: 'Asia/Kolkata' },
+      end: { dateTime: new Date(t.endUtc.getTime() + _IST_MIN * 60000).toISOString().slice(0, 19), timeZone: 'Asia/Kolkata' },
+      conferenceData: { createRequest: { requestId: 'erp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), conferenceSolutionKey: { type: 'hangoutsMeet' } } },
+    },
+  });
+  const link = ev.data.hangoutLink || ev.data.conferenceData?.entryPoints?.find(p => p.entryPointType === 'video')?.uri;
+  if (!link) throw new Error('Google Calendar made the event but returned no Meet link');
+  return { provider: 'Google Meet', link };
+}
+
+async function _autoMeetingLink(meeting) {
+  for (const make of [_zoomMeetingLink, _googleMeetLink]) {
+    try {
+      const got = await make(meeting);
+      if (got) return got;
+    } catch (e) { console.error('[meetings] auto link failed:', e.message); }
+  }
+  return null;
+}
+
+function _meetingIcs({ uid, title, dates, startTime, endTime, link, notes, organizerName, organizerEmail, attendees }) {
+  const stamp = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const escIcs = (s) => String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+  const events = dates.map((date, i) => {
+    const t = _meetingStartEnd(date, startTime, endTime);
+    return ['BEGIN:VEVENT', `UID:${uid}-${i}@laltdoffice.com`, `DTSTAMP:${stamp(new Date())}`,
+      `DTSTART:${stamp(t.startUtc)}`, `DTEND:${stamp(t.endUtc)}`, `SUMMARY:${escIcs(title)}`,
+      `DESCRIPTION:${escIcs([link ? 'Join: ' + link : '', notes].filter(Boolean).join('\n\n'))}`,
+      link ? `LOCATION:${escIcs(link)}` : '', link ? `URL:${link}` : '',
+      organizerEmail ? `ORGANIZER;CN=${escIcs(organizerName)}:mailto:${organizerEmail}` : '',
+      ...attendees.map(a => `ATTENDEE;CN=${escIcs(a.name)};ROLE=REQ-PARTICIPANT;RSVP=FALSE:mailto:${a.email}`),
+      'END:VEVENT'].filter(Boolean).join('\r\n');
+  });
+  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Lallubhai Amichand ERP//Scheduler//EN', 'METHOD:REQUEST', ...events, 'END:VCALENDAR'].join('\r\n');
+}
+
+async function sendMeetingInvites({ id, title, dates, startTime, endTime, link, provider, notes, clientName, organizer, attendeeNames }) {
+  const mailer = getMailer();
+  if (!mailer) return { mailed: 0, missing: attendeeNames };
+  const attendees = [], missing = [];
+  for (const n of attendeeNames) {
+    const u = await userByName(n);
+    if (u?.email) { if (!attendees.some(a => a.email.toLowerCase() === u.email.toLowerCase())) attendees.push({ name: u.name, email: u.email }); }
+    else missing.push(n);
+  }
+  if (!attendees.length) return { mailed: 0, missing };
+  const org = organizer?.email ? organizer : (await userByName(organizer?.name)) || organizer || {};
+  const when = (() => {
+    const t = (s) => { if (!s) return ''; const [h, m] = s.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`; };
+    const d = new Date(dates[0] + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
+    return `${d}${startTime ? ' · ' + t(startTime) + (endTime ? ' – ' + t(endTime) : '') : ''}${dates.length > 1 ? ` (and ${dates.length - 1} more)` : ''}`;
+  })();
+  const ics = _meetingIcs({ uid: id, title, dates, startTime, endTime, link, notes, organizerName: org.name || '', organizerEmail: org.email || '', attendees });
+  await mailer.sendMail({
+    from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+    to: attendees.map(a => a.email).join(', '),
+    cc: org.email && !attendees.some(a => a.email.toLowerCase() === String(org.email).toLowerCase()) ? org.email : undefined,
+    subject: `Meeting: ${title} — ${when}`,
+    html: _leaveMailHtml({
+      heading: 'Meeting Invitation', colour: '#0150AA',
+      lead: `<b>${escHtml(org.name || 'A colleague')}</b> has invited you to a meeting.`,
+      rows: [['Title', escHtml(title)], ['When', escHtml(when)], ['Client', escHtml(clientName || '')],
+        ['Attendees', escHtml(attendees.map(a => a.name).join(', '))], ['Agenda', notes ? escHtml(notes).replace(/\n/g, '<br>') : ''],
+        ['Link', link ? `<a href="${escHtml(link)}">${escHtml(link)}</a>` : '']],
+      actions: link ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${escHtml(link)}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Join ${escHtml(provider || 'meeting')}</a></td></tr></table>` : '',
+      footer: 'The attached invite adds this to your calendar. It is also on your Scheduler in the ERP.',
+    }),
+    icalEvent: { method: 'REQUEST', filename: 'invite.ics', content: ics },
+  });
+  console.log('[meetings] invite mailed for', id, 'to', attendees.map(a => a.email).join(', '));
+  return { mailed: attendees.length, missing };
+}
+
 // Frequency -> how many total occurrences to create and how to step the date.
 // Capped at a year's worth so "Weekly" from a stray click can't fill the table.
 const MEETING_RECUR_STEPS = {
@@ -6076,11 +6213,18 @@ app.post('/api/meetings', requireAuth, async (req, res) => {
     const clientName = (b.clientName || '').trim();
     const startTime = (b.startTime || '').trim();
     const endTime = (b.endTime || '').trim();
-    const location = (b.location || '').trim();
+    let location = (b.location || '').trim();
     const notes = (b.notes || '').trim() || null;
     const freq = String(b.frequency || '').trim().toLowerCase();
     const step = MEETING_RECUR_STEPS[freq];
     const dates = step ? Array.from({ length: step.count }, (_, i) => step.next(date, i)) : [date];
+    // Blank link box → make one (Zoom, else Google Meet, when configured).
+    // b.noLink keeps an in-person meeting from getting one.
+    let made = null;
+    if (!location && !b.noLink) {
+      made = await _autoMeetingLink({ title, date, startTime, endTime, notes });
+      if (made) location = made.link;
+    }
 
     let id = null, seriesId = null;
     for (const d of dates) {
@@ -6091,7 +6235,18 @@ app.post('/api/meetings', requireAuth, async (req, res) => {
           [newId, title, d, startTime, endTime, attendees, location, notes, me?.id || null, me?.name || '', clientId, clientName, step ? freq : '', seriesId]);
       });
     }
-    return res.status(201).json({ success: true, id, occurrences: dates.length });
+    // Invites go out after the save; a mail hiccup never undoes the meeting.
+    let invite = { mailed: 0, missing: [] };
+    const attendeeNames = attendees.split(',').map(s => s.trim()).filter(Boolean);
+    if (attendeeNames.length && b.sendInvite !== false) {
+      try {
+        invite = await sendMeetingInvites({ id: seriesId || id, title, dates, startTime, endTime, link: /^https?:\/\//i.test(location) ? location : '',
+          provider: made?.provider || (/zoom\.us/i.test(location) ? 'Zoom' : /meet\.google/i.test(location) ? 'Google Meet' : ''),
+          notes, clientName, organizer: { name: me?.name || '', email: me?.email || '' }, attendeeNames });
+      } catch (e) { console.error('[meetings] invite mail failed:', e.message); invite.error = e.message; }
+    }
+    const linkMode = location && /^https?:\/\//i.test(location) ? (made ? 'auto' : 'typed') : (b.noLink ? 'none' : (process.env.ZOOM_CLIENT_ID || process.env.GOOGLE_MEET_ORGANIZER ? 'failed' : 'not-configured'));
+    return res.status(201).json({ success: true, id, occurrences: dates.length, link: /^https?:\/\//i.test(location) ? location : '', provider: made?.provider || '', linkMode, invite });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
