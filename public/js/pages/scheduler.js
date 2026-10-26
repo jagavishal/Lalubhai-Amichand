@@ -884,13 +884,12 @@ window.Pages.scheduler = (() => {
           <textarea id="sch-notes" rows="3" placeholder="Optional — what's the meeting about?" style="${inputStyle}resize:none;font-family:inherit;"></textarea>
         </div>
         <div>
-          <label style="${labelStyle}">Meet Link</label>
-          <div style="font-size:10.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;margin:-2px 0 5px;">Leave blank — a Zoom / Google Meet link is made for you</div>
-          <input id="sch-location" style="${inputStyle}" placeholder="Auto, or paste a link / write a place" />
+          <div style="font-size:12px;color:var(--text-secondary);background:var(--surface-alt);border:1px solid var(--border-base);border-radius:8px;padding:8px 10px;">
+            A Zoom / Google Meet link is made under your account, and attendees get an email invite with it.
+          </div>
           <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-secondary);margin-top:7px;cursor:pointer;">
             <input type="checkbox" id="sch-nolink"> In person — no online link
           </label>
-          <div style="font-size:11.5px;color:var(--text-muted);margin-top:6px;">Attendees get an email invite with the link and a calendar file.</div>
         </div>
       </div>`;
     const footerHTML = `
@@ -953,7 +952,6 @@ window.Pages.scheduler = (() => {
             startTime,
             endTime: document.getElementById('sch-end').value,
             attendees,
-            location: document.getElementById('sch-location').value.trim(),
             notes: document.getElementById('sch-notes').value.trim(),
             noLink: !!document.getElementById('sch-nolink')?.checked,
           }),
@@ -963,7 +961,7 @@ window.Pages.scheduler = (() => {
         const parts = ['Meeting scheduled'];
         if (saved?.linkMode === 'auto') parts.push(`${saved.provider} link created`);
         else if (saved?.linkMode === 'not-configured') parts.push('no Zoom/Meet account connected yet, so no link was made');
-        else if (saved?.linkMode === 'failed') parts.push('the meeting link could not be made — paste one if needed');
+        else if (saved?.linkMode === 'failed') parts.push('the Zoom / Meet link could not be made — check the server log');
         const inv = saved?.invite || {};
         if (inv.mailed) parts.push(`invite mailed to ${inv.mailed}`);
         if ((inv.missing || []).length) parts.push(`no email for ${inv.missing.join(', ')}`);

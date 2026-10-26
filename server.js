@@ -6084,7 +6084,13 @@ function _meetingStartEnd(date, startTime, endTime) {
 }
 
 let _zoomToken = { value: '', exp: 0 };
-async function _zoomMeetingLink({ title, date, startTime, endTime, notes }) {
+/* Whose account the link is made under: the person creating the meeting
+   ("jo bhi user meeting create kr rha hai uske zoom ya meet ka link"), so they
+   are its host. Zoom: their email as the Zoom user (it must be a user on the
+   company's Zoom account); Google: their own calendar via delegation. Each
+   falls back to the configured shared host when the creator has no account
+   there, so a meeting still gets a link. */
+async function _zoomMeetingLink({ title, date, startTime, endTime, notes, hostEmail }) {
   const { ZOOM_ACCOUNT_ID: acct, ZOOM_CLIENT_ID: id, ZOOM_CLIENT_SECRET: secret } = process.env;
   if (!acct || !id || !secret) return null;
   if (!_zoomToken.value || Date.now() > _zoomToken.exp) {
@@ -6096,23 +6102,40 @@ async function _zoomMeetingLink({ title, date, startTime, endTime, notes }) {
     _zoomToken = { value: j.access_token, exp: Date.now() + (Number(j.expires_in || 3600) - 120) * 1000 };
   }
   const t = _meetingStartEnd(date, startTime, endTime);
-  const r = await fetch(`https://api.zoom.us/v2/users/${encodeURIComponent(process.env.ZOOM_USER_ID || 'me')}/meetings`, {
-    method: 'POST',
-    headers: { Authorization: 'Bearer ' + _zoomToken.value, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topic: title.slice(0, 200), type: 2, start_time: t.local, timezone: 'Asia/Kolkata', duration: t.mins, agenda: (notes || '').slice(0, 2000),
-      settings: { join_before_host: true, waiting_room: false } }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok || !j.join_url) throw new Error('Zoom meeting create failed: ' + (j.message || r.status));
-  return { provider: 'Zoom', link: j.join_url };
+  const hosts = [...new Set([hostEmail, process.env.ZOOM_USER_ID || 'me'].filter(Boolean))];
+  let lastErr = '';
+  for (const host of hosts) {
+    const r = await fetch(`https://api.zoom.us/v2/users/${encodeURIComponent(host)}/meetings`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + _zoomToken.value, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic: title.slice(0, 200), type: 2, start_time: t.local, timezone: 'Asia/Kolkata', duration: t.mins, agenda: (notes || '').slice(0, 2000),
+        settings: { join_before_host: true, waiting_room: false } }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.join_url) return { provider: 'Zoom', link: j.join_url, host };
+    lastErr = j.message || String(r.status);
+    console.warn(`[meetings] Zoom host ${host} could not take the meeting: ${lastErr}`);
+  }
+  throw new Error('Zoom meeting create failed: ' + lastErr);
 }
 
-async function _googleMeetLink({ title, date, startTime, endTime, notes }) {
-  const organizer = process.env.GOOGLE_MEET_ORGANIZER;
+async function _googleMeetLink({ title, date, startTime, endTime, notes, hostEmail }) {
   const { email, key } = _resolveGoogleCredentials();
-  if (!organizer || !email || !key) return null;
+  const on = process.env.GOOGLE_MEET_ORGANIZER || /^(1|true|yes)$/i.test(process.env.GOOGLE_MEET_DELEGATION || '');
+  if (!on || !email || !key) return null;
+  const subjects = [...new Set([hostEmail, process.env.GOOGLE_MEET_ORGANIZER].filter(Boolean))];
+  let lastErr = null;
+  for (const subject of subjects) {
+    try { return await _googleMeetAs(subject, { title, date, startTime, endTime, notes }, email, key); }
+    catch (e) { lastErr = e; console.warn(`[meetings] Google Meet as ${subject} failed: ${e.message}`); }
+  }
+  if (lastErr) throw lastErr;
+  return null;
+}
+
+async function _googleMeetAs(subject, { title, date, startTime, endTime, notes }, email, key) {
   const { google } = require('googleapis');
-  const auth = new google.auth.JWT({ email, key, scopes: ['https://www.googleapis.com/auth/calendar.events'], subject: organizer });
+  const auth = new google.auth.JWT({ email, key, scopes: ['https://www.googleapis.com/auth/calendar.events'], subject });
   const cal = google.calendar({ version: 'v3', auth });
   const t = _meetingStartEnd(date, startTime, endTime);
   const ev = await cal.events.insert({
@@ -6126,7 +6149,7 @@ async function _googleMeetLink({ title, date, startTime, endTime, notes }) {
   });
   const link = ev.data.hangoutLink || ev.data.conferenceData?.entryPoints?.find(p => p.entryPointType === 'video')?.uri;
   if (!link) throw new Error('Google Calendar made the event but returned no Meet link');
-  return { provider: 'Google Meet', link };
+  return { provider: 'Google Meet', link, host: subject };
 }
 
 async function _autoMeetingLink(meeting) {
@@ -6222,7 +6245,10 @@ app.post('/api/meetings', requireAuth, async (req, res) => {
     // b.noLink keeps an in-person meeting from getting one.
     let made = null;
     if (!location && !b.noLink) {
-      made = await _autoMeetingLink({ title, date, startTime, endTime, notes });
+      // Under the creator's own account. The session may predate an email
+      // being added, so read it fresh from the login row.
+      const hostEmail = (await q('SELECT email FROM users WHERE id = $1', [me?.id || '']).catch(() => []))[0]?.email || me?.email || '';
+      made = await _autoMeetingLink({ title, date, startTime, endTime, notes, hostEmail });
       if (made) location = made.link;
     }
 
@@ -6245,7 +6271,7 @@ app.post('/api/meetings', requireAuth, async (req, res) => {
           notes, clientName, organizer: { name: me?.name || '', email: me?.email || '' }, attendeeNames });
       } catch (e) { console.error('[meetings] invite mail failed:', e.message); invite.error = e.message; }
     }
-    const linkMode = location && /^https?:\/\//i.test(location) ? (made ? 'auto' : 'typed') : (b.noLink ? 'none' : (process.env.ZOOM_CLIENT_ID || process.env.GOOGLE_MEET_ORGANIZER ? 'failed' : 'not-configured'));
+    const linkMode = location && /^https?:\/\//i.test(location) ? (made ? 'auto' : 'typed') : (b.noLink ? 'none' : (process.env.ZOOM_CLIENT_ID || process.env.GOOGLE_MEET_ORGANIZER || /^(1|true|yes)$/i.test(process.env.GOOGLE_MEET_DELEGATION || '') ? 'failed' : 'not-configured'));
     return res.status(201).json({ success: true, id, occurrences: dates.length, link: /^https?:\/\//i.test(location) ? location : '', provider: made?.provider || '', linkMode, invite });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
