@@ -13380,6 +13380,58 @@ app.put('/api/packing-list/cancel', requireAuth, sheetSerialised('packing', asyn
   } catch (e) { return res.status(e.notFound ? 404 : 500).json({ error: e.message }); }
 }));
 
+// PUT /api/packing-list/invoice-no?plNo=... { invoiceNo } — the invoice
+// number is typed on the form and is only settled once the container's
+// stuffing order is ("LA-21/26-27 will be stuffed later, LA-22/26-27 first").
+// Rewrites it on the log row and its form JSON and re-prints the PDF from the
+// stored form, so the sheet, the list and the document agree. Nothing else on
+// the packing list changes. A swap between two lists is two edits.
+app.put('/api/packing-list/invoice-no', requireAuth, sheetSerialised('packing', async (req, res) => {
+  try {
+    const plNo = String(req.query.plNo || '').trim();
+    const invoiceNo = String(req.body?.invoiceNo || '').trim();
+    if (!plNo) return res.status(400).json({ error: 'plNo is required' });
+    if (!invoiceNo) return res.status(400).json({ error: 'Invoice No. is required' });
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const row = await _plByNo(sheets, plNo);
+    if (!row) return res.status(404).json({ error: 'Entry not found' });
+    if (!canManageDeptRow(req.session.user, null, row.createdBy)) {
+      return res.status(403).json({ error: 'Only who raised this packing list (or an Admin/HOD) can change its invoice number' });
+    }
+    if (row.status === 'Cancelled') return res.status(400).json({ error: `${plNo} is cancelled` });
+    if (!row.form) return res.status(400).json({ error: `${plNo} has no stored form to re-print from` });
+    if (String(row.invoiceNo).trim() === invoiceNo) return res.json({ success: true, unchanged: true, pdfLink: row.pdfLink });
+
+    const form = { ...row.form, invoiceNo };
+    const { templateSheetId } = await _packingListMeta(_piFyLabel(row.plDate || new Date().toISOString().slice(0, 10)));
+    await _fillPackingTemplate(sheets, { ...form, plNo }, templateSheetId);
+    const pdfLink = (await _finishPackingSubmission(plNo, templateSheetId)) || row.pdfLink;
+
+    const rowIndex = await _findRowIndexByKey(PI_CREATION_SHEET_ID, PACKING_LOG_TAB, plNo);
+    const n = rowIndex + 1;
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: PI_CREATION_SHEET_ID,
+      requestBody: {
+        valueInputOption: 'USER_ENTERED',
+        data: [
+          { range: `'${PACKING_LOG_TAB}'!C${n}`, values: [["'" + invoiceNo]] },
+          { range: `'${PACKING_LOG_TAB}'!I${n}`, values: [[pdfLink || '']] },
+          { range: `'${PACKING_LOG_TAB}'!L${n}`, values: [[JSON.stringify(form)]] },
+        ],
+      },
+    });
+    console.log('[packing-list] invoice no changed', plNo, row.invoiceNo, '→', invoiceNo, 'by', req.session.user?.name);
+    return res.json({ success: true, pdfLink, invoiceNo });
+  } catch (e) {
+    console.error('[packing-list] invoice no change failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+}));
+
 // Owner-only, and worth the same warning the PI's and the order's deletes
 // carry: the next packing list number is the highest on this log plus one, so
 // deleting the most recent one hands its number to the next one raised — while

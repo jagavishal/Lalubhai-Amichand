@@ -2525,7 +2525,8 @@ window.Pages['proforma-invoice'] = (() => {
         + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
-            : '<button type="button" class="pkl-cancel-btn" data-pl="' + esc(r.plNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
+            : '<button type="button" class="pkl-inv-btn" data-pl="' + esc(r.plNo) + '" data-inv="' + esc(r.invoiceNo || '') + '" title="Change the invoice number and re-print the PDF" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Edit Inv. No.</button>'
+              + '<button type="button" class="pkl-cancel-btn" data-pl="' + esc(r.plNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
           + (r.status !== 'Cancelled' && r.approvalStatus !== 'Approved' && r.approvalStatus !== 'Rejected'
             ? '<button type="button" class="pkl-resend-btn" data-pl="' + esc(r.plNo) + '" title="Email the approver again with Approve / Reject buttons" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Resend mail</button>'
             : '')
@@ -2552,6 +2553,27 @@ window.Pages['proforma-invoice'] = (() => {
     if (!body || body.dataset.actionsBound) return;
     body.dataset.actionsBound = '1';
     body.addEventListener('click', async (e) => {
+      // The invoice number follows the container stuffing order, which can
+      // change after the list is raised — swapping two is two edits.
+      const invBtn = e.target.closest('.pkl-inv-btn');
+      if (invBtn) {
+        const plNo = invBtn.dataset.pl;
+        const next = await Utils.showPrompt('New invoice number for Packing List ' + plNo + '. The PDF is re-printed with it; nothing else on the list changes.',
+          { title: 'Edit Invoice No.', value: invBtn.dataset.inv || '', placeholder: 'e.g. LA-22/26-27', confirmText: 'Save & Re-print' });
+        if (next == null || !String(next).trim() || String(next).trim() === (invBtn.dataset.inv || '')) return;
+        const dupe = _pklRows.find(x => x.plNo !== plNo && x.status !== 'Cancelled' && String(x.invoiceNo || '').trim().toLowerCase() === String(next).trim().toLowerCase());
+        if (dupe && !(await Utils.showConfirm(String(next).trim() + ' is already on ' + dupe.plNo + '. Save it here as well? (Change ' + dupe.plNo + ' next if you are swapping the two.)', { title: 'Invoice No. already used', confirmText: 'Save anyway' }))) return;
+        invBtn.disabled = true; invBtn.textContent = 'Saving…';
+        try {
+          await Utils.apiFetch('/api/packing-list/invoice-no?plNo=' + encodeURIComponent(plNo), { method: 'PUT', body: JSON.stringify({ invoiceNo: String(next).trim() }) });
+          Utils.showToast('Invoice No. of ' + plNo + ' changed to ' + String(next).trim() + ' — PDF re-printed', 'success');
+          await _pklLoad();
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to change the invoice number', 'error');
+          invBtn.disabled = false; invBtn.textContent = 'Edit Inv. No.';
+        }
+        return;
+      }
       const cancelBtn = e.target.closest('.pkl-cancel-btn');
       if (cancelBtn) {
         const ok = await Utils.showConfirm('Packing List ' + cancelBtn.dataset.pl + ' will be marked Cancelled, and the quantities on it go back onto the orders as still to ship.', { title: 'Cancel Packing List', confirmText: 'Cancel Packing List', danger: true });
