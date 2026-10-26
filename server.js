@@ -5939,7 +5939,35 @@ app.get('/api/scheduler', requireAuth, async (req, res) => {
       || String(m.attendees || '').split(',').map(a => a.trim().toLowerCase()).includes(myNameLower));
     const meetings = mine.map(m => ({ ...m, date: toDateStr(m.date) }));
 
-    return res.json({ weekOffs: [...weekOffs], holidays, tasks, meetings });
+    // The office's Google Calendar kept an "Employee Leaves" and a "Birthdays"
+    // calendar; the Scheduler carries both so nobody has to look in two places.
+    // Who is away and on which days only — the reason stays on the leave
+    // request, which is visible to the applicant and their approver alone.
+    // Management (the Directors' rows) is left off, as on every HR list.
+    let leaves = [], birthdays = [];
+    if (USE_DB) {
+      const lvRows = await q(
+        `SELECT l.id, l.leave_type AS "leaveType", l.from_date AS "fromDate", l.to_date AS "toDate", l.half_day AS "halfDay",
+                COALESCE(e.name, l.user_name) AS name
+           FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
+          WHERE l.status = 'Approved' AND l.from_date <= $1 AND l.to_date >= $2`,
+        [to, from]).catch(() => []);
+      leaves = lvRows.map(l => ({ ...l, fromDate: toDateStr(l.fromDate), toDate: toDateStr(l.toDate) }))
+        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+      const people = await q(
+        `SELECT name, dob FROM hr_employees WHERE status = 'Active' AND dob IS NOT NULL AND COALESCE(emp_type, '') <> 'Director'`).catch(() => []);
+      const fromY = Number(from.slice(0, 4)), toY = Number(to.slice(0, 4));
+      for (const p of people) {
+        const md = (toDateStr(p.dob) || '').slice(5);
+        if (md.length !== 5) continue;
+        for (let y = fromY; y <= toY; y++) {
+          const date = `${y}-${md}`;
+          if (date >= from && date <= to) birthdays.push({ date, name: p.name });
+        }
+      }
+    }
+
+    return res.json({ weekOffs: [...weekOffs], holidays, tasks, meetings, leaves, birthdays });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 

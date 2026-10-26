@@ -16,7 +16,7 @@ window.Pages.scheduler = (() => {
   const MON = MONTH_NAMES.map(m => m.slice(0, 3));
   const HOUR_PX = 48;              // height of one hour on the Day / Week grid
   const SCROLL_TO_HOUR = 8;        // the grid opens at 8 AM unless now is later
-  const KINDS = ['meeting', 'task', 'holiday'];
+  const KINDS = ['meeting', 'task', 'holiday', 'leave', 'birthday'];
 
   const _store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -28,7 +28,7 @@ window.Pages.scheduler = (() => {
   let _anchor = _startOfDay(new Date());   // the focused day; the view is built around it
   let _mini = new Date(_anchor.getFullYear(), _anchor.getMonth(), 1);   // month on the mini calendar
   let _hidden = new Set(String(_store.get('sch-hidden') || '').split(',').filter(k => KINDS.includes(k)));
-  let _data = { weekOffs: ['0'], holidays: [], tasks: [], meetings: [] };
+  let _data = { weekOffs: ['0'], holidays: [], tasks: [], meetings: [], leaves: [], birthdays: [] };
   let _byDate = new Map();         // date -> { holiday, tasks:[], meetings:[] }
   let _users = null;                // lazy-loaded for the attendee picker
   let _nowTimer = null;
@@ -87,10 +87,10 @@ window.Pages.scheduler = (() => {
     const to = _dateStr(days[days.length - 1]);
     try {
       const res = await Utils.apiFetch(`/api/scheduler?from=${from}&to=${to}`);
-      _data = res || { weekOffs: ['0'], holidays: [], tasks: [], meetings: [] };
+      _data = res || { weekOffs: ['0'], holidays: [], tasks: [], meetings: [], leaves: [], birthdays: [] };
     } catch (e) {
       Utils.showToast(e.message || 'Failed to load scheduler', 'error');
-      _data = { weekOffs: ['0'], holidays: [], tasks: [], meetings: [] };
+      _data = { weekOffs: ['0'], holidays: [], tasks: [], meetings: [], leaves: [], birthdays: [] };
     }
     _reindex();
   }
@@ -98,22 +98,30 @@ window.Pages.scheduler = (() => {
   function _reindex() {
     _byDate = new Map();
     const bucket = (date) => {
-      if (!_byDate.has(date)) _byDate.set(date, { holiday: null, tasks: [], meetings: [] });
+      if (!_byDate.has(date)) _byDate.set(date, { holiday: null, tasks: [], meetings: [], leaves: [], birthdays: [] });
       return _byDate.get(date);
     };
     for (const h of _data.holidays || []) bucket(h.date).holiday = h;
     for (const t of _data.tasks || []) if (t.dueDate) bucket(t.dueDate).tasks.push(t);
     for (const m of _data.meetings || []) bucket(m.date).meetings.push(m);
+    // A leave spans days: it sits on each one it covers (as in the office's
+    // Google Calendar "Employee Leaves"), one chip per person per day.
+    for (const l of _data.leaves || []) {
+      for (let d = new Date(l.fromDate + 'T00:00:00'), end = new Date(l.toDate + 'T00:00:00'); d <= end; d = _addDays(d, 1)) bucket(_dateStr(d)).leaves.push(l);
+    }
+    for (const b of _data.birthdays || []) bucket(b.date).birthdays.push(b);
     for (const b of _byDate.values()) b.meetings.sort((a, c) => String(a.startTime || '').localeCompare(String(c.startTime || '')));
   }
 
   // One day's entries after the show/hide toggles.
   function _infoFor(dateStr) {
-    const info = _byDate.get(dateStr) || { holiday: null, tasks: [], meetings: [] };
+    const info = _byDate.get(dateStr) || { holiday: null, tasks: [], meetings: [], leaves: [], birthdays: [] };
     return {
       holiday: _hidden.has('holiday') ? null : info.holiday,
       tasks: _hidden.has('task') ? [] : info.tasks,
       meetings: _hidden.has('meeting') ? [] : info.meetings,
+      leaves: _hidden.has('leave') ? [] : (info.leaves || []),
+      birthdays: _hidden.has('birthday') ? [] : (info.birthdays || []),
     };
   }
 
@@ -128,6 +136,10 @@ window.Pages.scheduler = (() => {
       ? 'background:var(--color-purple-bg);color:var(--color-purple-text);border-left:3px solid var(--color-purple);'
       : kind === 'holiday'
       ? 'background:var(--color-danger-bg);color:var(--color-danger-text);border-left:3px solid var(--color-danger);'
+      : kind === 'leave'
+      ? 'background:var(--color-success-bg);color:var(--color-success-text);border-left:3px solid var(--color-success);'
+      : kind === 'birthday'
+      ? 'background:var(--color-info-bg);color:var(--color-info-text);border-left:3px solid var(--color-info);'
       : opts.muted
       ? 'background:var(--surface-alt);color:var(--text-muted);border-left:3px solid var(--border-strong);'
       : 'background:var(--color-warning-bg);color:var(--color-warning-text);border-left:3px solid var(--color-warning);';
@@ -135,9 +147,15 @@ window.Pages.scheduler = (() => {
         style="${tone}${opts.done ? 'text-decoration:line-through;' : ''}">${opts.time ? `<b>${esc(opts.time)}</b> ` : ''}${esc(label)}</button>`;
   }
 
+  function _leaveLabel(l) {
+    return `${l.name || 'Leave'} [${l.leaveType || 'Leave'}${l.halfDay && l.halfDay !== 'full' ? ' ½' : ''}]`;
+  }
+
   function _dayChips(dateStr, info) {
     const out = [];
     if (info.holiday) out.push(_chipHTML('holiday', dateStr, 0, info.holiday.name));
+    info.birthdays.forEach((b, i) => out.push(_chipHTML('birthday', dateStr, i, '🎂 ' + b.name)));
+    info.leaves.forEach((l, i) => out.push(_chipHTML('leave', dateStr, i, _leaveLabel(l))));
     info.meetings.forEach((m, i) => out.push(_chipHTML('meeting', dateStr, i, m.title, { time: m.startTime ? _fmtTime(m.startTime) : '' })));
     info.tasks.forEach((t, i) => out.push(_chipHTML('task', dateStr, i, t.description, { done: t.status === 'done', muted: t.status === 'done' || t.status === 'leave' })));
     return out;
@@ -225,6 +243,8 @@ window.Pages.scheduler = (() => {
       const chips = [];
       if (info.holiday) chips.push(_chipHTML('holiday', ds, 0, info.holiday.name));
       else if (_isWeekOff(d) && !raw?.holiday) chips.push('<span class="sch-offtag" style="padding:2px 4px;">Week off</span>');
+      info.birthdays.forEach((b, i) => chips.push(_chipHTML('birthday', ds, i, '🎂 ' + b.name)));
+      info.leaves.forEach((l, i) => chips.push(_chipHTML('leave', ds, i, _leaveLabel(l))));
       info.meetings.forEach((m, i) => { if (_toMins(m.startTime) === null) chips.push(_chipHTML('meeting', ds, i, m.title)); });
       info.tasks.forEach((t, i) => chips.push(_chipHTML('task', ds, i, t.description, { done: t.status === 'done', muted: t.status === 'done' || t.status === 'leave' })));
       const cap = isDay ? chips.length : 3;
@@ -311,6 +331,8 @@ window.Pages.scheduler = (() => {
         ${toggle('meeting', 'Meetings', 'var(--color-purple)')}
         ${toggle('task', 'Tasks due', 'var(--color-warning)')}
         ${toggle('holiday', 'Holidays', 'var(--color-danger)')}
+        ${toggle('leave', 'Employee Leaves', 'var(--color-success)')}
+        ${toggle('birthday', 'Birthdays', 'var(--color-info)')}
       </div>`;
   }
 
@@ -435,6 +457,8 @@ window.Pages.scheduler = (() => {
       .sch-mdots i.meeting { background:var(--color-purple); }
       .sch-mdots i.task { background:var(--color-warning); }
       .sch-mdots i.holiday { background:var(--color-danger); }
+      .sch-mdots i.leave { background:var(--color-success); }
+      .sch-mdots i.birthday { background:var(--color-info); }
       .sch-offtag { font-size:8.5px; }
       .sch-colhead b { font-size:15px; width:28px; height:28px; line-height:28px; }
       .sch-tscroll { height:calc(100vh - 300px); min-height:360px; }
@@ -617,7 +641,7 @@ window.Pages.scheduler = (() => {
   function _openPopover(ref, anchorEl) {
     _closePopover();
     const [kind, ds, idx] = ref.split(':');
-    const info = _byDate.get(ds) || { holiday: null, tasks: [], meetings: [] };
+    const info = _byDate.get(ds) || { holiday: null, tasks: [], meetings: [], leaves: [], birthdays: [] };
     let colour, title, body = '', actions = '', when = _fmtLongDate(ds);
     if (kind === 'meeting') {
       const m = info.meetings[Number(idx)];
@@ -641,6 +665,18 @@ window.Pages.scheduler = (() => {
       body = _row('user', esc(t.doer || ''))
         + _row('flag', esc([status, t.priority].filter(Boolean).join(' · ')))
         + _row('note', 'Open <b>All Tasks</b> to update it.');
+    } else if (kind === 'leave') {
+      const l = (info.leaves || [])[Number(idx)];
+      if (!l) return;
+      colour = 'var(--color-success)'; title = `${l.name || 'Employee'} — on leave`;
+      when = l.fromDate === l.toDate ? _fmtLongDate(l.fromDate) : `${_fmtLongDate(l.fromDate)} – ${_fmtLongDate(l.toDate)}`;
+      body = _row('flag', esc([l.leaveType, l.halfDay && l.halfDay !== 'full' ? l.halfDay + ' half' : ''].filter(Boolean).join(' · ')))
+        + _row('note', 'Approved leave — from HR → Leave Management.');
+    } else if (kind === 'birthday') {
+      const b = (info.birthdays || [])[Number(idx)];
+      if (!b) return;
+      colour = 'var(--color-info)'; title = `🎂 ${b.name}'s birthday`;
+      body = _row('note', 'From the Employee Master.');
     } else {
       if (!info.holiday) return;
       colour = 'var(--color-danger)'; title = info.holiday.name;
