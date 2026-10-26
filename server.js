@@ -1195,6 +1195,85 @@ async function withMastersCache(key, ttlMs, fetcher) {
   }
 }
 
+/* ── Google Sheets quota guard (every caller, one place) ─────────────────────
+   The whole app reads Sheets through one service account, and Google allows
+   it 60 read requests a minute. ~80 call sites (PO/PR/GRN/PI/packing lists,
+   FMS, HR import…) each read live, and a few people opening lists at once
+   went over: "Quota exceeded for quota metric 'Read requests' … per minute
+   per user" on screen, several times a day.
+
+   Patched onto googleapis' own Sheets resource classes, so every caller —
+   server.js and backend/*.js alike — goes through it without changes:
+   - identical reads within READ_TTL_MS share one request (in-flight ones
+     too), each caller getting its own copy of the data;
+   - any write to a spreadsheet drops that spreadsheet's cached reads, before
+     and after, so a create still reads its own write;
+   - a quota rejection is retried with back-off instead of failing the page
+     (a 429 is refused before anything happens, so re-sending a write is safe).
+   Edits made outside the app (Forms, someone typing in the sheet) show up
+   within READ_TTL_MS. */
+(function guardSheetsQuota() {
+  const { google } = require('googleapis');
+  const probe = google.sheets({ version: 'v4' });
+  const Values = Object.getPrototypeOf(probe.spreadsheets.values);
+  const Sheets = Object.getPrototypeOf(probe.spreadsheets);
+  if (Values.__quotaGuard) return;
+  Values.__quotaGuard = true;
+
+  const READ_TTL_MS = 20000;
+  const BACKOFF_MS = [2000, 5000, 10000, 20000];
+  const cache = new Map(); // key -> { at, sid, promise }
+  const isQuota = (e) => {
+    const code = e?.code || e?.status || e?.response?.status;
+    return Number(code) === 429 || /quota exceeded|rate limit exceeded|too many requests/i.test(e?.message || '');
+  };
+  const withRetry = async (label, fn) => {
+    for (let i = 0; ; i++) {
+      try { return await fn(); } catch (e) {
+        if (!isQuota(e) || i >= BACKOFF_MS.length) throw e;
+        const wait = BACKOFF_MS[i] + Math.floor(Math.random() * 1000);
+        console.warn(`[sheets] quota hit on ${label} — retry ${i + 1} in ${wait}ms`);
+        await new Promise((r) => setTimeout(r, wait));
+      }
+    }
+  };
+  const forget = (sid) => { for (const [k, v] of cache) if (!sid || v.sid === sid) cache.delete(k); };
+  const copy = (res) => ({ ...res, data: res && res.data !== undefined ? structuredClone(res.data) : res?.data });
+  const plainCall = (params, rest) => rest.length > 0 || !params || typeof params !== 'object';
+
+  const wrapRead = (proto, name) => {
+    const orig = proto[name];
+    proto[name] = function (params, ...rest) {
+      if (plainCall(params, rest)) return orig.call(this, params, ...rest); // callback style: untouched
+      let key;
+      try { key = name + JSON.stringify(params); } catch { return withRetry(name, () => orig.call(this, params)); }
+      const now = Date.now();
+      const hit = cache.get(key);
+      if (hit && now - hit.at < READ_TTL_MS) return hit.promise.then(copy);
+      const promise = withRetry(name, () => orig.call(this, params));
+      cache.set(key, { at: now, sid: params.spreadsheetId, promise });
+      promise.catch(() => { if (cache.get(key)?.promise === promise) cache.delete(key); });
+      if (cache.size > 400) for (const [k, v] of cache) if (now - v.at >= READ_TTL_MS) cache.delete(k);
+      return promise.then(copy);
+    };
+  };
+  const wrapWrite = (proto, name) => {
+    const orig = proto[name];
+    proto[name] = function (params, ...rest) {
+      if (plainCall(params, rest)) { forget(); return orig.call(this, params, ...rest); }
+      const sid = params.spreadsheetId;
+      forget(sid);
+      return withRetry(name, () => orig.call(this, params)).finally(() => forget(sid));
+    };
+  };
+
+  ['get', 'batchGet', 'batchGetByDataFilter'].forEach((m) => wrapRead(Values, m));
+  ['get', 'getByDataFilter'].forEach((m) => wrapRead(Sheets, m));
+  ['append', 'update', 'clear', 'batchClear', 'batchClearByDataFilter', 'batchUpdate', 'batchUpdateByDataFilter']
+    .forEach((m) => wrapWrite(Values, m));
+  ['batchUpdate', 'create'].forEach((m) => wrapWrite(Sheets, m));
+})();
+
 // ── Backup helpers ────────────────────────────────────────────────────────────
 /* TIMESTAMPTZ is a Postgres type; MySQL/MariaDB has no such thing, so this
    CREATE failed outright on the production database and dev_backups never
