@@ -2746,7 +2746,17 @@ function mountHrms(app, ctx) {
         const onBehalf = isAdminUser(user) && !!employeeId && (await selfEmployee(user))?.id !== employeeId;
         const PL_LONG = 4;   // days — rules 2 and 3 apply above this
         const longPl = code === 'PL' && days > PL_LONG;
-        if (longPl && !onBehalf) {
+        /* An emergency PL (26 Oct 2026, "PL mai emg leave ka bhi option") is
+           taken from the PL balance like any other, but nobody can give three
+           weeks' notice of an emergency — so it skips rule 2. It must say why,
+           and the reason is marked so the approver sees it was an emergency. */
+        const emergencyPl = code === 'PL' && (b.emergency === true || b.emergency === 'true' || b.emergency === 1);
+        if (emergencyPl) {
+          const why = String(b.reason || '').trim().replace(/^\[Emergency\]\s*/i, '');
+          if (!why) return res.status(400).json({ error: 'An emergency PL needs a reason — say what the emergency is.' });
+          b.reason = '[Emergency] ' + why;
+        }
+        if (longPl && !onBehalf && !emergencyPl) {
           const today = isoDate(new Date());
           if (from < addDays(today, 21)) {
             return res.status(400).json({

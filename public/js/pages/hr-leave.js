@@ -464,6 +464,11 @@ window.Pages['hr-leave'] = (() => {
       ${H.select('hrla-backup', 'Backup Person', '',
         emps, { placeholder: 'Who covers your work — optional', span: 2,
                 hint: 'Shown on the dashboard next to your name while you are away' })}
+      <label id="hrla-emg-wrap" style="grid-column:1/-1;display:none;align-items:flex-start;gap:8px;font-size:12.5px;color:#0f172a;
+             background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;padding:9px 11px;cursor:pointer;">
+        <input type="checkbox" id="hrla-emg" style="margin-top:2px;">
+        <span><b>Emergency PL</b> — no 3-week notice needed. Taken from the PL balance; write the emergency in Reason.</span>
+      </label>
       ${H.textarea('hrla-reason', 'Reason', '', { rows: 3 })}
       <div id="hrla-bal" style="grid-column:1/-1;"></div>
     `);
@@ -559,6 +564,12 @@ window.Pages['hr-leave'] = (() => {
                 + `${half.value === 'full' ? '&nbsp;· counted as calendar days' : '&nbsp;· half day'}</span>`
               : `<span style="font-size:12.5px;font-weight:500;color:#b45309;">Pick both dates</span>`;
           }
+          // The Emergency tick only means something on a PL.
+          const emgWrap = document.getElementById('hrla-emg-wrap');
+          if (emgWrap) {
+            emgWrap.style.display = type.value === 'PL' ? 'flex' : 'none';
+            if (type.value !== 'PL') document.getElementById('hrla-emg').checked = false;
+          }
           paintBalances();
         };
         [half, from, to, type, empSel].forEach((x) => x && x.addEventListener('change', sync));
@@ -569,6 +580,7 @@ window.Pages['hr-leave'] = (() => {
           employeeId: admin ? H.val('hrla-emp') : undefined,
           leave_type: H.val('hrla-type'), half_day: H.val('hrla-half'),
           from_date: H.val('hrla-from'), to_date: H.val('hrla-to'), reason: H.val('hrla-reason'),
+          emergency: H.val('hrla-type') === 'PL' && !!document.getElementById('hrla-emg')?.checked,
           // The picker holds employee ids; the row stores the display name, so
           // every screen that lists today's leave can show it without a join.
           backup_name: (() => {

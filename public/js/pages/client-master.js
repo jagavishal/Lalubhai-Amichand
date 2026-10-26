@@ -113,7 +113,10 @@ window.Pages['client-master'] = (() => {
   async function _load(skipRender) {
     try {
       const res = await Utils.apiFetch('/api/clients');
-      _list = Array.isArray(res) ? res : [];
+      // A–Z by vendor name (it came newest-first, so finding a party meant
+      // scrolling). Every view and the payment-maker picker read _list.
+      _list = (Array.isArray(res) ? res : [])
+        .sort((a, b) => String(a.name || '').trim().localeCompare(String(b.name || '').trim(), 'en', { sensitivity: 'base', numeric: true }));
     } catch { _list = []; }
     _resolveVendorNames();
     if (!skipRender) _render();
