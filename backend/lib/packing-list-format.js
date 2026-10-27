@@ -149,11 +149,15 @@ const ITEMS = {
     'TOTAL ORDER QTY.', 'TOTAL  PACKED QTY.',
     'NET WT. PER CARTON (Kg)', 'TOTAL NET WT. CARTON\n(Kg)',
     'GR. WT. PER CARTON (Kg)', 'TOTAL GR. WT. CARTON (Kg)',
-    'CBM PER CARTON', 'TOTAL CBM', 'PER PCS WT. (Kg)', 'ORDER NO.',
+    'CBM PER CARTON', 'TOTAL CBM', 'PER PCS WT. (Kg)', 'ORDER NO. /\nBUYER CODE',
   ],
-  // px widths, A..S — sums to 1065px, the printable width of an A4 LANDSCAPE
-  // page at the 0.3" margins _exportSheetTabPdf() uses.
-  colWidths: [28, 135, 60, 48, 48, 76, 54, 48, 48, 50, 50, 50, 58, 50, 58, 48, 48, 50, 58],
+  // px widths, A..S. Was 1065px (A4 landscape at the 0.3" margins) with ITEM
+  // CODE at 60 and ORDER NO. at 58 — too narrow: "VTV/ORD/010/26-27" and the
+  // longer item codes were cut off. ITEM CODE widened to 92 and ORDER NO. to 108
+  // (an order no. at 8pt Arial is ~98px); the export's fitw=true
+  // scales the 1147px grid back onto the page (~93%). server.js re-applies
+  // these widths on every fill, so editing them here is all a change needs.
+  colWidths: [28, 135, 92, 48, 48, 76, 54, 48, 48, 50, 50, 50, 58, 50, 58, 48, 48, 50, 108],
   // Number formats, by column. Decimal places follow their sheets exactly —
   // three on the weights, five on CBM per carton, four on total CBM.
   numberFormats: [

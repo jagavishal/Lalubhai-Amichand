@@ -22,6 +22,7 @@ npm-debug.log*
 database/store.json
 database/circle-requirement.json
 database/production-norms.json
+database/moulding-jobwork.json
 
 # Bulk Email — uploaded batch PDFs live on the server's disk, never in git
 uploads/

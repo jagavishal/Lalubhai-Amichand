@@ -475,6 +475,12 @@ SCHEMA.push(...CR_SCHEMA);
 const { PN_SCHEMA, mountProductionNorms } = require('./backend/production-norms.js');
 SCHEMA.push(...PN_SCHEMA);
 
+// Moulding IN-OUT (daily bhatti DPR) and Job Work IN-OUT (lots sent to
+// Vakharia / Subhash Metal). Routes mounted further down (search
+// "mountMouldingJobwork").
+const { MJ_SCHEMA, mountMouldingJobwork } = require('./backend/moulding-jobwork.js');
+SCHEMA.push(...MJ_SCHEMA);
+
 // The factory's own department list (the numbered list the plant keeps on
 // paper), used to seed the `departments` table on a fresh DB and as the
 // fallback whenever that table can't be read. Not the live list — once seeded,
@@ -6653,6 +6659,15 @@ mountProductionNorms(app, {
   requireAccess: requireAdminOrPage('production-norms'),
 });
 
+// ── Moulding & Job Work routes ────────────────────────────────────────────────
+// Everything under /api/moulding-jobwork/, behind the 'moulding-jobwork' page
+// (Users → Access). Deleting and the sheet import need Admin/HOD. Works in
+// local JSON mode too. See backend/moulding-jobwork.js.
+mountMouldingJobwork(app, {
+  q, ensureSchema, requireAuth, isAdminUser, isSuperAdmin, getGoogleAuth, useDb: USE_DB,
+  requireAccess: requireAdminOrPage('moulding-jobwork'),
+});
+
 /* ── Approve / reject straight from the notification email ────────────────────
    Deliberately outside requireAuth: the point is that the approver does not
    have to log in. The signed token IS the authorisation, and it names one
@@ -9253,12 +9268,20 @@ app.get('/api/pr-creation/masters', requireAuth, async (req, res) => {
       if (!auth) throw new Error('Google Sheets is not configured on this server');
       const { google } = require('googleapis');
       const sheets = google.sheets({ version: 'v4', auth });
-      const [vendorsRes, departments, meta] = await Promise.all([
+      // Vendors come from the PO sheet's Vendor Details — the same list PO
+      // Creation offers — so a PR is raised under exactly the name its PO
+      // will carry ("PR and PO mai vendor name same aana chahiye"). The PR
+      // sheet's own 'Vendor Name' tab spelt many parties differently
+      // ("SHUBHASH METAL" vs "SHUBHASH METAL INDUSTRIES"); it is only the
+      // fallback now, if Vendor Details can't be read.
+      const [vendorsRes, prVendorsRes, departments, meta] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:A`, valueRenderOption: 'FORMATTED_VALUE' }).catch(() => null),
         sheets.spreadsheets.values.get({ spreadsheetId: PR_CREATION_SHEET_ID, range: `'Vendor Name'!A3:A1000`, valueRenderOption: 'FORMATTED_VALUE' }),
         listDepartments(),
         _prSheetMeta(),
       ]);
-      const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+      const poVendors = [...new Set(((vendorsRes && vendorsRes.data.values) || []).map(r => _cleanPartyName(r[0])).filter(Boolean))];
+      const vendors = poVendors.length ? poVendors : (prVendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
       // Departments (ALU's manual Department dropdown, and the PR Form tab's own
       // Department multi-select) come from the app's departments master — the
       // same list every other form uses. They used to be two separate hardcoded
@@ -10064,11 +10087,15 @@ app.get('/api/grn-creation/masters', requireAuth, async (req, res) => {
       if (!auth) throw new Error('Google Sheets is not configured on this server');
       const { google } = require('googleapis');
       const sheets = google.sheets({ version: 'v4', auth });
-      const [vendorsRes, meta] = await Promise.all([
+      // Same Vendor Details list as PR and PO Creation, so all three carry one
+      // spelling; the old 'Vendor Name' tab is only the fallback.
+      const [vendorsRes, prVendorsRes, meta] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'Vendor Details'!A2:A`, valueRenderOption: 'FORMATTED_VALUE' }).catch(() => null),
         sheets.spreadsheets.values.get({ spreadsheetId: PR_SHEET_ID, range: `'Vendor Name'!A3:A2000`, valueRenderOption: 'FORMATTED_VALUE' }),
         _grnSheetMeta(),
       ]);
-      const vendors = (vendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
+      const poVendors = [...new Set(((vendorsRes && vendorsRes.data.values) || []).map(r => _cleanPartyName(r[0])).filter(Boolean))];
+      const vendors = poVendors.length ? poVendors : (prVendorsRes.data.values || []).filter(r => r[0]).map(r => r[0]);
       return { vendors, nextGrNumber: meta.nextGrNo };
     });
     return res.json(payload);
@@ -13199,6 +13226,22 @@ function _plRound(v, dp) {
   return Math.round((Number(v) || 0) * f) / f;
 }
 
+// Column index (0-based, A..Z only — the packing grid is A..S) to its letter.
+function _colLetter(i) { return String.fromCharCode(65 + i); }
+
+// Roughly how many lines a value wraps to in a column `px` wide at the item
+// rows' 8pt Arial — about 6.5px a character (these are mostly capitals and
+// digits), padded a little because Sheets breaks at word boundaries, not
+// mid-word. Only sizes the row; erring tall costs a little white space,
+// erring short cuts text off.
+function _plWrappedLines(value, px) {
+  if (typeof value === 'number') return 1;   // numbers never wrap
+  const text = value == null ? '' : String(value);
+  if (!text) return 1;
+  const perLine = Math.max(1, Math.floor(((px || 50) - 6) / 6.5));
+  return text.split('\n').reduce((n, seg) => n + Math.max(1, Math.ceil((seg.length * 1.1) / perLine)), 0);
+}
+
 // The identity one packed line carries back to the order it came from. The
 // LINE INDEX is the key, not the model number: an order's items are a stored
 // array, and the same model in two sizes is two legitimate lines that matching
@@ -13294,6 +13337,7 @@ function _plOrderLines(order, packed) {
     return {
       lineIdx: i,
       modelNo: String(it.modelNo || ''), itemName: String(it.itemName || ''),
+      clientCode: String(it.clientCode || ''),
       size: String(it.size || ''), swg: String(it.swg || ''), packing: String(it.packing || ''),
       orderedQty, packedQty,
       balanceQty: Math.max(0, orderedQty - packedQty),
@@ -13450,6 +13494,9 @@ function _plCollectLines(b, ordersByNo, packed) {
       // Identity, straight off the order. SWG on the order sheet is the gauge
       // in mm, which is exactly what their SIZE (MM) column holds.
       description: src.itemName, itemCode: src.modelNo, size: src.size, sizeMm: src.swg,
+      // The buyer's own code for this product, from the PI line (Saif Plus
+      // gives every item one, e.g. 001-0209). Printed under the order no.
+      clientCode: src.clientCode || '',
       barcode: it.barcode,
       cartonNo: '',                       // the running range, assigned below
       cartons: it.cartons,
@@ -13561,11 +13608,20 @@ async function _fillPackingTemplate(sheets, form, templateSheetId) {
   put(C.department, PL_FMT.DEPARTMENT);
   put(C.productCategory, form.productCategory);
 
+  // Header row rewritten every time so a label change here reaches the live
+  // tab without re-running the builder script.
+  IT.headers.forEach((h, i) => put(`${_colLetter(i)}${L.itemHeaderRow}`, h));
+
+  // The ORDER NO. cell carries the buyer's own item code on a second line
+  // when the order line has one ("buyer ka code bhi aana chahiye order number
+  // ke sath").
+  const cellText = (it, field) => field === 'orderNo' && it.clientCode
+    ? `${it.orderNo || ''}\n${it.clientCode}` : it[field];
   items.forEach((it, i) => {
     const row = L.itemsFirstRow + i;
     if (row > L.itemsLastRow) return;   // beyond capacity — see the cap in _plCollectLines
     put(`${IT.srNoCol}${row}`, i + 1);
-    Object.entries(IT.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
+    Object.entries(IT.fields).forEach(([field, col]) => put(`${col}${row}`, cellText(it, field)));
   });
 
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
@@ -13584,13 +13640,33 @@ async function _fillPackingTemplate(sheets, form, templateSheetId) {
     });
     const requests = [rowRange(firstIdx, usedEnd, false)];
     if (usedEnd < endIdx) requests.push(rowRange(usedEnd, endIdx, true));
-    // No photos on this document, so every used line is the same plain height.
-    requests.push({
+    // Column widths come from PL_FMT every time, so widening a column there
+    // (ITEM CODE and ORDER NO. were cutting off) reaches the live tab.
+    IT.colWidths.forEach((px, i) => requests.push({
       updateDimensionProperties: {
-        range: { sheetId: templateSheetId, dimension: 'ROWS', startIndex: firstIdx, endIndex: endIdx },
-        properties: { pixelSize: L.itemRowHeight }, fields: 'pixelSize',
+        range: { sheetId: templateSheetId, dimension: 'COLUMNS', startIndex: i, endIndex: i + 1 },
+        properties: { pixelSize: px }, fields: 'pixelSize',
       },
-    });
+    }));
+    // Each line is as tall as its longest wrapped cell. A fixed 15px row
+    // printed only the first line of a long item code or order no., the
+    // rest cut off.
+    const fieldCols = Object.entries(IT.fields);
+    for (let idx = firstIdx; idx < endIdx; idx++) {
+      const it = items[idx - firstIdx];
+      let lines = 1;
+      if (it) {
+        for (const [field, col] of fieldCols) {
+          lines = Math.max(lines, _plWrappedLines(cellText(it, field), IT.colWidths[col.charCodeAt(0) - 65]));
+        }
+      }
+      requests.push({
+        updateDimensionProperties: {
+          range: { sheetId: templateSheetId, dimension: 'ROWS', startIndex: idx, endIndex: idx + 1 },
+          properties: { pixelSize: Math.max(L.itemRowHeight, 4 + 11 * lines) }, fields: 'pixelSize',
+        },
+      });
+    }
     await sheets.spreadsheets.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { requests } });
   }
 }
