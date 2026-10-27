@@ -2532,6 +2532,36 @@ function requireAdminOrPage(page) {
   };
 }
 
+/* The Users page is managed from Users → Access ("iska access mai user page se
+   manage krunga"): the Admin role and the owner always have it; anyone else —
+   HOD included — only with an explicit 'users' tick. No saved record does NOT
+   count as a grant here, unlike other pages: this page hands out every other
+   page, so it is never on by default. Mirrors `grantedOnly` in sidebar.js. */
+async function canManageUsers(user) {
+  if (isSuperAdmin(user) || rolesOf(user).includes('Admin')) return true;
+  const perms = await getUserPermissions(user?.id);
+  return !!(perms && Array.isArray(perms.pages) && perms.pages.includes('users'));
+}
+async function requireUsersPage(req, res, next) {
+  if (await canManageUsers(req.session?.user)) return next();
+  res.status(403).json({ error: 'Forbidden' });
+}
+/* A non-Admin holding the Users grant must not be able to promote anyone
+   (themselves included) to Admin, or edit / delete / reset an Admin's account —
+   otherwise the grant is a back door to the Admin role. */
+async function usersAdminGuard(caller, targetId, newRoles) {
+  if (isSuperAdmin(caller) || rolesOf(caller).includes('Admin')) return null;
+  const want = Array.isArray(newRoles) ? newRoles : String(newRoles || '').split(',').map(r => r.trim());
+  if (want.includes('Admin')) return 'Only an Admin can give the Admin role';
+  if (targetId) {
+    let target = null;
+    if (USE_DB) target = (await q('SELECT email, roles FROM users WHERE id = $1', [targetId]))[0];
+    else target = ((await readStoreJson()).users || []).find(u => u.id === targetId);
+    if (target && (isSuperAdmin(target) || rolesOf(target).includes('Admin'))) return 'Only an Admin can change an Admin account';
+  }
+  return null;
+}
+
 /* The developer secret used to be read from ?secret=... — which put it in the
    hosting layer's access logs, the browser's history and every proxy in between,
    in plain text, on every developer-panel call. It travels in a header now (see
@@ -5542,7 +5572,7 @@ app.get('/api/users', requireAuth, async (req, res) => {
   // needed by the dropdowns (Dashboard/All Tasks/FMS/Help Ticket) that were
   // the reason ?lite=1 exists. Only the admin-only Users page needs it on
   // OTHER people's rows; everyone can still see their own via /auth/session.
-  if (!isAdminUser(req.session?.user)) {
+  if (!isAdminUser(req.session?.user) && !(await canManageUsers(req.session?.user))) {
     return res.json(out.map(({ roles, permissions, phone, leave_approver, substitute_approver, ...rest }) => rest));
   }
   return res.json(out);
@@ -5583,9 +5613,13 @@ function defaultPermissionsFor(roles) {
   return { pages: DEFAULT_USER_PAGES, features: {} };
 }
 
-app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
+app.post('/api/users', requireAuth, requireUsersPage, async (req, res) => {
   const body = req.body;
   if (Array.isArray(body.bulk)) {
+    for (const row of body.bulk) {
+      const bad = await usersAdminGuard(req.session.user, null, parseRoles(row.role || '', row.user_role || ''));
+      if (bad) return res.status(403).json({ error: bad });
+    }
     try {
       let inserted=0; const errors=[];
       if (!USE_DB) {
@@ -5636,6 +5670,8 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
 
   if (!body.name||!body.email) return res.status(400).json({ error:'Name and email required' });
   if (isSuperAdminEmail(body.email)) return res.status(403).json({ error: RESERVED_EMAIL_MSG });
+  const badRole = await usersAdminGuard(req.session.user, null, body.roles);
+  if (badRole) return res.status(403).json({ error: badRole });
 
   if (!USE_DB) {
     const store = await readStore();
@@ -5680,10 +5716,12 @@ app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
+app.patch('/api/users', requireAuth, requireUsersPage, async (req, res) => {
   try {
     const body = req.body;
     if (!body.id) return res.status(400).json({ error:'id required' });
+    const badRole = await usersAdminGuard(req.session.user, body.id, body.roles);
+    if (badRole) return res.status(403).json({ error: badRole });
     // Without this, any Admin or HOD could point a user row (their own
     // included) at the owner's login address and inherit every owner-only
     // guard in the app — isSuperAdmin() matches on email alone. The row that
@@ -5780,9 +5818,11 @@ app.patch('/api/users', requireAuth, requireAdmin, async (req, res) => {
   } catch (err) { console.error('[PATCH /api/users]',err); return res.status(500).json({ error:err.message }); }
 });
 
-app.delete('/api/users', requireAuth, requireAdmin, async (req, res) => {
+app.delete('/api/users', requireAuth, requireUsersPage, async (req, res) => {
   const id = req.query.id;
   if (!id) return res.status(400).json({ error:'id required' });
+  const badRole = await usersAdminGuard(req.session.user, id);
+  if (badRole) return res.status(403).json({ error: badRole });
   if (!USE_DB) {
     const store = await readStore();
     store.users=(store.users||[]).filter(u=>u.id!==id);
@@ -5799,9 +5839,11 @@ app.delete('/api/users', requireAuth, requireAdmin, async (req, res) => {
 });
 
 // ── Users: set-password ───────────────────────────────────────────────────────
-app.post('/api/users/set-password', requireAuth, requireAdmin, async (req, res) => {
+app.post('/api/users/set-password', requireAuth, requireUsersPage, async (req, res) => {
   const { userId, password } = req.body;
   if (!userId||!password||password.length<6) return res.status(400).json({ error:'userId and password (min 6 chars) required' });
+  const badRole = await usersAdminGuard(req.session.user, userId);
+  if (badRole) return res.status(403).json({ error: badRole });
   const hash = await bcrypt.hash(password, 10);
   const now = Date.now();
   if (!USE_DB) {

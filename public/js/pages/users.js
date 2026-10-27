@@ -51,7 +51,13 @@ window.Pages.users = (() => {
   // group headings below; the saved permission is still just the page key.
   // Dashboard is never listed (everyone gets it), and Users/Developer aren't
   // either — those are Admin/HOD-only, not per-user grants.
+  //
+  // `fixed` rows are sidebar entries nobody grants here — they are listed so
+  // the grid shows the whole menu, but render a read-only tick: 'all' =
+  // alwaysShow in sidebar.js, 'admin' = Admin/HOD, 'trueAdmin' = Admin only.
+  // `same` = a shortcut that follows another page's grant (canAccess alias).
   const ALL_PAGES = [
+    { cat: 'Basic', key: 'dashboard',     label: 'Dashboard', fixed: 'all' },
     { cat: 'Basic', key: 'all-tasks',     label: 'All Tasks' },
     { cat: 'Basic', key: 'approvals',     label: 'Approvals' },
     { cat: 'Basic', key: 'scheduler',     label: 'Scheduler' },
@@ -61,6 +67,7 @@ window.Pages.users = (() => {
     // offered here any more, so new grants use the one live key.
     { cat: 'Basic', key: 'announcements', label: 'Announcements' },
     { cat: 'Basic', key: 'help-ticket',   label: 'Help Ticket' },
+    { cat: 'Basic', key: 'amc-open',      label: 'Service Management', fixed: 'all' },
     { cat: 'Basic', key: 'profile',       label: 'Profile' },
 
     // The Export department's three desks, in the sidebar's own order (see
@@ -89,8 +96,14 @@ window.Pages.users = (() => {
 
     { cat: 'Trading Department', key: 'ims-trading',    label: 'IMS Trading' },
 
+    { cat: 'Retail', key: 'retail-new-expense', label: 'New Expense', same: 'retail-dashboard' },
     { cat: 'Retail', key: 'retail-dashboard', label: 'Retail Dashboard' },
 
+    { cat: 'Admin Section', key: 'company-overview', label: 'CEO Dashboard', fixed: 'trueAdmin' },
+    // Admin always; anyone else (HOD included) only with this tick — see
+    // canManageUsers in server.js. A non-Admin holding it still cannot give
+    // the Admin role or touch an Admin's account.
+    { cat: 'Admin Section', key: 'users',        label: 'Users', explicit: true },
     { cat: 'Admin Section', key: 'mis',          label: 'MIS Report' },
     { cat: 'Admin Section', key: 'office-inventory', label: 'Office Inventory' },
     { cat: 'Admin Section', key: 'quotation-approval', label: 'Quotation Approval' },
@@ -101,11 +114,14 @@ window.Pages.users = (() => {
     { cat: 'Admin Section', key: 'amc',          label: 'Service Management (admin)', grant: true },
 
     { cat: 'HR Section', key: 'hr-employees',  label: 'Employee Master' },
+    { cat: 'HR Section', key: 'hr-org-chart',  label: 'Company Tree', fixed: 'all' },
     { cat: 'HR Section', key: 'hr-attendance', label: 'Attendance' },
     { cat: 'HR Section', key: 'hr-leave',      label: 'Leave Management' },
     { cat: 'HR Section', key: 'hr-payroll',    label: 'Payroll' },
-    { cat: 'HR Section', key: 'hr-assets',     label: 'Assets' },
+    // alwaysShow in sidebar.js, so a checkbox here never changed anything.
+    { cat: 'HR Section', key: 'hr-assets',     label: 'Assets', fixed: 'all' },
     { cat: 'HR Section', key: 'hr-reports',    label: 'HR Reports' },
+    { cat: 'HR Section', key: 'hr-policies',   label: 'HR Policies', fixed: 'all' },
 
     { cat: 'Accounts', key: 'client-master',     label: 'Vendor Master' },
     { cat: 'Accounts', key: 'bulk-email',        label: 'Bulk Email' },
@@ -117,7 +133,13 @@ window.Pages.users = (() => {
      Admin would otherwise restrict that Admin's whole menu to the list.
      Mirrors `grantOnly` in sidebar.js and hasAmcAccess in server.js. */
   const GRANT_PAGES = new Set(ALL_PAGES.filter(p => p.grant).map(p => p.key));
-  const PAGE_KEYS = ALL_PAGES.filter(p => !p.grant).map(p => p.key);
+  const PAGE_KEYS = ALL_PAGES.filter(p => !p.grant && !p.fixed && !p.same).map(p => p.key);
+  // `explicit` pages are never part of the "no record = everything" default,
+  // so filling a default list in must not quietly grant them.
+  const EXPLICIT_PAGES = new Set(ALL_PAGES.filter(p => p.explicit).map(p => p.key));
+  const DEFAULT_KEYS = PAGE_KEYS.filter(k => !EXPLICIT_PAGES.has(k));
+  const _isReadOnly = p => !!(p.fixed || p.same);
+  const FIXED_NOTE = { all: 'Everyone', admin: 'Admin / HOD only', trueAdmin: 'Admin only' };
 
   const ALL_FEATURES = {
     'all-tasks': [
@@ -363,7 +385,7 @@ window.Pages.users = (() => {
       _permData = { pages: [...existing.pages], features: existing.features ? JSON.parse(JSON.stringify(existing.features)) : {}, grants: [...(existing.grants || [])] };
     } else {
       _permData = {
-        pages: [...PAGE_KEYS],
+        pages: [...DEFAULT_KEYS],
         grants: [...((existing && existing.grants) || [])],
         features: Object.fromEntries(Object.entries(ALL_FEATURES).map(([k, arr]) => [k, arr.map(f => f.key)])),
       };
@@ -725,8 +747,8 @@ window.Pages.users = (() => {
             if (chk.checked) g.add(page); else g.delete(page);
             u.permissions = { ...(existing || {}), grants: [...g] };
           } else {
-            const base = existing || { pages: [...PAGE_KEYS], features: {} };
-            let pages = [...(base.pages || PAGE_KEYS)];
+            const base = existing || { pages: [...DEFAULT_KEYS], features: {} };
+            let pages = [...(base.pages || DEFAULT_KEYS)];
             if (chk.checked) { if (!pages.includes(page)) pages.push(page); }
             else              { pages = pages.filter(p => p !== page); }
             /* optimistically update local state */
@@ -886,6 +908,14 @@ window.Pages.users = (() => {
     return i === 0 || ALL_PAGES[i - 1].cat !== p.cat;
   }
 
+  // Whether a user sees a `fixed` sidebar entry — mirrors sidebar.js.
+  function _fixedHas(u, fixed) {
+    if (fixed === 'all') return true;
+    const r = Array.isArray(u.roles) ? u.roles : String(u.roles || '').split(',').map(x => x.trim());
+    if (u.isSuperAdmin || r.includes('Admin')) return true;
+    return fixed === 'admin' && r.includes('HOD');
+  }
+
   function renderPermInline() {
     let lastCat = null;
     const pagesHtml = ALL_PAGES.map(p => {
@@ -895,6 +925,16 @@ window.Pages.users = (() => {
         ? `<div style="padding:${lastCat ? '12px' : '2px'} 0 4px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8;">${esc(p.cat)}</div>`
         : '';
       lastCat = p.cat || lastCat;
+      if (_isReadOnly(p)) {
+        const note = p.same ? `follows ${(ALL_PAGES.find(x => x.key === p.same) || {}).label || p.same}` : FIXED_NOTE[p.fixed];
+        return `${catHtml}<div class="usr-perm-row" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f1f5f9;">
+          <span style="display:flex;align-items:center;gap:6px;min-width:130px;font-size:13px;font-weight:600;color:#94a3b8;">
+            <input type="checkbox" disabled ${p.fixed === 'all' ? 'checked' : ''} style="width:14px;height:14px;" />
+            ${esc(p.label)}
+          </span>
+          <span style="font-size:11px;color:#94a3b8;">${esc(note)}</span>
+        </div>`;
+      }
       const checked = p.grant ? (_permData.grants || []).includes(p.key) : _permData.pages.includes(p.key);
       const feats   = ALL_FEATURES[p.key] || [];
       const featHtml = feats.map(f => {
@@ -916,7 +956,7 @@ window.Pages.users = (() => {
   }
 
   function renderAccessTab() {
-    const allPageKeys = PAGE_KEYS;
+    const allPageKeys = DEFAULT_KEYS;
 
     // Admin is the only role still hard-wired to "always everything" here —
     // HOD is governed by its own saved record now, same as a plain User
@@ -942,6 +982,7 @@ window.Pages.users = (() => {
       if (GRANT_PAGES.has(pageKey)) return !!(u.permissions && (u.permissions.grants || []).includes(pageKey));
       if (isAdminRole(u)) return true;
       const perm = u.permissions;
+      if (EXPLICIT_PAGES.has(pageKey)) return !!(perm && perm.pages && perm.pages.includes(pageKey));
       if (!perm || !perm.pages) return true;
       return perm.pages.includes(pageKey);
     };
@@ -977,8 +1018,15 @@ window.Pages.users = (() => {
         </td>`;
 
       const pageCells = ALL_PAGES.map(p => {
-        const checked = userHasPage(u, p.key);
         const tdStyle = `padding:10px 12px;border-bottom:1px solid #f1f5f9;text-align:center;${_isCatStart(p) ? _catEdge : ''}`;
+        if (_isReadOnly(p)) {
+          const has = p.same ? userHasPage(u, p.same) : _fixedHas(u, p.fixed);
+          const note = p.same ? `Follows ${(ALL_PAGES.find(x => x.key === p.same) || {}).label || p.same}` : FIXED_NOTE[p.fixed];
+          return `<td style="${tdStyle}" title="${esc(note)}">${has
+            ? '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+            : '<span style="color:#cbd5e1;">—</span>'}</td>`;
+        }
+        const checked = userHasPage(u, p.key);
         if (isFixedAdmin && !p.grant) {
           return `<td style="${tdStyle}">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -993,7 +1041,7 @@ window.Pages.users = (() => {
       return `<tr style="transition:background .1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">${nameTd}${pageCells}</tr>`;
     }).join('');
 
-    const colHeaders = ALL_PAGES.map(p => `<th style="${thStyle}${_isCatStart(p) ? _catEdge : ''}">${p.label}</th>`).join('');
+    const colHeaders = ALL_PAGES.map(p => `<th style="${thStyle}${_isCatStart(p) ? _catEdge : ''}${_isReadOnly(p) ? 'color:#a3aec0;' : ''}"${_isReadOnly(p) ? ` title="${esc(p.same ? 'Follows ' + p.same : FIXED_NOTE[p.fixed])} — not set here"` : ''}>${p.label}</th>`).join('');
 
     // Category band above the page columns. Deliberately NOT sticky — the page
     // header row below it is, and two sticky rows at top:0 would overlap; this
@@ -1558,7 +1606,8 @@ window.Pages.users = (() => {
       const userRoles = Array.isArray(user?.roles)
         ? user.roles
         : (typeof user?.roles === 'string' ? user.roles.split(',').map(r => r.trim()) : []);
-      _isAdmin = userRoles.includes('Admin') || userRoles.includes('HOD');
+      // Anyone holding the Users grant manages users here (server: canManageUsers).
+      _isAdmin = userRoles.includes('Admin') || !!window.Sidebar?.canAccess?.('users', user);
 
       // Reset state on each navigation to this page
       _tab            = 'Users';

@@ -230,7 +230,10 @@ window.Sidebar = {
       // login"): trueAdminOnly hides it from HOD too, unlike adminOnly, and it
       // is not grantable from Users → Access. The API gate is requireTrueAdmin.
       { route: 'company-overview', label: 'CEO Dashboard', icon: 'companyoverview', adminOnly: true, trueAdminOnly: true },
-      { route: 'users',         label: 'Users',        icon: 'users',        adminOnly: true },
+      // Managed from Users → Access: the Admin role always has it, anyone else
+      // (HOD included) only with an explicit 'users' tick — no saved record is
+      // not a grant here. Mirrors canManageUsers in server.js.
+      { route: 'users',         label: 'Users',        icon: 'users',        grantedOnly: true },
       { route: 'mis',           label: 'MIS Report',   icon: 'mis' },
       // Office consumables (was the "Inventory Management System" sheet).
       // adminOnly but grantable from Users → Access, like Bulk Email; the
@@ -363,6 +366,7 @@ window.Sidebar = {
     if (!item) return true;
     if (item.trueAdminOnly && !this._isTrueAdmin(u)) return false;
     if (item.grantOnly) return !!(u.permissions && Array.isArray(u.permissions.grants) && u.permissions.grants.includes(route));
+    if (item.grantedOnly) return this._isTrueAdmin(u) || !!(u.permissions && Array.isArray(u.permissions.pages) && u.permissions.pages.includes(route));
 
     const permissions = u.permissions || null;
     // An explicit page grant from Users → Access outranks adminOnly: HR staff
@@ -389,7 +393,7 @@ window.Sidebar = {
     // Same grant-outranks-adminOnly rule as canAccess above — the menu and the
     // router must never disagree about who can open a page.
     if (item.trueAdminOnly && !this._isTrueAdmin(window.currentUser)) return '';
-    if (item.grantOnly && !this.canAccess(item.route)) return '';
+    if ((item.grantOnly || item.grantedOnly) && !this.canAccess(item.route)) return '';
     const grantedAdminPage = !!(permissions && permissions.pages && permissions.pages.includes(item.route));
     if (item.adminOnly && !isAdmin && !grantedAdminPage) return '';
     if (item.flag && !(featureFlags || {})[item.flag]) return '';
@@ -412,7 +416,7 @@ window.Sidebar = {
       : (item.route === 'order-sheet' || item.route === 'packing-list')
       ? [item.route, 'proforma-invoice']
       : [item.route];
-    if (!item.alwaysShow && permissions && permissions.pages && !routeAliases.some(r => permissions.pages.includes(r))) return '';
+    if (!item.alwaysShow && !item.grantedOnly && permissions && permissions.pages && !routeAliases.some(r => permissions.pages.includes(r))) return '';
 
     const active = activeRoute === item.route;
     const icon   = this._icons[item.icon] || '';
