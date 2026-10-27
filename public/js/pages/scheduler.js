@@ -885,7 +885,7 @@ window.Pages.scheduler = (() => {
         </div>
         <div>
           <div style="font-size:12px;color:var(--text-secondary);background:var(--surface-alt);border:1px solid var(--border-base);border-radius:8px;padding:8px 10px;">
-            A Zoom / Google Meet link is made under your account, and attendees get an email invite with it.
+            A Google Meet link is made under your account, and attendees get the invite in their email and Google Calendar.
           </div>
           <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-secondary);margin-top:7px;cursor:pointer;">
             <input type="checkbox" id="sch-nolink"> In person — no online link
@@ -963,7 +963,7 @@ window.Pages.scheduler = (() => {
         else if (saved?.linkMode === 'not-configured') parts.push('no Zoom/Meet account connected yet, so no link was made');
         else if (saved?.linkMode === 'failed') parts.push('the Zoom / Meet link could not be made — check the server log');
         const inv = saved?.invite || {};
-        if (inv.mailed) parts.push(`invite mailed to ${inv.mailed}`);
+        if (inv.mailed) parts.push(inv.via === 'google' ? `Google Calendar invite sent to ${inv.mailed}` : `invite mailed to ${inv.mailed}`);
         if ((inv.missing || []).length) parts.push(`no email for ${inv.missing.join(', ')}`);
         Utils.showToast(parts.join(' · '), saved?.linkMode === 'failed' || (inv.missing || []).length ? 'warning' : 'success');
         _anchor = _startOfDay(new Date(date + 'T00:00:00'));
@@ -980,8 +980,8 @@ window.Pages.scheduler = (() => {
   async function _deleteMeeting(id) {
     if (!await Utils.showConfirm('Cancel this meeting?', { danger: true, title: 'Cancel Meeting', confirmText: 'Cancel Meeting' })) return;
     try {
-      await Utils.apiFetch('/api/meetings?id=' + encodeURIComponent(id), { method: 'DELETE' });
-      Utils.showToast('Meeting cancelled');
+      const r = await Utils.apiFetch('/api/meetings?id=' + encodeURIComponent(id), { method: 'DELETE' });
+      Utils.showToast(r?.notified === 'google' || r?.notified === 'mail' ? 'Meeting cancelled · attendees told' : r?.notified === 'failed' ? 'Meeting cancelled · could not notify attendees' : 'Meeting cancelled', r?.notified === 'failed' ? 'warning' : 'success');
       await loadData();
       renderPage();
     } catch (e) { Utils.showToast(e.message || 'Failed', 'error'); }

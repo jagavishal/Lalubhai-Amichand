@@ -420,6 +420,11 @@ const SCHEMA = [
   `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS client_name VARCHAR(255) DEFAULT ''`,
   `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS frequency VARCHAR(16) DEFAULT ''`,
   `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS series_id VARCHAR(16) DEFAULT NULL`,
+  // The Google Calendar event behind a meeting's Meet link (one per series),
+  // and whose calendar it is on — what cancelling needs to cancel it there.
+  `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS ext_provider VARCHAR(16) DEFAULT ''`,
+  `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS ext_event_id VARCHAR(255) DEFAULT ''`,
+  `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS ext_host VARCHAR(255) DEFAULT ''`,
 ];
 
 // ── HRMS ──────────────────────────────────────────────────────────────────────
@@ -6119,47 +6124,100 @@ async function _zoomMeetingLink({ title, date, startTime, endTime, notes, hostEm
   throw new Error('Zoom meeting create failed: ' + lastErr);
 }
 
-async function _googleMeetLink({ title, date, startTime, endTime, notes, hostEmail }) {
+/* Google Meet is the company's choice (laltd.in is on Google Workspace, so
+   every scheduler hosts on their own account and any number can run at once).
+   The ERP acts as the creator through the service account's domain-wide
+   delegation (scope calendar.events, set once in the Workspace Admin console;
+   GOOGLE_MEET_DELEGATION=1 turns it on). The event is a real calendar event
+   on the creator's calendar with the attendees on it, so Google itself sends
+   the invite (and later the cancellation) and it lands in their calendars. A
+   repeating ERP meeting is one repeating event with one Meet link. */
+const _GCAL_RRULE = { daily: 'FREQ=DAILY', weekly: 'FREQ=WEEKLY', monthly: 'FREQ=MONTHLY' };
+function _googleMeetOn() {
   const { email, key } = _resolveGoogleCredentials();
   const on = process.env.GOOGLE_MEET_ORGANIZER || /^(1|true|yes)$/i.test(process.env.GOOGLE_MEET_DELEGATION || '');
-  if (!on || !email || !key) return null;
-  const subjects = [...new Set([hostEmail, process.env.GOOGLE_MEET_ORGANIZER].filter(Boolean))];
+  return on && email && key ? { email, key } : null;
+}
+function _gcalAs(subject, creds) {
+  const { google } = require('googleapis');
+  const auth = new google.auth.JWT({ email: creds.email, key: creds.key, scopes: ['https://www.googleapis.com/auth/calendar.events'], subject });
+  return google.calendar({ version: 'v3', auth });
+}
+
+async function _googleMeetLink(meeting) {
+  const creds = _googleMeetOn();
+  if (!creds) return null;
+  const subjects = [...new Set([meeting.hostEmail, process.env.GOOGLE_MEET_ORGANIZER].filter(Boolean))];
   let lastErr = null;
   for (const subject of subjects) {
-    try { return await _googleMeetAs(subject, { title, date, startTime, endTime, notes }, email, key); }
+    try { return await _googleMeetAs(subject, meeting, creds); }
     catch (e) { lastErr = e; console.warn(`[meetings] Google Meet as ${subject} failed: ${e.message}`); }
   }
   if (lastErr) throw lastErr;
   return null;
 }
 
-async function _googleMeetAs(subject, { title, date, startTime, endTime, notes }, email, key) {
-  const { google } = require('googleapis');
-  const auth = new google.auth.JWT({ email, key, scopes: ['https://www.googleapis.com/auth/calendar.events'], subject });
-  const cal = google.calendar({ version: 'v3', auth });
+async function _googleMeetAs(subject, { title, date, startTime, endTime, notes, clientName, attendees = [], freq = '', count = 1 }, creds) {
+  const cal = _gcalAs(subject, creds);
   const t = _meetingStartEnd(date, startTime, endTime);
+  const rule = _GCAL_RRULE[freq];
+  const guests = attendees.filter(a => a.email && a.email.toLowerCase() !== String(subject).toLowerCase());
   const ev = await cal.events.insert({
-    calendarId: 'primary', conferenceDataVersion: 1, sendUpdates: 'none',
+    calendarId: 'primary', conferenceDataVersion: 1, sendUpdates: guests.length ? 'all' : 'none',
     requestBody: {
-      summary: title, description: notes || '',
+      summary: title,
+      description: [notes || '', clientName ? `Client: ${clientName}` : '', 'Scheduled from the Lallubhai Amichand ERP.'].filter(Boolean).join('\n\n'),
       start: { dateTime: t.local, timeZone: 'Asia/Kolkata' },
       end: { dateTime: new Date(t.endUtc.getTime() + _IST_MIN * 60000).toISOString().slice(0, 19), timeZone: 'Asia/Kolkata' },
+      recurrence: rule && count > 1 ? [`RRULE:${rule};COUNT=${count}`] : undefined,
+      attendees: guests.map(a => ({ email: a.email, displayName: a.name })),
       conferenceData: { createRequest: { requestId: 'erp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8), conferenceSolutionKey: { type: 'hangoutsMeet' } } },
     },
   });
   const link = ev.data.hangoutLink || ev.data.conferenceData?.entryPoints?.find(p => p.entryPointType === 'video')?.uri;
   if (!link) throw new Error('Google Calendar made the event but returned no Meet link');
-  return { provider: 'Google Meet', link, host: subject };
+  return { provider: 'Google Meet', link, host: subject, eventId: ev.data.id, invitesSent: guests.length };
+}
+
+/* Cancelling in the ERP cancels on Google too, which mails the attendees.
+   One occurrence of a repeating event is found by its date and cancelled on
+   its own; the rest of the series stays. */
+async function _googleMeetCancel({ host, eventId, date, wholeSeries }) {
+  const creds = _googleMeetOn();
+  if (!creds || !host || !eventId) return false;
+  const cal = _gcalAs(host, creds);
+  if (wholeSeries) {
+    await cal.events.delete({ calendarId: 'primary', eventId, sendUpdates: 'all' });
+    return true;
+  }
+  const dayStart = new Date(Date.parse(date + 'T00:00:00Z') - _IST_MIN * 60000);
+  const inst = await cal.events.instances({ calendarId: 'primary', eventId, timeMin: dayStart.toISOString(), timeMax: new Date(dayStart.getTime() + 86400000).toISOString() });
+  const one = (inst.data.items || [])[0];
+  if (one) await cal.events.delete({ calendarId: 'primary', eventId: one.id, sendUpdates: 'all' });
+  else await cal.events.delete({ calendarId: 'primary', eventId, sendUpdates: 'all' }); // not repeating
+  return true;
 }
 
 async function _autoMeetingLink(meeting) {
-  for (const make of [_zoomMeetingLink, _googleMeetLink]) {
+  // Google Meet first (the company's choice); Zoom only as a fallback.
+  for (const make of [_googleMeetLink, _zoomMeetingLink]) {
     try {
       const got = await make(meeting);
       if (got) return got;
     } catch (e) { console.error('[meetings] auto link failed:', e.message); }
   }
   return null;
+}
+
+// Attendee names (as stored on the meeting) → login emails, deduped.
+async function _meetingAttendeeEmails(names) {
+  const list = [], missing = [];
+  for (const n of names) {
+    const u = await userByName(n);
+    if (u?.email) { if (!list.some(a => a.email.toLowerCase() === u.email.toLowerCase())) list.push({ name: u.name, email: u.email }); }
+    else missing.push(n);
+  }
+  return { list, missing };
 }
 
 function _meetingIcs({ uid, title, dates, startTime, endTime, link, notes, organizerName, organizerEmail, attendees }) {
@@ -6181,12 +6239,7 @@ function _meetingIcs({ uid, title, dates, startTime, endTime, link, notes, organ
 async function sendMeetingInvites({ id, title, dates, startTime, endTime, link, provider, notes, clientName, organizer, attendeeNames }) {
   const mailer = getMailer();
   if (!mailer) return { mailed: 0, missing: attendeeNames };
-  const attendees = [], missing = [];
-  for (const n of attendeeNames) {
-    const u = await userByName(n);
-    if (u?.email) { if (!attendees.some(a => a.email.toLowerCase() === u.email.toLowerCase())) attendees.push({ name: u.name, email: u.email }); }
-    else missing.push(n);
-  }
+  const { list: attendees, missing } = await _meetingAttendeeEmails(attendeeNames);
   if (!attendees.length) return { mailed: 0, missing };
   const org = organizer?.email ? organizer : (await userByName(organizer?.name)) || organizer || {};
   const when = (() => {
@@ -6215,6 +6268,38 @@ async function sendMeetingInvites({ id, title, dates, startTime, endTime, link, 
   return { mailed: attendees.length, missing };
 }
 
+// The mirror of sendMeetingInvites for a meeting not on Google: a mail plus
+// an .ics CANCEL carrying the same UID the invite used (series id + the
+// occurrence's position), so calendars that took the invite drop it.
+async function sendMeetingCancellation({ m, by }) {
+  const mailer = getMailer();
+  if (!mailer) return { mailed: 0 };
+  const { list } = await _meetingAttendeeEmails(String(m.attendees || '').split(',').map(s => s.trim()).filter(Boolean));
+  if (!list.length) return { mailed: 0 };
+  const uidBase = m.seriesId || m.id;
+  const pos = m.seriesId ? Number((await q('SELECT COUNT(*) AS n FROM scheduler_meetings WHERE series_id = $1 AND date < $2', [m.seriesId, m.date]))[0]?.n || 0) : 0;
+  const t = _meetingStartEnd(m.date, m.startTime, m.endTime);
+  const stamp = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Lallubhai Amichand ERP//Scheduler//EN', 'METHOD:CANCEL', 'BEGIN:VEVENT',
+    `UID:${uidBase}-${pos}@laltdoffice.com`, `DTSTAMP:${stamp(new Date())}`, `DTSTART:${stamp(t.startUtc)}`, `DTEND:${stamp(t.endUtc)}`,
+    `SUMMARY:${String(m.title || '').replace(/[,;]/g, ' ')}`, 'STATUS:CANCELLED', 'SEQUENCE:1', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+  const when = new Date(m.date + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' })
+    + (m.startTime ? ' · ' + m.startTime : '');
+  await mailer.sendMail({
+    from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
+    to: list.map(a => a.email).join(', '),
+    subject: `Cancelled: ${m.title} — ${when}`,
+    html: _leaveMailHtml({
+      heading: 'Meeting Cancelled', colour: '#b91c1c',
+      lead: `<b>${escHtml(by || m.createdByName || 'The organiser')}</b> has cancelled this meeting.`,
+      rows: [['Title', escHtml(m.title)], ['When', escHtml(when)], ['Client', escHtml(m.clientName || '')]],
+      footer: 'It has been removed from the ERP Scheduler.',
+    }),
+    icalEvent: { method: 'CANCEL', filename: 'cancel.ics', content: ics },
+  });
+  return { mailed: list.length };
+}
+
 // Frequency -> how many total occurrences to create and how to step the date.
 // Capped at a year's worth so "Weekly" from a stray click can't fill the table.
 const MEETING_RECUR_STEPS = {
@@ -6241,14 +6326,16 @@ app.post('/api/meetings', requireAuth, async (req, res) => {
     const freq = String(b.frequency || '').trim().toLowerCase();
     const step = MEETING_RECUR_STEPS[freq];
     const dates = step ? Array.from({ length: step.count }, (_, i) => step.next(date, i)) : [date];
-    // Blank link box → make one (Zoom, else Google Meet, when configured).
+    const attendeeNames = attendees.split(',').map(s => s.trim()).filter(Boolean);
+    const guests = attendeeNames.length ? await _meetingAttendeeEmails(attendeeNames) : { list: [], missing: [] };
+    // No link given → make one (Google Meet, else Zoom, when configured).
     // b.noLink keeps an in-person meeting from getting one.
     let made = null;
     if (!location && !b.noLink) {
       // Under the creator's own account. The session may predate an email
       // being added, so read it fresh from the login row.
       const hostEmail = (await q('SELECT email FROM users WHERE id = $1', [me?.id || '']).catch(() => []))[0]?.email || me?.email || '';
-      made = await _autoMeetingLink({ title, date, startTime, endTime, notes, hostEmail });
+      made = await _autoMeetingLink({ title, date, startTime, endTime, notes, clientName, hostEmail, attendees: guests.list, freq: step ? freq : '', count: dates.length });
       if (made) location = made.link;
     }
 
@@ -6257,14 +6344,18 @@ app.post('/api/meetings', requireAuth, async (req, res) => {
       id = await withSeqId('scheduler_meetings', 'MTG', 4, (newId) => {
         seriesId = seriesId || newId; // first occurrence's own id groups the series
         return pool.query(
-          `INSERT INTO scheduler_meetings (id, title, date, start_time, end_time, attendees, location, notes, created_by, created_by_name, client_id, client_name, frequency, series_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-          [newId, title, d, startTime, endTime, attendees, location, notes, me?.id || null, me?.name || '', clientId, clientName, step ? freq : '', seriesId]);
+          `INSERT INTO scheduler_meetings (id, title, date, start_time, end_time, attendees, location, notes, created_by, created_by_name, client_id, client_name, frequency, series_id, ext_provider, ext_event_id, ext_host) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+          [newId, title, d, startTime, endTime, attendees, location, notes, me?.id || null, me?.name || '', clientId, clientName, step ? freq : '', seriesId,
+           made?.provider || '', made?.eventId || '', made?.host || '']);
       });
     }
-    // Invites go out after the save; a mail hiccup never undoes the meeting.
-    let invite = { mailed: 0, missing: [] };
-    const attendeeNames = attendees.split(',').map(s => s.trim()).filter(Boolean);
-    if (attendeeNames.length && b.sendInvite !== false) {
+    // A Google Meet event already invited its attendees through Google.
+    // Anything else gets the ERP's own invite mail — after the save, so a
+    // mail hiccup never undoes the meeting.
+    let invite = { mailed: 0, missing: guests.missing };
+    if (made?.provider === 'Google Meet') {
+      invite = { mailed: made.invitesSent || 0, missing: guests.missing, via: 'google' };
+    } else if (attendeeNames.length && b.sendInvite !== false) {
       try {
         invite = await sendMeetingInvites({ id: seriesId || id, title, dates, startTime, endTime, link: /^https?:\/\//i.test(location) ? location : '',
           provider: made?.provider || (/zoom\.us/i.test(location) ? 'Zoom' : /meet\.google/i.test(location) ? 'Google Meet' : ''),
@@ -6282,13 +6373,31 @@ app.delete('/api/meetings', requireAuth, async (req, res) => {
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: 'id required' });
     const me = req.session?.user;
-    if (!isAdminUser(me)) {
-      const rows = await q('SELECT created_by AS "createdBy" FROM scheduler_meetings WHERE id = $1', [id]);
-      if (!rows.length) return res.status(404).json({ error: 'Not found' });
-      if (rows[0].createdBy !== me?.id) return res.status(403).json({ error: 'Only the organizer or an Admin/HOD can cancel this meeting' });
-    }
+    const rows = await q(`SELECT id, title, date, start_time AS "startTime", end_time AS "endTime", attendees, location, notes, client_name AS "clientName",
+                                 created_by AS "createdBy", created_by_name AS "createdByName", series_id AS "seriesId",
+                                 ext_provider AS "extProvider", ext_event_id AS "extEventId", ext_host AS "extHost"
+                            FROM scheduler_meetings WHERE id = $1`, [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    const m = rows[0];
+    if (!isAdminUser(me) && m.createdBy !== me?.id) return res.status(403).json({ error: 'Only the organizer or an Admin/HOD can cancel this meeting' });
     await pool.query('DELETE FROM scheduler_meetings WHERE id = $1', [id]);
-    return res.json({ success: true });
+
+    // Tell the attendees. Google Meet: cancel that day on Google, which mails
+    // them and clears their calendars. Otherwise the ERP mails them itself.
+    // The meeting is already gone from the ERP either way.
+    const date = toDateStr(m.date);
+    let notified = 'none';
+    try {
+      if (m.extProvider === 'Google Meet' && m.extEventId) {
+        const left = m.seriesId ? (await q('SELECT COUNT(*) AS n FROM scheduler_meetings WHERE series_id = $1', [m.seriesId]))[0] : { n: 0 };
+        await _googleMeetCancel({ host: m.extHost, eventId: m.extEventId, date, wholeSeries: !Number(left?.n) });
+        notified = 'google';
+      } else if (String(m.attendees || '').trim()) {
+        const r = await sendMeetingCancellation({ m: { ...m, date }, by: me?.name || '' });
+        if (r.mailed) notified = 'mail';
+      }
+    } catch (e) { console.error('[meetings] cancel notice failed for', id, e.message); notified = 'failed'; }
+    return res.json({ success: true, notified });
   } catch (err) { return res.status(500).json({ error: err.message }); }
 });
 
