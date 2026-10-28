@@ -245,23 +245,21 @@ window.Pages['company-overview'] = (() => {
     return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
   }
 
-  // "10:00" + "PM" -> "22:00"; '' if the free-text Start Time doesn't parse
-  // as a 1-12 hour, 0-59 minute clock time.
-  // "10", "10:30", "10.30", "1030", "10:30 pm", or 24-hour "14:30" (which
-  // overrides the AM/PM pick). '' when it can't be read.
-  function _to24Hour(text, ampm) {
-    let t = String(text || '').trim().toLowerCase();
-    const suffix = t.match(/\s*([ap])\.?m?\.?$/);
-    if (suffix) { ampm = suffix[1] === 'p' ? 'PM' : 'AM'; t = t.slice(0, suffix.index).trim(); }
-    const m = t.match(/^(\d{1,2})(?:\s*[:.\-\s]\s*(\d{2})|(\d{2}))?$/);
-    if (!m) return '';
-    let h = parseInt(m[1], 10);
-    const min = parseInt(m[2] || m[3] || '0', 10);
-    if (h > 23 || min > 59) return '';
-    if (h === 0 || h > 12) return h <= 23 && !suffix ? String(h).padStart(2, '0') + ':' + String(min).padStart(2, '0') : '';
-    if (ampm === 'AM') h = (h === 12) ? 0 : h;
-    else h = (h === 12) ? 12 : h + 12;
-    return String(h).padStart(2, '0') + ':' + String(min).padStart(2, '0');
+  // Start Time choices: every 15 minutes, "HH:MM" values shown as 10:30 AM.
+  // Pre-picks `sel`, else the next half hour from now.
+  function _timeOptions(sel) {
+    if (!sel) {
+      const d = new Date();
+      const m = Math.ceil((d.getHours() * 60 + d.getMinutes() + 1) / 30) * 30 % 1440;
+      sel = String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+    }
+    const out = [];
+    for (let m = 0; m < 1440; m += 15) {
+      const h = Math.floor(m / 60), mm = String(m % 60).padStart(2, '0');
+      const v = String(h).padStart(2, '0') + ':' + mm;
+      out.push(`<option value="${v}"${v === sel ? ' selected' : ''}>${h % 12 || 12}:${mm} ${h < 12 ? 'AM' : 'PM'}</option>`);
+    }
+    return out.join('');
   }
 
   // Outside guests: emails separated by commas, semicolons or spaces.
@@ -329,7 +327,6 @@ window.Pages['company-overview'] = (() => {
     const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--ceo-border);border-radius:8px;font-size:13px;color:var(--ceo-ink);background:var(--ceo-surface);outline:none;';
     const labelStyle = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ceo-ink2);margin-bottom:5px;';
     const DURATIONS = [['15', '15 min'], ['30', '30 min'], ['45', '45 min'], ['60', '1 hour'], ['90', '1.5 hours'], ['120', '2 hours'], ['', 'Custom']];
-    const FREQUENCIES = [['', 'Does not repeat'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']];
     const bodyHTML = `<div class="ceo" style="max-width:none;padding:0;"><div style="display:flex;flex-direction:column;gap:14px;">
         <div class="ceo-mtg-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
           <div style="grid-column:1/-1;"><label style="${labelStyle}">Title <span style="color:var(--ceo-crit);">*</span></label>
@@ -339,18 +336,10 @@ window.Pages['company-overview'] = (() => {
           <div><label style="${labelStyle}">Duration</label>
             <select id="ceo-mtg-duration" style="${inputStyle}background:var(--ceo-surface);">${DURATIONS.map(([v, l]) => `<option value="${v}"${v === '30' ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
           <div><label style="${labelStyle}">Start Time <span style="color:var(--ceo-crit);">*</span></label>
-            <div style="display:flex;gap:6px;">
-              <input id="ceo-mtg-start-text" type="text" autocomplete="off" placeholder="e.g. 10:30" style="${inputStyle}" />
-              <select id="ceo-mtg-start-ampm" style="${inputStyle}width:76px;flex:0 0 76px;background:var(--ceo-surface);">
-                <option value="AM">AM</option>
-                <option value="PM">PM</option>
-              </select>
-            </div></div>
+            <select id="ceo-mtg-start" style="${inputStyle}background:var(--ceo-surface);">${_timeOptions('')}</select></div>
           <div><label style="${labelStyle}">End Time</label>
             <input id="ceo-mtg-end" type="time" disabled style="${inputStyle}background:var(--ceo-hover);color:var(--ceo-muted);cursor:not-allowed;" /></div>
         </div>
-        <div><label style="${labelStyle}">Frequency</label>
-          <select id="ceo-mtg-frequency" style="${inputStyle}background:var(--ceo-surface);">${FREQUENCIES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></div>
         <div><label style="${labelStyle}">Attendees (Team)</label>
           <div id="ceo-mtg-attendees-box" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:40px;box-sizing:border-box;padding:5px 8px;border:1.5px solid var(--ceo-border);border-radius:8px;background:var(--ceo-surface);cursor:text;">
             <input id="ceo-mtg-attendees-input" type="text" autocomplete="off" placeholder="Select attendees…" style="flex:1;min-width:120px;border:none;outline:none;font-size:13px;background:transparent;color:var(--ceo-ink);" /></div>
@@ -382,18 +371,17 @@ window.Pages['company-overview'] = (() => {
     _bindAttendeesCombobox(_meetingUsers);
     const recomputeEnd = () => {
       const mins = parseInt(document.getElementById('ceo-mtg-duration').value, 10);
-      const start = _to24Hour(document.getElementById('ceo-mtg-start-text').value, document.getElementById('ceo-mtg-start-ampm').value);
+      const start = document.getElementById('ceo-mtg-start').value;
       document.getElementById('ceo-mtg-end').value = (start && Number.isFinite(mins)) ? _addMinutes(start, mins) : '';
     };
     document.getElementById('ceo-mtg-duration').addEventListener('change', recomputeEnd);
-    document.getElementById('ceo-mtg-start-text').addEventListener('input', recomputeEnd);
-    document.getElementById('ceo-mtg-start-ampm').addEventListener('change', recomputeEnd);
+    document.getElementById('ceo-mtg-start').addEventListener('change', recomputeEnd);
+    recomputeEnd();
     document.getElementById('ceo-mtg-save').addEventListener('click', async () => {
       const title = document.getElementById('ceo-mtg-title').value.trim();
       const date = document.getElementById('ceo-mtg-date').value;
-      const startTime = _to24Hour(document.getElementById('ceo-mtg-start-text').value, document.getElementById('ceo-mtg-start-ampm').value);
+      const startTime = document.getElementById('ceo-mtg-start').value;
       if (!title || !date) { Utils.showToast('Title and date are required', 'error'); return; }
-      if (document.getElementById('ceo-mtg-start-text').value.trim() && !startTime) { Utils.showToast('Start time should look like 10:30 (or 10.30)', 'error'); return; }
       const guests = _guestEmails(document.getElementById('ceo-mtg-guests').value);
       if (guests.bad) { Utils.showToast(`"${guests.bad}" is not an email address`, 'error'); return; }
       const attendees = [...document.querySelectorAll('#ceo-mtg-attendees-box .ceo-chip')].map(c => c.dataset.name).concat(guests.emails);
@@ -404,7 +392,6 @@ window.Pages['company-overview'] = (() => {
           method: 'POST',
           body: JSON.stringify({
             title, date,
-            frequency: document.getElementById('ceo-mtg-frequency').value,
             startTime,
             endTime: document.getElementById('ceo-mtg-end').value,
             attendees,

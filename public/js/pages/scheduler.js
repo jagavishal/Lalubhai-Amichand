@@ -731,24 +731,21 @@ window.Pages.scheduler = (() => {
   }
 
 
-  // "10:00" + "PM" -> "22:00". Returns '' on anything that doesn't parse as
-  // a 1-12 hour, 0-59 minute clock time (the Start Time field is free text,
-  // matching the reference design, so it needs real validation before use).
-  // "10", "10:30", "10.30", "1030", "10:30 pm", or 24-hour "14:30" (which
-  // overrides the AM/PM pick). '' when it can't be read.
-  function _to24Hour(text, ampm) {
-    let t = String(text || '').trim().toLowerCase();
-    const suffix = t.match(/\s*([ap])\.?m?\.?$/);
-    if (suffix) { ampm = suffix[1] === 'p' ? 'PM' : 'AM'; t = t.slice(0, suffix.index).trim(); }
-    const m = t.match(/^(\d{1,2})(?:\s*[:.\-\s]\s*(\d{2})|(\d{2}))?$/);
-    if (!m) return '';
-    let h = parseInt(m[1], 10);
-    const min = parseInt(m[2] || m[3] || '0', 10);
-    if (h > 23 || min > 59) return '';
-    if (h === 0 || h > 12) return h <= 23 && !suffix ? String(h).padStart(2, '0') + ':' + String(min).padStart(2, '0') : '';
-    if (ampm === 'AM') h = (h === 12) ? 0 : h;
-    else h = (h === 12) ? 12 : h + 12;
-    return String(h).padStart(2, '0') + ':' + String(min).padStart(2, '0');
+  // Start Time choices: every 15 minutes, "HH:MM" values shown as 10:30 AM.
+  // Pre-picks `sel`, else the next half hour from now.
+  function _timeOptions(sel) {
+    if (!sel) {
+      const d = new Date();
+      const m = Math.ceil((d.getHours() * 60 + d.getMinutes() + 1) / 30) * 30 % 1440;
+      sel = String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+    }
+    const out = [];
+    for (let m = 0; m < 1440; m += 15) {
+      const h = Math.floor(m / 60), mm = String(m % 60).padStart(2, '0');
+      const v = String(h).padStart(2, '0') + ':' + mm;
+      out.push(`<option value="${v}"${v === sel ? ' selected' : ''}>${h % 12 || 12}:${mm} ${h < 12 ? 'AM' : 'PM'}</option>`);
+    }
+    return out.join('');
   }
 
   // Outside guests: emails separated by commas, semicolons or spaces.
@@ -836,7 +833,6 @@ window.Pages.scheduler = (() => {
     const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--border-base);border-radius:8px;font-size:13px;color:var(--text-primary);background:var(--surface);outline:none;';
     const labelStyle = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:5px;';
     const DURATIONS = [['15', '15 min'], ['30', '30 min'], ['45', '45 min'], ['60', '1 hour'], ['90', '1.5 hours'], ['120', '2 hours'], ['', 'Custom']];
-    const FREQUENCIES = [['', 'Does not repeat'], ['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly']];
 
     const bodyHTML = `
       <div style="display:flex;flex-direction:column;gap:14px;">
@@ -855,22 +851,12 @@ window.Pages.scheduler = (() => {
           </div>
           <div>
             <label style="${labelStyle}">Start Time <span style="color:var(--color-danger)">*</span></label>
-            <div style="display:flex;gap:6px;">
-              <input id="sch-start-text" type="text" autocomplete="off" placeholder="e.g. 10:30" style="${inputStyle}" />
-              <select id="sch-start-ampm" style="${inputStyle}width:76px;flex:0 0 76px;background:var(--surface);">
-                <option value="AM">AM</option>
-                <option value="PM">PM</option>
-              </select>
-            </div>
+            <select id="sch-start" style="${inputStyle}background:var(--surface);">${_timeOptions(startTime)}</select>
           </div>
           <div>
             <label style="${labelStyle}">End Time</label>
             <input id="sch-end" type="time" disabled style="${inputStyle}background:var(--bg-subtle,#f3f4f6);color:var(--text-muted);cursor:not-allowed;" />
           </div>
-        </div>
-        <div>
-          <label style="${labelStyle}">Frequency</label>
-          <select id="sch-frequency" style="${inputStyle}background:var(--surface);">${FREQUENCIES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select>
         </div>
         <div>
           <label style="${labelStyle}">Attendees (Team)</label>
@@ -918,30 +904,23 @@ window.Pages.scheduler = (() => {
     document.getElementById('sch-title').focus();
     _bindAttendeesCombobox(users);
 
-    // Duration + the Start Time text/AM-PM pair drive the (read-only) End
+    // Duration + the Start Time pick drive the (read-only) End
     // Time — the reference design shows End Time greyed out because it's
     // computed, not typed.
     const recomputeEnd = () => {
       const mins = parseInt(document.getElementById('sch-duration').value, 10);
-      const start = _to24Hour(document.getElementById('sch-start-text').value, document.getElementById('sch-start-ampm').value);
+      const start = document.getElementById('sch-start').value;
       document.getElementById('sch-end').value = (start && Number.isFinite(mins)) ? _addMinutes(start, mins) : '';
     };
     document.getElementById('sch-duration').addEventListener('change', recomputeEnd);
-    document.getElementById('sch-start-text').addEventListener('input', recomputeEnd);
-    document.getElementById('sch-start-ampm').addEventListener('change', recomputeEnd);
-    if (startTime) {
-      const [h, m] = startTime.split(':').map(Number);
-      document.getElementById('sch-start-text').value = `${h % 12 || 12}:${String(m).padStart(2, '0')}`;
-      document.getElementById('sch-start-ampm').value = h >= 12 ? 'PM' : 'AM';
-      recomputeEnd();
-    }
+    document.getElementById('sch-start').addEventListener('change', recomputeEnd);
+    recomputeEnd();
 
     document.getElementById('sch-save').addEventListener('click', async () => {
       const title = document.getElementById('sch-title').value.trim();
       const date = document.getElementById('sch-date').value;
-      const startTime = _to24Hour(document.getElementById('sch-start-text').value, document.getElementById('sch-start-ampm').value);
+      const startTime = document.getElementById('sch-start').value;
       if (!title || !date) { Utils.showToast('Title and date are required', 'error'); return; }
-      if (document.getElementById('sch-start-text').value.trim() && !startTime) { Utils.showToast('Start time should look like 10:30 (or 10.30)', 'error'); return; }
       const guests = _guestEmails(document.getElementById('sch-guests').value);
       if (guests.bad) { Utils.showToast(`"${guests.bad}" is not an email address`, 'error'); return; }
       const attendees = [...document.querySelectorAll('#sch-attendees-box .sch-chip')].map(c => c.dataset.name).concat(guests.emails);
@@ -952,7 +931,6 @@ window.Pages.scheduler = (() => {
           method: 'POST',
           body: JSON.stringify({
             title, date,
-            frequency: document.getElementById('sch-frequency').value,
             startTime,
             endTime: document.getElementById('sch-end').value,
             attendees,
