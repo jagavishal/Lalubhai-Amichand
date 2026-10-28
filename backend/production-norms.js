@@ -427,17 +427,20 @@ function mountProductionNorms(app, ctx) {
       const normPcs = Math.max(0, num(l.norm_pcs));
       const normHours = Math.max(0, num(l.norm_hours)) || 8;
       const pcRate = Math.max(0, num(l.pc_rate));
+      const dayRate = Math.max(0, num(l.day_rate));
+      const normId = str(l.norm_id, 16);
       return {
         id: `PE${stamp}${String(i).padStart(3, '0')}`, entry_date: date, dept, line_no: i + 1,
-        worker: str(l.worker, 120).toUpperCase(), norm_id: str(l.norm_id, 16),
+        worker: str(l.worker, 120).toUpperCase(), norm_id: normId,
         section: str(l.section, 160), item: str(l.item, 160).toUpperCase(), size: str(l.size, 64),
-        qty, hours, norm_pcs: normPcs, norm_hours: normHours, day_rate: Math.max(0, num(l.day_rate)), pc_rate: r4(pcRate),
+        qty, hours, norm_pcs: normPcs, norm_hours: normHours, day_rate: dayRate, pc_rate: normId ? r4(pcRate) : 0,
         target: normPcs ? r4(normPcs * hours / normHours) : 0,
-        amount: Math.round(qty * pcRate * 100) / 100,
+        // Time work (no norm) is paid for the hours, at the day rate of 8 hours.
+        amount: Math.round((normId ? qty * pcRate : dayRate * hours / 8) * 100) / 100,
         remark: str(l.remark, 255),
       };
     }).filter((l) => l.worker || l.item || l.qty);
-    const badLine = lines.findIndex((l) => !l.worker || !l.item || !(l.qty > 0));
+    const badLine = lines.findIndex((l) => !l.worker || !l.item || (l.norm_id && !(l.qty > 0)));
     if (badLine >= 0) bad(`Line ${badLine + 1}: worker, item and qty are all needed`);
     await store.replaceDay(date, dept, lines, req.pn.by);
     return { saved: lines.length };

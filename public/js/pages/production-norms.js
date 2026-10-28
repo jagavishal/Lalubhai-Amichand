@@ -74,7 +74,9 @@ window.Pages['production-norms'] = (() => {
   const itemsOf = (dept) => [...new Set(N.filter((r) => r.dept === dept).map((r) => r.item))];
 
   function applyNorm(l, m) {
-    if (!m) { Object.assign(l, { norm_id: '', norm_pcs: 0, norm_hours: 8, day_rate: 0, pc_rate: 0, section: '' }); return; }
+    // No norm = time work: a ₹/day typed on the line itself survives a
+    // worker or item change; one carried over from a norm does not.
+    if (!m) { Object.assign(l, { day_rate: l.norm_id ? 0 : (l.day_rate || 0), norm_id: '', norm_pcs: 0, norm_hours: 8, pc_rate: 0, section: '' }); return; }
     Object.assign(l, {
       norm_id: m.id, item: m.item, size: m.size, section: m.section || '',
       norm_pcs: Number(m.norm_pcs) || 0, norm_hours: Number(m.hours) || 8, day_rate: Number(m.day_rate) || 0, pc_rate: pcRateOf(m),
@@ -95,7 +97,9 @@ window.Pages['production-norms'] = (() => {
     const hours = Number(l.hours) || Number(l.norm_hours) || 8;
     const target = l.norm_pcs ? l.norm_pcs * hours / (l.norm_hours || 8) : 0;
     const qty = Number(l.qty) || 0;
-    return { target, eff: target ? qty / target * 100 : 0, amount: qty * (Number(l.pc_rate) || 0) };
+    // Time work (no norm): paid for the hours at the day rate of 8 hours.
+    const amount = l.norm_id ? qty * (Number(l.pc_rate) || 0) : (Number(l.day_rate) || 0) * hours / 8;
+    return { target, eff: target ? qty / target * 100 : 0, amount };
   };
 
   /* ── Render ───────────────────────────────────────────────────────── */
@@ -155,19 +159,22 @@ window.Pages['production-norms'] = (() => {
         ? `<select data-size="${i}"><option value="">${c.length > 1 ? 'size…' : ''}</option>
             ${c.map((r) => `<option value="${esc(r.id)}"${r.id === l.norm_id ? ' selected' : ''}>${esc(r.size || 'ALL')}${r.worker && norm(r.worker) !== norm(l.worker) ? ` · ${esc(r.worker)} rate` : ''}</option>`).join('')}</select>`
         : `<input data-f="size" data-i="${i}" value="${esc(l.size)}" placeholder="size" />`;
-      const warn = l.item && !known ? '<div class="pn-sub" style="color:#d97706;">is department ke norms mein nahi</div>'
+      const timeWork = l.item && !l.norm_id && (!known || !c.length);
+      const warn = timeWork ? '<div class="pn-sub" style="color:#2563eb;">norm nahi — time work: hours + ₹/day bharo</div>'
         : l.item && !l.norm_id ? '<div class="pn-sub" style="color:#d97706;">size chuno</div>'
           : l.section ? `<div class="pn-sub">${esc(l.section)}</div>` : '';
       return `<tr>
         <td style="width:26px;color:#94a3b8;">${i + 1}</td>
-        <td style="min-width:150px;"><input data-f="worker" data-i="${i}" value="${esc(l.worker)}" list="pn-workers" placeholder="worker ka naam" /></td>
+        <td style="min-width:150px;"><input data-f="worker" data-i="${i}" value="${esc(l.worker)}" list="pn-workers" placeholder="naam type karo" title="List mein na ho to bhi naam type kar do — save hone ke baad list mein aa jayega" /></td>
         <td style="min-width:230px;"><input data-f="item" data-i="${i}" value="${esc(l.item)}" list="pn-items" placeholder="item…" />${warn}</td>
         <td style="width:130px;">${sizeCtl}</td>
         <td style="width:66px;"><input data-f="hours" data-i="${i}" value="${esc(l.hours)}" type="number" min="0" max="24" step="0.5" placeholder="${l.norm_hours || 8}" title="Ghante kaam kiya" /></td>
         <td style="width:84px;"><input data-f="qty" data-i="${i}" value="${esc(l.qty)}" type="number" min="0" step="1" placeholder="0" /></td>
         <td class="num" data-c="target-${i}">${c2.target ? n0(c2.target) : '—'}</td>
         <td class="num" data-c="eff-${i}">${effPill(c2.eff)}</td>
-        <td class="num">${l.pc_rate ? rate(l.pc_rate) : '—'}${l.day_rate ? `<div class="pn-sub">₹${n0(l.day_rate)}/day</div>` : ''}</td>
+        <td class="num">${timeWork
+          ? `<input data-f="day_rate" data-i="${i}" value="${esc(l.day_rate || '')}" type="number" min="0" step="1" placeholder="₹/day" title="Time work: 8 ghante ka rate" style="width:84px;text-align:right;" />`
+          : `${l.pc_rate ? rate(l.pc_rate) : '—'}${l.day_rate ? `<div class="pn-sub">₹${n0(l.day_rate)}/day</div>` : ''}`}</td>
         <td class="num" data-c="amt-${i}"><b>${c2.amount ? rs(c2.amount) : '—'}</b></td>
         <td style="width:36px;"><button class="pn-ico" data-del="${i}" title="Line hatao">✕</button></td>
       </tr>`;
@@ -313,10 +320,11 @@ window.Pages['production-norms'] = (() => {
 
   async function saveDay(btn) {
     const lines = D.lines.filter((l) => l.worker || l.item || l.qty);
-    const bad = lines.findIndex((l) => !l.worker || !l.item || !(Number(l.qty) > 0));
+    // A norm line needs its pieces; a time-work line (no norm) only the hours.
+    const bad = lines.findIndex((l) => !l.worker || !l.item || (l.norm_id && !(Number(l.qty) > 0)));
     if (bad >= 0) { H.toast(`Line ${D.lines.indexOf(lines[bad]) + 1}: worker, item aur qty teeno chahiye`, 'error'); return; }
-    const noNorm = lines.filter((l) => !l.norm_id).length;
-    if (noNorm && !(await Utils.showConfirm(`${noNorm} line${noNorm > 1 ? 's' : ''} ka norm nahi mila — unka amount ₹0 rahega. Phir bhi save karein?`, { title: 'Norm missing', confirmText: 'Save' }))) return;
+    const noRate = lines.filter((l) => !l.norm_id && !(Number(l.day_rate) > 0)).length;
+    if (noRate && !(await Utils.showConfirm(`${noRate} time-work line${noRate > 1 ? 's' : ''} (bina norm) mein ₹/day nahi bhara — unka amount ₹0 rahega. Phir bhi save karein?`, { title: 'Rate missing', confirmText: 'Save' }))) return;
     btn.disabled = true;
     try {
       const r = await H.post(`${BASE}/day`, { date: D.date, dept: D.dept, lines: lines.map((l) => ({ ...l, hours: Number(l.hours) || l.norm_hours || 8 })) });
