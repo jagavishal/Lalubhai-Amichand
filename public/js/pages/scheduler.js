@@ -1,35 +1,39 @@
 window.Pages = window.Pages || {};
 
-/* Scheduler — one calendar for the three date-bound things people already
-   track elsewhere in the app: holidays (HR → Leave Management), tasks (All
-   Tasks / delegations), and meetings (new here — the only thing this page
-   itself creates). It reads all three from one call, GET /api/scheduler.
+/* Scheduler — one calendar for the date-bound things people already track
+   elsewhere in the app: holidays and approved leaves (HR), tasks (All Tasks /
+   delegations), birthdays (Employee Master), and meetings (the only thing
+   this page itself creates). It reads them all from one call, GET
+   /api/scheduler.
 
-   Laid out like Google Calendar: Day / Week / Month views, a mini month and
-   show/hide toggles on the left, an hour grid with a now-line, click an empty
-   slot to schedule a meeting at that time, click anything to see its details. */
+   Laid out as a month grid with a Day panel beside it: pick a day and the
+   panel shows its hours (click an empty slot to schedule at that time), the
+   picked meeting's details with Join / Copy invite / Cancel, and the tasks
+   due that day. */
 window.Pages.scheduler = (() => {
   const esc = Utils.esc;
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
   const MON = MONTH_NAMES.map(m => m.slice(0, 3));
-  const HOUR_PX = 48;              // height of one hour on the Day / Week grid
-  const SCROLL_TO_HOUR = 8;        // the grid opens at 8 AM unless now is later
+  const HOUR_PX = 44;              // height of one hour on the Day panel's timeline
+  const SCROLL_TO_HOUR = 8;        // the timeline opens at 8 AM unless something is earlier
   const KINDS = ['meeting', 'task', 'holiday', 'leave', 'birthday'];
+  const KIND_LABEL = { meeting: 'Meetings', task: 'Tasks', holiday: 'Holidays', leave: 'Leaves', birthday: 'Birthdays' };
+  const KIND_COLOUR = { meeting: 'var(--color-purple)', task: 'var(--color-warning)', holiday: 'var(--color-danger)', leave: 'var(--color-success)', birthday: 'var(--color-info)' };
 
   const _store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch {} },
   };
-  const _isPhone = () => window.matchMedia('(max-width: 767px)').matches;
+  const _isPhone = () => window.matchMedia('(max-width: 900px)').matches;
 
-  let _mode = ['day', 'week', 'month'].includes(_store.get('sch-mode')) ? _store.get('sch-mode') : (_isPhone() ? 'day' : 'week');
-  let _anchor = _startOfDay(new Date());   // the focused day; the view is built around it
-  let _mini = new Date(_anchor.getFullYear(), _anchor.getMonth(), 1);   // month on the mini calendar
+  let _anchor = _startOfDay(new Date());   // any day of the month on show
+  let _sel = _dateStr(_anchor);             // the day in the Day panel
+  let _selEv = null;                        // "<kind>:<date>:<index>" shown in the panel's details
   let _hidden = new Set(String(_store.get('sch-hidden') || '').split(',').filter(k => KINDS.includes(k)));
   let _data = { weekOffs: ['0'], holidays: [], tasks: [], meetings: [], leaves: [], birthdays: [] };
-  let _byDate = new Map();         // date -> { holiday, tasks:[], meetings:[] }
+  let _byDate = new Map();         // date -> { holiday, tasks:[], meetings:[], leaves:[], birthdays:[] }
   let _users = null;                // lazy-loaded for the attendee picker
   let _nowTimer = null;
 
@@ -44,12 +48,6 @@ window.Pages.scheduler = (() => {
     const first = new Date(view.getFullYear(), view.getMonth(), 1);
     const start = _addDays(first, -first.getDay());
     return Array.from({ length: 42 }, (_, i) => _addDays(start, i));
-  }
-  // The days the current view shows, in order.
-  function _visibleDays() {
-    if (_mode === 'day') return [_anchor];
-    if (_mode === 'week') { const s = _addDays(_anchor, -_anchor.getDay()); return Array.from({ length: 7 }, (_, i) => _addDays(s, i)); }
-    return _gridDays(_anchor);
   }
   function _fmtTime(hhmm) {
     if (!hhmm) return '';
@@ -82,7 +80,7 @@ window.Pages.scheduler = (() => {
 
   /* ── Data loading ─────────────────────────────────────────────────── */
   async function loadData() {
-    const days = _visibleDays();
+    const days = _gridDays(_anchor);
     const from = _dateStr(days[0]);
     const to = _dateStr(days[days.length - 1]);
     try {
@@ -129,7 +127,7 @@ window.Pages.scheduler = (() => {
     return (_data.weekOffs || []).includes(String(d.getDay()));
   }
 
-  /* ── Event chips (shared by every view) ───────────────────────────── */
+  /* ── Event chips ──────────────────────────────────────────────────── */
   // data-ev = "<kind>:<date>:<index>" — resolved back to the entry on click.
   function _chipHTML(kind, dateStr, i, label, opts = {}) {
     const tone = kind === 'meeting'
@@ -143,7 +141,8 @@ window.Pages.scheduler = (() => {
       : opts.muted
       ? 'background:var(--surface-alt);color:var(--text-muted);border-left:3px solid var(--border-strong);'
       : 'background:var(--color-warning-bg);color:var(--color-warning-text);border-left:3px solid var(--color-warning);';
-    return `<button type="button" class="sch-chip-ev" data-ev="${kind}:${dateStr}:${i}" title="${esc(label)}"
+    const on = _selEv === `${kind}:${dateStr}:${i}` ? ' sch-on' : '';
+    return `<button type="button" class="sch-chip-ev${on}" data-ev="${kind}:${dateStr}:${i}" title="${esc(label)}"
         style="${tone}${opts.done ? 'text-decoration:line-through;' : ''}">${opts.time ? `<b>${esc(opts.time)}</b> ` : ''}${esc(label)}</button>`;
   }
 
@@ -151,17 +150,18 @@ window.Pages.scheduler = (() => {
     return `${l.name || 'Leave'} [${l.leaveType || 'Leave'}${l.halfDay && l.halfDay !== 'full' ? ' ½' : ''}]`;
   }
 
+  // Meetings first (they are what the day is planned around), then the rest.
   function _dayChips(dateStr, info) {
     const out = [];
+    info.meetings.forEach((m, i) => out.push(_chipHTML('meeting', dateStr, i, m.title, { time: m.startTime ? _fmtTime(m.startTime) : '' })));
     if (info.holiday) out.push(_chipHTML('holiday', dateStr, 0, info.holiday.name));
     info.birthdays.forEach((b, i) => out.push(_chipHTML('birthday', dateStr, i, '🎂 ' + b.name)));
     info.leaves.forEach((l, i) => out.push(_chipHTML('leave', dateStr, i, _leaveLabel(l))));
-    info.meetings.forEach((m, i) => out.push(_chipHTML('meeting', dateStr, i, m.title, { time: m.startTime ? _fmtTime(m.startTime) : '' })));
     info.tasks.forEach((t, i) => out.push(_chipHTML('task', dateStr, i, t.description, { done: t.status === 'done', muted: t.status === 'done' || t.status === 'leave' })));
     return out;
   }
 
-  /* ── Month view ───────────────────────────────────────────────────── */
+  /* ── Month grid ───────────────────────────────────────────────────── */
   function _monthHTML() {
     const days = _gridDays(_anchor);
     const today = _todayStr();
@@ -174,13 +174,16 @@ window.Pages.scheduler = (() => {
       const chips = _dayChips(ds, info);
       const shown = chips.slice(0, 3);
       const more = chips.length - shown.length;
+      const moreTasks = info.tasks.length && shown.length < chips.length
+        ? chips.slice(3).filter(c => c.includes('data-ev="task:')).length : 0;
+      const moreLabel = moreTasks === more ? `+ ${more} task${more > 1 ? 's' : ''}` : `+ ${more} more`;
       return `
-        <div class="sch-mcell${d.getMonth() !== _anchor.getMonth() ? ' sch-out' : ''}${off ? ' sch-off' : ''}" data-date="${ds}">
+        <div class="sch-mcell${d.getMonth() !== _anchor.getMonth() ? ' sch-out' : ''}${off ? ' sch-off' : ''}${ds === _sel ? ' sch-sel' : ''}" data-date="${ds}">
           <div class="sch-mhead">
-            <button type="button" class="sch-daynum${ds === today ? ' sch-today' : ''}" data-goto="${ds}" title="Open ${_fmtLongDate(ds)}">${d.getDate() === 1 ? MON[d.getMonth()] + ' ' : ''}${d.getDate()}</button>
-            ${off ? '<span class="sch-offtag">Off</span>' : ''}
+            <span class="sch-daynum${ds === today ? ' sch-today' : ''}">${d.getDate() === 1 ? MON[d.getMonth()] + ' ' : ''}${d.getDate()}</span>
+            ${off ? '<span class="sch-offtag">Off</span>' : raw?.holiday && !_hidden.has('holiday') ? '<span class="sch-offtag">Holiday</span>' : ''}
           </div>
-          <div class="sch-mitems">${shown.join('')}${more > 0 ? `<button type="button" class="sch-more" data-goto="${ds}">+${more} more</button>` : ''}</div>
+          <div class="sch-mitems">${shown.join('')}${more > 0 ? `<span class="sch-more">${moreLabel}</span>` : ''}</div>
           <div class="sch-mdots">${chips.length ? chips.slice(0, 4).map(c => `<i class="${/data-ev="(\w+)/.exec(c)[1]}"></i>`).join('') : ''}</div>
         </div>`;
     }).join('');
@@ -191,10 +194,9 @@ window.Pages.scheduler = (() => {
       </div>`;
   }
 
-  /* ── Day / Week time grid ─────────────────────────────────────────── */
-  // Overlapping meetings share the column side by side, Google-style: each
-  // cluster of mutually overlapping meetings is split into as many lanes as
-  // it needs at its busiest.
+  /* ── Day panel ────────────────────────────────────────────────────── */
+  // Overlapping meetings share the timeline side by side: each cluster of
+  // mutually overlapping meetings is split into as many lanes as it needs.
   function _layoutTimed(list) {
     const items = list.map((m, i) => {
       const s = _toMins(m.startTime);
@@ -222,233 +224,262 @@ window.Pages.scheduler = (() => {
     return items;
   }
 
-  function _timeGridHTML() {
-    const days = _visibleDays();
-    const today = _todayStr();
-    const cols = `56px repeat(${days.length}, minmax(0,1fr))`;
-    const isDay = _mode === 'day';
-
-    const head = days.map(d => {
-      const ds = _dateStr(d);
-      return `<button type="button" class="sch-colhead${ds === today ? ' sch-today' : ''}" data-goto="${ds}" title="Open ${_fmtLongDate(ds)}">
-          <span>${DOW[d.getDay()]}</span><b>${d.getDate()}</b></button>`;
-    }).join('');
-
-    // All-day strip: holidays, tasks (they carry a due date, not a time) and
-    // meetings saved without a start time.
-    const allDay = days.map(d => {
-      const ds = _dateStr(d);
-      const info = _infoFor(ds);
-      const raw = _byDate.get(ds);
-      const chips = [];
-      if (info.holiday) chips.push(_chipHTML('holiday', ds, 0, info.holiday.name));
-      else if (_isWeekOff(d) && !raw?.holiday) chips.push('<span class="sch-offtag" style="padding:2px 4px;">Week off</span>');
-      info.birthdays.forEach((b, i) => chips.push(_chipHTML('birthday', ds, i, '🎂 ' + b.name)));
-      info.leaves.forEach((l, i) => chips.push(_chipHTML('leave', ds, i, _leaveLabel(l))));
-      info.meetings.forEach((m, i) => { if (_toMins(m.startTime) === null) chips.push(_chipHTML('meeting', ds, i, m.title)); });
-      info.tasks.forEach((t, i) => chips.push(_chipHTML('task', ds, i, t.description, { done: t.status === 'done', muted: t.status === 'done' || t.status === 'leave' })));
-      const cap = isDay ? chips.length : 3;
-      const more = chips.length - cap;
-      return `<div class="sch-allday-col">${chips.slice(0, cap).join('')}${more > 0 ? `<button type="button" class="sch-more" data-goto="${ds}">+${more} more</button>` : ''}</div>`;
-    }).join('');
-
-    const hours = Array.from({ length: 24 }, (_, h) =>
-      `<div class="sch-hour" style="top:${h * HOUR_PX}px;">${h ? _fmtTime(String(h).padStart(2, '0') + ':00') : ''}</div>`).join('');
-
-    const columns = days.map(d => {
-      const ds = _dateStr(d);
-      const info = _infoFor(ds);
-      const raw = _byDate.get(ds);
-      const shade = raw?.holiday || _isWeekOff(d);
-      const timed = _layoutTimed(info.meetings.map((m, i) => ({ ...m, _i: i })).filter(m => _toMins(m.startTime) !== null));
-      const blocks = timed.map(it => {
-        const top = (it.s / 60) * HOUR_PX;
-        const h = Math.max(((it.e - it.s) / 60) * HOUR_PX - 2, 18);
-        const w = 100 / it.lanes;
-        return `<button type="button" class="sch-block" data-ev="meeting:${ds}:${it.m._i}"
-            style="top:${top}px;height:${h}px;left:calc(${it.lane * w}% + 1px);width:calc(${w}% - 3px);">
-            <b>${esc(it.m.title)}</b>
-            <span>${_fmtTime(it.m.startTime)}${it.m.endTime ? ' – ' + _fmtTime(it.m.endTime) : ''}${it.m.location && !/^https?:/i.test(it.m.location) ? ', ' + esc(it.m.location) : ''}</span>
-          </button>`;
-      }).join('');
-      const now = ds === today ? `<div class="sch-now" data-now style="top:${_nowTop()}px;"></div>` : '';
-      return `<div class="sch-col${shade ? ' sch-off' : ''}" data-date="${ds}">${blocks}${now}</div>`;
-    }).join('');
-
-    return `
-      <div class="sch-tgrid">
-        <div class="sch-thead" style="grid-template-columns:${cols};">
-          <div class="sch-tz">IST</div>${head}
-        </div>
-        <div class="sch-allday" style="grid-template-columns:${cols};">
-          <div class="sch-allday-label">All day</div>${allDay}
-        </div>
-        <div class="sch-tscroll" id="sch-tscroll">
-          <div class="sch-tbody" style="grid-template-columns:${cols};height:${24 * HOUR_PX}px;">
-            <div class="sch-gutter">${hours}</div>${columns}
-          </div>
-        </div>
-      </div>`;
-  }
-
   function _nowTop() {
     const n = new Date();
     return ((n.getHours() * 60 + n.getMinutes()) / 60) * HOUR_PX;
   }
 
-  /* ── Left rail: mini month + show/hide ────────────────────────────── */
-  function _miniHTML() {
-    const days = _gridDays(_mini);
+  // The panel's details default to the day's first meeting.
+  function _currentEv() {
+    if (_selEv && _selEv.split(':')[1] === _sel) return _selEv;
+    const info = _infoFor(_sel);
+    return info.meetings.length ? `meeting:${_sel}:0` : null;
+  }
+
+  function _sideHTML() {
+    const ds = _sel;
+    const d = new Date(ds + 'T00:00:00');
+    const info = _infoFor(ds);
+    const raw = _byDate.get(ds);
     const today = _todayStr();
-    const sel = _dateStr(_anchor);
-    const weekStart = _dateStr(_addDays(_anchor, -_anchor.getDay()));
-    const weekEnd = _dateStr(_addDays(_anchor, 6 - _anchor.getDay()));
-    const cells = days.map(d => {
-      const ds = _dateStr(d);
-      const cls = [
-        d.getMonth() !== _mini.getMonth() ? 'out' : '',
-        ds === today ? 'today' : '',
-        ds === sel ? 'sel' : '',
-        _mode === 'week' && ds >= weekStart && ds <= weekEnd ? 'wk' : '',
-      ].filter(Boolean).join(' ');
-      return `<button type="button" class="${cls}" data-mini="${ds}">${d.getDate()}</button>`;
+
+    // All-day strip: holiday, birthdays, leaves, meetings with no start time.
+    const allDay = [];
+    if (info.holiday) allDay.push(_chipHTML('holiday', ds, 0, info.holiday.name));
+    else if (_isWeekOff(d) && !raw?.holiday) allDay.push('<span class="sch-offtag">Week off</span>');
+    info.birthdays.forEach((b, i) => allDay.push(_chipHTML('birthday', ds, i, '🎂 ' + b.name)));
+    info.leaves.forEach((l, i) => allDay.push(_chipHTML('leave', ds, i, _leaveLabel(l))));
+    info.meetings.forEach((m, i) => { if (_toMins(m.startTime) === null) allDay.push(_chipHTML('meeting', ds, i, m.title)); });
+
+    const hours = Array.from({ length: 24 }, (_, h) =>
+      `<div class="sch-hour" style="top:${h * HOUR_PX}px;">${h ? _fmtTime(String(h).padStart(2, '0') + ':00') : ''}</div>`).join('');
+    const cur = _currentEv();
+    const timed = _layoutTimed(info.meetings.map((m, i) => ({ ...m, _i: i })).filter(m => _toMins(m.startTime) !== null));
+    const blocks = timed.map(it => {
+      const top = (it.s / 60) * HOUR_PX;
+      const h = Math.max(((it.e - it.s) / 60) * HOUR_PX - 2, 20);
+      const w = 100 / it.lanes;
+      const ref = `meeting:${ds}:${it.m._i}`;
+      // Under ~45 minutes there is room for one line only: title, no times.
+      return `<button type="button" class="sch-block${ref === cur ? ' sch-on' : ''}${h < 32 ? ' sch-short' : ''}" data-ev="${ref}"
+          style="top:${top}px;height:${h}px;left:calc(${it.lane * w}% + 2px);width:calc(${w}% - 4px);">
+          <b>${esc(_fmtTime(it.m.startTime))} ${esc(it.m.title)}</b>
+          <span>${_fmtTime(it.m.startTime)}${it.m.endTime ? ' – ' + _fmtTime(it.m.endTime) : ''}</span>
+        </button>`;
     }).join('');
-    const toggle = (k, label, colour) => `
-      <label class="sch-toggle"><input type="checkbox" data-kind="${k}"${_hidden.has(k) ? '' : ' checked'} style="accent-color:${colour};"> ${label}</label>`;
+    const now = ds === today ? `<div class="sch-now" data-now style="top:${_nowTop()}px;"></div>` : '';
+
+    const tasks = info.tasks.map((t, i) => {
+      const ref = `task:${ds}:${i}`;
+      const status = t.status === 'done' ? 'Done' : t.status === 'leave' ? 'On leave' : 'Pending';
+      return `<button type="button" class="sch-task${ref === cur ? ' sch-on' : ''}" data-ev="${ref}">
+          <i class="${t.status === 'done' ? 'done' : t.status === 'leave' ? 'leave' : ''}"></i>
+          <span><b${t.status === 'done' ? ' style="text-decoration:line-through;opacity:.7;"' : ''}>${esc(t.description || '')}</b>
+          <small>${esc([t.doer, status, t.priority].filter(Boolean).join(' · '))}</small></span>
+        </button>`;
+    }).join('');
+
     return `
-      <div class="sch-mini">
-        <div class="sch-mini-head">
-          <b>${MONTH_NAMES[_mini.getMonth()]} ${_mini.getFullYear()}</b>
-          <span>
-            <button type="button" class="sch-icon-btn" data-mini-nav="-1" aria-label="Previous month"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
-            <button type="button" class="sch-icon-btn" data-mini-nav="1" aria-label="Next month"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
-          </span>
-        </div>
-        <div class="sch-mini-grid">${DOW.map(d => `<i>${d[0]}</i>`).join('')}${cells}</div>
+      <div class="sch-side-head">
+        <div><b>Day</b> <span>${esc(_fmtLongDate(ds))}</span></div>
+        <button type="button" class="sch-icon-btn" data-act="new" title="Schedule on this day" aria-label="Schedule on this day">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
       </div>
-      <div class="sch-toggles">
-        <div class="sch-rail-title">My calendars</div>
-        ${toggle('meeting', 'Meetings', 'var(--color-purple)')}
-        ${toggle('task', 'Tasks due', 'var(--color-warning)')}
-        ${toggle('holiday', 'Holidays', 'var(--color-danger)')}
-        ${toggle('leave', 'Employee Leaves', 'var(--color-success)')}
-        ${toggle('birthday', 'Birthdays', 'var(--color-info)')}
-      </div>`;
+      ${allDay.length ? `<div class="sch-allday">${allDay.join('')}</div>` : ''}
+      <div class="sch-tscroll" id="sch-tscroll">
+        <div class="sch-tbody" style="height:${24 * HOUR_PX}px;">
+          <div class="sch-gutter">${hours}</div>
+          <div class="sch-col${raw?.holiday || _isWeekOff(d) ? ' sch-off' : ''}" data-date="${ds}">${blocks}${now}</div>
+        </div>
+      </div>
+      <div class="sch-detail">${cur ? _detailHTML(cur) : '<div class="sch-hint">Click a meeting or task to see its details. Click an empty time to schedule one.</div>'}</div>
+      ${_hidden.has('task') ? '' : `<div class="sch-sec">Tasks due${info.tasks.length ? ` <span>${info.tasks.length}</span>` : ''}</div>
+      <div class="sch-tasks">${tasks || '<div class="sch-hint" style="text-align:center;padding:18px 8px;">No tasks due on this date</div>'}</div>`}`;
+  }
+
+  /* ── Details of the picked entry (inside the Day panel) ───────────── */
+  const ICON = {
+    pin: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
+    people: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg>',
+    note: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
+    user: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
+    flag: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg>',
+  };
+  const _row = (icon, html) => html ? `<div class="sch-pop-row">${ICON[icon]}<div>${html}</div></div>` : '';
+
+  function _entry(ref) {
+    const [kind, ds, idx] = ref.split(':');
+    const info = _byDate.get(ds) || { holiday: null, tasks: [], meetings: [], leaves: [], birthdays: [] };
+    const list = { meeting: info.meetings, task: info.tasks, leave: info.leaves || [], birthday: info.birthdays || [] }[kind];
+    return { kind, ds, item: kind === 'holiday' ? info.holiday : (list || [])[Number(idx)] };
+  }
+
+  function _detailHTML(ref) {
+    const { kind, ds, item } = _entry(ref);
+    if (!item) return '';
+    let title, when = _fmtLongDate(ds), body = '', actions = '';
+    if (kind === 'meeting') {
+      const m = item;
+      title = m.title;
+      if (m.startTime) when = `${_fmtTime(m.startTime)}${m.endTime ? ' – ' + _fmtTime(m.endTime) : ''} · ${when}`;
+      const isLink = /^https?:\/\//i.test(m.location || '');
+      if (isLink) actions += `<a href="${esc(m.location)}" target="_blank" rel="noopener" class="btn-primary sch-act">Join</a>`;
+      actions += `<button type="button" class="btn-secondary sch-act" data-act="copy" data-ref="${esc(ref)}">Copy invite</button>`;
+      const me = window.currentUser;
+      if (_canManage(m)) actions += `<button type="button" class="btn-secondary sch-act" data-act="cancel" data-id="${esc(m.id)}" style="color:var(--color-danger-text);">Cancel</button>`;
+      else if (_isAttendee(m) && m.createdBy !== me?.id) actions += `<button type="button" class="btn-secondary sch-act" data-act="decline" data-id="${esc(m.id)}">Decline</button>`;
+      body = (isLink ? '' : _row('pin', esc(m.location || '')))
+        + _row('people', `Team: ${m.attendees ? esc(m.attendees) : '—'}`)
+        + _row('note', m.notes ? esc(m.notes) : '')
+        + _row('user', m.createdByName ? `Organised by ${esc(m.createdByName)}` : '');
+    } else if (kind === 'task') {
+      const t = item;
+      title = t.description;
+      when = 'Due ' + when;
+      const status = t.status === 'done' ? 'Done' : t.status === 'leave' ? 'On leave' : 'Pending';
+      body = _row('user', esc(t.doer || ''))
+        + _row('flag', esc([status, t.priority].filter(Boolean).join(' · ')))
+        + _row('note', 'Open <b>All Tasks</b> to update it.');
+    } else if (kind === 'leave') {
+      const l = item;
+      title = `${l.name || 'Employee'} — on leave`;
+      when = l.fromDate === l.toDate ? _fmtLongDate(l.fromDate) : `${_fmtLongDate(l.fromDate)} – ${_fmtLongDate(l.toDate)}`;
+      body = _row('flag', esc([l.leaveType, l.halfDay && l.halfDay !== 'full' ? l.halfDay + ' half' : ''].filter(Boolean).join(' · ')))
+        + _row('note', 'Approved leave — from HR → Leave Management.');
+    } else if (kind === 'birthday') {
+      title = `🎂 ${item.name}'s birthday`;
+      body = _row('note', 'From the Employee Master.');
+    } else {
+      title = item.name;
+      body = _row('note', 'Company holiday — from HR → Leave Management.');
+    }
+    return `
+      <div class="sch-detail-top">
+        <div style="min-width:0;">
+          <h3><i style="background:${KIND_COLOUR[kind]};"></i><span>${esc(title)}</span></h3>
+          <div class="sch-pop-when">${esc(when)}</div>
+        </div>
+        ${actions ? `<div class="sch-detail-acts">${actions}</div>` : ''}
+      </div>
+      ${body}`;
+  }
+
+  // Plain-text invite for WhatsApp / mail: title, when, link, agenda.
+  function _inviteText(m) {
+    return [
+      m.title,
+      `${_fmtLongDate(m.date)}${m.startTime ? ' · ' + _fmtTime(m.startTime) + (m.endTime ? ' – ' + _fmtTime(m.endTime) : '') : ''}`,
+      /^https?:\/\//i.test(m.location || '') ? `Join: ${m.location}` : (m.location ? `Where: ${m.location}` : ''),
+      m.notes ? `Agenda: ${m.notes}` : '',
+    ].filter(Boolean).join('\n');
+  }
+  async function _copy(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* fall back below */ }
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    ta.remove();
+    return ok;
   }
 
   function _titleText() {
-    if (_mode === 'month') return `${MONTH_NAMES[_anchor.getMonth()]} ${_anchor.getFullYear()}`;
-    if (_mode === 'day') return _fmtLongDate(_dateStr(_anchor));
-    const days = _visibleDays();
-    const a = days[0], b = days[6];
-    if (a.getMonth() === b.getMonth()) return `${a.getDate()} – ${b.getDate()} ${MON[b.getMonth()]} ${b.getFullYear()}`;
-    if (a.getFullYear() === b.getFullYear()) return `${a.getDate()} ${MON[a.getMonth()]} – ${b.getDate()} ${MON[b.getMonth()]} ${b.getFullYear()}`;
-    return `${a.getDate()} ${MON[a.getMonth()]} ${a.getFullYear()} – ${b.getDate()} ${MON[b.getMonth()]} ${b.getFullYear()}`;
+    return `${MONTH_NAMES[_anchor.getMonth()]} ${_anchor.getFullYear()}`;
   }
 
   /* ── Page shell ───────────────────────────────────────────────────── */
   const CSS = `
-    .sch-wrap { display:flex; gap:16px; align-items:flex-start; }
-    .sch-rail { flex:0 0 228px; display:flex; flex-direction:column; gap:18px; position:sticky; top:8px; }
-    .sch-main { flex:1 1 auto; min-width:0; background:var(--surface); border:1px solid var(--border-light); border-radius:12px; box-shadow:var(--shadow-xs); overflow:hidden; }
+    .sch-wrap { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:16px; align-items:start; }
+    .sch-main, .sch-side { background:var(--surface); border:1px solid var(--border-light); border-radius:12px; box-shadow:var(--shadow-xs); overflow:hidden; }
+    .sch-side { position:sticky; top:8px; display:flex; flex-direction:column; max-height:calc(100vh - 120px); }
     .sch-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:14px; }
     .sch-toolbar-left { display:flex; align-items:center; gap:8px; min-width:0; }
-    .sch-icon-btn { width:30px; height:30px; border-radius:50%; border:none; background:transparent; color:var(--text-secondary);
+    .sch-icon-btn { width:30px; height:30px; border-radius:8px; border:1.5px solid var(--border-base); background:var(--surface); color:var(--text-secondary);
       cursor:pointer; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
     .sch-icon-btn:hover { background:var(--surface-alt); }
-    #sch-title-label { font-size:18px; font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .sch-seg { display:inline-flex; border:1.5px solid var(--border-base); border-radius:8px; overflow:hidden; }
-    .sch-seg button { border:none; background:transparent; padding:6px 14px; font:inherit; font-size:13px; font-weight:600; color:var(--text-secondary); cursor:pointer; }
-    .sch-seg button + button { border-left:1.5px solid var(--border-base); }
-    .sch-seg button.on { background:var(--color-primary-light); color:var(--color-primary-strong); }
-
-    .sch-mini { background:var(--surface); border:1px solid var(--border-light); border-radius:12px; padding:12px; box-shadow:var(--shadow-xs); }
-    .sch-mini-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; font-size:13px; color:var(--text-primary); }
-    .sch-mini-head .sch-icon-btn { width:26px; height:26px; }
-    .sch-mini-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:1px; text-align:center; }
-    .sch-mini-grid i { font-style:normal; font-size:10px; font-weight:700; color:var(--text-muted); padding:3px 0; }
-    .sch-mini-grid button { border:none; background:transparent; font:inherit; font-size:11.5px; color:var(--text-primary); height:26px; border-radius:50%; cursor:pointer; padding:0; }
-    .sch-mini-grid button:hover { background:var(--surface-alt); }
-    .sch-mini-grid button.out { color:var(--text-muted); }
-    .sch-mini-grid button.wk { background:var(--color-primary-light); border-radius:0; }
-    .sch-mini-grid button.today { color:var(--color-primary); font-weight:800; }
-    .sch-mini-grid button.sel { background:var(--color-primary); color:var(--color-primary-text); border-radius:50%; font-weight:700; }
-    .sch-toggles { display:flex; flex-direction:column; gap:6px; padding:0 4px; }
-    .sch-rail-title { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-secondary); margin-bottom:2px; }
-    .sch-toggle { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-primary); cursor:pointer; }
-    .sch-toggle input { width:15px; height:15px; cursor:pointer; }
+    #sch-title-label { font-size:18px; font-weight:700; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-left:4px; }
+    .sch-legend { display:flex; gap:6px; flex-wrap:wrap; }
+    .sch-legend button { display:inline-flex; align-items:center; gap:6px; border:1.5px solid var(--border-base); background:var(--surface); border-radius:999px;
+      padding:4px 10px; font:inherit; font-size:12px; font-weight:600; color:var(--text-secondary); cursor:pointer; }
+    .sch-legend button i { width:9px; height:9px; border-radius:50%; }
+    .sch-legend button.off { opacity:.45; text-decoration:line-through; }
 
     .sch-chip-ev { display:block; width:100%; text-align:left; border:none; border-radius:4px; padding:2px 6px; font:inherit; font-size:11.5px;
       font-weight:500; line-height:1.35; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-sizing:border-box; }
     .sch-chip-ev:hover { filter:brightness(.96); }
-    .sch-more { align-self:flex-start; border:none; background:transparent; padding:1px 4px; border-radius:4px; font:inherit; font-size:11px;
-      font-weight:700; color:var(--text-secondary); cursor:pointer; }
-    .sch-more:hover { background:var(--surface-alt); color:var(--text-primary); }
+    .sch-chip-ev.sch-on { outline:2px solid var(--color-primary); outline-offset:-1px; }
+    .sch-more { font-size:11px; font-weight:600; color:var(--text-muted); padding:0 4px; }
     .sch-offtag { font-size:10.5px; font-weight:700; color:var(--color-danger-text); }
 
     .sch-mgrid-head, .sch-mgrid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); }
-    .sch-dow { font-size:10.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--text-muted); text-align:center; padding:8px 0 6px; border-bottom:1px solid var(--border-light); }
-    .sch-mcell { min-height:112px; min-width:0; padding:4px 5px 6px; border-right:1px solid var(--border-light); border-bottom:1px solid var(--border-light);
+    .sch-dow { font-size:10.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--text-muted); text-align:center; padding:9px 0 7px; border-bottom:1px solid var(--border-light); background:var(--surface-alt); }
+    .sch-mcell { min-height:118px; min-width:0; padding:5px 6px 6px; border-right:1px solid var(--border-light); border-bottom:1px solid var(--border-light);
       display:flex; flex-direction:column; gap:3px; cursor:pointer; box-sizing:border-box; overflow:hidden; }
     .sch-mcell:nth-child(7n) { border-right:none; }
     .sch-mcell:hover { background:var(--surface-alt); }
     .sch-mcell.sch-off { background:color-mix(in srgb, var(--surface-alt) 55%, transparent); }
+    .sch-mcell.sch-sel { background:var(--color-primary-light); box-shadow:inset 0 0 0 2px var(--color-primary); }
     .sch-mcell.sch-out .sch-daynum, .sch-mcell.sch-out .sch-mitems { opacity:.45; }
     .sch-mhead { display:flex; align-items:center; justify-content:space-between; gap:4px; }
-    .sch-daynum { border:none; background:transparent; font:inherit; font-size:12px; font-weight:600; color:var(--text-primary); min-width:24px; height:24px;
-      padding:0 6px; border-radius:12px; cursor:pointer; }
-    .sch-daynum:hover { background:var(--border-light); }
+    .sch-daynum { font-size:12px; font-weight:700; color:var(--text-primary); min-width:22px; height:22px; line-height:22px; text-align:center; padding:0 5px; border-radius:11px; }
     .sch-daynum.sch-today { background:var(--color-primary); color:var(--color-primary-text); }
     .sch-mitems { display:flex; flex-direction:column; gap:2px; min-width:0; }
     .sch-mdots { display:none; }
 
-    .sch-thead, .sch-allday, .sch-tbody { display:grid; }
-    .sch-thead { border-bottom:1px solid var(--border-light); }
-    .sch-tz { font-size:10px; color:var(--text-muted); align-self:end; text-align:right; padding:0 8px 6px 0; }
-    .sch-colhead { border:none; background:transparent; font:inherit; cursor:pointer; display:flex; flex-direction:column; align-items:center; gap:2px; padding:8px 0 6px; color:var(--text-secondary); }
-    .sch-colhead span { font-size:10.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
-    .sch-colhead b { font-size:22px; font-weight:500; color:var(--text-primary); width:40px; height:40px; line-height:40px; border-radius:50%; }
-    .sch-colhead:hover b { background:var(--surface-alt); }
-    .sch-colhead.sch-today span { color:var(--color-primary); }
-    .sch-colhead.sch-today b { background:var(--color-primary); color:var(--color-primary-text); }
-    .sch-allday { border-bottom:1px solid var(--border-base); }
-    .sch-allday-label { font-size:10px; color:var(--text-muted); text-align:right; padding:6px 8px 0 0; }
-    .sch-allday-col { display:flex; flex-direction:column; gap:2px; padding:3px 3px 4px; min-width:0; border-left:1px solid var(--border-light); max-height:190px; overflow-y:auto; }
-    .sch-tscroll { height:calc(100vh - 290px); min-height:420px; overflow-y:auto; position:relative; }
-    .sch-tbody { position:relative; }
+    .sch-side-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 14px; border-bottom:1px solid var(--border-light); }
+    .sch-side-head b { font-size:15px; color:var(--text-primary); }
+    .sch-side-head span { font-size:12px; color:var(--text-secondary); margin-left:6px; }
+    .sch-allday { display:flex; flex-direction:column; gap:3px; padding:8px 12px; border-bottom:1px solid var(--border-light); max-height:110px; overflow-y:auto; }
+    .sch-tscroll { height:300px; flex:0 0 auto; overflow-y:auto; position:relative; border-bottom:1px solid var(--border-base); }
+    .sch-tbody { position:relative; display:grid; grid-template-columns:54px minmax(0,1fr); }
     .sch-gutter { position:relative; }
     .sch-hour { position:absolute; right:8px; transform:translateY(-50%); font-size:10px; color:var(--text-muted); white-space:nowrap; }
     .sch-col { position:relative; border-left:1px solid var(--border-light); cursor:pointer;
       background-image:repeating-linear-gradient(to bottom, var(--border-light) 0, var(--border-light) 1px, transparent 1px, transparent ${HOUR_PX}px); }
     .sch-col.sch-off { background-color:color-mix(in srgb, var(--surface-alt) 60%, transparent); }
-    .sch-block { position:absolute; box-sizing:border-box; border:1px solid var(--surface); border-radius:6px; padding:3px 6px; text-align:left;
-      background:var(--color-purple); color:#fff; font:inherit; cursor:pointer; overflow:hidden; display:flex; flex-direction:column; gap:1px; z-index:1; }
-    .sch-block:hover { filter:brightness(1.08); box-shadow:var(--shadow-md); z-index:2; }
+    .sch-block { position:absolute; box-sizing:border-box; border:none; border-left:3px solid var(--color-purple); border-radius:6px; padding:3px 7px; text-align:left;
+      background:var(--color-purple-bg); color:var(--color-purple-text); font:inherit; cursor:pointer; overflow:hidden; display:flex; flex-direction:column; gap:1px; z-index:1; }
+    .sch-block:hover, .sch-block.sch-on { background:var(--color-purple); color:#fff; z-index:2; }
     .sch-block b { font-size:11.5px; font-weight:700; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-    .sch-block span { font-size:10.5px; opacity:.9; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .sch-block span { font-size:10.5px; opacity:.85; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .sch-block.sch-short { padding:1px 7px; justify-content:center; }
+    .sch-block.sch-short span { display:none; }
     .sch-now { position:absolute; left:0; right:0; height:2px; background:#ea4335; z-index:3; pointer-events:none; }
     .sch-now::before { content:''; position:absolute; left:-6px; top:-5px; width:12px; height:12px; border-radius:50%; background:#ea4335; }
 
-    .sch-pop { position:fixed; z-index:9998; width:340px; max-width:calc(100vw - 32px); background:var(--surface); color:var(--text-primary);
-      border:1px solid var(--border-light); border-radius:12px; box-shadow:var(--shadow-xl); padding:14px 16px 16px; }
-    .sch-pop-top { display:flex; justify-content:flex-end; gap:2px; margin:-6px -8px 2px 0; }
-    .sch-pop h3 { display:flex; gap:10px; align-items:flex-start; margin:0 0 4px; font-size:17px; font-weight:600; line-height:1.3; }
-    .sch-pop h3 i { width:12px; height:12px; border-radius:3px; flex-shrink:0; margin-top:5px; }
-    .sch-pop-when { font-size:12.5px; color:var(--text-secondary); margin:0 0 10px 22px; }
-    .sch-pop-row { display:flex; gap:10px; font-size:12.5px; color:var(--text-secondary); margin:6px 0 0; line-height:1.45; }
+    .sch-detail { padding:12px 14px; border-bottom:1px solid var(--border-light); }
+    .sch-detail-top { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; flex-wrap:wrap; }
+    .sch-detail h3 { display:flex; gap:8px; align-items:flex-start; margin:0 0 3px; font-size:15px; font-weight:700; line-height:1.3; color:var(--text-primary); }
+    .sch-detail h3 i { width:10px; height:10px; border-radius:3px; flex-shrink:0; margin-top:5px; }
+    .sch-pop-when { font-size:12px; color:var(--text-secondary); margin:0 0 4px 18px; }
+    .sch-detail-acts { display:flex; gap:6px; flex-wrap:wrap; }
+    .sch-act { padding:5px 11px !important; font-size:12px !important; min-height:0 !important; text-decoration:none; }
+    .sch-pop-row { display:flex; gap:8px; font-size:12px; color:var(--text-secondary); margin:6px 0 0 18px; line-height:1.45; }
     .sch-pop-row svg { flex-shrink:0; margin-top:2px; color:var(--text-muted); }
     .sch-pop-row div { min-width:0; overflow-wrap:anywhere; white-space:pre-wrap; }
-    .sch-pop-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
+    .sch-hint { font-size:12px; color:var(--text-muted); line-height:1.5; }
+    .sch-sec { font-size:10.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--text-secondary); padding:10px 14px 6px; }
+    .sch-sec span { background:var(--color-warning-bg); color:var(--color-warning-text); border-radius:999px; padding:1px 7px; margin-left:4px; }
+    .sch-tasks { overflow-y:auto; padding:0 8px 10px; flex:1 1 auto; min-height:60px; }
+    .sch-task { display:flex; gap:9px; align-items:flex-start; width:100%; text-align:left; border:none; background:transparent; border-radius:8px; padding:7px 6px; font:inherit; cursor:pointer; }
+    .sch-task:hover, .sch-task.sch-on { background:var(--surface-alt); }
+    .sch-task i { width:9px; height:9px; border-radius:50%; background:var(--color-warning); flex-shrink:0; margin-top:4px; }
+    .sch-task i.done { background:var(--color-success); }
+    .sch-task i.leave { background:var(--border-strong); }
+    .sch-task span { min-width:0; display:flex; flex-direction:column; gap:1px; }
+    .sch-task b { font-size:12.5px; font-weight:600; color:var(--text-primary); line-height:1.35; overflow-wrap:anywhere; }
+    .sch-task small { font-size:11px; color:var(--text-muted); }
 
-    /* Phone: no rail, compact month (dots), full-width toolbar. */
-    @media (max-width: 767px) {
-      .sch-rail { display:none; }
+    /* Narrow screens: Day panel under the month; month cells show dots. */
+    @media (max-width: 900px) {
+      .sch-wrap { grid-template-columns:minmax(0,1fr); }
+      .sch-side { position:static; max-height:none; }
+      .sch-tasks { max-height:none; }
       .sch-toolbar-left { width:100%; }
-      .sch-toolbar-right { width:100%; flex-wrap:nowrap !important; }
+      .sch-toolbar-right { width:100%; }
       .sch-brand { display:none; }
       #sch-title-label { font-size:15px; flex:1; }
-      .sch-seg { flex:1; }
-      .sch-seg button { flex:1; padding:8px 0; }
       #sch-create { min-height:38px; }
       .sch-mcell { min-height:58px; padding:3px 2px; }
       .sch-mitems { display:none; }
@@ -460,23 +491,14 @@ window.Pages.scheduler = (() => {
       .sch-mdots i.leave { background:var(--color-success); }
       .sch-mdots i.birthday { background:var(--color-info); }
       .sch-offtag { font-size:8.5px; }
-      .sch-colhead b { font-size:15px; width:28px; height:28px; line-height:28px; }
-      .sch-tscroll { height:calc(100vh - 300px); min-height:360px; }
-      .sch-block span { display:none; }
-      .sch-block { padding:2px 3px; }
-      #sch-meeting-modal-overlay [style*="grid-template-columns:1fr 1fr"] > div:nth-child(1),
-      #sch-meeting-modal-overlay [style*="grid-template-columns:1fr 1fr"] > div:nth-child(2),
-      #sch-meeting-modal-overlay [style*="grid-template-columns:1fr 1fr"] > div:nth-child(5),
-      #sch-meeting-modal-overlay [style*="grid-template-columns:1fr 1fr"] > div:nth-child(6) { grid-column: 1 / -1; }
+      #sch-meeting-modal-overlay [style*="grid-template-columns:1fr 1fr"] > div { grid-column: 1 / -1; }
       #sch-meeting-modal-overlay .modal-footer > button { flex: 1 1 0; justify-content: center; min-height: 42px; }
     }`;
 
   function renderPage() {
     const el = document.getElementById('main-content');
     if (!el) return;
-    _closePopover();
     const chev = (pts) => `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="${pts}"/></svg>`;
-    const unit = _mode === 'month' ? 'month' : _mode === 'week' ? 'week' : 'day';
 
     el.innerHTML = `
       <style>${CSS}</style>
@@ -486,39 +508,53 @@ window.Pages.scheduler = (() => {
             <svg class="sch-brand" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-primary)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/></svg>
             <h1 class="sch-brand" style="font-size:18px;font-weight:700;color:var(--text-primary);letter-spacing:-0.02em;margin:0 8px 0 0;">Scheduler</h1>
             <button id="sch-today" class="btn-secondary" title="Today (T)">Today</button>
-            <button id="sch-prev" class="sch-icon-btn" aria-label="Previous ${unit}" title="Previous ${unit}">${chev('15 18 9 12 15 6')}</button>
-            <button id="sch-next" class="sch-icon-btn" aria-label="Next ${unit}" title="Next ${unit}">${chev('9 18 15 12 9 6')}</button>
+            <button id="sch-prev" class="sch-icon-btn" aria-label="Previous month" title="Previous month">${chev('15 18 9 12 15 6')}</button>
+            <button id="sch-next" class="sch-icon-btn" aria-label="Next month" title="Next month">${chev('9 18 15 12 9 6')}</button>
             <div id="sch-title-label" aria-live="polite">${esc(_titleText())}</div>
           </div>
           <div class="sch-toolbar-right" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-            <div class="sch-seg" role="tablist" aria-label="View">
-              ${[['day', 'Day', 'D'], ['week', 'Week', 'W'], ['month', 'Month', 'M']].map(([k, l, key]) =>
-                `<button type="button" data-mode="${k}" class="${_mode === k ? 'on' : ''}" role="tab" aria-selected="${_mode === k}" title="${l} (${key})">${l}</button>`).join('')}
-            </div>
+            <div class="sch-legend" id="sch-legend">${KINDS.map(k =>
+              `<button type="button" data-kind="${k}" class="${_hidden.has(k) ? 'off' : ''}" title="Show / hide ${KIND_LABEL[k]}"><i style="background:${KIND_COLOUR[k]};"></i>${KIND_LABEL[k]}</button>`).join('')}</div>
             <button id="sch-create" class="btn-primary">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-              Create
+              Schedule
             </button>
           </div>
         </div>
 
         <div class="sch-wrap">
-          <aside class="sch-rail" id="sch-rail">${_miniHTML()}</aside>
-          <div class="sch-main" id="sch-main">${_mode === 'month' ? _monthHTML() : _timeGridHTML()}</div>
+          <div class="sch-main" id="sch-main"></div>
+          <aside class="sch-side" id="sch-side"></aside>
         </div>
       </div>`;
 
     _bindPage();
-    if (_mode !== 'month') {
-      const sc = document.getElementById('sch-tscroll');
-      const showsToday = _visibleDays().some(d => _dateStr(d) === _todayStr());
-      const hour = showsToday ? Math.max(0, new Date().getHours() - 2) : SCROLL_TO_HOUR;
-      if (sc) sc.scrollTop = Math.min(hour, SCROLL_TO_HOUR + 4) * HOUR_PX;
-      _startNowTimer();
-    }
+    _renderBody();
   }
 
-  // Keeps the red now-line moving while a Day / Week view is open.
+  // Month + Day panel only — the toolbar stays put.
+  function _renderBody({ keepScroll = false } = {}) {
+    const main = document.getElementById('sch-main');
+    const side = document.getElementById('sch-side');
+    if (!main || !side) return;
+    const sc0 = document.getElementById('sch-tscroll')?.scrollTop;
+    main.innerHTML = _monthHTML();
+    side.innerHTML = _sideHTML();
+    const sc = document.getElementById('sch-tscroll');
+    if (sc) {
+      if (keepScroll && sc0 != null) sc.scrollTop = sc0;
+      else {
+        // Open at the first meeting (an hour before), else now on today, else 8 AM.
+        const first = _infoFor(_sel).meetings.map(m => _toMins(m.startTime)).filter(v => v !== null).sort((a, b) => a - b)[0];
+        const hour = first != null ? Math.max(0, Math.floor(first / 60) - 1)
+          : _sel === _todayStr() ? Math.max(0, new Date().getHours() - 2) : SCROLL_TO_HOUR;
+        sc.scrollTop = hour * HOUR_PX;
+      }
+    }
+    _startNowTimer();
+  }
+
+  // Keeps the red now-line moving while today is in the Day panel.
   function _startNowTimer() {
     clearInterval(_nowTimer);
     _nowTimer = setInterval(() => {
@@ -528,16 +564,30 @@ window.Pages.scheduler = (() => {
     }, 60 * 1000);
   }
 
-  function _go(date, mode) {
-    _anchor = _startOfDay(date);
-    if (mode) { _mode = mode; _store.set('sch-mode', mode); }
-    _mini = new Date(_anchor.getFullYear(), _anchor.getMonth(), 1);
+  // Show a month (re-fetching its data) with `date` picked in the Day panel.
+  function _go(date) {
+    const d = _startOfDay(date);
+    _anchor = d;
+    _sel = _dateStr(d);
+    _selEv = null;
     loadData().then(renderPage);
   }
 
   function _step(dir) {
-    if (_mode === 'month') _go(new Date(_anchor.getFullYear(), _anchor.getMonth() + dir, 1));
-    else _go(_addDays(_anchor, dir * (_mode === 'week' ? 7 : 1)));
+    const first = new Date(_anchor.getFullYear(), _anchor.getMonth() + dir, 1);
+    const now = new Date();
+    _go(first.getFullYear() === now.getFullYear() && first.getMonth() === now.getMonth() ? now : first);
+  }
+
+  // Pick a day: stays on this month's data if the day is in its grid.
+  function _pick(ds, ev = null) {
+    const inGrid = _gridDays(_anchor).some(d => _dateStr(d) === ds);
+    if (!inGrid) { _go(new Date(ds + 'T00:00:00')); return; }
+    const sameDay = ds === _sel;
+    _sel = ds;
+    _selEv = ev;
+    _renderBody({ keepScroll: sameDay });
+    if (_isPhone() && !sameDay) document.getElementById('sch-side')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   // Per-render listeners: aborted on the next render, and with the page.
@@ -547,51 +597,53 @@ window.Pages.scheduler = (() => {
     _bindCtl = new AbortController();
     const signal = _bindCtl.signal;
     const pageSignal = window.Router.pageSignal();
-    if (!pageSignal.aborted) pageSignal.addEventListener('abort', () => { _bindCtl?.abort(); clearInterval(_nowTimer); _closePopover(); }, { once: true, signal });
+    if (!pageSignal.aborted) pageSignal.addEventListener('abort', () => { _bindCtl?.abort(); clearInterval(_nowTimer); }, { once: true, signal });
     document.getElementById('sch-today')?.addEventListener('click', () => _go(new Date()));
     document.getElementById('sch-prev')?.addEventListener('click', () => _step(-1));
     document.getElementById('sch-next')?.addEventListener('click', () => _step(1));
-    document.querySelectorAll('.sch-seg [data-mode]').forEach(b => b.addEventListener('click', () => _go(_anchor, b.dataset.mode)));
-    document.getElementById('sch-create')?.addEventListener('click', () => _openMeetingModal(_dateStr(_anchor)));
+    document.getElementById('sch-create')?.addEventListener('click', () => _openMeetingModal(_sel));
 
-    const rail = document.getElementById('sch-rail');
-    rail?.addEventListener('click', (e) => {
-      const day = e.target.closest('[data-mini]');
-      if (day) { _go(new Date(day.dataset.mini + 'T00:00:00')); return; }
-      const nav = e.target.closest('[data-mini-nav]');
-      if (nav) {
-        _mini = new Date(_mini.getFullYear(), _mini.getMonth() + Number(nav.dataset.miniNav), 1);
-        rail.innerHTML = _miniHTML();
-      }
-    });
-    rail?.addEventListener('change', (e) => {
-      const k = e.target.dataset?.kind;
-      if (!k) return;
-      if (e.target.checked) _hidden.delete(k); else _hidden.add(k);
+    document.getElementById('sch-legend')?.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-kind]');
+      if (!b) return;
+      const k = b.dataset.kind;
+      if (_hidden.has(k)) _hidden.delete(k); else _hidden.add(k);
       _store.set('sch-hidden', [..._hidden].join(','));
-      document.getElementById('sch-main').innerHTML = _mode === 'month' ? _monthHTML() : _timeGridHTML();
-      if (_mode !== 'month') { _startNowTimer(); }
+      b.classList.toggle('off', _hidden.has(k));
+      _renderBody({ keepScroll: true });
     });
 
-    // One delegated handler for the whole calendar body (it is re-rendered
-    // by the show/hide toggles, so per-element listeners would be lost).
+    // Month grid: a chip picks its day and shows it in the panel; a click on
+    // the cell picks the day; a double click schedules on it.
     const main = document.getElementById('sch-main');
     main?.addEventListener('click', (e) => {
       const ev = e.target.closest('[data-ev]');
-      if (ev) { e.stopPropagation(); _openPopover(ev.dataset.ev, ev); return; }
-      // With details open, a click elsewhere only closes them (as in Google Calendar).
-      if (document.getElementById('sch-pop')) { e.stopPropagation(); _closePopover(); return; }
-      const go = e.target.closest('[data-goto]');
-      if (go) { _go(new Date(go.dataset.goto + 'T00:00:00'), 'day'); return; }
-      // Empty month cell → schedule that day. On a phone the cells hold only
-      // dots, so a tap opens the day instead.
+      if (ev) { _pick(ev.dataset.ev.split(':')[1], ev.dataset.ev); return; }
       const cell = e.target.closest('.sch-mcell');
-      if (cell) {
-        if (_isPhone()) _go(new Date(cell.dataset.date + 'T00:00:00'), 'day');
-        else _openMeetingModal(cell.dataset.date);
+      if (cell) _pick(cell.dataset.date);
+    });
+    main?.addEventListener('dblclick', (e) => {
+      const cell = e.target.closest('.sch-mcell');
+      if (cell && !e.target.closest('[data-ev]')) _openMeetingModal(cell.dataset.date);
+    });
+
+    // Day panel: pick an entry, act on the picked meeting, or click an empty
+    // slot on the timeline to schedule at that half hour.
+    const side = document.getElementById('sch-side');
+    side?.addEventListener('click', async (e) => {
+      const act = e.target.closest('[data-act]');
+      if (act) {
+        if (act.dataset.act === 'new') return _openMeetingModal(_sel);
+        if (act.dataset.act === 'cancel') return _deleteMeeting(act.dataset.id);
+        if (act.dataset.act === 'decline') return _declineMeeting(act.dataset.id);
+        if (act.dataset.act === 'copy') {
+          const m = _entry(act.dataset.ref).item;
+          if (m) Utils.showToast(await _copy(_inviteText(m)) ? 'Invite copied — paste it in WhatsApp or mail' : 'Could not copy', 'success');
+        }
         return;
       }
-      // Empty slot on the hour grid → schedule at that half hour.
+      const ev = e.target.closest('[data-ev]');
+      if (ev) { _selEv = ev.dataset.ev; _renderBody({ keepScroll: true }); return; }
       const col = e.target.closest('.sch-col');
       if (col) {
         const y = e.clientY - col.getBoundingClientRect().top;
@@ -600,116 +652,21 @@ window.Pages.scheduler = (() => {
       }
     });
 
-    // Keyboard shortcuts, as in Google Calendar — never while typing or with a dialog open.
+    // Keyboard: T today, J/K next/previous month, ←/→ previous/next day,
+    // C schedule — never while typing or with a dialog open.
     document.addEventListener('keydown', (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
-      if (e.key === 'Escape') { _closePopover(); return; }
       if (document.getElementById('sch-meeting-modal-overlay') || document.querySelector('.modal-overlay:not(.hidden)')) return;
       const k = e.key.toLowerCase();
       if (k === 't') _go(new Date());
-      else if (k === 'd') _go(_anchor, 'day');
-      else if (k === 'w') _go(_anchor, 'week');
-      else if (k === 'm') _go(_anchor, 'month');
       else if (k === 'j' || k === 'n') _step(1);
       else if (k === 'k' || k === 'p') _step(-1);
-      else if (k === 'c') _openMeetingModal(_dateStr(_anchor));
+      else if (k === 'arrowleft' || k === 'arrowright') _pick(_dateStr(_addDays(new Date(_sel + 'T00:00:00'), k === 'arrowleft' ? -1 : 1)));
+      else if (k === 'c') _openMeetingModal(_sel);
       else return;
       e.preventDefault();
     }, { signal });
-    document.addEventListener('click', (e) => {
-      const pop = document.getElementById('sch-pop');
-      if (pop && !pop.contains(e.target)) _closePopover();
-    }, { signal });
-  }
-
-  /* ── Event details popover ────────────────────────────────────────── */
-  function _closePopover() { document.getElementById('sch-pop')?.remove(); }
-
-  const ICON = {
-    clock: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
-    pin: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
-    video: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="m16 10 6-3v10l-6-3z"/></svg>',
-    people: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></svg>',
-    note: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
-    user: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>',
-    flag: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4h11l-1.5 4L16 12H5"/></svg>',
-    close: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
-  };
-  const _row = (icon, html) => html ? `<div class="sch-pop-row">${ICON[icon]}<div>${html}</div></div>` : '';
-
-  function _openPopover(ref, anchorEl) {
-    _closePopover();
-    const [kind, ds, idx] = ref.split(':');
-    const info = _byDate.get(ds) || { holiday: null, tasks: [], meetings: [], leaves: [], birthdays: [] };
-    let colour, title, body = '', actions = '', when = _fmtLongDate(ds);
-    if (kind === 'meeting') {
-      const m = info.meetings[Number(idx)];
-      if (!m) return;
-      colour = 'var(--color-purple)'; title = m.title;
-      if (m.startTime) when += ` · ${_fmtTime(m.startTime)}${m.endTime ? ' – ' + _fmtTime(m.endTime) : ''}`;
-      const isLink = /^https?:\/\//i.test(m.location || '');
-      body = (isLink ? _row('video', `<a href="${esc(m.location)}" target="_blank" rel="noopener" class="btn-primary" style="display:inline-flex;padding:6px 14px;font-size:12.5px;text-decoration:none;">Join meeting</a>`) : _row('pin', esc(m.location || '')))
-        + _row('people', m.attendees ? esc(m.attendees) : '')
-        + _row('note', m.notes ? esc(m.notes) : '')
-        + _row('user', m.createdByName ? `Organised by ${esc(m.createdByName)}` : '');
-      const me = window.currentUser;
-      if (_canManage(m)) actions += `<button type="button" class="btn-secondary" data-act="cancel" data-id="${esc(m.id)}" style="color:var(--color-danger-text);">Cancel meeting</button>`;
-      else if (_isAttendee(m) && m.createdBy !== me?.id) actions += `<button type="button" class="btn-secondary" data-act="decline" data-id="${esc(m.id)}">Decline</button>`;
-    } else if (kind === 'task') {
-      const t = info.tasks[Number(idx)];
-      if (!t) return;
-      colour = 'var(--color-warning)'; title = t.description;
-      when = 'Due ' + when;
-      const status = t.status === 'done' ? 'Done' : t.status === 'leave' ? 'On leave' : 'Pending';
-      body = _row('user', esc(t.doer || ''))
-        + _row('flag', esc([status, t.priority].filter(Boolean).join(' · ')))
-        + _row('note', 'Open <b>All Tasks</b> to update it.');
-    } else if (kind === 'leave') {
-      const l = (info.leaves || [])[Number(idx)];
-      if (!l) return;
-      colour = 'var(--color-success)'; title = `${l.name || 'Employee'} — on leave`;
-      when = l.fromDate === l.toDate ? _fmtLongDate(l.fromDate) : `${_fmtLongDate(l.fromDate)} – ${_fmtLongDate(l.toDate)}`;
-      body = _row('flag', esc([l.leaveType, l.halfDay && l.halfDay !== 'full' ? l.halfDay + ' half' : ''].filter(Boolean).join(' · ')))
-        + _row('note', 'Approved leave — from HR → Leave Management.');
-    } else if (kind === 'birthday') {
-      const b = (info.birthdays || [])[Number(idx)];
-      if (!b) return;
-      colour = 'var(--color-info)'; title = `🎂 ${b.name}'s birthday`;
-      body = _row('note', 'From the Employee Master.');
-    } else {
-      if (!info.holiday) return;
-      colour = 'var(--color-danger)'; title = info.holiday.name;
-      body = _row('note', 'Company holiday — from HR → Leave Management.');
-    }
-
-    document.body.insertAdjacentHTML('beforeend', `
-      <div class="sch-pop" id="sch-pop" role="dialog" aria-label="${esc(title)}">
-        <div class="sch-pop-top"><button type="button" class="sch-icon-btn" data-act="close" aria-label="Close">${ICON.close}</button></div>
-        <h3><i style="background:${colour};"></i><span>${esc(title)}</span></h3>
-        <div class="sch-pop-when">${when}</div>
-        ${body}
-        ${actions ? `<div class="sch-pop-actions">${actions}</div>` : ''}
-      </div>`);
-    const pop = document.getElementById('sch-pop');
-    // Beside the clicked item, flipped / clamped to stay on screen.
-    const r = anchorEl.getBoundingClientRect();
-    const pw = pop.offsetWidth, ph = pop.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
-    let left = r.right + 8;
-    if (left + pw > vw - 12) left = r.left - pw - 8;
-    if (left < 12) left = Math.max(12, Math.min(vw - pw - 12, r.left));
-    let top = Math.min(Math.max(12, r.top), vh - ph - 12);
-    if (left === Math.max(12, Math.min(vw - pw - 12, r.left)) && r.bottom + ph + 8 < vh) top = r.bottom + 6;
-    pop.style.left = left + 'px'; pop.style.top = Math.max(12, top) + 'px';
-
-    pop.addEventListener('click', async (e) => {
-      const b = e.target.closest('[data-act]');
-      if (!b) return;
-      if (b.dataset.act === 'close') return _closePopover();
-      _closePopover();
-      if (b.dataset.act === 'cancel') return _deleteMeeting(b.dataset.id);
-      if (b.dataset.act === 'decline') return _declineMeeting(b.dataset.id);
-    });
   }
 
   async function _declineMeeting(id) {
@@ -717,6 +674,7 @@ window.Pages.scheduler = (() => {
     try {
       await Utils.apiFetch('/api/meetings/decline?id=' + encodeURIComponent(id), { method: 'PATCH' });
       Utils.showToast('Meeting declined');
+      _selEv = null;
       await loadData();
       renderPage();
     } catch (e) { Utils.showToast(e.message || 'Failed', 'error'); }
@@ -827,7 +785,6 @@ window.Pages.scheduler = (() => {
   // startTime ("HH:MM", optional) prefills the Start Time — set when an empty
   // slot on the Day / Week grid was clicked.
   async function _openMeetingModal(dateStr, startTime) {
-    _closePopover();
     _closeMeetingModal();
     const users = await _loadUsers();
     const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--border-base);border-radius:8px;font-size:13px;color:var(--text-primary);background:var(--surface);outline:none;';
@@ -949,7 +906,8 @@ window.Pages.scheduler = (() => {
         if ((inv.missing || []).length) parts.push(`no email for ${inv.missing.join(', ')}`);
         Utils.showToast(parts.join(' · '), saved?.linkMode === 'failed' || (inv.missing || []).length ? 'warning' : 'success');
         _anchor = _startOfDay(new Date(date + 'T00:00:00'));
-        _mini = new Date(_anchor.getFullYear(), _anchor.getMonth(), 1);
+        _sel = date;
+        _selEv = null;
         await loadData();
         renderPage();
       } catch (e) {
@@ -964,6 +922,7 @@ window.Pages.scheduler = (() => {
     try {
       const r = await Utils.apiFetch('/api/meetings?id=' + encodeURIComponent(id), { method: 'DELETE' });
       Utils.showToast(r?.notified === 'google' || r?.notified === 'mail' ? 'Meeting cancelled · attendees told' : r?.notified === 'failed' ? 'Meeting cancelled · could not notify attendees' : 'Meeting cancelled', r?.notified === 'failed' ? 'warning' : 'success');
+      _selEv = null;
       await loadData();
       renderPage();
     } catch (e) { Utils.showToast(e.message || 'Failed', 'error'); }
