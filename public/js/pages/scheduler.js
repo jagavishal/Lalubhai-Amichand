@@ -730,26 +730,33 @@ window.Pages.scheduler = (() => {
     return _users;
   }
 
-  let _clients = null;
-  async function _loadClients() {
-    if (_clients) return _clients;
-    try { _clients = await Utils.apiFetch('/api/clients') || []; }
-    catch { _clients = []; }
-    return _clients;
-  }
 
   // "10:00" + "PM" -> "22:00". Returns '' on anything that doesn't parse as
   // a 1-12 hour, 0-59 minute clock time (the Start Time field is free text,
   // matching the reference design, so it needs real validation before use).
+  // "10", "10:30", "10.30", "1030", "10:30 pm", or 24-hour "14:30" (which
+  // overrides the AM/PM pick). '' when it can't be read.
   function _to24Hour(text, ampm) {
-    const m = String(text || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+    let t = String(text || '').trim().toLowerCase();
+    const suffix = t.match(/\s*([ap])\.?m?\.?$/);
+    if (suffix) { ampm = suffix[1] === 'p' ? 'PM' : 'AM'; t = t.slice(0, suffix.index).trim(); }
+    const m = t.match(/^(\d{1,2})(?:\s*[:.\-\s]\s*(\d{2})|(\d{2}))?$/);
     if (!m) return '';
     let h = parseInt(m[1], 10);
-    const min = parseInt(m[2], 10);
-    if (h < 1 || h > 12 || min > 59) return '';
+    const min = parseInt(m[2] || m[3] || '0', 10);
+    if (h > 23 || min > 59) return '';
+    if (h === 0 || h > 12) return h <= 23 && !suffix ? String(h).padStart(2, '0') + ':' + String(min).padStart(2, '0') : '';
     if (ampm === 'AM') h = (h === 12) ? 0 : h;
     else h = (h === 12) ? 12 : h + 12;
-    return String(h).padStart(2, '0') + ':' + m[2];
+    return String(h).padStart(2, '0') + ':' + String(min).padStart(2, '0');
+  }
+
+  // Outside guests: emails separated by commas, semicolons or spaces.
+  // Returns { emails } or { bad } naming the first one that isn't an email.
+  function _guestEmails(text) {
+    const parts = String(text || '').split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+    const bad = parts.find(p => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(p));
+    return bad ? { bad } : { emails: [...new Set(parts.map(p => p.toLowerCase()))] };
   }
 
   function _closeMeetingModal() {
@@ -825,7 +832,7 @@ window.Pages.scheduler = (() => {
   async function _openMeetingModal(dateStr, startTime) {
     _closePopover();
     _closeMeetingModal();
-    const [users, clients] = await Promise.all([_loadUsers(), _loadClients()]);
+    const users = await _loadUsers();
     const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--border-base);border-radius:8px;font-size:13px;color:var(--text-primary);background:var(--surface);outline:none;';
     const labelStyle = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:5px;';
     const DURATIONS = [['15', '15 min'], ['30', '30 min'], ['45', '45 min'], ['60', '1 hour'], ['90', '1.5 hours'], ['120', '2 hours'], ['', 'Custom']];
@@ -834,16 +841,9 @@ window.Pages.scheduler = (() => {
     const bodyHTML = `
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-          <div>
+          <div style="grid-column:1/-1;">
             <label style="${labelStyle}">Title <span style="color:var(--color-danger)">*</span></label>
             <input id="sch-title" style="${inputStyle}" placeholder="e.g. Vendor review call" />
-          </div>
-          <div>
-            <label style="${labelStyle}">Client</label>
-            <select id="sch-client" style="${inputStyle}background:var(--surface);">
-              <option value="">— None —</option>
-              ${clients.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}
-            </select>
           </div>
           <div>
             <label style="${labelStyle}">Date <span style="color:var(--color-danger)">*</span></label>
@@ -856,7 +856,7 @@ window.Pages.scheduler = (() => {
           <div>
             <label style="${labelStyle}">Start Time <span style="color:var(--color-danger)">*</span></label>
             <div style="display:flex;gap:6px;">
-              <input id="sch-start-text" type="text" autocomplete="off" placeholder="e.g. 10:00" style="${inputStyle}" />
+              <input id="sch-start-text" type="text" autocomplete="off" placeholder="e.g. 10:30" style="${inputStyle}" />
               <select id="sch-start-ampm" style="${inputStyle}width:76px;flex:0 0 76px;background:var(--surface);">
                 <option value="AM">AM</option>
                 <option value="PM">PM</option>
@@ -878,6 +878,11 @@ window.Pages.scheduler = (() => {
             <input id="sch-attendees-input" type="text" autocomplete="off" placeholder="Select attendees…" style="flex:1;min-width:120px;border:none;outline:none;font-size:13px;background:transparent;color:var(--text-primary);" />
           </div>
           <div id="sch-attendees-dd" style="display:none;position:fixed;z-index:9999;background:var(--surface);border:1px solid var(--border-base);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:200px;overflow-y:auto;"></div>
+        </div>
+        <div>
+          <label style="${labelStyle}">Outside guests (email)</label>
+          <input id="sch-guests" type="text" autocomplete="off" placeholder="e.g. client@company.com, ca@firm.in" style="${inputStyle}" />
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Not on the ERP? Add their email — they get the same invite.</div>
         </div>
         <div>
           <label style="${labelStyle}">Agenda</label>
@@ -936,9 +941,10 @@ window.Pages.scheduler = (() => {
       const date = document.getElementById('sch-date').value;
       const startTime = _to24Hour(document.getElementById('sch-start-text').value, document.getElementById('sch-start-ampm').value);
       if (!title || !date) { Utils.showToast('Title and date are required', 'error'); return; }
-      if (document.getElementById('sch-start-text').value.trim() && !startTime) { Utils.showToast('Start time should look like 10:00', 'error'); return; }
-      const attendees = [...document.querySelectorAll('#sch-attendees-box .sch-chip')].map(c => c.dataset.name);
-      const clientSel = document.getElementById('sch-client');
+      if (document.getElementById('sch-start-text').value.trim() && !startTime) { Utils.showToast('Start time should look like 10:30 (or 10.30)', 'error'); return; }
+      const guests = _guestEmails(document.getElementById('sch-guests').value);
+      if (guests.bad) { Utils.showToast(`"${guests.bad}" is not an email address`, 'error'); return; }
+      const attendees = [...document.querySelectorAll('#sch-attendees-box .sch-chip')].map(c => c.dataset.name).concat(guests.emails);
       const btn = document.getElementById('sch-save');
       btn.disabled = true; btn.textContent = 'Scheduling…';
       try {
@@ -946,8 +952,6 @@ window.Pages.scheduler = (() => {
           method: 'POST',
           body: JSON.stringify({
             title, date,
-            clientId: clientSel.value,
-            clientName: clientSel.value ? clientSel.options[clientSel.selectedIndex].textContent : '',
             frequency: document.getElementById('sch-frequency').value,
             startTime,
             endTime: document.getElementById('sch-end').value,

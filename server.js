@@ -6261,6 +6261,11 @@ async function _autoMeetingLink(meeting) {
 async function _meetingAttendeeEmails(names) {
   const list = [], missing = [];
   for (const n of names) {
+    // An outside guest is entered as a plain email address, not a login name.
+    if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(n)) {
+      if (!list.some(a => a.email.toLowerCase() === n.toLowerCase())) list.push({ name: n, email: n });
+      continue;
+    }
     const u = await userByName(n);
     if (u?.email) { if (!list.some(a => a.email.toLowerCase() === u.email.toLowerCase())) list.push({ name: u.name, email: u.email }); }
     else missing.push(n);
