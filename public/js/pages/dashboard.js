@@ -254,16 +254,54 @@ window.Pages.dashboard = (function () {
         </div>`;
       return;
     }
-    bodyEl.innerHTML = meetings.slice(0, 8).map(m => `
-      <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9;">
-        <div style="width:56px;flex-shrink:0;font-size:11px;font-weight:700;color:#334155;line-height:1.4;">
-          ${fmt(m.date)}${m.startTime ? `<br><span style="font-weight:500;color:#94a3b8;">${esc(m.startTime)}</span>` : ''}
+    // Each row: when, what, who — and Join (when there is a link) and Copy
+    // invite, the same two actions as the Scheduler's Day panel.
+    const t12 = (hhmm) => {
+      const [h, mi] = String(hhmm || '').split(':').map(Number);
+      if (!Number.isFinite(h)) return hhmm || '';
+      return `${h % 12 || 12}:${String(mi || 0).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+    };
+    const isLink = (m) => /^https?:\/\//i.test(m.location || '');
+    const via = (m) => /zoom\.us/i.test(m.location) ? 'Zoom' : /meet\.google/i.test(m.location) ? 'Google Meet' : /teams\.microsoft/i.test(m.location) ? 'Teams' : 'Online';
+    const inviteText = (m) => [
+      m.title,
+      `${fmt(m.date)}${m.startTime ? ' · ' + t12(m.startTime) + (m.endTime ? ' – ' + t12(m.endTime) : '') : ''}`,
+      isLink(m) ? `Join: ${m.location}` : (m.location ? `Where: ${m.location}` : ''),
+      m.notes ? `Agenda: ${m.notes}` : '',
+    ].filter(Boolean).join('\n');
+    const shown = meetings.slice(0, 8);
+    bodyEl.innerHTML = shown.map((m, i) => `
+      <div style="display:flex;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--border-light,#f1f5f9);">
+        <div style="width:64px;flex-shrink:0;font-size:11px;font-weight:700;color:var(--text-primary,#334155);line-height:1.4;">
+          ${fmt(m.date)}${m.startTime ? `<br><span style="font-weight:600;color:var(--color-purple);">${esc(t12(m.startTime))}</span>` : ''}
         </div>
-        <div style="min-width:0;">
-          <div style="font-size:12.5px;font-weight:600;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.title)}</div>
-          ${m.location ? `<div style="font-size:11px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.location)}</div>` : ''}
+        <div style="min-width:0;flex:1;">
+          <div style="font-size:12.5px;font-weight:600;color:var(--text-primary,#0f172a);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(m.title)}</div>
+          <div style="font-size:11px;color:var(--text-muted,#94a3b8);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc([
+            m.startTime && m.endTime ? `${t12(m.startTime)} – ${t12(m.endTime)}` : '',
+            isLink(m) ? via(m) : (m.location || ''),
+            m.attendees ? 'with ' + m.attendees : '',
+          ].filter(Boolean).join(' · '))}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          ${isLink(m) ? `<a href="${esc(m.location)}" target="_blank" rel="noopener" class="btn-primary btn-sm" style="text-decoration:none;">Join</a>` : ''}
+          <button type="button" class="btn-secondary btn-sm" data-mtg-copy="${i}">Copy invite</button>
         </div>
       </div>`).join('');
+    bodyEl.onclick = async (e) => {
+      const b = e.target.closest('[data-mtg-copy]');
+      if (!b) return;
+      const text = inviteText(shown[Number(b.dataset.mtgCopy)]);
+      let ok = false;
+      try { await navigator.clipboard.writeText(text); ok = true; } catch {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        try { ok = document.execCommand('copy'); } catch { ok = false; }
+        ta.remove();
+      }
+      Utils.showToast(ok ? 'Invite copied — paste it in WhatsApp or mail' : 'Could not copy', ok ? 'success' : 'error');
+    };
   }
 
   /* ── full render ─────────────────────────────────────────────────── */
