@@ -203,7 +203,10 @@ window.Sidebar = {
       { route: 'production-norms', label: 'Production Norms', icon: 'prodnorms', group: 'Factory' },
       // Daily bhatti DPR (was "MOULDING IN OUT") and the job-work lots sent
       // to outside parties (was the VAKHARIA / SUBHASH METAL sheet).
-      { route: 'moulding-jobwork', label: 'Moulding & Job Work', icon: 'moulding', group: 'Factory' },
+      { route: 'moulding-jobwork', label: 'Moulding (DPR)', icon: 'moulding', group: 'Factory' },
+      // Job work lots, on their own since 2026-10-29 (same data, own page key;
+      // an older 'moulding-jobwork' grant still shows it — see the aliases).
+      { route: 'job-work', label: 'Job Work', icon: 'moulding', group: 'Factory' },
       { route: 'proforma-invoice', label: 'Proforma Invoice', icon: 'picreation', group: 'Marketing' },
       // The Proforma Invoice page's Order Sheets / Packing List tabs on their
       // own, for the packing desk — granted without the PI's prices. Anyone
@@ -389,6 +392,8 @@ window.Sidebar = {
       ? ['retail-new-expense', 'retail-dashboard']
       : (route === 'order-sheet' || route === 'packing-list')
       ? [route, 'proforma-invoice']
+      : route === 'job-work'
+      ? ['job-work', 'moulding-jobwork']
       : [route];
     return routeAliases.some(r => permissions.pages.includes(r));
   },
@@ -419,6 +424,8 @@ window.Sidebar = {
       ? ['retail-new-expense', 'retail-dashboard']
       : (item.route === 'order-sheet' || item.route === 'packing-list')
       ? [item.route, 'proforma-invoice']
+      : item.route === 'job-work'
+      ? ['job-work', 'moulding-jobwork']
       : [item.route];
     if (!item.alwaysShow && !item.grantedOnly && permissions && permissions.pages && !routeAliases.some(r => permissions.pages.includes(r))) return '';
 
@@ -430,7 +437,7 @@ window.Sidebar = {
 
     const activeBg   = active ? 'var(--sidebar-active-bg)' : 'transparent';
     const activeBar  = active
-      ? `<span style="position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:0 2px 2px 0;background:var(--sidebar-accent-bar);"></span>`
+      ? `<span class="sb-active-bar" style="position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:0 2px 2px 0;background:var(--sidebar-accent-bar);"></span>`
       : '';
     const iconColor  = active ? 'var(--sidebar-accent)' : 'var(--sidebar-icon-muted)';
     const textColor  = active ? 'var(--sidebar-text)' : 'var(--sidebar-text-muted)';

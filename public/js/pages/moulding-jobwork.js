@@ -20,8 +20,9 @@ window.Pages['moulding-jobwork'] = (() => {
   const esc = H.esc;
   const BASE = '/api/moulding-jobwork';
 
-  let _tab = 'dpr';
+  let _tab = 'dpr';          // 'dpr' on the Moulding page, 'jw' on the Job Work page
   let manage = false;
+  let _workers = [];         // operator names seen before, for the picker
   const today = () => H.todayISO();
   const monthOf = (iso) => String(iso || today()).slice(0, 7);
   const monthEnd = (ym) => { const [y, m] = ym.split('-').map(Number); return `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`; };
@@ -35,6 +36,7 @@ window.Pages['moulding-jobwork'] = (() => {
     { value: 'PURCHASE', label: 'Purchase — 0% loss (rate per kg)', loss: 0 },
   ];
   const GOODS = ['ALU. SCRAP', 'ALU. WIRE SCRAP', 'INGOTS', 'ALU. CIRCLES'];
+  const MATERIALS = ['ALU. SCRAP', 'ALU. SHEET', 'ALU. WIRE SCRAP', 'INGOTS'];
 
   const kg = (n, dp = 3) => (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: dp, maximumFractionDigits: dp });
   const n0 = (n) => Math.round(Number(n) || 0).toLocaleString('en-IN');
@@ -53,12 +55,8 @@ window.Pages['moulding-jobwork'] = (() => {
   function render() {
     const el = document.getElementById('main-content');
     if (!el) return;
-    const tabs = [
-      { key: 'dpr', label: 'Moulding (DPR)' },
-      { key: 'jw', label: 'Job Work IN-OUT', count: J.parties.length || null },
-    ];
     const actions = [
-      manage ? '<button id="mj-import" class="btn-secondary btn-sm" title="Dono Google sheets se data laao (pichhla import replace hota hai, ERP ki entries bachi rehti hain)">Import from sheets</button>' : '',
+      manage ? `<button id="mj-import" class="btn-secondary btn-sm" title="Google sheet se data laao (pichhla import replace hota hai, ERP ki entries bachi rehti hain)">Import from sheet</button>` : '',
       _tab === 'dpr' ? '<button id="md-xls" class="btn-secondary btn-sm">Excel</button><button id="md-add" class="btn-primary btn-sm">+ Day entry</button>' : '',
       _tab === 'jw' ? '<button id="jw-xls" class="btn-secondary btn-sm">Excel</button><button id="jw-in" class="btn-secondary btn-sm">+ Maal aaya (IN)</button><button id="jw-out" class="btn-primary btn-sm">+ Maal bheja (OUT)</button>' : '',
     ].join('');
@@ -80,8 +78,9 @@ window.Pages['moulding-jobwork'] = (() => {
         a.mj-lot { font-weight:700;color:#0f172a;text-decoration:none; }
         a.mj-lot.on { color:var(--color-primary); }
       </style>
-      ${H.header('Moulding & Job Work', 'Bhatti ka roz ka DPR, aur job work / purchase lots ka IN-OUT', actions)}
-      ${H.tabs('mj', tabs, _tab)}
+      ${_tab === 'dpr'
+        ? H.header('Moulding (DPR)', 'Bhatti ka roz ka DPR — input, output, chhay aur melting loss', actions)
+        : H.header('Job Work', 'Job work / purchase lots — maal bheja (OUT), bill aaya (IN), party ke paas kitna baaki', actions)}
       ${_tab === 'dpr' ? dprTab() : jwTab()}
     </div>`;
     bind();
@@ -116,17 +115,18 @@ window.Pages['moulding-jobwork'] = (() => {
     ]);
     const body = rows.map((r) => [
       `<b>${esc(H.fmtDate(r.entry_date))}</b>${r.source === 'sheet' ? '<div class="mj-sub">sheet</div>' : ''}`,
+      esc(r.input_material || 'ALU. SCRAP'),
       kg(r.input_wt), kg(r.balance_wt), `<b>${kg(r.actual_wt)}</b>`, `<b>${kg(r.output_wt)}</b>`, n0(r.qty_pcs),
       `<span style="white-space:normal;">${esc(r.parts || '')}</span>`, kg(r.chhay_wt), lossPill(r.loss_pct),
       esc(r.operators || ''), `<span class="mj-sub" style="white-space:normal;">${esc(r.remarks || '')}</span>`,
       `<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="btn-secondary btn-sm" data-dedit="${esc(r.id)}">Edit</button>${manage ? `<button class="btn-secondary btn-sm" data-ddel="${esc(r.id)}" style="color:#dc2626;">✕</button>` : ''}</div>`,
     ]);
     if (rows.length) {
-      body.push(['<b>TOTAL</b>', `<b>${kg(t.input)}</b>`, `<b>${kg(t.balance)}</b>`, `<b>${kg(t.actual)}</b>`, `<b>${kg(t.output)}</b>`, `<b>${n0(t.qty)}</b>`, '', `<b>${kg(t.chhay)}</b>`, lossPill(t.loss), '', '', '']);
+      body.push(['<b>TOTAL</b>', '', `<b>${kg(t.input)}</b>`, `<b>${kg(t.balance)}</b>`, `<b>${kg(t.actual)}</b>`, `<b>${kg(t.output)}</b>`, `<b>${n0(t.qty)}</b>`, '', `<b>${kg(t.chhay)}</b>`, lossPill(t.loss), '', '', '']);
     }
     const R = { align: 'right', nowrap: true };
     return `${bar}${tiles}${H.table([
-      { label: 'Date', m: 'title' }, { label: 'Input (kg)', ...R }, { label: 'Balance scrap', ...R }, { label: 'Actual input', ...R },
+      { label: 'Date', m: 'title' }, 'Input material', { label: 'Input (kg)', ...R }, { label: 'Balance scrap', ...R }, { label: 'Actual input', ...R },
       { label: 'Output (kg)', ...R }, { label: 'Qty (pcs)', ...R }, 'Name of the parts', { label: 'Chhay (kg)', ...R },
       { label: 'Melting loss', ...R }, 'Operators', 'Remarks', { label: '', m: 'actions' },
     ], body, { empty: 'Is mahine ki koi entry nahi — “+ Day entry” dabao', cards: true, maxHeight: '640px' })}`;
@@ -144,7 +144,8 @@ window.Pages['moulding-jobwork'] = (() => {
 
   function dprModal(r) {
     const isNew = !r;
-    const m = r || { entry_date: today(), process: 'ALUM. SHEET CUTTING' };
+    const m = r || { entry_date: today(), process: 'ALUM. SHEET CUTTING', input_material: 'ALU. SCRAP' };
+    const ops0 = String(m.operators || '').split(/[,/&]+/).map((x) => x.trim()).filter(Boolean);
     H.openModal({
       id: 'md-m', width: 640,
       title: isNew ? 'Moulding — day entry' : `Edit ${H.fmtDate(m.entry_date)}`,
@@ -152,16 +153,49 @@ window.Pages['moulding-jobwork'] = (() => {
       bodyHTML: `${H.grid(`
         ${H.field('md-date', 'Date', m.entry_date, { type: 'date', required: true })}
         ${H.field('md-process', 'Item name', m.process || '', { placeholder: 'ALUM. SHEET CUTTING' })}
-        ${H.field('md-input', 'Input wt. — alum. scrap (kg)', m.input_wt ?? '', { type: 'number', step: 'any', required: true })}
+        ${H.field('md-material', 'Input material', m.input_material || 'ALU. SCRAP', { placeholder: 'ALU. SCRAP / ALU. SHEET' })}
+        ${H.field('md-input', 'Input wt. (kg)', m.input_wt ?? '', { type: 'number', step: 'any', required: true })}
         ${H.field('md-balance', 'Balance scrap at end of shift (kg)', m.balance_wt ?? '', { type: 'number', step: 'any' })}
         ${H.field('md-output', 'Output wt. — parts (kg)', m.output_wt ?? '', { type: 'number', step: 'any' })}
         ${H.field('md-qty', 'Qty of parts (nos)', m.qty_pcs ?? '', { type: 'number', step: '1' })}
         ${H.field('md-parts', 'Name of the parts', m.parts || '', { span: 2, placeholder: 'Moden Keetle Pipe NO.4,5' })}
         ${H.field('md-chhay', 'Chhay wt. (kg)', m.chhay_wt ?? '', { type: 'number', step: 'any' })}
-        ${H.field('md-ops', 'Name of operators', m.operators || '', { placeholder: 'Pradip, Ravjibhai' })}
+        <div style="grid-column:span 2;">
+          <label style="display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:5px;">Name of operators</label>
+          <div id="md-ops-box" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:40px;box-sizing:border-box;padding:5px 8px;border:1.5px solid #e2e8f0;border-radius:8px;background:#fff;cursor:text;">
+            <input id="md-ops-in" list="md-ops-list" autocomplete="off" placeholder="naam chuno ya type karke Enter" style="flex:1;min-width:150px;border:none;outline:none;font-size:13px;background:transparent;font-family:inherit;" />
+          </div>
+          <div class="mj-sub" style="margin-top:4px;">List mein naam na ho to type karke Enter dabao — naya naam add ho jayega.</div>
+        </div>
         ${H.field('md-rem', 'Remarks', m.remarks || '', { span: 2, placeholder: 'Bhati folt, vati repairing…' })}`)}
-        <div class="mj-calc"><div>Actual input<b id="md-c-actual">—</b></div><div>Output − actual<b id="md-c-diff">—</b></div><div>Melting loss<b id="md-c-loss">—</b></div></div>`,
+        <div class="mj-calc"><div>Actual input<b id="md-c-actual">—</b></div><div>Output − actual<b id="md-c-diff">—</b></div><div>Melting loss<b id="md-c-loss">—</b></div></div>
+        <datalist id="md-ops-list">${_workers.map((w) => `<option value="${esc(w)}">`).join('')}</datalist>
+        <datalist id="md-material-list">${MATERIALS.map((x) => `<option value="${esc(x)}">`).join('')}</datalist>`,
       onOpen: () => {
+        document.getElementById('md-material')?.setAttribute('list', 'md-material-list');
+        // Operators as chips: pick from the list or type a new name + Enter.
+        const box = document.getElementById('md-ops-box');
+        const inp = document.getElementById('md-ops-in');
+        const addChip = (name) => {
+          const n = String(name || '').replace(/\s+/g, ' ').trim().toUpperCase();
+          if (!n || [...box.querySelectorAll('.md-chip')].some((c) => c.dataset.name === n)) return;
+          const c = document.createElement('span');
+          c.className = 'md-chip'; c.dataset.name = n;
+          c.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:#eef2ff;color:#3730a3;border-radius:999px;padding:3px 9px;font-size:12px;font-weight:600;';
+          c.innerHTML = `${esc(n)}<button type="button" aria-label="Remove" style="border:none;background:none;cursor:pointer;color:#6366f1;font-size:14px;line-height:1;padding:0;">×</button>`;
+          c.querySelector('button').addEventListener('click', () => c.remove());
+          box.insertBefore(c, inp);
+        };
+        ops0.forEach(addChip);
+        const take = () => { if (inp.value.trim()) { inp.value.split(',').forEach(addChip); inp.value = ''; } };
+        inp.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ',') { ev.preventDefault(); take(); }
+          else if (ev.key === 'Backspace' && !inp.value) box.querySelector('.md-chip:last-of-type')?.remove();
+        });
+        // Picking from the suggestions fills the box in one go — take it.
+        inp.addEventListener('input', () => { if (_workers.includes(inp.value.trim().toUpperCase())) take(); });
+        inp.addEventListener('blur', take);
+        box.addEventListener('click', (ev) => { if (ev.target === box) inp.focus(); });
         const calc = () => {
           const input = num(H.val('md-input')), bal = num(H.val('md-balance')), out = num(H.val('md-output'));
           const actual = Math.max(0, input - bal);
@@ -176,8 +210,11 @@ window.Pages['moulding-jobwork'] = (() => {
         await H.post(`${BASE}/dpr`, {
           id: isNew ? '' : m.id, entry_date: H.val('md-date'), process: H.val('md-process'),
           input_wt: H.val('md-input'), balance_wt: H.val('md-balance'), output_wt: H.val('md-output'), qty_pcs: H.val('md-qty'),
-          parts: H.val('md-parts'), chhay_wt: H.val('md-chhay'), operators: H.val('md-ops'), remarks: H.val('md-rem'),
+          parts: H.val('md-parts'), chhay_wt: H.val('md-chhay'), remarks: H.val('md-rem'), input_material: H.val('md-material'),
+          operators: [...document.querySelectorAll('#md-ops-box .md-chip')].map((c) => c.dataset.name)
+            .concat(String(H.val('md-ops-in') || '').split(',').map((x) => x.trim().toUpperCase()).filter(Boolean)).join(', '),
         });
+        loadWorkers();
         H.closeModal('md-m');
         M.month = monthOf(H.val('md-date') || M.month);
         H.toast('Saved');
@@ -195,10 +232,10 @@ window.Pages['moulding-jobwork'] = (() => {
       const [y, mo] = M.month.split('-');
       const title = `DPR ${new Date(+y, +mo - 1, 1).toLocaleString('en-IN', { month: 'short' }).toUpperCase()}-${y}`;
       const ws = XLSX.utils.aoa_to_sheet([[`LALLUBHAI AMICHAND LTD. — MOULDING ${title}`], [],
-        ['DATE', 'ITEM NAME', 'INPUT WT. (Kg) ALUM. SCRAP', 'BALANCE SCRAP AT THE END OF SHIFT (Kg)', 'ACTUAL INPUT WT. (Kg) ALUM. SCRAP', 'OUT PUT WT. (Kg) PARTS', 'QTY. OF PARTS (NOS)', 'NAME OF THE PARTS', 'CHHAY WT. (Kg)', 'MELTING LOSS PERCENTAGE', 'NAME OF OPERATORS', 'REMARKS'],
-        ['', 'TOTAL', r3(t.input), r3(t.balance), r3(t.actual), r3(t.output), t.qty, '', r3(t.chhay), `${t.loss.toFixed(2)}%`],
-        ...rows.map((r) => [r.entry_date, r.process, r.input_wt, r.balance_wt, r.actual_wt, r.output_wt, r.qty_pcs, r.parts || '', r.chhay_wt, `${(+r.loss_pct || 0).toFixed(2)}%`, r.operators || '', r.remarks || ''])]);
-      ws['!cols'] = [11, 22, 12, 14, 14, 12, 10, 40, 10, 11, 22, 24].map((w) => ({ wch: w }));
+        ['DATE', 'ITEM NAME', 'INPUT MATERIAL', 'INPUT WT. (Kg)', 'BALANCE SCRAP AT THE END OF SHIFT (Kg)', 'ACTUAL INPUT WT. (Kg)', 'OUT PUT WT. (Kg) PARTS', 'QTY. OF PARTS (NOS)', 'NAME OF THE PARTS', 'CHHAY WT. (Kg)', 'MELTING LOSS PERCENTAGE', 'NAME OF OPERATORS', 'REMARKS'],
+        ['', 'TOTAL', '', r3(t.input), r3(t.balance), r3(t.actual), r3(t.output), t.qty, '', r3(t.chhay), `${t.loss.toFixed(2)}%`],
+        ...rows.map((r) => [r.entry_date, r.process, r.input_material || 'ALU. SCRAP', r.input_wt, r.balance_wt, r.actual_wt, r.output_wt, r.qty_pcs, r.parts || '', r.chhay_wt, `${(+r.loss_pct || 0).toFixed(2)}%`, r.operators || '', r.remarks || ''])]);
+      ws['!cols'] = [11, 22, 14, 12, 14, 14, 12, 10, 40, 10, 11, 22, 24].map((w) => ({ wch: w }));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, title);
       XLSX.writeFile(wb, `Moulding ${title}.xlsx`);
@@ -217,12 +254,20 @@ window.Pages['moulding-jobwork'] = (() => {
         ? '“Import from sheets” se VAKHARIA / SUBHASH METAL ka data laao, ya “+ Maal bheja (OUT)” se naya lot kholo.'
         : '“+ Maal bheja (OUT)” se pehla lot kholo.');
     }
-    const cards = `<div class="mj-parties">${J.parties.map((p) => `
+    // Per party: what was sent (after loss), what came back, what is left.
+    const cards = `<div class="mj-parties">${J.parties.map((p) => {
+      const ls = lotsOf(p.party);
+      const sent = ls.reduce((t, l) => t + (Number(l.final) || 0), 0);
+      const recd = ls.reduce((t, l) => t + (Number(l.received) || 0), 0);
+      return `
       <button class="mj-party${p.party === J.party ? ' on' : ''}" data-party="${esc(p.party)}">
         <b>${esc(p.party)}</b>
         <div class="big">${kg(p.balance)} kg</div>
-        <div class="mj-sub">party ke paas · ${p.openLots} open lot${p.openLots === 1 ? '' : 's'} of ${p.lots}</div>
-      </button>`).join('')}</div>`;
+        <div class="mj-sub">abhi party ke paas baaki</div>
+        <div class="mj-sub" style="margin-top:4px;">Bheja (loss ke baad) ${kg(sent, 0)} · Wapas aaya ${kg(recd, 0)} kg</div>
+        <div class="mj-sub">${p.openLots} open lot${p.openLots === 1 ? '' : 's'} of ${p.lots}</div>
+      </button>`;
+    }).join('')}</div>`;
 
     const lots = lotsOf(J.party);
     const R = { align: 'right', nowrap: true };
@@ -258,14 +303,57 @@ window.Pages['moulding-jobwork'] = (() => {
     }), { empty: 'Koi entry nahi', cards: true, maxHeight: '620px' });
 
     return `${cards}
+      ${J.lot ? lotDetail(lots.find((l) => l.lot_no === J.lot)) : ''}
       <div class="mj-card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
         <b style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;">${esc(J.party)} — lots</b>
         <span style="display:flex;gap:10px;align-items:center;">
-          ${J.lot ? `<a href="#" id="jw-lot-clear" style="font-size:12px;color:var(--color-primary);">Lot ${esc(J.lot)} ✕ — sab dikhao</a>` : '<span class="mj-sub">lot pe click karo — sirf uski entries</span>'}
+          ${J.lot ? `<a href="#" id="jw-lot-clear" style="font-size:12px;color:var(--color-primary);">Lot ${esc(J.lot)} ✕ — sab dikhao</a>` : '<span class="mj-sub">lot (booking) pe click karo — uska poora hisaab: bheja, bills, baaki</span>'}
           <button id="jw-open" class="btn-secondary btn-sm" title="Pichhle saal se party ke paas bacha maal">+ Opening balance</button>
         </span>
       </div>${lotTable}</div>
       <div class="mj-card"><b style="display:block;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:8px;">Ledger${J.lot ? ` — lot ${esc(J.lot)}` : ''} (${ledger.length})</b>${ledgerTable}</div>`;
+  }
+
+  // One booking (lot): what was booked/sent and at what rate, every bill
+  // received against it, and what is still with the party.
+  function lotDetail(l) {
+    if (!l) return '';
+    const es = J.entries.filter((e) => e.party === J.party && e.lot_no === l.lot_no);
+    const outs = es.filter((e) => e.type !== 'IN');
+    const ins = es.filter((e) => e.type === 'IN');
+    const rate = Number(l.rate) || 0;
+    const R = { align: 'right', nowrap: true };
+    const sentKg = outs.reduce((t, e) => t + (e.type === 'OUT' ? Number(e.weight) || 0 : Number(e.qty) || 0), 0);
+    const recdKg = ins.reduce((t, e) => t + (Number(e.qty) || 0), 0);
+    const rs = (n) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+    const tiles = H.stats([
+      { label: 'Booking / bheja', value: `${kg(sentKg)} kg`, hint: rate ? `@ ₹${rate}/kg = ${rs(sentKg * rate)}` : (l.lot_type || '') },
+      { label: 'Wapas aana hai (loss ke baad)', value: `${kg(l.final)} kg`, hint: l.loss_pct ? `${l.loss_pct}% melting loss` : 'no loss' },
+      { label: `Aaya — ${ins.length} bill${ins.length === 1 ? '' : 's'}`, value: `${kg(recdKg)} kg`, hint: rate ? rs(recdKg * rate) : '' },
+      { label: 'Party ke paas baaki', value: `${kg(l.balance)} kg`, color: l.balance > 0.005 ? '#d97706' : '#16a34a', hint: (STATUS[l.status] || [l.status])[0] },
+    ]);
+    const outTable = H.table([{ label: 'Date', m: 'title' }, 'Challan / PO', 'Goods', { label: 'Weight', ...R }, { label: 'Loss', ...R }, { label: 'Final wt.', ...R }, ...(rate ? [{ label: 'Value', ...R }] : [])],
+      outs.map((e) => [esc(H.fmtDate(e.entry_date)) + (e.type === 'OPENING' ? '<div class="mj-sub">opening</div>' : ''), esc(e.doc_no || ''), esc(e.description || ''),
+        kg(e.type === 'OUT' ? e.weight : e.qty), e.type === 'OUT' ? kg(e.loss_wt) : '', `<b>${kg(e.type === 'OUT' ? e.final_wt : e.qty)}</b>`,
+        ...(rate ? [rs((e.type === 'OUT' ? Number(e.weight) || 0 : Number(e.qty) || 0) * rate)] : [])]), { empty: '—' });
+    const inTable = H.table([{ label: 'Bill date', m: 'title' }, 'Bill no.', { label: 'Received (kg)', ...R }, ...(rate ? [{ label: 'Value', ...R }] : []), { label: 'Lot balance after', ...R }],
+      ins.map((e) => [esc(H.fmtDate(e.entry_date)), esc(e.doc_no || ''), `<b>${kg(e.qty)}</b>`, ...(rate ? [rs((Number(e.qty) || 0) * rate)] : []), kg(e.lot_balance)]),
+      { empty: 'Is booking ke against abhi koi bill nahi aaya' });
+    return `<div class="mj-card" style="border-color:var(--color-primary);">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+        <b style="font-size:14px;color:#0f172a;">${esc(J.party)} — Lot ${esc(l.lot_no)} · ${esc(l.lot_type)}${rate ? ` @ ₹${esc(rate)}/kg` : ''}</b>
+        <span class="mj-sub">${esc(H.fmtDate(l.first_date))} → ${esc(H.fmtDate(l.last_date))}</span>
+      </div>
+      ${tiles}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
+        <div><b style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:6px;">Maal bheja (booking)</b>${outTable}</div>
+        <div><b style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:6px;">Bills aaye (IN)</b>${inTable}</div>
+      </div>
+    </div>`;
+  }
+
+  async function loadWorkers() {
+    try { _workers = (await H.api(`${BASE}/dpr/workers`)).workers || []; } catch { _workers = []; }
   }
 
   async function loadJw() {
@@ -446,28 +534,23 @@ window.Pages['moulding-jobwork'] = (() => {
   }
 
   async function runImport(btn) {
-    if (!(await Utils.showConfirm('Dono Google sheets (MOULDING IN OUT aur VAKHARIA-2026-2027) se data laayein? Pichhli baar import hua data replace hoga; ERP mein daali entries bachi rahengi.', { title: 'Import from sheets', confirmText: 'Import' }))) return;
+    const sheet = _tab === 'dpr' ? 'MOULDING IN OUT' : 'VAKHARIA-2026-2027';
+    if (!(await Utils.showConfirm(`Google sheet (${sheet}) se data laayein? Pichhli baar import hua data replace hoga; ERP mein daali entries bachi rahengi.`, { title: 'Import from sheet', confirmText: 'Import' }))) return;
     btn.disabled = true; btn.textContent = 'Importing…';
     try {
-      const r = await H.post(`${BASE}/import`, { what: 'both' });
+      const r = await H.post(`${BASE}/import`, { what: _tab });
       const jw = (r.jw?.parties || []).map((p) => `${p.party}: ${p.lots} lots, ${kg(p.balance)} kg${p.mismatched?.length ? ` (sheet se alag: ${p.mismatched.join(', ')})` : ' ✓ sheet se match'}`).join(' · ');
-      H.toast(`DPR: ${r.dpr?.days || 0} din (${r.dpr?.tabs || 0} tabs) · Job work: ${r.jw?.entries || 0} entries — ${jw}`);
+      H.toast(_tab === 'dpr' ? `DPR: ${r.dpr?.days || 0} din (${r.dpr?.tabs || 0} tabs)` : `Job work: ${r.jw?.entries || 0} entries — ${jw}`);
       M.rows = null; J.entries = null;
       await loadJw();
       if (_tab === 'dpr') loadDpr(); else render();
-    } catch (e) { H.fail(e); btn.disabled = false; btn.textContent = 'Import from sheets'; }
+    } catch (e) { H.fail(e); btn.disabled = false; btn.textContent = 'Import from sheet'; }
   }
 
   /* ── Binding ──────────────────────────────────────────────────────── */
 
   function bind() {
     const $ = (id) => document.getElementById(id);
-    document.querySelectorAll('[data-mj-tab]').forEach((b) => b.addEventListener('click', async () => {
-      _tab = b.getAttribute('data-mj-tab');
-      if (_tab === 'dpr' && !M.rows) { loadDpr(); return; }
-      if (_tab === 'jw' && !J.entries) { render(); await loadJw(); }
-      render();
-    }));
     $('mj-import')?.addEventListener('click', (e) => runImport(e.currentTarget));
 
     if (_tab === 'dpr') {
@@ -506,13 +589,25 @@ window.Pages['moulding-jobwork'] = (() => {
   }
 
   return {
+    // Moulding (DPR) page.
     async render() {
+      _tab = 'dpr';
       const el = document.getElementById('main-content');
-      if (el) el.innerHTML = H.spinner('Opening Moulding & Job Work…');
-      M.rows = null; J.entries = null;
-      // The job-work list also tells us whether this person can manage.
+      if (el) el.innerHTML = H.spinner('Opening Moulding…');
+      M.rows = null;
+      loadWorkers();
+      loadDpr();
+    },
+    // Job Work page (its own menu item since 2026-10-29).
+    async renderJobWork() {
+      _tab = 'jw';
+      const el = document.getElementById('main-content');
+      if (el) el.innerHTML = H.spinner('Opening Job Work…');
+      J.entries = null;
       await loadJw();
-      if (_tab === 'dpr') loadDpr(); else render();
+      render();
     },
   };
 })();
+
+window.Pages['job-work'] = { render() { return window.Pages['moulding-jobwork'].renderJobWork(); } };

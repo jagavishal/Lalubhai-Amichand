@@ -43,6 +43,8 @@ const MOULDING_SHEET_ID = '1iyj9To2RMMjFb9_GhYNFVb0gkuUOvTEC66f4XiSS1K0';
 const JOBWORK_SHEET_ID = '1ZXeiY60ZYqPLycoBqU_Z9gC38XmslA2mwYGoBlN1DOY';
 
 const DEFAULT_PROCESS = 'ALUM. SHEET CUTTING';
+// What goes into the bhatti; the DPR sheet only ever had scrap.
+const DEFAULT_MATERIAL = 'ALU. SCRAP';
 
 const MJ_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS mj_entries (
@@ -85,6 +87,7 @@ function cleanDpr(src) {
   return {
     entry_date: isoDate(src.entry_date),
     process: str(src.process, 120).toUpperCase() || DEFAULT_PROCESS,
+    input_material: str(src.input_material, 60).toUpperCase() || DEFAULT_MATERIAL,
     input_wt: r3(input),
     balance_wt: r3(balance),
     actual_wt: r3(actual),
@@ -228,7 +231,10 @@ function parseDprTab(grid) {
     date: col(/^DATE$/), item: col(/^ITEM/), input: col(/^INPUT WT/), balance: col(/^BALANCE SCRAP/),
     output: col(/^OUT ?PUT WT/), qty: col(/^QTY/), parts: col(/^NAME OF THE PARTS/),
     chhay: col(/CHHAY/), ops: col(/OPERATOR/), rem: col(/^REA?MARK/),
+    material: col(/MATERIAL|TYPE OF (SCRAP|INPUT)/),
   };
+  // No material column: the input heading says it ("INPUT WT. (KG) ALUM. SCRAP").
+  const headMaterial = C.input >= 0 && /SHEET/.test(head[C.input]) ? 'ALU. SHEET' : DEFAULT_MATERIAL;
   if (C.parts < 0) C.parts = col(/NAME OF PARTS/);
   const at = (r, k) => (C[k] >= 0 ? r[C[k]] : '');
   const out = [];
@@ -237,7 +243,8 @@ function parseDprTab(grid) {
     const date = sheetDate(at(r, 'date'), false);
     if (!date) continue;
     const row = cleanDpr({
-      entry_date: date, process: at(r, 'item'), input_wt: at(r, 'input'), balance_wt: at(r, 'balance'),
+      entry_date: date, process: at(r, 'item'), input_material: at(r, 'material') || headMaterial,
+      input_wt: at(r, 'input'), balance_wt: at(r, 'balance'),
       output_wt: at(r, 'output'), qty_pcs: at(r, 'qty'), parts: at(r, 'parts'), chhay_wt: at(r, 'chhay'),
       operators: at(r, 'ops'), remarks: at(r, 'rem'),
     });
@@ -436,7 +443,7 @@ function mountMouldingJobwork(app, ctx) {
     const e = cleanDpr(b);
     if (!e.entry_date) bad('Date is required');
     if (e.entry_date > tomorrow()) bad('That date is in the future');
-    if (!(e.input_wt > 0)) bad('Input weight (scrap) is required');
+    if (!(e.input_wt > 0)) bad('Input weight is required');
     if (e.balance_wt > e.input_wt) bad('Balance scrap cannot be more than the input');
     if (e.output_wt > e.actual_wt) bad(`Output (${e.output_wt} kg) is more than the actual input (${e.actual_wt} kg)`);
     const id = str(b.id, 24);
@@ -449,6 +456,14 @@ function mountMouldingJobwork(app, ctx) {
     const nid = newId('MD');
     await store.save({ ...e, id: nid, kind: 'dpr', party: '', seq: Date.now(), source: 'erp', created_by: req.mj.by });
     return { id: nid };
+  }));
+
+  // Everyone who has run the bhatti, for the operator picker.
+  app.get(`${BASE}/dpr/workers`, ...guard, route(async () => {
+    const all = await store.list('dpr', { from: '2000-01-01', to: '2999-12-31' });
+    const names = new Set();
+    for (const e of all) for (const n of String(e.operators || '').split(/[,/&]+/)) { const t = n.replace(/\s+/g, ' ').trim(); if (t) names.add(t.toUpperCase()); }
+    return { workers: [...names].sort() };
   }));
 
   app.delete(`${BASE}/dpr/:id`, ...guard, route(async (req) => {

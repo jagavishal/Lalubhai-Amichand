@@ -2512,6 +2512,9 @@ function requireFeature(page, feat) {
 }
 
 function requireAdminOrPage(page) {
+  // One page key, or several (any of them opens it).
+  const pages = [].concat(page);
+  const has = (list) => pages.some((p) => list.includes(p));
   return async (req, res, next) => {
     const user = req.session?.user;
     // The owner is never restricted by anything saved here — same exception
@@ -2530,10 +2533,10 @@ function requireAdminOrPage(page) {
       // opened for that account ("HOD ka bhi access access page se hi
       // maintain hoga").
       if (!perms || !perms.pages) return next();
-      if (perms.pages.includes(page)) return next();
+      if (has(perms.pages)) return next();
       return res.status(403).json({ error: 'Forbidden' });
     }
-    if (perms && perms.pages && perms.pages.includes(page)) return next();
+    if (perms && perms.pages && has(perms.pages)) return next();
     res.status(403).json({ error: 'Forbidden' });
   };
 }
@@ -6668,9 +6671,14 @@ mountProductionNorms(app, {
 // Everything under /api/moulding-jobwork/, behind the 'moulding-jobwork' page
 // (Users → Access). Deleting and the sheet import need Admin/HOD. Works in
 // local JSON mode too. See backend/moulding-jobwork.js.
+// Moulding (DPR) and Job Work are separate pages since 2026-10-29: the job
+// work routes (/jw…) also open to the 'job-work' page key; an old
+// 'moulding-jobwork' grant still opens both.
+const _mouldingAccess = requireAdminOrPage('moulding-jobwork');
+const _jobworkAccess = requireAdminOrPage(['moulding-jobwork', 'job-work']);
 mountMouldingJobwork(app, {
   q, ensureSchema, requireAuth, isAdminUser, isSuperAdmin, getGoogleAuth, useDb: USE_DB,
-  requireAccess: requireAdminOrPage('moulding-jobwork'),
+  requireAccess: (req, res, next) => (/\/api\/moulding-jobwork\/jw(\/|$)/.test(req.path) ? _jobworkAccess : _mouldingAccess)(req, res, next),
 });
 
 /* ── Approve / reject straight from the notification email ────────────────────

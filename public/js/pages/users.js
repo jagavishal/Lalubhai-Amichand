@@ -85,7 +85,8 @@ window.Pages.users = (() => {
     { cat: 'Export — Factory', key: 'ims-accessories', label: 'IMS Accessories' },
     { cat: 'Export — Factory', key: 'circle-requirement', label: 'Circle Requirement' },
     { cat: 'Export — Factory', key: 'production-norms', label: 'Production Norms' },
-    { cat: 'Export — Factory', key: 'moulding-jobwork', label: 'Moulding & Job Work' },
+    { cat: 'Export — Factory', key: 'moulding-jobwork', label: 'Moulding (DPR) — also opens Job Work' },
+    { cat: 'Export — Factory', key: 'job-work', label: 'Job Work' },
     { cat: 'Export — Marketing', key: 'proforma-invoice', label: 'Proforma Invoice' },
     // Just the Order Sheets / Packing List tabs of that page, without the PI's
     // create form or prices — for the packing desk. The full page above
