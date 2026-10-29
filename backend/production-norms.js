@@ -59,6 +59,20 @@ const PN_SCHEMA = [
      KEY idx_pn_date_dept (entry_date, dept),
      KEY idx_pn_worker (worker)
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  /* Every change to a day already saved: who, why, and the lines before and
+     after — pay is worked out from these lines, so a change must leave a trail. */
+  `CREATE TABLE IF NOT EXISTS pn_day_log (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     entry_date DATE NOT NULL,
+     dept VARCHAR(120) NOT NULL DEFAULT '',
+     action VARCHAR(20) NOT NULL DEFAULT 'edit',
+     reason TEXT,
+     before_data LONGTEXT,
+     after_data LONGTEXT,
+     by_name VARCHAR(255) DEFAULT '',
+     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     KEY idx_pnlog_date_dept (entry_date, dept)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ];
 
 class UserError extends Error {
@@ -71,6 +85,7 @@ const num = (v) => {
   return Number.isFinite(n) ? n : 0;
 };
 const r4 = (n) => Math.round(n * 10000) / 10000;
+const r2 = (n) => Math.round(n * 100) / 100;
 const norm = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
 const isoDate = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '');
 
@@ -222,8 +237,8 @@ function mountProductionNorms(app, ctx) {
   /* ── Storage: tables in the DB, one JSON file in local JSON mode ── */
 
   async function readFile() {
-    try { const d = JSON.parse(await fsp.readFile(JSON_FILE, 'utf8')); return { norms: d.norms || [], entries: d.entries || [] }; }
-    catch { return { norms: [], entries: [] }; }
+    try { const d = JSON.parse(await fsp.readFile(JSON_FILE, 'utf8')); return { norms: d.norms || [], entries: d.entries || [], log: d.log || [] }; }
+    catch { return { norms: [], entries: [], log: [] }; }
   }
   async function writeFile(d) {
     await fsp.mkdir(path.dirname(JSON_FILE), { recursive: true });
@@ -302,6 +317,20 @@ function mountProductionNorms(app, ctx) {
         });
         await q(`INSERT INTO pn_entries (id, entry_date, dept, worker, line_no, data, created_by) VALUES ${values.join(',')}`, params);
       }
+    },
+    async addLog({ date, dept, action, reason, before, after, by }) {
+      if (!useDb) {
+        const d = await readFile();
+        d.log.push({ id: d.log.length + 1, entry_date: date, dept, action, reason, before_data: before, after_data: after, by_name: by, created_at: nowSql() });
+        return writeFile(d);
+      }
+      await q('INSERT INTO pn_day_log (entry_date, dept, action, reason, before_data, after_data, by_name) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        [date, dept, action, reason, JSON.stringify(before), JSON.stringify(after), by]);
+    },
+    async dayLog(date, dept) {
+      if (!useDb) return (await readFile()).log.filter((l) => l.entry_date === date && l.dept === dept).reverse();
+      const rows = await q('SELECT id, action, reason, before_data, after_data, by_name, created_at FROM pn_day_log WHERE entry_date = $1 AND dept = $2 ORDER BY id DESC LIMIT 50', [date, dept]);
+      return rows.map((r) => ({ ...r, before_data: parse(r.before_data), after_data: parse(r.after_data), created_at: String(r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at) }));
     },
     async workers() {
       if (!useDb) return [...new Set((await readFile()).entries.map((e) => e.worker))];
@@ -429,21 +458,45 @@ function mountProductionNorms(app, ctx) {
       const pcRate = Math.max(0, num(l.pc_rate));
       const dayRate = Math.max(0, num(l.day_rate));
       const normId = str(l.norm_id, 16);
+      // Overtime: the day rate is for the norm's hours (8, or 10 where the
+      // norm says so; always 8 for time work). Hours beyond that are paid on
+      // top at day rate ÷ those hours, per hour.
+      const baseHours = normId ? normHours : 8;
+      const otHours = Math.max(0, hours - baseHours);
+      const otAmount = dayRate && otHours ? r2(dayRate / baseHours * otHours) : 0;
+      const base = normId ? qty * pcRate : dayRate * Math.min(hours, baseHours) / baseHours;
       return {
         id: `PE${stamp}${String(i).padStart(3, '0')}`, entry_date: date, dept, line_no: i + 1,
         worker: str(l.worker, 120).toUpperCase(), norm_id: normId,
         section: str(l.section, 160), item: str(l.item, 160).toUpperCase(), size: str(l.size, 64),
         qty, hours, norm_pcs: normPcs, norm_hours: normHours, day_rate: dayRate, pc_rate: normId ? r4(pcRate) : 0,
         target: normPcs ? r4(normPcs * hours / normHours) : 0,
-        // Time work (no norm) is paid for the hours, at the day rate of 8 hours.
-        amount: Math.round((normId ? qty * pcRate : dayRate * hours / 8) * 100) / 100,
+        // Norm lines: pieces × rate; time work (no norm): the day rate for up
+        // to 8 hours. Either way overtime is added on top.
+        ot_hours: otHours, ot_amount: otAmount,
+        amount: r2(base + otAmount),
         remark: str(l.remark, 255),
       };
     }).filter((l) => l.worker || l.item || l.qty);
     const badLine = lines.findIndex((l) => !l.worker || !l.item || (l.norm_id && !(l.qty > 0)));
     if (badLine >= 0) bad(`Line ${badLine + 1}: worker, item and qty are all needed`);
+    // Changing a day that is already saved needs a reason, and is logged
+    // with the lines before and after.
+    const prev = await store.entries({ from: date, to: date, dept });
+    const reason = str(b.reason, 500);
+    if (prev.length) {
+      if (!reason) bad('This day is already saved — write the reason for changing it');
+      await store.addLog({ date, dept, action: lines.length ? 'edit' : 'clear', reason, before: prev, after: lines, by: req.pn.by });
+    }
     await store.replaceDay(date, dept, lines, req.pn.by);
     return { saved: lines.length };
+  }));
+
+  app.get(`${BASE}/day/log`, ...guard, route(async (req) => {
+    const date = isoDate(req.query.date);
+    const dept = str(req.query.dept, 120).toUpperCase();
+    if (!date || !dept) bad('Pick a date and a department');
+    return { log: await store.dayLog(date, dept) };
   }));
 
   /* ── Report ────────────────────────────────────────────────────── */

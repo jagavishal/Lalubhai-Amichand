@@ -97,9 +97,14 @@ window.Pages['production-norms'] = (() => {
     const hours = Number(l.hours) || Number(l.norm_hours) || 8;
     const target = l.norm_pcs ? l.norm_pcs * hours / (l.norm_hours || 8) : 0;
     const qty = Number(l.qty) || 0;
-    // Time work (no norm): paid for the hours at the day rate of 8 hours.
-    const amount = l.norm_id ? qty * (Number(l.pc_rate) || 0) : (Number(l.day_rate) || 0) * hours / 8;
-    return { target, eff: target ? qty / target * 100 : 0, amount };
+    // Overtime (same rule as the server): hours beyond the norm's hours (8
+    // for time work) are paid on top at day rate ÷ those hours.
+    const dayRate = Number(l.day_rate) || 0;
+    const baseHours = l.norm_id ? (Number(l.norm_hours) || 8) : 8;
+    const otHours = Math.max(0, hours - baseHours);
+    const ot = dayRate && otHours ? dayRate / baseHours * otHours : 0;
+    const base = l.norm_id ? qty * (Number(l.pc_rate) || 0) : dayRate * Math.min(hours, baseHours) / baseHours;
+    return { target, eff: target ? qty / target * 100 : 0, amount: base + ot, ot, otHours };
   };
 
   /* ── Render ───────────────────────────────────────────────────────── */
@@ -175,7 +180,7 @@ window.Pages['production-norms'] = (() => {
         <td class="num">${timeWork
           ? `<input data-f="day_rate" data-i="${i}" value="${esc(l.day_rate || '')}" type="number" min="0" step="1" placeholder="₹/day" title="Time work: 8 ghante ka rate" style="width:84px;text-align:right;" />`
           : `${l.pc_rate ? rate(l.pc_rate) : '—'}${l.day_rate ? `<div class="pn-sub">₹${n0(l.day_rate)}/day</div>` : ''}`}</td>
-        <td class="num" data-c="amt-${i}"><b>${c2.amount ? rs(c2.amount) : '—'}</b></td>
+        <td class="num" data-c="amt-${i}">${amtCell(c2)}</td>
         <td style="width:36px;"><button class="pn-ico" data-del="${i}" title="Line hatao">✕</button></td>
       </tr>`;
     }).join('');
@@ -185,6 +190,7 @@ window.Pages['production-norms'] = (() => {
         <div><label>Date</label><input id="pn-date" type="date" value="${esc(D.date)}" max="${today()}"></div>
         <div><label>Department</label><select id="pn-dept">${depts().map((d) => `<option${d === D.dept ? ' selected' : ''}>${esc(d)}</option>`).join('')}</select></div>
         <span style="flex:1;"></span>
+        ${D.loaded ? '<button id="pn-log" class="btn-ghost btn-sm" title="Is din mein kab, kisne aur kyun badlav kiya">History</button>' : ''}
         <button id="pn-prev" class="btn-secondary btn-sm" title="Pichhle din ke workers aur items (qty khaali)">Copy last day</button>
       </div>
       <div class="pn-card" style="padding:0;overflow:hidden;">
@@ -202,6 +208,8 @@ window.Pages['production-norms'] = (() => {
       <div id="pn-wsum"></div>`;
   }
 
+  const amtCell = (c) => `<b>${c.amount ? rs(c.amount) : '—'}</b>${c.ot ? `<div class="pn-sub" style="color:#7c3aed;">+${rs(c.ot)} OT (${c.otHours} hr)</div>` : ''}`;
+
   function refreshTotals() {
     let qty = 0, amt = 0;
     const per = new Map();
@@ -210,7 +218,7 @@ window.Pages['production-norms'] = (() => {
       qty += Number(l.qty) || 0; amt += c.amount;
       const t = document.querySelector(`[data-c="target-${i}"]`); if (t) t.textContent = c.target ? n0(c.target) : '—';
       const e = document.querySelector(`[data-c="eff-${i}"]`); if (e) e.innerHTML = effPill(c.eff);
-      const a = document.querySelector(`[data-c="amt-${i}"]`); if (a) a.innerHTML = `<b>${c.amount ? rs(c.amount) : '—'}</b>`;
+      const a = document.querySelector(`[data-c="amt-${i}"]`); if (a) a.innerHTML = amtCell(c);
       if (!l.worker) return;
       const w = per.get(l.worker) || { qty: 0, amt: 0, target: 0, items: 0 };
       w.qty += Number(l.qty) || 0; w.amt += c.amount; w.items++;
@@ -258,6 +266,7 @@ window.Pages['production-norms'] = (() => {
       document.querySelector(`[data-f="worker"][data-i="${D.lines.length - 1}"]`)?.focus();
     });
     $('pn-prev')?.addEventListener('click', copyLastDay);
+    $('pn-log')?.addEventListener('click', showLog);
     $('pn-save')?.addEventListener('click', (e) => saveDay(e.target));
 
     document.querySelectorAll('[data-f]').forEach((inp) => {
@@ -325,9 +334,15 @@ window.Pages['production-norms'] = (() => {
     if (bad >= 0) { H.toast(`Line ${D.lines.indexOf(lines[bad]) + 1}: worker, item aur qty teeno chahiye`, 'error'); return; }
     const noRate = lines.filter((l) => !l.norm_id && !(Number(l.day_rate) > 0)).length;
     if (noRate && !(await Utils.showConfirm(`${noRate} time-work line${noRate > 1 ? 's' : ''} (bina norm) mein ₹/day nahi bhara — unka amount ₹0 rahega. Phir bhi save karein?`, { title: 'Rate missing', confirmText: 'Save' }))) return;
+    // A day already saved can only be changed with a reason (kept in History).
+    let reason = '';
+    if (D.loaded === `${D.date}|${D.dept}`) {
+      reason = await askReason(lines.length ? 'Ye din pehle se saved hai. Badlav ka reason likho:' : 'Is din ki saari entry hata rahe ho. Reason likho:');
+      if (!reason) return;
+    }
     btn.disabled = true;
     try {
-      const r = await H.post(`${BASE}/day`, { date: D.date, dept: D.dept, lines: lines.map((l) => ({ ...l, hours: Number(l.hours) || l.norm_hours || 8 })) });
+      const r = await H.post(`${BASE}/day`, { date: D.date, dept: D.dept, reason, lines: lines.map((l) => ({ ...l, hours: Number(l.hours) || l.norm_hours || 8 })) });
       await loadDay();
       // Names typed today show up in tomorrow's suggestions.
       lines.forEach((l) => { if (!workerNames.includes(l.worker)) workerNames.push(l.worker); });
@@ -335,6 +350,51 @@ window.Pages['production-norms'] = (() => {
       H.toast(r.saved ? `${r.saved} lines saved` : 'Is din ki entry hata di');
       render();
     } catch (e) { btn.disabled = false; H.fail(e); }
+  }
+
+  // Resolves with the typed reason, or '' if cancelled.
+  function askReason(msg) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      H.openModal({
+        id: 'pn-reason', title: 'Reason for change', subtitle: msg, width: 460,
+        bodyHTML: H.textarea('pn-reason-txt', 'Reason', '', { rows: 3, span: 2, placeholder: 'e.g. qty galat dali thi, 10 ghante kaam kiya tha' }),
+        confirmText: 'Save with reason',
+        onOpen: () => {
+          document.getElementById('pn-reason-txt')?.focus();
+          // Closing the dialog any other way counts as cancel.
+          const box = document.getElementById('pn-reason');
+          if (box) new MutationObserver((_, obs) => { if (!document.getElementById('pn-reason')) { obs.disconnect(); finish(''); } })
+            .observe(document.body, { childList: true });
+        },
+        onConfirm: async () => {
+          const v = String(H.val('pn-reason-txt') || '').trim();
+          if (!v) throw new Error('Reason likhna zaroori hai');
+          finish(v);
+          H.closeModal('pn-reason');
+        },
+      });
+    });
+  }
+
+  async function showLog() {
+    try {
+      const r = await H.api(`${BASE}/day/log?date=${encodeURIComponent(D.date)}&dept=${encodeURIComponent(D.dept)}`);
+      const log = r.log || [];
+      const sum = (lines) => (lines || []).reduce((t, l) => t + (Number(l.amount) || 0), 0);
+      const rows = log.map((x) => [
+        esc(H.fmtDate(String(x.created_at).slice(0, 10))) + `<div class="pn-sub">${esc(String(x.created_at).slice(11, 16))}</div>`,
+        esc(x.by_name || ''),
+        x.action === 'clear' ? '<b style="color:#dc2626;">Cleared</b>' : 'Edited',
+        esc(x.reason || ''),
+        `${(x.before_data || []).length} → ${(x.after_data || []).length} lines<div class="pn-sub">${rs(sum(x.before_data))} → ${rs(sum(x.after_data))}</div>`,
+      ]);
+      H.openModal({
+        id: 'pn-logm', title: 'History', subtitle: `${D.dept} · ${H.fmtDate(D.date)}`, width: 720, hideConfirm: true,
+        bodyHTML: `<div style="grid-column:1/-1;">${H.table(['When', 'By', 'Action', 'Reason', 'Change'], rows, { empty: 'Is din mein abhi tak koi badlav nahi hua' })}</div>`,
+      });
+    } catch (e) { H.fail(e); }
   }
 
   /* ── Report tab ───────────────────────────────────────────────────── */
@@ -433,10 +493,10 @@ window.Pages['production-norms'] = (() => {
         [], ['TOTAL', '', '', sum.reduce((s, w) => s + w.qty, 0), Math.round(sum.reduce((s, w) => s + w.target, 0)), '', r2(sum.reduce((s, w) => s + w.amount, 0))]]);
       ws1['!cols'] = [24, 30, 7, 10, 11, 12, 14].map((w) => ({ wch: w }));
       const ws2 = XLSX.utils.aoa_to_sheet([[title], [],
-        ['DATE', 'DEPARTMENT', 'WORKER', 'ITEM', 'SIZE', 'HOURS', 'QTY (PCS)', '8 HRS NORM', 'TARGET', 'EFFICIENCY %', 'RATE PER DAY', 'PER PCS RATE', 'AMOUNT (Rs.)', 'REMARK'],
+        ['DATE', 'DEPARTMENT', 'WORKER', 'ITEM', 'SIZE', 'HOURS', 'QTY (PCS)', '8 HRS NORM', 'TARGET', 'EFFICIENCY %', 'RATE PER DAY', 'PER PCS RATE', 'OT HRS', 'OT (Rs.)', 'AMOUNT (Rs.)', 'REMARK'],
         ...lines.map((l) => [l.entry_date, l.dept, l.worker, l.item, l.size, l.hours, l.qty, l.norm_pcs || '', l.target ? Math.round(l.target) : '', l.target ? Math.round(l.qty / l.target * 100) : '',
-          l.day_rate || '', l.pc_rate ? Math.round(l.pc_rate * 10000) / 10000 : '', r2(l.amount), l.remark || ''])]);
-      ws2['!cols'] = [11, 26, 20, 34, 10, 7, 10, 11, 9, 11, 11, 11, 12, 20].map((w) => ({ wch: w }));
+          l.day_rate || '', l.pc_rate ? Math.round(l.pc_rate * 10000) / 10000 : '', l.ot_hours || '', l.ot_amount || '', r2(l.amount), l.remark || ''])]);
+      ws2['!cols'] = [11, 26, 20, 34, 10, 7, 10, 11, 9, 11, 11, 11, 8, 10, 12, 20].map((w) => ({ wch: w }));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws1, 'Worker-wise');
       XLSX.utils.book_append_sheet(wb, ws2, 'Detail');
