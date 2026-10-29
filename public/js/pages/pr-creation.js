@@ -63,8 +63,11 @@ window.Pages['pr-creation'] = (() => {
   // packing dept selcted aana chahiye") since every Packing Box PR is
   // raised by that department in practice; staff can still switch it.
   // PACKING_STICKER has no department concept requested — left alone.
-  const DEPARTMENT_MODE = { ITEM_CODE: 'manual', PACKING_STICKER: 'none', PACKING_BOX: 'manual', ALU: 'manual' };
-  const DEPARTMENT_DEFAULT = { PACKING_BOX: 'Packing Dept.' };
+  // Packing Sticker too since 2026-10-29: both packing PRs (Diamond box, NR
+  // sticker) are only ever raised by the packing department, so it comes
+  // pre-selected on both ("by default Packing department uthale").
+  const DEPARTMENT_MODE = { ITEM_CODE: 'manual', PACKING_STICKER: 'manual', PACKING_BOX: 'manual', ALU: 'manual' };
+  const DEPARTMENT_DEFAULT = { PACKING_BOX: 'Packing Dept.', PACKING_STICKER: 'Packing Dept.' };
 
   // ALU's manual Department dropdown, and the PR Form tab's own Department
   // multi-select further down, are both built from the app-wide department
@@ -619,9 +622,17 @@ window.Pages['pr-creation'] = (() => {
     if (current) sel.value = current;
   }
 
+  // The log keeps the sheet tab name ("PURCHASE REQUISITION(PACKING_BOX)");
+  // the filter and labels use the format key (PACKING_BOX).
+  function _formatKey(r) {
+    if (FORMATS.includes(r.form?.format)) return r.form.format;
+    const t = String(r.format || '').toUpperCase();
+    return FORMATS.find(f => f !== 'ITEM_CODE' && t.includes(f)) || (t ? 'ITEM_CODE' : '');
+  }
+
   function _sumFilteredRows() {
     return _sumRows.filter(r => {
-      if (_sumFFormat && r.format !== _sumFFormat) return false;
+      if (_sumFFormat && _formatKey(r) !== _sumFFormat) return false;
       if (_sumFDept && r.department !== _sumFDept) return false;
       if (_sumFParty && !(r.party || '').toLowerCase().includes(_sumFParty.toLowerCase())) return false;
       if (_sumFFrom && (r.date || '') < _sumFFrom) return false;
@@ -654,7 +665,7 @@ window.Pages['pr-creation'] = (() => {
     body.innerHTML = rows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
         + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.prNo) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:600;">' + esc(FORMAT_LABEL[r.format] || r.format) + '</span></td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:600;">' + esc(FORMAT_LABEL[_formatKey(r)] || r.format) + '</span></td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.party) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.requestedBy) + '</td>'
@@ -737,7 +748,11 @@ window.Pages['pr-creation'] = (() => {
 
   function _sumFilterBarHtml() {
     const formatOptions = '<option value="">All Formats</option>' + FORMATS.map(f => '<option value="' + esc(f) + '">' + esc(FORMAT_LABEL[f]) + '</option>').join('');
-    return '<div class="pcr-fbar" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
+    // One-click Diamond (Packing Box) / NR (Packing Sticker), as the two
+    // packing PR books are called on the floor.
+    const quick = [['', 'All PRs'], ['PACKING_BOX', 'Diamond (Packing Box)'], ['PACKING_STICKER', 'NR (Packing Sticker)']];
+    return '<div id="sum-quick" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;">' + quick.map(([k, l]) => '<button type="button" data-qf="' + k + '" style="padding:6px 14px;border-radius:999px;font-size:12.5px;font-weight:600;cursor:pointer;border:1.5px solid ' + (_sumFFormat === k ? 'var(--color-primary)' : '#e2e8f0') + ';background:' + (_sumFFormat === k ? 'var(--color-primary)' : '#fff') + ';color:' + (_sumFFormat === k ? '#fff' : '#334155') + ';">' + esc(l) + '</button>').join('') + '</div>'
+      + '<div class="pcr-fbar" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;">'
       + '<select id="sum-format" style="' + _inputStyle + 'min-width:160px;width:auto;background:#fff;">' + formatOptions + '</select>'
       + '<select id="sum-dept" style="' + _inputStyle + 'min-width:160px;width:auto;background:#fff;"><option value="">All Departments</option></select>'
       + '<input type="text" id="sum-party" placeholder="Search vendor/party…" style="' + _inputStyle + 'min-width:200px;width:auto;flex:1;" />'
@@ -750,7 +765,20 @@ window.Pages['pr-creation'] = (() => {
   }
 
   function _sumBindFilterBar() {
-    document.getElementById('sum-format').addEventListener('change', (e) => { _sumFFormat = e.target.value; _sumRenderTable(); });
+    const paintQuick = () => document.querySelectorAll('#sum-quick [data-qf]').forEach(b => {
+      const on = b.dataset.qf === _sumFFormat;
+      b.style.background = on ? 'var(--color-primary)' : '#fff';
+      b.style.color = on ? '#fff' : '#334155';
+      b.style.borderColor = on ? 'var(--color-primary)' : '#e2e8f0';
+    });
+    document.getElementById('sum-quick')?.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-qf]');
+      if (!b) return;
+      _sumFFormat = b.dataset.qf;
+      document.getElementById('sum-format').value = _sumFFormat;
+      paintQuick(); _sumRenderTable();
+    });
+    document.getElementById('sum-format').addEventListener('change', (e) => { _sumFFormat = e.target.value; paintQuick(); _sumRenderTable(); });
     document.getElementById('sum-dept').addEventListener('change', (e) => { _sumFDept = e.target.value; _sumRenderTable(); });
     document.getElementById('sum-party').addEventListener('input', (e) => { _sumFParty = e.target.value; _sumRenderTable(); });
     document.getElementById('sum-from').addEventListener('change', (e) => { _sumFFrom = e.target.value; _sumRenderTable(); });

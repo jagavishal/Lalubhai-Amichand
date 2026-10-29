@@ -1916,23 +1916,48 @@ const PI_DASHBOARD_PRICER_EMAILS = (process.env.PI_DASHBOARD_PRICER_EMAILS || 's
 // Who is told, besides whoever raised it, when any PR or PO is approved — the
 // store, the factory office, packing and Khurshid, who act on it (Khurshid,
 // 2026-10-21: approved mails were reaching only the creator's own id).
-// app_config 'po_approved_notify' overrides the list without a deploy.
+// app_config 'po_approved_notify' adds names/addresses without a deploy; the
+// four below always get it (Sajil sir, 2026-10-28: approved POs were not
+// reaching them), whatever that key holds.
 const PO_APPROVED_NOTIFY = ['store@laltd.in', 'factory.ahd@laltd.in', 'khurshidalam@laltd.in', 'packing@laltd.in'];
 async function _approvedRecipients(creatorEmail) {
   const to = creatorEmail ? [String(creatorEmail).toLowerCase()] : [];
-  for (const a of await _notifyRecipients('po_approved_notify', PO_APPROVED_NOTIFY)) if (!to.includes(a)) to.push(a);
+  const extra = await _notifyRecipients('po_approved_notify', PO_APPROVED_NOTIFY).catch(() => []);
+  for (const a of [...PO_APPROVED_NOTIFY, ...extra]) if (!to.includes(a)) to.push(a);
   return to;
 }
 
-async function sendPoDecisionEmail({ poNumber, format, party, department, totalAmount, pdfLink, createdBy, status, decidedBy }) {
+// The PO PDF itself, from its Drive link, to attach to the approved mail.
+// Best effort: null if the link isn't a Drive file or can't be read.
+async function _drivePdfBuffer(link) {
+  const id = (/\/d\/([\w-]{20,})/.exec(String(link || '')) || /[?&]id=([\w-]{20,})/.exec(String(link || '')) || [])[1];
+  if (!id) return null;
+  const auth = getGoogleAuth();
+  if (!auth) return null;
+  const { google } = require('googleapis');
+  const drive = google.drive({ version: 'v3', auth });
+  const r = await drive.files.get({ fileId: id, alt: 'media', supportsAllDrives: true }, { responseType: 'arraybuffer' });
+  return Buffer.from(r.data);
+}
+
+async function sendPoDecisionEmail({ poNumber, format, party, department, totalAmount, pdfLink, createdBy, status, decidedBy, orderNo }) {
   const mailer = getMailer();
-  if (!mailer) return;
+  if (!mailer) return null;
   const approved = status === 'Approved';
   const who = await userByName(createdBy);
   const to = approved ? await _approvedRecipients(who?.email) : (who?.email ? [who.email] : []);
-  if (!to.length) { console.log('[email] PO decision mail skipped — no login/email for creator:', createdBy); return; }
+  if (!to.length) { console.log('[email] PO decision mail skipped — no login/email for creator:', createdBy); return null; }
   const n = Number(totalAmount);
+  // An approved PO goes out with its (stamped) PDF attached, not only linked.
+  let attachments;
+  if (approved && pdfLink) {
+    try {
+      const buf = await _drivePdfBuffer(pdfLink);
+      if (buf && buf.length) attachments = [{ filename: `${poNumber}${party ? ' - ' + String(party).replace(/[\\/:*?"<>|]+/g, ' ').trim() : ''}.pdf`, content: buf, contentType: 'application/pdf' }];
+    } catch (e) { console.error('[email] PO PDF attach failed for', poNumber + ':', e.message); }
+  }
   await mailer.sendMail({
+    attachments,
     from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
     to: to.join(', '),
     subject: `${poNumber} ${approved ? 'approved' : 'rejected'}${party ? ' — ' + party : ''}`,
@@ -1940,12 +1965,13 @@ async function sendPoDecisionEmail({ poNumber, format, party, department, totalA
       heading: `Purchase Order ${status}`,
       colour: approved ? '#15803d' : '#b91c1c',
       lead: `${who?.name ? 'Hi <b>' + who.name + '</b>, ' : ''}<b>${decidedBy || 'the approver'}</b> has <b>${status.toLowerCase()}</b> ${poNumber}${format ? ' (' + format + ')' : ''}.`,
-      rows: [['PO No', poNumber], ['Format', format], ['Party', party], ['Department', department], ['Total', Number.isFinite(n) && String(totalAmount ?? '').trim() !== '' ? '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '']],
+      rows: [['PO No', poNumber], ['Format', format], ['Party', party], ['Department', department], ['Order No', orderNo || ''], ['Total', Number.isFinite(n) && String(totalAmount ?? '').trim() !== '' ? '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '']],
       actions: pdfLink ? `<table cellpadding="0" cellspacing="0" style="margin:16px 0"><tr><td style="background:#0150AA;border-radius:8px"><a href="${pdfLink}" style="display:inline-block;padding:10px 22px;color:#ffffff;font-weight:700;text-decoration:none">Open PO PDF</a></td></tr></table>` : '',
-      footer: approved ? 'The PDF carries the approval stamp. You can send it to the vendor.' : 'Speak to the approver before raising it again.',
+      footer: approved ? `The PDF${attachments ? ' (attached)' : ''} carries the approval stamp. You can send it to the vendor.` : 'Speak to the approver before raising it again.',
     }),
   });
-  console.log('[email] PO decision mail sent to:', to.join(', '), 'for', poNumber, status);
+  console.log('[email] PO decision mail sent to:', to.join(', '), 'for', poNumber, status, attachments ? '(PDF attached)' : '');
+  return to;
 }
 
 /* ── PR approval — the same bridge as the PO one, for Purchase Requisitions.
@@ -6990,9 +7016,11 @@ app.post('/po-action', async (req, res) => {
       catch (e) { console.error('[po-action] re-stamp failed for', row.poNo + ':', e.message); }
     }
 
+    let orderNo = '';
+    try { orderNo = JSON.parse(row.formJson || 'null')?.orderNo || ''; } catch { orderNo = ''; }
     sendPoDecisionEmail({
       poNumber: row.poNo, format: row.format, party: row.party, department: row.department,
-      totalAmount: String(row.total).replace(/[^0-9.-]/g, ''), pdfLink, createdBy: row.createdBy, status, decidedBy: by,
+      totalAmount: String(row.total).replace(/[^0-9.-]/g, ''), pdfLink, createdBy: row.createdBy, status, decidedBy: by, orderNo,
     }).catch((e) => console.error('[po-action] decision mail failed:', e.message));
 
     const good = status === 'Approved';
@@ -8727,6 +8755,8 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po', async (req, res)
     const cfg = PO_FORMAT_CONFIG[req.body?.format];
     if (!cfg) return res.status(400).json({ error: 'Unknown PO format' });
     const { date, prNo: prNoRaw, department: departmentRaw, party: partyRaw, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired } = req.body;
+    // The order no. comes over from the PR(s) the PO is raised against.
+    const orderNo = String(req.body.orderNo || '').replace(/\s+/g, ' ').trim().slice(0, 300);
     // One spelling on the sheet, the PO log and the app — see canonicalDept.
     const department = await canonicalDept(departmentRaw);
     // Vendor Details' own spelling, so the template's address VLOOKUP matches.
@@ -8814,7 +8844,7 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po', async (req, res)
       // reparsed into a locale-formatted date — the PO List page's date-range
       // filter compares these as plain "YYYY-MM-DD" strings.
       poNoFormatted, tab, "'" + date, party, department || '', totalAmount ?? '', pdfLink || '', sessUser?.name || '', _timestampForSheet(), prNo || '',
-      JSON.stringify({ format: tab, date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary, termsAndConditions, comments, testCertificateRequired }),
+      JSON.stringify({ format: tab, date, prNo, orderNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary, termsAndConditions, comments, testCertificateRequired }),
       'Active',
     ]);
 
@@ -8840,10 +8870,12 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
     if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-    const [result, fmsPending, poApprover] = await Promise.all([
+    const [result, fmsPending, poApprover, receipts] = await Promise.all([
       sheets.spreadsheets.values.get({ spreadsheetId: PO_CREATION_SHEET_ID, range: `'${PO_CREATION_LOG_TAB}'!A2:N`, valueRenderOption: 'FORMATTED_VALUE' }),
       _fmsPendingByPr(),
       _configuredApprover('po_approver'),
+      // Open / part received / closed — a GRN read failure only loses the badge.
+      _poReceipts(sheets).catch((e) => { console.error('[po-list] GRN read failed:', e.message); return null; }),
     ]);
     // A PO on this log has been created, whatever the FMS's "Create PO" Form
     // says (it is no longer filled) — the PO showed "Pending with Khurshid /
@@ -8860,10 +8892,13 @@ app.get('/api/po-creation/list', requireAuth, async (req, res) => {
         : _prNosFromCell(r[9]).map(k => fmsPending.get(k)).find(Boolean) || null;
       if (status === 'Active') pendingAt = { label: 'PO Approval', owner: poApprover };
       else if (pendingAt && pendingAt.key === 'S5') pendingAt = issueStep;
+      const receipt = !receipts || ['Cancelled', 'Rejected'].includes(status) ? ''
+        : receipts.isFullyReceived(r[0], r[1], form?.items || []) ? 'closed'
+          : receipts.receivedByPo.has(_seqKey(r[0])) ? 'part' : 'open';
       return {
         poNo: r[0] || '', format: r[1] || '', date: _sheetDateToIso(r[2]), party: r[3] || '', department: r[4] || '',
         total: r[5] || '', pdfLink: r[6] || '', createdBy: r[7] || '', createdAt: r[8] || '', prNo: r[9] || '', form,
-        status, decidedBy: r[12] || '', decidedAt: r[13] || '',
+        status, decidedBy: r[12] || '', decidedAt: r[13] || '', receipt,
         fmsPending: pendingAt ? { label: pendingAt.label, owner: pendingAt.owner } : null,
       };
     }).reverse();
@@ -8950,6 +8985,30 @@ app.post('/api/po-creation/resend-approval', requireAuth, async (req, res) => {
       totalAmount: String(row.total).replace(/[^0-9.-]/g, ''), pdfLink: row.pdfLink, createdBy: row.createdBy,
     });
     if (!sentTo) return res.status(500).json({ error: 'Mail not sent — SMTP is not configured or the PO approver has no login email' });
+    return res.json({ success: true, sentTo });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// Mails an approved PO (PDF attached) to the store / factory / packing list
+// again — for one that never arrived, or a vendor copy needed later.
+app.post('/api/po-creation/resend-approved', requireAuth, async (req, res) => {
+  try {
+    const poNo = String(req.query.poNo || '').trim();
+    if (!poNo) return res.status(400).json({ error: 'poNo is required' });
+    const { error, row } = await _poLogRow(poNo);
+    if (error) return res.status(404).json({ error });
+    if (!canManageDeptRow(req.session.user, row.department, row.createdBy)) {
+      return res.status(403).json({ error: 'Only the department that raised this PO (or an Admin/HOD) can send it' });
+    }
+    if (row.status !== 'Approved') return res.status(400).json({ error: `${row.poNo} is ${row.status || 'not approved yet'} — only an approved PO is mailed` });
+    let orderNo = '';
+    try { orderNo = JSON.parse(row.formJson || 'null')?.orderNo || ''; } catch { orderNo = ''; }
+    const sentTo = await sendPoDecisionEmail({
+      poNumber: row.poNo, format: row.format, party: row.party, department: row.department,
+      totalAmount: String(row.total).replace(/[^0-9.-]/g, ''), pdfLink: row.pdfLink, createdBy: row.createdBy,
+      status: 'Approved', decidedBy: row.decidedBy, orderNo,
+    });
+    if (!sentTo) return res.status(500).json({ error: 'Mail not sent — SMTP is not configured on the server' });
     return res.json({ success: true, sentTo });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -9063,14 +9122,14 @@ app.get('/api/po-creation/pending-prs', requireAuth, async (req, res) => {
     const pending = prRows
       .filter(r => r[0] && (r[11] || 'Active') !== 'Cancelled')
       .map(r => {
-        let items = [];
-        try { items = JSON.parse(r[10] || 'null')?.items || []; } catch { items = []; }
+        let items = [], orderNo = '';
+        try { const f = JSON.parse(r[10] || 'null') || {}; items = f.items || []; orderNo = String(f.orderNo || '').trim(); } catch { items = []; }
         const prNo = _normalizePrNo(r[0]);
         const prTabName = r[1] || '';
         // Surfaced so the picker can tell staff this PR already has an
         // earlier PO against it, rather than looking untouched.
         const partiallyOrdered = orderedByPr.has(prNo);
-        return { prNo, prTabName, date: _sheetDateToIso(r[2]), party: r[3] || '', requestedBy: r[4] || '', department: r[5] || '', items, partiallyOrdered, _fullyOrdered: isFullyOrdered(prNo, prTabName, items) };
+        return { prNo, prTabName, date: _sheetDateToIso(r[2]), party: r[3] || '', requestedBy: r[4] || '', department: r[5] || '', orderNo, items, partiallyOrdered, _fullyOrdered: isFullyOrdered(prNo, prTabName, items) };
       })
       .filter((pr) => !pr._fullyOrdered)
       .map(({ _fullyOrdered, ...pr }) => pr)
@@ -10122,6 +10181,85 @@ app.get('/api/grn-creation/masters', requireAuth, async (req, res) => {
 // discipline as PO Creation's own pending-PR filter. Each PO already carries
 // its own PR No (logged when the PO was created), so GRN gets that for free
 // instead of needing its own PR lookup.
+/* Goods received against each PO, from the GRN log: approved qty per item
+   code across every non-cancelled GRN. Shared by GRN's PO picker (which
+   drops a fully received PO) and PO List (Open / Part received / Closed). */
+async function _poReceipts(sheets) {
+  // A PO does not always arrive in one truck — goods against the same PO
+  // can come in over more than one bill ("PO343 ka product 2 bill me aaya,
+  // ek Bill GRN hua, dusre bill ka GRN karte time PO343 nahi aa raha").
+  // The old rule dropped a PO from this picker the moment it had ANY GRN
+  // at all, so the second bill's GRN had nowhere to point. Instead, sum
+  // what's already been approved-received against each PO, item by item,
+  // across every (non-cancelled) GRN raised on it, and only drop a PO once
+  // every one of its items has that much or more.
+  const receivedByPo = new Map(); // normalized PO No -> Map(item code lower -> qty already received)
+  try {
+    const grnRes = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:M`, valueRenderOption: 'FORMATTED_VALUE' });
+    for (const r of (grnRes.data.values || [])) {
+      const poKeys = _poKeysFromCell(r[5]);
+      if (!poKeys.length || (r[12] || '') === 'Cancelled') continue; // a cancelled GRN never happened
+      let items = [];
+      try { items = JSON.parse(r[11] || 'null')?.items || []; } catch { items = []; }
+      // Every PO on the GRN counts as touched (the "part received" flag),
+      // even one none of its lines can be credited to.
+      for (const k of poKeys) if (!receivedByPo.has(k)) receivedByPo.set(k, new Map());
+      for (const it of items) {
+        const code = String(it?.itemNo || '').trim().toLowerCase();
+        if (!code) continue;
+        // A multi-PO GRN stamps each line with its own PO. An older or
+        // hand-typed multi-PO GRN without that can't be split by line, so
+        // it credits nothing — better a PO lingering in the picker than
+        // one hidden on a guess.
+        const poKey = it.poNo ? _seqKey(it.poNo) : (poKeys.length === 1 ? poKeys[0] : '');
+        if (!poKey) continue;
+        // Approved is what actually landed in stock — a rejected quantity
+        // was sent back, so it doesn't count against what's still owed.
+        const qty = parseFloat(String(it.approvedQty ?? it.receivedQty ?? '0').replace(/,/g, '')) || 0;
+        const perItem = receivedByPo.get(poKey) || new Map();
+        perItem.set(code, (perItem.get(code) || 0) + qty);
+        receivedByPo.set(poKey, perItem);
+      }
+    }
+  } catch (e) {
+    if (!/unable to parse range/i.test(e.message || '')) throw e;
+  }
+  // No item snapshot to compare against, or nothing meaningful ordered on a
+  // line — never hide a PO on the strength of a comparison that can't
+  // actually be made; that direction of mistake is silent and much worse
+  // than a fully-received PO lingering in the list a little too long.
+  //
+  // Which item field holds the ordered qty depends on the PO's format
+  // ("PO mai item gyab ho rhe hai") — PurchaseOrder items carry qty, ENR PO
+  // carries stickerQty, Diamond PO carries boxQty (GRN's own
+  // _mapPoItemToGrn already treats boxQty alone as the receivable qty for
+  // Diamond PO — plateQty isn't separately received). The old code
+  // hardcoded `it.qty`, which is always undefined on ENR PO/Diamond PO
+  // items, so `!ordered` fired on every line and the whole PO vanished
+  // from this picker the moment ANY GRN existed against it, however partial.
+  const PO_QTY_FIELDS_BY_FORMAT = {
+    PurchaseOrder: ['qty'],
+    'ENR PO': ['stickerQty'],
+    'Diamond PO': ['boxQty'],
+  };
+  const isFullyReceived = (poNo, poFormat, items) => {
+    if (!items.length) return false;
+    const received = receivedByPo.get(_seqKey(poNo));
+    if (!received) return false;
+    const qtyFields = PO_QTY_FIELDS_BY_FORMAT[poFormat] || ['qty'];
+    return items.every((it) => {
+      // Service PO items have no item code at all — description is their
+      // identity (see the 'Service PO' PO_TEMPLATES entry's keyField), and
+      // that's what GRN's own item picker now stores as itemNo for them.
+      const code = String(it?.itemCode || it?.code || (poFormat === 'Service PO' ? it?.description : '') || '').trim().toLowerCase();
+      const ordered = qtyFields.reduce((sum, f) => sum + (parseFloat(String(it[f] ?? '0').replace(/,/g, '')) || 0), 0);
+      if (!code || !ordered) return true;
+      return (received.get(code) || 0) >= ordered;
+    });
+  };
+  return { receivedByPo, isFullyReceived };
+}
+
 app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
   try {
     const auth = getGoogleAuth();
@@ -10135,78 +10273,8 @@ app.get('/api/grn-creation/po-list', requireAuth, async (req, res) => {
     } catch (e) {
       if (!/unable to parse range/i.test(e.message || '')) throw e;
     }
-    // A PO does not always arrive in one truck — goods against the same PO
-    // can come in over more than one bill ("PO343 ka product 2 bill me aaya,
-    // ek Bill GRN hua, dusre bill ka GRN karte time PO343 nahi aa raha").
-    // The old rule dropped a PO from this picker the moment it had ANY GRN
-    // at all, so the second bill's GRN had nowhere to point. Instead, sum
-    // what's already been approved-received against each PO, item by item,
-    // across every (non-cancelled) GRN raised on it, and only drop a PO once
-    // every one of its items has that much or more.
-    let receivedByPo = new Map(); // normalized PO No -> Map(item code lower -> qty already received)
-    try {
-      const grnRes = await sheets.spreadsheets.values.get({ spreadsheetId: GRN_CREATION_SHEET_ID, range: `'${GRN_CREATION_LOG_TAB}'!A2:M`, valueRenderOption: 'FORMATTED_VALUE' });
-      for (const r of (grnRes.data.values || [])) {
-        const poKeys = _poKeysFromCell(r[5]);
-        if (!poKeys.length || (r[12] || '') === 'Cancelled') continue; // a cancelled GRN never happened
-        let items = [];
-        try { items = JSON.parse(r[11] || 'null')?.items || []; } catch { items = []; }
-        // Every PO on the GRN counts as touched (the "part received" flag),
-        // even one none of its lines can be credited to.
-        for (const k of poKeys) if (!receivedByPo.has(k)) receivedByPo.set(k, new Map());
-        for (const it of items) {
-          const code = String(it?.itemNo || '').trim().toLowerCase();
-          if (!code) continue;
-          // A multi-PO GRN stamps each line with its own PO. An older or
-          // hand-typed multi-PO GRN without that can't be split by line, so
-          // it credits nothing — better a PO lingering in the picker than
-          // one hidden on a guess.
-          const poKey = it.poNo ? _seqKey(it.poNo) : (poKeys.length === 1 ? poKeys[0] : '');
-          if (!poKey) continue;
-          // Approved is what actually landed in stock — a rejected quantity
-          // was sent back, so it doesn't count against what's still owed.
-          const qty = parseFloat(String(it.approvedQty ?? it.receivedQty ?? '0').replace(/,/g, '')) || 0;
-          const perItem = receivedByPo.get(poKey) || new Map();
-          perItem.set(code, (perItem.get(code) || 0) + qty);
-          receivedByPo.set(poKey, perItem);
-        }
-      }
-    } catch (e) {
-      if (!/unable to parse range/i.test(e.message || '')) throw e;
-    }
-    // No item snapshot to compare against, or nothing meaningful ordered on a
-    // line — never hide a PO on the strength of a comparison that can't
-    // actually be made; that direction of mistake is silent and much worse
-    // than a fully-received PO lingering in the list a little too long.
-    //
-    // Which item field holds the ordered qty depends on the PO's format
-    // ("PO mai item gyab ho rhe hai") — PurchaseOrder items carry qty, ENR PO
-    // carries stickerQty, Diamond PO carries boxQty (GRN's own
-    // _mapPoItemToGrn already treats boxQty alone as the receivable qty for
-    // Diamond PO — plateQty isn't separately received). The old code
-    // hardcoded `it.qty`, which is always undefined on ENR PO/Diamond PO
-    // items, so `!ordered` fired on every line and the whole PO vanished
-    // from this picker the moment ANY GRN existed against it, however partial.
-    const PO_QTY_FIELDS_BY_FORMAT = {
-      PurchaseOrder: ['qty'],
-      'ENR PO': ['stickerQty'],
-      'Diamond PO': ['boxQty'],
-    };
-    const isFullyReceived = (poNo, poFormat, items) => {
-      if (!items.length) return false;
-      const received = receivedByPo.get(_seqKey(poNo));
-      if (!received) return false;
-      const qtyFields = PO_QTY_FIELDS_BY_FORMAT[poFormat] || ['qty'];
-      return items.every((it) => {
-        // Service PO items have no item code at all — description is their
-        // identity (see the 'Service PO' PO_TEMPLATES entry's keyField), and
-        // that's what GRN's own item picker now stores as itemNo for them.
-        const code = String(it?.itemCode || it?.code || (poFormat === 'Service PO' ? it?.description : '') || '').trim().toLowerCase();
-        const ordered = qtyFields.reduce((sum, f) => sum + (parseFloat(String(it[f] ?? '0').replace(/,/g, '')) || 0), 0);
-        if (!code || !ordered) return true;
-        return (received.get(code) || 0) >= ordered;
-      });
-    };
+    // What has arrived against each PO, from the GRN log — see _poReceipts.
+    const { receivedByPo, isFullyReceived } = await _poReceipts(sheets);
     // Service POs used to be excluded outright here ("nothing physical to
     // receive against a service") — but a service still needs a GRN to log
     // what was actually delivered/received against the bill ("Service PO GRN

@@ -323,6 +323,10 @@ window.Pages['po-creation'] = (() => {
     const eligible = () => {
       const already = picked();
       let list = _pendingPrs.filter(p => !already.has(String(p.prNo).toLowerCase()));
+      // Only this PO format's own PRs: Diamond PO ← Packing Box PRs, ENR PO ←
+      // Packing Sticker PRs, PurchaseOrder ← Purchase Requisition / ALU
+      // ("Diamond pe click karein to sirf Diamond ke PR").
+      list = list.filter(p => (PR_TAB_TO_PO_FORMAT[p.prTabName] || 'PurchaseOrder') === _format);
       if (_appliedPrs.length) {
         const first = _appliedPrs[0];
         const norm = s => String(s || '').replace(/[\s ​]+/g, ' ').trim().toLowerCase();
@@ -391,9 +395,19 @@ window.Pages['po-creation'] = (() => {
     }
   }
 
+  // The picked PRs' order numbers, shown on the form and sent with the PO.
+  function _appliedOrderNo() {
+    return [...new Set(_appliedPrs.map(p => String(p.orderNo || '').trim()).filter(Boolean))].join(', ');
+  }
+  function _syncOrderNo() {
+    const el = document.getElementById('poc-order-no');
+    if (el) el.textContent = _appliedOrderNo() || '—';
+  }
+
   function _renderPrChip(pr) {
     const input = document.getElementById('poc-pr-no');
     if (input) input.insertAdjacentHTML('beforebegin', _prNoChipHtml(pr));
+    _syncOrderNo();
   }
 
   // Drops a picked PR back off the form: removes its chip, its rows from the
@@ -402,6 +416,7 @@ window.Pages['po-creation'] = (() => {
   function _removeAppliedPr(pr) {
     _appliedPrs = _appliedPrs.filter(p => String(p.prNo) !== String(pr.prNo));
     document.querySelector('.poc-prno-chip[data-pr="' + CSS.escape(String(pr.prNo)) + '"]')?.remove();
+    _syncOrderNo();
     document.querySelectorAll('#poc-items-tbody .poc-item-row[data-pr-no="' + CSS.escape(String(pr.prNo)) + '"]').forEach(row => row.remove());
     if (!_appliedPrs.length) {
       const partyInput = document.getElementById('poc-party');
@@ -896,14 +911,16 @@ window.Pages['po-creation'] = (() => {
         + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.poNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:600;">' + esc(FORMAT_LABEL[r.format] || r.format) + '</span></td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.party) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.party) + (r.form?.orderNo ? '<div style="font-size:11px;color:var(--text-muted);">Order: ' + esc(r.form.orderNo) + '</div>' : '') + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.department) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;text-align:right;">' + esc(r.total) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.createdBy) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + (r.pdfLink ? '<a href="' + esc(r.pdfLink) + '" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">View PDF</a>' : '<span style="color:#cbd5e1;">—</span>') + '</td>'
-        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + _polStatusPill(r) + _polPendingWithHtml(r) + '</td>'
+        + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + _polStatusPill(r) + _polReceiptPill(r) + _polPendingWithHtml(r) + '</td>'
         + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
-          + (r.status === 'Approved' || r.status === 'Rejected' || r.status === 'Cancelled'
+          + (r.status === 'Approved'
+            ? '<button type="button" class="poc-mailapproved-btn btn-secondary btn-sm" data-po="' + esc(r.poNo) + '" title="Mail the approved PO (PDF attached) to store, factory, Khurshid and packing again">Mail approved PO</button>'
+            : r.status === 'Rejected' || r.status === 'Cancelled'
             ? ''
             : '<button type="button" class="poc-resend-btn btn-secondary btn-sm" data-po="' + esc(r.poNo) + '" title="Email the approver again with Approve / Reject buttons">Resend mail</button>')
           + (r.status === 'Cancelled' || r.status === 'Rejected'
@@ -924,6 +941,16 @@ window.Pages['po-creation'] = (() => {
     if (r.status === 'Approved')  return pill('Approved', 'var(--color-success-bg)', 'var(--color-success-text)', who);
     if (r.status === 'Rejected')  return pill('Rejected', 'var(--color-danger-bg)', 'var(--color-danger-text)', who);
     return pill('Awaiting approval', 'var(--color-warning-bg)', 'var(--color-warning-text)');
+  }
+
+  // Has the material come? From the GRNs raised against the PO (receipt field
+  // of /api/po-creation/list): open until a GRN, closed once every item is in.
+  function _polReceiptPill(r) {
+    const pill = (label, bg, fg, title) => ' <span title="' + esc(title) + '" style="display:inline-flex;padding:2px 8px;border-radius:10px;background:' + bg + ';color:' + fg + ';font-size:11px;font-weight:600;">' + esc(label) + '</span>';
+    if (r.receipt === 'closed') return pill('Closed — maal aa gaya', 'var(--color-neutral-bg)', 'var(--color-neutral-text)', 'Every item received (GRN)');
+    if (r.receipt === 'part') return pill('Part received', 'var(--color-info-bg)', 'var(--color-info-text)', 'Some items received (GRN), rest still open');
+    if (r.receipt === 'open') return pill('Open — maal nahi aaya', 'var(--color-warning-bg)', 'var(--color-warning-text)', 'No GRN against this PO yet');
+    return '';
   }
 
   // Where the PO's PR sits in the Stores FMS and whose step that is (see the
@@ -952,6 +979,18 @@ window.Pages['po-creation'] = (() => {
           Utils.showToast(err.message || 'Failed to delete', 'error');
           await _polLoad();
         }
+        return;
+      }
+      const mailBtn = e.target.closest('.poc-mailapproved-btn');
+      if (mailBtn) {
+        mailBtn.disabled = true; mailBtn.textContent = 'Sending…';
+        try {
+          const r = await Utils.apiFetch('/api/po-creation/resend-approved?poNo=' + encodeURIComponent(mailBtn.dataset.po), { method: 'POST' });
+          Utils.showToast('PO #' + mailBtn.dataset.po + ' mailed to ' + ((r.sentTo || []).join(', ') || 'the list'), 'success');
+        } catch (err) {
+          Utils.showToast(err.message || 'Failed to send', 'error');
+        }
+        mailBtn.disabled = false; mailBtn.textContent = 'Mail approved PO';
         return;
       }
       const resendBtn = e.target.closest('.poc-resend-btn');
@@ -1055,6 +1094,8 @@ window.Pages['po-creation'] = (() => {
       // omitted entirely rather than shown-and-ignored, and that tab's sheet
       // template has no P.R. NO cell either.
       + (_isManual() ? '' : _prNoField())
+      // Filled from the picked PR(s) — the order these goods are for.
+      + (_isManual() ? '' : _readonlyField('poc-order-no', 'Order No (from PR)', '—'))
       + _fieldWrap('Department', '<select id="poc-department" style="' + _inputStyle + 'background:#fff;">' + deptOptions + '</select>')
       + _partyField();
 
@@ -1203,7 +1244,7 @@ window.Pages['po-creation'] = (() => {
     try {
       const result = await Utils.apiFetch('/api/po-creation', {
         method: 'POST',
-        body: JSON.stringify({ format: _format, date, prNo: prNoOut, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired }),
+        body: JSON.stringify({ format: _format, date, prNo: prNoOut, orderNo: _appliedOrderNo(), department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items, summary, termsAndConditions, comments, testCertificateRequired }),
       });
       await _loadMasters();
       _appliedPrs = [];
