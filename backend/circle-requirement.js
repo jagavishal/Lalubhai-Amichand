@@ -348,6 +348,42 @@ function mountCircleRequirement(app, ctx) {
   }
   const guard = [requireAuth, requireAccess];
 
+  /* ── Job-work stock: what each party still holds (from Job Work) ─
+     Read here rather than through /api/moulding-jobwork, so planners need
+     only this page's access. Only parties holding something are listed. */
+  app.get(`${BASE}/jobwork-holdings`, ...guard, route(async () => {
+    const { withBalances, lotSummary } = require('./moulding-jobwork.js');
+    let entries = [];
+    if (useDb) {
+      const rows = await q("SELECT id, entry_date, party, seq, data FROM mj_entries WHERE kind = 'jw' ORDER BY entry_date, seq").catch(() => []);
+      entries = rows.map((r) => {
+        let d = {};
+        try { d = JSON.parse(r.data) || {}; } catch { d = {}; }
+        const date = r.entry_date instanceof Date
+          ? `${r.entry_date.getFullYear()}-${String(r.entry_date.getMonth() + 1).padStart(2, '0')}-${String(r.entry_date.getDate()).padStart(2, '0')}`
+          : String(r.entry_date || '').slice(0, 10);
+        return { ...d, id: r.id, entry_date: date, party: r.party, seq: Number(r.seq) || 0 };
+      });
+    } else {
+      try { entries = (JSON.parse(await fsp.readFile(path.join(__dirname, '..', 'database', 'moulding-jobwork.json'), 'utf8')).entries || []).filter((e) => e.kind === 'jw'); }
+      catch { entries = []; }
+    }
+    const lots = lotSummary(withBalances(entries));
+    const byParty = new Map();
+    for (const l of lots) {
+      const p = byParty.get(l.party) || { party: l.party, balance: 0, openLots: 0, goods: new Set() };
+      p.balance += Number(l.balance) || 0;
+      if (l.status === 'OPEN') { p.openLots += 1; if (l.description) p.goods.add(l.description); }
+      byParty.set(l.party, p);
+    }
+    return {
+      parties: [...byParty.values()]
+        .map((p) => ({ party: p.party, balance: Math.round(p.balance * 1000) / 1000, openLots: p.openLots, goods: [...p.goods] }))
+        .filter((p) => p.balance > 0.005)
+        .sort((a, b) => b.balance - a.balance),
+    };
+  }));
+
   /* ── Master ────────────────────────────────────────────────────── */
 
   app.get(`${BASE}/master`, ...guard, route(async (req) => ({ manage: req.cr.manage, master: await store.master() })));

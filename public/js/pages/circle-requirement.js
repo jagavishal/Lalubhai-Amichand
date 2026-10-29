@@ -288,6 +288,53 @@ window.Pages['circle-requirement'] = (() => {
   const setLabel = () => P.round_mode === 'none' ? `${P.extra_pct}% extra · no rounding`
     : `${P.extra_pct}% extra · ${P.round_mode === 'nearest' ? 'round' : 'round up'} to ${P.round_step} kg`;
 
+  /* Job-work stock: what each outside party still holds (from the Job Work
+     page), so the plan can go to whoever already has the metal — pick one
+     and "Create PR" opens an Aluminium PR with this plan's circles. */
+  let _jw = null;          // [{party, balance, openLots, goods}] once loaded
+  let _jwParty = '';
+  async function loadHoldings() {
+    try { _jw = (await H.api(`${BASE}/jobwork-holdings`)).parties || []; } catch { _jw = []; }
+    if (!_jw.some((p) => p.party === _jwParty)) _jwParty = _jw[0]?.party || '';
+  }
+  function holdingsHTML(R) {
+    const list = _jw || [];
+    const rows = list.length
+      ? list.map((p) => `<label style="display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px dotted #e2e8f0;cursor:pointer;">
+          <input type="radio" name="cr-jw" value="${esc(p.party)}"${p.party === _jwParty ? ' checked' : ''}>
+          <b style="flex:1;font-size:13px;">${esc(p.party)}</b>
+          <span style="font-size:11px;color:#94a3b8;">${esc((p.goods || []).join(', '))}</span>
+          <b style="font-size:14px;color:var(--color-primary);min-width:110px;text-align:right;">${kg0(p.balance)} kg</b></label>`).join('')
+      : `<div style="font-size:12.5px;color:#94a3b8;padding:6px 0;">${_jw ? 'Kisi job-work party ke paas abhi maal nahi (Job Work page).' : 'Loading…'}</div>`;
+    return `<div class="cr-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+        <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;">Job work — party ke paas maal</span>
+        <button type="button" id="cr-pr" class="btn-primary btn-sm"${R.order ? '' : ' disabled'}>Create PR (Aluminium)</button>
+      </div>
+      ${rows}
+      <div style="font-size:11px;color:#94a3b8;margin-top:6px;">Party chuno → Create PR: is plan ke circles (${kg0(R.order)} kg) Aluminium PR mein bhar ke khulte hain.</div>
+    </div>`;
+  }
+
+  // The plan's circles as Aluminium PR rows: one per circle size and gauge.
+  function createPr() {
+    const R = calc();
+    if (!R.order) { H.toast('Pehle plan mein qty daalo', 'error'); return; }
+    const orders = [...new Set(P.lines.map((l) => String(l.order_no || '').trim()).filter(Boolean))].join(', ') || P.title || '';
+    const items = [];
+    R.summary.forEach((g) => g.items.forEach((it) => {
+      if (!it.kg) return;
+      items.push({ hint: `${it.label} · ${gaugeLong(g.t)} · ${kg0(it.kg)} kg`, search: it.label, fields: { qtyRequired: it.kg, uom: 'KGS' } });
+    }));
+    const pr = window.Pages && window.Pages['pr-creation'];
+    if (!pr || !pr.openWith) { H.toast('PR page nahi khul saka', 'error'); return; }
+    pr.openWith({
+      format: 'ALU', party: _jwParty, department: 'Circle Dept.',
+      header: { orderNo: orders, requestedBy: window.currentUser?.name || '' },
+      items, note: `${items.length} circle line${items.length === 1 ? '' : 's'} bhar diye — har line ka Item No. chun lo`,
+    });
+  }
+
   function resultsHTML() {
     const R = calc();
     if (!R.rows.length) return '';
@@ -314,6 +361,7 @@ window.Pages['circle-requirement'] = (() => {
         <span style="font-size:12px;color:#94a3b8;">net ${kg0(Math.round(R.net * 1000) / 1000)} kg + ${pct}% + round off</span>
       </div>
       <div class="cr-sum" style="margin-bottom:14px;">${totals}${sum}</div>
+      ${holdingsHTML(R)}
       <details class="cr-card" style="padding:12px 16px;"><summary style="cursor:pointer;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;">Line by line dekho</summary><div style="margin-top:10px;">${detail}</div></details>`;
   }
 
@@ -455,6 +503,14 @@ window.Pages['circle-requirement'] = (() => {
       P = blankPlan(); dirty = false; render();
     });
     $('cr-xls')?.addEventListener('click', exportExcel);
+    // Results are redrawn on every change; listen on their container.
+    const res = $('cr-results');
+    if (res && !res.dataset.prBound) {
+      res.dataset.prBound = '1';
+      res.addEventListener('change', (e) => { if (e.target.name === 'cr-jw') _jwParty = e.target.value; });
+      res.addEventListener('click', (e) => { if (e.target.closest('#cr-pr')) createPr(); });
+    }
+    if (!_jw) loadHoldings().then(refreshCalc);
 
     document.querySelectorAll('[data-f]').forEach((inp) => {
       const i = +inp.getAttribute('data-i');

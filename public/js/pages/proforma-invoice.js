@@ -2146,12 +2146,40 @@ window.Pages['proforma-invoice'] = (() => {
             ? ''
             : '<button type="button" class="osl-pack-btn btn-primary btn-sm" data-order="' + esc(r.orderNo) + '">Pack</button>')
           + _moreMenuHtml(
-              (r.status === 'Cancelled' ? '' : '<button type="button" role="menuitem" class="pil-mi osl-cancel-btn" data-order="' + esc(r.orderNo) + '">Cancel Order</button>')
+              // Packing material for this order: a Packing Box / Packing Sticker
+              // PR pre-filled with its lines (box qty / pcs), order no. + buyer.
+              (r.status === 'Cancelled' || !r.form ? '' : '<button type="button" role="menuitem" class="pil-mi osl-packpr-btn" data-order="' + esc(r.orderNo) + '" data-fmt="PACKING_BOX">Packing PR — Box</button>'
+                + '<button type="button" role="menuitem" class="pil-mi osl-packpr-btn" data-order="' + esc(r.orderNo) + '" data-fmt="PACKING_STICKER">Packing PR — Sticker</button>')
+              + (r.status === 'Cancelled' ? '' : '<button type="button" role="menuitem" class="pil-mi osl-cancel-btn" data-order="' + esc(r.orderNo) + '">Cancel Order</button>')
               + Utils.ownerDeleteBtn('osl-delete-btn pil-mi pil-mi-danger', 'order', r.orderNo).replace('<button ', '<button role="menuitem" '),
               'More actions for order ' + r.orderNo)
           + '</div>'
         + '</td>'
       + '</tr>').join('');
+  }
+
+  // An order's packing PR: one row per order line — boxes for a Packing Box
+  // PR, pieces for a Packing Sticker PR — with the order no. and buyer in
+  // Order No. The PAC-B / PAC-S code is picked per row (the order lines carry
+  // no box or sticker code); the row says which item it is for.
+  function _osOpenPackingPr(orderNo, fmt) {
+    const r = _oslRows.find(x => x.orderNo === orderNo);
+    const pr = window.Pages && window.Pages['pr-creation'];
+    if (!r || !r.form || !pr || !pr.openWith) { Utils.showToast('PR page could not be opened', 'error'); return; }
+    const box = fmt === 'PACKING_BOX';
+    const num = (v) => Number(String(v ?? '').replace(/,/g, '')) || 0;
+    const items = (r.form.items || []).filter(it => num(box ? it.boxes : it.qty) > 0).map(it => ({
+      hint: [it.modelNo, it.itemName, it.size].filter(Boolean).join(' ') + (box ? ' · ' + (it.packing ? it.packing + ' pcs/box · ' : '') + num(it.boxes) + ' boxes' : ' · ' + num(it.qty) + ' pcs'),
+      search: it.itemName || it.modelNo || '',
+      fields: box ? { boxQty: num(it.boxes) } : { stickerQty: num(it.qty) },
+    }));
+    if (!items.length) { Utils.showToast('This order has no ' + (box ? 'box counts' : 'quantities') + ' to put on a PR', 'warning'); return; }
+    const buyer = r.buyer || r.form.buyerName || '';
+    pr.openWith({
+      format: fmt, department: 'Packing Dept.',
+      header: { orderNo: orderNo + (buyer ? ' — ' + buyer : ''), requestedBy: (window.currentUser && window.currentUser.name) || '' },
+      items, note: items.length + ' line' + (items.length === 1 ? '' : 's') + ' from order ' + orderNo + ' — pick each ' + (box ? 'box' : 'sticker') + ' Item No.',
+    });
   }
 
   // Priced PIs with no live order sheet yet — what "+ New Order Sheet" offers.
@@ -2204,6 +2232,8 @@ window.Pages['proforma-invoice'] = (() => {
       if (e.target.closest('.pil-mi')) _pilCloseMenus();
       const packBtn = e.target.closest('.osl-pack-btn');
       if (packBtn) { _plStartNew(packBtn.dataset.order); return; }
+      const prBtn = e.target.closest('.osl-packpr-btn');
+      if (prBtn) { _osOpenPackingPr(prBtn.dataset.order, prBtn.dataset.fmt); return; }
       const cancelBtn = e.target.closest('.osl-cancel-btn');
       if (cancelBtn) {
         const ok = await Utils.showConfirm('Order ' + cancelBtn.dataset.order + ' will be marked Cancelled. This can\'t be undone.', { title: 'Cancel Order Sheet', confirmText: 'Cancel Order', danger: true });

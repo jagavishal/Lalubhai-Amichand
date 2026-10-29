@@ -591,6 +591,70 @@ window.Pages['pr-creation'] = (() => {
     // format switch or a trip through the Summary tab.
     Utils.bindDeptSelect(document.getElementById('pcr-department'), null, { extra: PR_DEPARTMENT_EXTRAS });
     if (!_mastersLoaded) _loadMasters();
+    if (_prefill) _applyPrefill();
+  }
+
+  /* ── Opening the form pre-filled from another page (Circle Requirement's
+     "Create PR", Order Sheet's "Packing PR"): openWith() sets the format and
+     data, the next render fills party, header fields, department and one row
+     per item. A row without an item code keeps the caller's hint (e.g.
+     "10 X 18G · 120 kg") in Description and in the code box's search, and is
+     filled in by itself when the catalog has exactly one match. ────────── */
+  let _prefill = null;
+  function openWith(p) {
+    if (!p || !FORMATS.includes(p.format)) return;
+    _prefill = p;
+    _view = 'create';
+    _format = p.format;
+    if ((window.location.hash || '').replace('#', '') === 'pr-creation') renderPage();
+    else window.Router.navigate('pr-creation');
+  }
+
+  function _applyPrefill() {
+    const p = _prefill;
+    _prefill = null;
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
+    setVal('pcr-party', p.party);
+    Object.entries(p.header || {}).forEach(([k, v]) => setVal('pcr-' + k, v));
+    if (p.department) {
+      const sel = document.getElementById('pcr-department');
+      if (sel) {
+        if (!sel.querySelector('option[value="' + CSS.escape(p.department) + '"]')) sel.insertAdjacentHTML('beforeend', '<option value="' + esc(p.department) + '">' + esc(p.department) + '</option>');
+        sel.value = p.department;
+      }
+    }
+    const tbody = document.getElementById('pcr-items-tbody');
+    if (!tbody || !Array.isArray(p.items) || !p.items.length) return;
+    tbody.innerHTML = '';
+    p.items.forEach(it => {
+      tbody.insertAdjacentHTML('beforeend', _itemRowHtml());
+      const row = tbody.lastElementChild;
+      _bindItemRow(row);
+      Object.entries(it.fields || {}).forEach(([k, v]) => { const f = row.querySelector('[data-field="' + k + '"]'); if (f) f.value = v; });
+      const code = row.querySelector('.pcr-item-code');
+      const desc = row.querySelector('.pcr-item-desc');
+      if (it.itemCode) { code.value = it.itemCode; return; }
+      if (it.hint) {
+        desc.innerHTML = '<span style="color:#b45309;">' + esc(it.hint) + '</span><div style="font-size:10.5px;color:#94a3b8;">Item No. chuno</div>';
+        code.placeholder = 'search: ' + (it.search || it.hint);
+        // One catalog match for the search text → take it.
+        if (it.search) {
+          fetch('/api/pr-creation/items?format=' + encodeURIComponent(_format) + '&q=' + encodeURIComponent(it.search))
+            .then(r => (r.ok ? r.json() : []))
+            .then(list => {
+              if (Array.isArray(list) && list.length === 1 && !code.value) {
+                code.value = list[0].code;
+                desc.textContent = list[0].description || '—';
+                const size = row.querySelector('.pcr-item-size'); if (size) size.textContent = list[0].size || '—';
+                _setBoxSize(row, list[0].boxSize);
+                _setSticker(row, list[0].stickerSize);
+              }
+            }).catch(() => {});
+        }
+      }
+    });
+    _recomputeGrandTotal();
+    if (p.note) Utils.showToast(p.note, 'info');
   }
 
   /* ── PR Summary (in-page tab) — read-only history from the ERP PR Log tab,
@@ -900,5 +964,6 @@ window.Pages['pr-creation'] = (() => {
 
   return {
     render() { renderPage(); },
+    openWith,
   };
 })();
