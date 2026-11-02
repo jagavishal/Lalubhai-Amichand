@@ -294,6 +294,11 @@ window.Pages.dashboard = (function () {
     if (play) play.onclick = () => window.Pages.trivia.play(_paintTrivia);
     const board = document.getElementById('db-tv-board');
     if (board) board.onclick = () => Router.navigate('trivia');
+    // Not played yet today: open the game by itself, once a day.
+    if (!done && !_paintTrivia._popped) {
+      _paintTrivia._popped = true;
+      setTimeout(() => window.Pages.trivia.autoPopup?.(_paintTrivia), 800);
+    }
   }
 
   function _openShipTargetModal(t) {

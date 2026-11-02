@@ -336,8 +336,10 @@ window.Pages.trivia = (() => {
       <div style="font-size:28px;font-weight:900;margin-top:8px;">${t.limitSec} seconds. One try.</div>
       <div style="font-size:14px;color:#c7d2fe;margin-top:10px;line-height:1.6;">Right answer = <b>50 points</b> + <b>5 for every second left</b>.<br>Wrong or out of time = 0. The faster you are, the higher you go on the big screen.</div>
       <button id="tv-go" style="margin-top:26px;border:none;border-radius:14px;padding:16px 46px;font-size:18px;font-weight:900;cursor:pointer;background:#facc15;color:#1e1b4b;box-shadow:0 7px 0 #ca8a04;">START ▶</button>
-      <div style="font-size:12px;color:#818cf8;margin-top:16px;">Keys 1–4 or A–D also answer.</div>
+      <div><button id="tv-later" style="margin-top:14px;border:none;background:none;color:#a5b4fc;font-size:13px;font-weight:600;cursor:pointer;text-decoration:underline;">Maybe later</button></div>
+      <div style="font-size:12px;color:#818cf8;margin-top:10px;">Keys 1–4 or A–D also answer.</div>
     </div>`);
+    document.getElementById('tv-later').onclick = () => { closeOverlay(); _onClose(); };
     const go = document.getElementById('tv-go');
     go.focus();
     go.onclick = async () => {
@@ -429,5 +431,24 @@ window.Pages.trivia = (() => {
     };
   }
 
-  return { render, play };
+  /* Pops the game up by itself (called from the dashboard): once a day per
+     person per browser, only while today's question is still unplayed — or
+     straight back into it if their clock is already running. The intro still
+     waits for START, so nobody's 30 seconds begin unasked. */
+  async function autoPopup(onClose) {
+    if (document.getElementById(OV_ID)) return;
+    let t;
+    try { t = await H.api(`${BASE}/today`); } catch { return; }
+    if (t.state !== 'new' && t.state !== 'playing') return;
+    const key = `trivia-popup:${window.currentUser?.id || ''}:${t.day}`;
+    try {
+      if (t.state === 'new' && localStorage.getItem(key)) return;
+      localStorage.setItem(key, '1');
+    } catch { /* storage blocked — still show it */ }
+    // The user may have left the dashboard while /today was loading.
+    if ((window.location.hash || '#dashboard').replace('#', '') !== 'dashboard') return;
+    play(onClose);
+  }
+
+  return { render, play, autoPopup };
 })();
