@@ -77,6 +77,12 @@ window.Pages['moulding-jobwork'] = (() => {
         .mj-calc b { display:block;font-size:16px;color:#0f172a;margin-top:3px;text-transform:none;letter-spacing:0; }
         a.mj-lot { font-weight:700;color:#0f172a;text-decoration:none; }
         a.mj-lot.on { color:var(--color-primary); }
+        tr.mj-detail-row:hover { background:none !important; }
+        td.mj-detail-td { padding:0 10px 14px !important;background:#f8fafc;border-bottom:1px solid #e2e8f0; }
+        .mj-detail { background:#fff;border:1.5px solid var(--color-primary);border-radius:11px;padding:14px 16px;box-shadow:0 4px 14px rgba(1,80,170,.08); }
+        .hr-tbl-cards table.m-cards td.mj-detail-td { padding:0 8px 12px !important;text-align:left !important;line-height:1.5; }
+        @media (max-width:767px) { .mj-detail { padding:12px; } .mj-detail .hr-stats { grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
+          .mj-detail .hr-stats > div { padding:10px 11px !important; } .mj-detail .hr-stats > div > div:nth-child(2) { font-size:15px !important; white-space:nowrap; } }
       </style>
       ${_tab === 'dpr'
         ? H.header('Moulding (DPR)', 'Bhatti ka roz ka DPR — input, output, chhay aur melting loss', actions)
@@ -264,7 +270,8 @@ window.Pages['moulding-jobwork'] = (() => {
         <b>${esc(p.party)}</b>
         <div class="big">${kg(p.balance)} kg</div>
         <div class="mj-sub">abhi party ke paas baaki</div>
-        <div class="mj-sub" style="margin-top:4px;">Bheja (loss ke baad) ${kg(sent, 0)} · Wapas aaya ${kg(recd, 0)} kg</div>
+        <div class="mj-sub" style="margin-top:4px;">Bheja (loss ke baad) ${kg(sent, 0)} kg</div>
+        <div class="mj-sub">Wapas aaya ${kg(recd, 0)} kg</div>
         <div class="mj-sub">${p.openLots} open lot${p.openLots === 1 ? '' : 's'} of ${p.lots}</div>
       </button>`;
     }).join('')}</div>`;
@@ -272,8 +279,10 @@ window.Pages['moulding-jobwork'] = (() => {
     const lots = lotsOf(J.party);
     const R = { align: 'right', nowrap: true };
     const lotTable = H.table([
-      { label: 'Lot', m: 'title' }, 'Type', 'Goods', 'Challan / PO', { label: 'Sent (kg)', ...R }, { label: 'Loss', ...R },
-      { label: 'Final wt.', ...R }, { label: 'Received', ...R }, { label: 'Balance', ...R }, 'Status', 'Dates',
+      // Phone cards keep what tells the story — final, received, balance,
+      // status; sent/loss/dates are in the lot's dropdown anyway.
+      { label: 'Lot', m: 'title' }, 'Type', 'Goods', 'Challan / PO', { label: 'Sent (kg)', m: 'hide', ...R }, { label: 'Loss', m: 'hide', ...R },
+      { label: 'Final wt.', ...R }, { label: 'Received', ...R }, { label: 'Balance', ...R }, 'Status', { label: 'Dates', m: 'hide' },
     ], lots.map((l) => [
       `<a href="#" class="mj-lot${J.lot === l.lot_no ? ' on' : ''}" data-lot="${esc(l.lot_no)}" title="Is lot ke bills dekho">${esc(l.lot_no)} ${J.lot === l.lot_no ? '▴' : '▾'}</a>`,
       `${esc(l.lot_type)}${l.rate ? `<div class="mj-sub">₹${esc(l.rate)}/kg</div>` : ''}`,
@@ -293,7 +302,7 @@ window.Pages['moulding-jobwork'] = (() => {
         `${esc(e.lot_no)}${e.type === 'OPENING' ? '<div class="mj-sub">opening</div>' : ''}`,
         out ? esc(e.doc_no || '') : '', out ? esc(e.description || '') : '',
         e.type === 'OUT' ? kg(e.weight) : e.type === 'OPENING' ? kg(e.qty) : '',
-        e.type === 'OUT' ? `${kg(e.loss_wt)}<div class="mj-sub">${e.loss_pct}%</div>` : '',
+        e.type === 'OUT' && Number(e.loss_wt) > 0 ? `${kg(e.loss_wt)}<div class="mj-sub">${e.loss_pct}%</div>` : '',
         e.type === 'OUT' ? `<b>${kg(e.final_wt)}</b>` : e.type === 'OPENING' ? `<b>${kg(e.qty)}</b>` : '',
         out ? '' : esc(e.doc_no || ''), out ? '' : `<b>${kg(e.qty)}</b>`,
         kg(e.lot_balance), `<b>${kg(e.balance)}</b>`,
@@ -302,15 +311,28 @@ window.Pages['moulding-jobwork'] = (() => {
       ];
     }), { empty: 'Koi entry nahi', cards: true, maxHeight: '620px' });
 
+    // The open lot's detail drops down right under its own row ("lot pe
+    // click karun to uske neeche bills aane chahiye" — Sajil sir, 30 Oct).
+    let lotTableOpen = lotTable;
+    if (J.lot) {
+      const at = lotTable.indexOf(`data-lot="${esc(J.lot)}"`);
+      const end = at < 0 ? -1 : lotTable.indexOf('</tr>', at);
+      if (end >= 0) {
+        const cut = end + '</tr>'.length;
+        lotTableOpen = lotTable.slice(0, cut)
+          + `<tr class="mj-detail-row"><td colspan="11" class="mj-detail-td">${lotDetail(lots.find((l) => l.lot_no === J.lot))}</td></tr>`
+          + lotTable.slice(cut);
+      }
+    }
+
     return `${cards}
-      ${J.lot ? lotDetail(lots.find((l) => l.lot_no === J.lot)) : ''}
       <div class="mj-card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
         <b style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;">${esc(J.party)} — lots</b>
         <span style="display:flex;gap:10px;align-items:center;">
           ${J.lot ? `<a href="#" id="jw-lot-clear" style="font-size:12px;color:var(--color-primary);">Lot ${esc(J.lot)} ✕ — sab dikhao</a>` : '<span class="mj-sub">lot (booking) pe click karo — uska poora hisaab: bheja, bills, baaki</span>'}
           <button id="jw-open" class="btn-secondary btn-sm" title="Pichhle saal se party ke paas bacha maal">+ Opening balance</button>
         </span>
-      </div>${lotTable}</div>
+      </div>${lotTableOpen}</div>
       <div class="mj-card"><b style="display:block;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:8px;">Ledger${J.lot ? ` — lot ${esc(J.lot)}` : ''} (${ledger.length})</b>${ledgerTable}</div>`;
   }
 
@@ -335,24 +357,27 @@ window.Pages['moulding-jobwork'] = (() => {
     const outTable = H.table([{ label: 'Date', m: 'title' }, 'Challan / PO', 'Goods', { label: 'Weight', ...R }, { label: 'Loss', ...R }, { label: 'Final wt.', ...R }, ...(rate ? [{ label: 'Value', ...R }] : [])],
       outs.map((e) => [esc(H.fmtDate(e.entry_date)) + (e.type === 'OPENING' ? '<div class="mj-sub">opening</div>' : ''), esc(e.doc_no || ''), esc(e.description || ''),
         kg(e.type === 'OUT' ? e.weight : e.qty), e.type === 'OUT' ? kg(e.loss_wt) : '', `<b>${kg(e.type === 'OUT' ? e.final_wt : e.qty)}</b>`,
-        ...(rate ? [rs((e.type === 'OUT' ? Number(e.weight) || 0 : Number(e.qty) || 0) * rate)] : [])]), { empty: '—' });
+        ...(rate ? [rs((e.type === 'OUT' ? Number(e.weight) || 0 : Number(e.qty) || 0) * rate)] : [])]), { empty: '—', cards: true });
     const inTable = H.table([{ label: 'Bill date', m: 'title' }, 'Bill no.', { label: 'Received (kg)', ...R }, ...(rate ? [{ label: 'Value', ...R }] : []), { label: 'Lot balance after', ...R }],
       ins.map((e) => [esc(H.fmtDate(e.entry_date)), esc(e.doc_no || ''), `<b>${kg(e.qty)}</b>`, ...(rate ? [rs((Number(e.qty) || 0) * rate)] : []), kg(e.lot_balance)]),
-      { empty: 'Is booking ke against abhi koi bill nahi aaya' });
+      { empty: 'Is booking ke against abhi koi bill nahi aaya', cards: true });
     // The tally Sajil sir asked for (30 Oct): final wt. minus every bill
     // listed here must equal the lot's balance — say so, or show the gap.
     const gap = (Number(l.final) || 0) - recdKg - (Number(l.balance) || 0);
     const tally = `<div style="margin:2px 0 12px;padding:8px 12px;border-radius:8px;font-size:12.5px;background:${Math.abs(gap) < 0.005 ? '#f0fdf4' : '#fef2f2'};color:${Math.abs(gap) < 0.005 ? '#166534' : '#b91c1c'};">
         Tally: wapas aana ${kg(l.final)} − ${ins.length} bill${ins.length === 1 ? '' : 's'} ${kg(recdKg)} = <b>${kg((Number(l.final) || 0) - recdKg)} kg</b> baaki
         ${Math.abs(gap) < 0.005 ? '✓ lot balance se match' : `— lot balance ${kg(l.balance)} kg se ${kg(Math.abs(gap))} kg ka farak`}</div>`;
-    return `<div class="mj-card" id="jw-lot-detail" style="border-color:var(--color-primary);">
+    return `<div class="mj-detail" id="jw-lot-detail">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-        <b style="font-size:14px;color:#0f172a;">${esc(J.party)} — Lot ${esc(l.lot_no)} · ${esc(l.lot_type)}${rate ? ` @ ₹${esc(rate)}/kg` : ''}</b>
-        <span class="mj-sub">${esc(H.fmtDate(l.first_date))} → ${esc(H.fmtDate(l.last_date))}</span>
+        <b style="font-size:14px;color:#0f172a;">Lot ${esc(l.lot_no)} · ${esc(l.lot_type)}${rate ? ` @ ₹${esc(rate)}/kg` : ''}</b>
+        <span style="display:flex;gap:10px;align-items:center;">
+          <span class="mj-sub">${esc(H.fmtDate(l.first_date))} → ${esc(H.fmtDate(l.last_date))}</span>
+          <a href="#" data-lot="${esc(l.lot_no)}" style="font-size:12px;color:var(--color-primary);">Band karo ▴</a>
+        </span>
       </div>
       ${tiles}
       ${tally}
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));gap:12px;">
         <div><b style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:6px;">Maal bheja (booking)</b>${outTable}</div>
         <div><b style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:6px;">Bills aaye (IN)</b>${inTable}</div>
       </div>
@@ -581,9 +606,8 @@ window.Pages['moulding-jobwork'] = (() => {
       document.querySelectorAll('[data-party]').forEach((b) => b.addEventListener('click', () => { J.party = b.getAttribute('data-party'); J.lot = ''; render(); }));
       document.querySelectorAll('[data-lot]').forEach((a) => a.addEventListener('click', (e) => {
         e.preventDefault(); const l = a.getAttribute('data-lot'); J.lot = J.lot === l ? '' : l; render();
-        // The detail card renders above the lots table — bring it into view,
-        // otherwise clicking a lot low in the list looks like nothing happened.
-        if (J.lot) document.getElementById('jw-lot-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        // Keep the opened dropdown on screen (a lot near the bottom of the list).
+        if (J.lot) document.getElementById('jw-lot-detail')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }));
       document.querySelectorAll('[data-jedit]').forEach((b) => b.addEventListener('click', () => {
         const e = (J.entries || []).find((x) => x.id === b.getAttribute('data-jedit'));
