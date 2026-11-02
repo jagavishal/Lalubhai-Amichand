@@ -481,6 +481,11 @@ SCHEMA.push(...PN_SCHEMA);
 const { MJ_SCHEMA, mountMouldingJobwork } = require('./backend/moulding-jobwork.js');
 SCHEMA.push(...MJ_SCHEMA);
 
+// Daily Trivia — one 30-second question a day for everyone, scores on a big
+// screen (/trivia-screen). Routes mounted further down (search "mountTrivia").
+const { TRIVIA_SCHEMA, mountTrivia } = require('./backend/trivia.js');
+SCHEMA.push(...TRIVIA_SCHEMA);
+
 // The factory's own department list (the numbered list the plant keeps on
 // paper), used to seed the `departments` table on a fresh DB and as the
 // fallback whenever that table can't be read. Not the live list — once seeded,
@@ -6705,6 +6710,14 @@ const _jobworkAccess = requireAdminOrPage(['moulding-jobwork', 'job-work']);
 mountMouldingJobwork(app, {
   q, ensureSchema, requireAuth, isAdminUser, isSuperAdmin, getGoogleAuth, useDb: USE_DB,
   requireAccess: (req, res, next) => (/\/api\/moulding-jobwork\/jw(\/|$)/.test(req.path) ? _jobworkAccess : _mouldingAccess)(req, res, next),
+});
+
+// ── Daily Trivia routes ───────────────────────────────────────────────────────
+// Everything under /api/trivia/ plus the /trivia-screen big-screen page. Every
+// logged-in user plays; the question bank needs Admin/HOD. Works in local JSON
+// mode too. See backend/trivia.js.
+mountTrivia(app, {
+  q, ensureSchema, requireAuth, isAdminUser, isSuperAdmin, istToday, useDb: USE_DB,
 });
 
 /* ── Approve / reject straight from the notification email ────────────────────

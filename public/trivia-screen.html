@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Daily Trivia — Big Screen</title>
+<link rel="icon" href="/logo.png" />
+<!--
+  Daily Trivia big screen — for the office TV. Open /trivia-screen in a
+  browser that is logged in to the ERP, press F11 (or the ⛶ button).
+  Polls /api/trivia/board every 10 s; each new score flashes full-screen.
+  Today's question and answer appear after the server's reveal hour (18:00
+  IST) so the screen does not give it away. See backend/trivia.js.
+-->
+<style>
+  :root { --bg:#0b1020; --panel:rgba(255,255,255,.06); --line:rgba(255,255,255,.1); --text:#f8fafc; --muted:#94a3b8; --gold:#facc15; --green:#4ade80; --red:#f87171; --violet:#a5b4fc; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font-family:'Segoe UI', system-ui, -apple-system, Roboto, sans-serif; }
+  body { background:radial-gradient(circle at 15% 0%, #312e81 0, transparent 45%), radial-gradient(circle at 100% 100%, #4c1d95 0, transparent 40%), var(--bg); overflow:hidden; }
+  .wrap { height:100vh; display:flex; flex-direction:column; padding:2.2vh 2.4vw; gap:2vh; }
+  header { display:flex; align-items:center; gap:1.4vw; }
+  header img { height:6vh; border-radius:10px; background:#fff; padding:4px; }
+  header h1 { margin:0; font-size:4.4vh; font-weight:900; letter-spacing:-.02em; }
+  header h1 span { color:var(--gold); }
+  header .sub { color:var(--violet); font-size:2vh; font-weight:600; letter-spacing:.08em; text-transform:uppercase; }
+  header .clock { margin-left:auto; text-align:right; }
+  header .clock b { display:block; font-size:4.4vh; font-weight:800; font-variant-numeric:tabular-nums; }
+  header .clock small { color:var(--muted); font-size:1.8vh; }
+  #fs { border:1px solid var(--line); background:var(--panel); color:var(--text); border-radius:10px; font-size:2.2vh; padding:.6vh 1vw; cursor:pointer; }
+  .grid { flex:1; min-height:0; display:grid; grid-template-columns:1.35fr 1fr; gap:2vw; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:22px; padding:2.2vh 1.6vw; display:flex; flex-direction:column; min-height:0; }
+  .panel h2 { margin:0 0 1.4vh; font-size:2vh; letter-spacing:.14em; text-transform:uppercase; color:var(--violet); display:flex; justify-content:space-between; }
+  .panel h2 em { font-style:normal; color:var(--muted); letter-spacing:.04em; text-transform:none; }
+  .side { display:flex; flex-direction:column; gap:2vh; min-height:0; }
+  .rows { display:flex; flex-direction:column; gap:1vh; overflow:hidden; }
+  .row { display:grid; grid-template-columns:6vh 1fr auto auto; align-items:center; gap:1.2vw; padding:1.1vh 1vw; border-radius:14px; background:rgba(255,255,255,.04); font-size:2.7vh; animation:rin .4s ease-out both; }
+  .row .pos { font-weight:900; text-align:center; font-size:3vh; }
+  .grid > *, .pair > *, .side > * { min-width:0; }
+  .row .nm { min-width:0; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row .nm small { display:block; font-weight:500; color:var(--muted); font-size:1.7vh; }
+  .row .pts { font-weight:900; color:var(--gold); font-variant-numeric:tabular-nums; }
+  .row .meta { color:var(--muted); font-size:2vh; font-variant-numeric:tabular-nums; min-width:6vw; text-align:right; }
+  .row.top1 { background:linear-gradient(90deg, rgba(250,204,21,.25), rgba(250,204,21,.05)); font-size:3.3vh; }
+  .row.top2 { background:linear-gradient(90deg, rgba(203,213,225,.18), rgba(203,213,225,.03)); }
+  .row.top3 { background:linear-gradient(90deg, rgba(251,146,60,.18), rgba(251,146,60,.03)); }
+  .row.sm { font-size:2.2vh; padding:.8vh .9vw; grid-template-columns:4.5vh 1fr auto; }
+  .row.sm .pos { font-size:2.3vh; }
+  .pair { flex:1; min-height:0; display:grid; grid-template-columns:1fr 1fr; gap:1.2vw; }
+  .stats { display:grid; grid-template-columns:repeat(3,1fr); gap:1vw; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:1.6vh 1vw; text-align:center; }
+  .stat b { display:block; font-size:5vh; font-weight:900; line-height:1.05; }
+  .stat span { color:var(--muted); font-size:1.7vh; letter-spacing:.08em; text-transform:uppercase; }
+  .qbox { font-size:2.3vh; line-height:1.4; }
+  .qbox .ans { color:var(--green); font-weight:800; margin-top:.8vh; }
+  .qbox .fact { color:var(--muted); font-size:1.9vh; margin-top:.6vh; }
+  .empty { color:var(--muted); font-size:2.4vh; text-align:center; padding:6vh 0; }
+  .ticker { color:var(--muted); font-size:1.9vh; text-align:center; }
+  .ticker b { color:var(--gold); }
+  @keyframes rin { from { opacity:0; transform:translateX(-14px); } to { opacity:1; transform:none; } }
+
+  /* The flash */
+  #flash { position:fixed; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; z-index:10; text-align:center;
+           background:radial-gradient(circle, rgba(49,46,129,.97), rgba(11,16,32,.98)); }
+  #flash.on { display:flex; animation:fin .35s ease-out; }
+  #flash .who { font-size:8vh; font-weight:900; letter-spacing:-.02em; animation:pop .6s ease-out; }
+  #flash .dept { font-size:3vh; color:var(--violet); margin-top:.6vh; }
+  #flash .big { font-size:22vh; font-weight:900; line-height:1; color:var(--gold); margin-top:2vh; animation:pop .7s .1s ease-out both; text-shadow:0 0 6vh rgba(250,204,21,.45); }
+  #flash .big.zero { color:var(--red); text-shadow:none; }
+  #flash .what { font-size:3.4vh; margin-top:1vh; font-weight:700; }
+  #flash .rank { font-size:3vh; margin-top:2vh; color:var(--green); font-weight:800; }
+  @keyframes fin { from { opacity:0; } to { opacity:1; } }
+  @keyframes pop { 0% { transform:scale(.3); opacity:0; } 60% { transform:scale(1.12); opacity:1; } 100% { transform:scale(1); } }
+  .confetti { position:fixed; top:-4vh; width:1.2vh; height:2vh; border-radius:2px; z-index:11; animation:fall linear forwards; pointer-events:none; }
+  @keyframes fall { to { transform:translateY(110vh) rotate(720deg); } }
+
+  #gate { position:fixed; inset:0; display:none; align-items:center; justify-content:center; text-align:center; padding:24px; z-index:20; background:var(--bg); }
+  #gate a { color:var(--gold); }
+  @media (max-width:900px) {
+    body { overflow:auto; }
+    .wrap { height:auto; min-height:100vh; padding:16px; }
+    header { flex-wrap:wrap; } header .clock { margin-left:0; text-align:left; } #fs { display:none; }
+    .grid, .pair { grid-template-columns:1fr; }
+    header h1 { font-size:24px; } header .clock b { font-size:22px; } header .sub, header .clock small { font-size:12px; }
+    .row { font-size:16px; grid-template-columns:32px 1fr auto auto; } .row.top1 { font-size:18px; } .row .nm small, .row .meta { font-size:12px; }
+    .panel h2, .stat span { font-size:12px; } .stat b { font-size:28px; } .qbox { font-size:14px; } .qbox .fact { font-size:12px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="/logo.png" alt="" />
+    <div>
+      <h1>Daily <span>Trivia</span></h1>
+      <div class="sub" id="sub">30 seconds · one question a day</div>
+    </div>
+    <div class="clock"><b id="clock">--:--</b><small id="date"></small></div>
+    <button id="fs" title="Full screen">⛶</button>
+  </header>
+  <div class="grid">
+    <div class="panel">
+      <h2>Today's leaderboard <em id="todayNote"></em></h2>
+      <div class="rows" id="today"></div>
+    </div>
+    <div class="side">
+      <div class="stats">
+        <div class="stat"><b id="sPlayed">0</b><span>Played</span></div>
+        <div class="stat"><b id="sRight" style="color:var(--green)">0</b><span>Got it right</span></div>
+        <div class="stat"><b id="sTop" style="color:var(--gold)">0</b><span>Top score</span></div>
+      </div>
+      <div class="panel" style="flex:0 0 auto;"><h2>Today's question</h2><div class="qbox" id="qbox"></div></div>
+      <div class="pair">
+        <div class="panel"><h2>This month <em id="monthName"></em></h2><div class="rows" id="month"></div></div>
+        <div class="panel"><h2>Departments <em>avg/play</em></h2><div class="rows" id="depts"></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="ticker" id="ticker"></div>
+</div>
+<div id="flash"></div>
+<div id="gate"><div>
+  <div style="font-size:48px;">🔒</div>
+  <h2>Log in to the ERP in this browser first</h2>
+  <p style="color:#94a3b8;">Then come back to this page. <a href="/#login">Open the ERP login</a></p>
+</div></div>
+
+<script>
+(function () {
+  var POLL_MS = 10000, FLASH_MS = 6500, ROWS = 10;
+  var seen = null;          // play ids already shown (null = first load: show nothing)
+  var queue = [], flashing = false, last = null;
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var medal = function (i) { return ['🥇', '🥈', '🥉'][i] || String(i + 1); };
+  var secs = function (ms) { return (ms / 1000).toFixed(1) + 's'; };
+
+  function clock() {
+    var d = new Date();
+    $('clock').textContent = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+    $('date').textContent = d.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' });
+  }
+
+  function rows(list, kind) {
+    if (!list.length) return '<div class="empty">' + (kind === 'today' ? 'Nobody yet — who will be first? 🧠' : 'No scores yet') + '</div>';
+    return list.map(function (u, i) {
+      var cls = 'row' + (kind === 'today' && i < 3 ? ' top' + (i + 1) : '') + (kind !== 'today' ? ' sm' : '');
+      var name = '<div class="nm">' + esc(u.name || u.department) + (u.department && u.name ? '<small>' + esc(u.department) + '</small>' : '') + '</div>';
+      if (kind === 'today') {
+        var meta = u.correct ? secs(u.ms) : '✗';
+        var streak = u.streak >= 2 ? '🔥' + u.streak : '';
+        return '<div class="' + cls + '" style="animation-delay:' + (i * 40) + 'ms"><div class="pos">' + medal(i) + '</div>' + name
+          + '<div class="meta">' + meta + ' ' + streak + '</div><div class="pts">' + u.points + '</div></div>';
+      }
+      var pts = kind === 'dept' ? u.avg : u.points;
+      return '<div class="' + cls + '"><div class="pos">' + medal(i) + '</div>' + name + '<div class="pts">' + pts + '</div></div>';
+    }).join('');
+  }
+
+  function paint(b) {
+    last = b;
+    var s = b.todayStats;
+    $('sPlayed').textContent = s.played;
+    $('sRight').textContent = s.correct;
+    $('sTop').textContent = b.today.length ? b.today[0].points : 0;
+    $('sub').textContent = b.limitSec + ' seconds · one question a day · play it in the ERP';
+    $('today').innerHTML = rows(b.today.slice(0, ROWS), 'today');
+    $('todayNote').textContent = b.today.length > ROWS ? '+' + (b.today.length - ROWS) + ' more' : '';
+    $('month').innerHTML = rows(b.month.slice(0, 5), 'month');
+    $('depts').innerHTML = rows(b.departments.slice(0, 5).map(function (d) { return { name: d.department, avg: d.avg }; }), 'dept');
+    $('monthName').textContent = new Date(b.day + 'T00:00:00').toLocaleDateString('en-IN', { month: 'long' });
+    var q = b.question;
+    $('qbox').innerHTML = !q ? '<span style="color:var(--muted)">No question today</span>'
+      : q.question
+        ? '<div>' + esc(q.question) + '</div><div class="ans">✓ ' + esc(q.answer) + '</div>' + (q.fact ? '<div class="fact">💡 ' + esc(q.fact) + '</div>' : '')
+        : '<div>Category: <b style="color:var(--gold)">' + esc(q.category || 'General') + '</b></div><div class="fact">The answer shows here after ' + b.revealHour + ':00. No spoilers! 🤫</div>';
+    var r = b.recent[0];
+    $('ticker').innerHTML = r ? 'Latest: <b>' + esc(r.name) + '</b> — ' + r.points + ' pts' + (r.correct ? ' in ' + secs(r.ms_taken) : '') : '';
+  }
+
+  function confetti() {
+    var colors = ['#facc15', '#4ade80', '#60a5fa', '#f472b6', '#a78bfa', '#fb923c'];
+    for (var i = 0; i < 70; i++) {
+      var c = document.createElement('div');
+      c.className = 'confetti';
+      c.style.left = Math.random() * 100 + 'vw';
+      c.style.background = colors[i % colors.length];
+      c.style.animationDuration = (2.2 + Math.random() * 2.5) + 's';
+      c.style.animationDelay = (Math.random() * .6) + 's';
+      document.body.appendChild(c);
+      setTimeout(function (el) { el.remove(); }.bind(null, c), 5500);
+    }
+  }
+
+  function nextFlash() {
+    if (flashing || !queue.length) return;
+    flashing = true;
+    var p = queue.shift();
+    var pos = last ? last.today.findIndex(function (u) { return u.name === p.name; }) : -1;
+    var f = $('flash');
+    f.innerHTML = '<div class="who">' + esc(p.name) + '</div>'
+      + (p.department ? '<div class="dept">' + esc(p.department) + '</div>' : '')
+      + '<div class="big' + (p.points ? '' : ' zero') + '">' + p.points + '</div>'
+      + '<div class="what">' + (p.correct ? '🎉 Correct in ' + secs(p.ms_taken) + '!' : p.ms_taken >= 30000 ? '⏱ Out of time!' : '😅 Better luck tomorrow!') + '</div>'
+      + (p.correct && pos >= 0 ? '<div class="rank">' + (pos === 0 ? '👑 New leader today!' : 'Now #' + (pos + 1) + ' today') + '</div>' : '');
+    f.className = 'on';
+    if (p.correct) confetti();
+    setTimeout(function () { f.className = ''; flashing = false; setTimeout(nextFlash, 600); }, FLASH_MS);
+  }
+
+  function poll() {
+    fetch('/api/trivia/board', { credentials: 'same-origin', cache: 'no-store' })
+      .then(function (r) {
+        if (r.status === 401) { $('gate').style.display = 'flex'; throw new Error('auth'); }
+        $('gate').style.display = 'none';
+        return r.json();
+      })
+      .then(function (b) {
+        paint(b);
+        var ids = b.recent.map(function (p) { return p.id; });
+        if (seen === null) seen = {};
+        else b.recent.slice().reverse().forEach(function (p) { if (!seen[p.id]) queue.push(p); });
+        ids.forEach(function (id) { seen[id] = 1; });
+        nextFlash();
+      })
+      .catch(function () {});
+  }
+
+  $('fs').onclick = function () {
+    if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(function () {});
+  };
+  // ?demo shows what a flash looks like without anybody playing.
+  if (/[?&]demo\b/.test(location.search)) setTimeout(function () { queue.push({ id: -1, name: 'Demo Player', department: 'Accounts', points: 165, correct: 1, ms_taken: 7400 }); nextFlash(); }, 1500);
+
+  clock(); setInterval(clock, 1000 * 15);
+  poll(); setInterval(poll, POLL_MS);
+  // A day change (or a long-running TV) — reload once at night to pick up any new version.
+  setInterval(function () { if (new Date().getHours() === 3 && new Date().getMinutes() < 1) location.reload(); }, 60000);
+})();
+</script>
+</body>
+</html>

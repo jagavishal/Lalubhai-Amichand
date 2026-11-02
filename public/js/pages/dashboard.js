@@ -263,6 +263,39 @@ window.Pages.dashboard = (function () {
     if (btn) btn.onclick = () => _openShipTargetModal(t);
   }
 
+  /* Daily Trivia strip: "Play today's question" until played, then the
+     score. The game itself lives on the trivia page (Pages.trivia.play).
+     Same rules as _paintShipTarget(): its own fetch, silent on failure. */
+  async function _paintTrivia() {
+    const box = document.getElementById('db-trivia');
+    if (!box || !window.Pages?.trivia) return;
+    const t = await Utils.apiFetch('/api/trivia/today').catch(() => null);
+    if (!t || t.state === 'none') { box.style.display = 'none'; return; }
+    const esc = Utils.esc;
+    const done = t.state === 'done';
+    const r = t.result;
+    box.style.display = '';
+    box.innerHTML = `
+      <div class="card" style="padding:12px 18px;border-left:3px solid ${done ? (r.correct ? '#16a34a' : '#94a3b8') : '#7c3aed'};display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div style="font-size:26px;line-height:1;">${done ? (r.correct ? '🏆' : '🧠') : '🧠'}</div>
+        <div style="flex:1;min-width:200px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-secondary);">
+            Daily Trivia · ${esc(done ? r.category : t.category || 'General')}
+          </div>
+          <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-top:2px;">
+            ${done ? (r.correct ? `${r.points} points today — correct in ${(r.ms_taken / 1000).toFixed(1)}s` : 'Played today — better luck tomorrow!')
+              : t.state === 'playing' ? 'Your 30 seconds are running!' : `Today's question is up — ${t.limitSec} seconds, one try`}
+          </div>
+        </div>
+        ${done ? `<button type="button" id="db-tv-board" class="btn-secondary btn-sm">Leaderboard</button>`
+          : `<button type="button" id="db-tv-play" class="btn-primary btn-sm">${t.state === 'playing' ? '▶ Resume' : '▶ Play'}</button>`}
+      </div>`;
+    const play = document.getElementById('db-tv-play');
+    if (play) play.onclick = () => window.Pages.trivia.play(_paintTrivia);
+    const board = document.getElementById('db-tv-board');
+    if (board) board.onclick = () => Router.navigate('trivia');
+  }
+
   function _openShipTargetModal(t) {
     document.getElementById('db-st-modal')?.remove();
     const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--border,#e2e8f0);border-radius:8px;font-size:13px;color:var(--text-primary);background:var(--surface,#fff);outline:none;';
@@ -426,6 +459,7 @@ window.Pages.dashboard = (function () {
     _renderShell(el, admin, hod);
     window.Festival?.mount(document.getElementById('db-wrap'));
     _paintShipTarget();
+    _paintTrivia();
     _paintOnLeave();
     _paintMeetings();
     } catch(err) {
@@ -601,6 +635,7 @@ window.Pages.dashboard = (function () {
         <!-- Who is away today, and who covers for them. Filled by _paintOnLeave()
              after the shell renders; stays empty (and invisible) when nobody is out. -->
         <div id="db-shiptarget" style="display:none;margin-bottom:16px;"></div>
+        <div id="db-trivia" style="display:none;margin-bottom:16px;"></div>
         <div id="db-onleave" style="display:none;margin-bottom:16px;"></div>
 
         <div id="db-stat-cards" style="display:grid;grid-template-columns:repeat(6,1fr);gap:1rem;margin-bottom:20px;">
