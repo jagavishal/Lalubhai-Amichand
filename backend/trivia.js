@@ -332,6 +332,33 @@ function mountTrivia(app, ctx) {
       if (!useDb) { const d = await readFile(); d.plays = d.plays.filter((x) => x.id !== id); return writeFile(d); }
       await q('DELETE FROM trivia_plays WHERE id = $1', [id]);
     },
+    // One person's plays between two days — "remove from this month's board".
+    async deleteUserPlays(userId, from, to) {
+      if (!useDb) {
+        const d = await readFile();
+        const before = d.plays.length;
+        d.plays = d.plays.filter((x) => !(x.user_id === userId && x.day >= from && x.day <= to));
+        await writeFile(d);
+        return before - d.plays.length;
+      }
+      const n = (await q('SELECT COUNT(*) AS n FROM trivia_plays WHERE user_id = $1 AND day >= $2 AND day <= $3', [userId, from, to]))[0];
+      await q('DELETE FROM trivia_plays WHERE user_id = $1 AND day >= $2 AND day <= $3', [userId, from, to]);
+      return Number(n?.n) || 0;
+    },
+    // Deleting today's question: forget the pin and today's plays on it, so
+    // the next request picks a fresh question and everyone can play that.
+    async unpinDay(day) {
+      if (!useDb) {
+        const d = await readFile();
+        const qid = d.days[day];
+        delete d.days[day];
+        d.plays = d.plays.filter((x) => !(x.day === day && x.question_id === qid));
+        return writeFile(d);
+      }
+      const qid = await this.dayQuestionId(day);
+      if (qid) await q('DELETE FROM trivia_plays WHERE day = $1 AND question_id = $2', [day, qid]);
+      await q('DELETE FROM trivia_days WHERE day = $1', [day]);
+    },
     async plays(from, to) {
       if (!useDb) return (await readFile()).plays.filter((p) => p.day >= from && p.day <= to);
       return (await q('SELECT * FROM trivia_plays WHERE day >= $1 AND day <= $2 ORDER BY id', [from, to])).map(pOut);
@@ -417,6 +444,7 @@ function mountTrivia(app, ctx) {
       u.name = p.user_name || u.name;
       u.department = p.department || u.department;
       u.points += p.points; u.played += 1; u.correct += p.correct; u.ms += p.correct ? p.ms_taken : 0;
+      u.play_id = p.id;   // the play itself, on the one-day (today) board
       users.set(p.user_id, u);
     }
     // Ties go to whoever answered faster in total.
@@ -596,25 +624,44 @@ function mountTrivia(app, ctx) {
     return { saved, errors };
   }, { manage: true }));
 
-  // A question that has been played is switched off instead, so old results
-  // keep their question.
+  // Deleting is permanent. Past scores stay (they keep only the question id);
+  // deleting today's question also clears today's plays on it, and a fresh
+  // question is picked on the next request. Switching a question off (Edit →
+  // Active, or the Off button) is the gentle alternative.
   app.delete(`${BASE}/questions/:id`, requireAuth, route(async (req) => {
     const m = await store.question(req.params.id);
     if (!m) bad('Question not found', 404);
-    const used = (await store.days()).some((d) => d.question_id === m.id);
-    if (used) await store.saveQuestion({ ...m, active: 0 });
-    else await store.deleteQuestion(m.id);
-    return { ok: true, archived: used };
+    const day = istToday().iso;
+    const wasToday = (await store.dayQuestionId(day)) === m.id;
+    await store.deleteQuestion(m.id);
+    if (wasToday) await store.unpinDay(day);
+    return { ok: true, wasToday };
   }, { manage: true }));
 
-  // Let someone play today's question again (browser crashed, wrong tap…).
+  // Admin switch: on / off without opening the editor.
+  app.post(`${BASE}/questions/:id/active`, requireAuth, route(async (req) => {
+    const m = await store.question(req.params.id);
+    if (!m) bad('Question not found', 404);
+    await store.saveQuestion({ ...m, active: req.body?.active ? 1 : 0 });
+    return { ok: true };
+  }, { manage: true }));
+
+  // Delete one score, any day. On today's play it also lets that person
+  // play today's question again (browser crashed, wrong tap…).
   app.delete(`${BASE}/plays/:id`, requireAuth, route(async (req) => {
     const id = Number(req.params.id);
-    const day = istToday().iso;
-    const p = (await store.plays(day, day)).find((x) => x.id === id);
-    if (!p) bad('Only today\'s plays can be reset', 404);
+    if (!Number.isInteger(id)) bad('Bad play id');
     await store.deletePlay(id);
     return { ok: true };
+  }, { manage: true }));
+
+  // Remove a person from a stretch of the board (the month view's Delete).
+  app.post(`${BASE}/plays/delete-user`, requireAuth, route(async (req) => {
+    const userId = str(req.body?.user_id, 64);
+    const from = isoDate(req.body?.from);
+    const to = isoDate(req.body?.to);
+    if (!userId || !from || !to || from > to) bad('Pick a person and a date range');
+    return { ok: true, deleted: await store.deleteUserPlays(userId, from, to) };
   }, { manage: true }));
 
   // The big screen.

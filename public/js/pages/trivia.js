@@ -104,16 +104,25 @@ window.Pages.trivia = (() => {
   function rankTable(rows, { month = false } = {}) {
     if (!rows.length) return H.empty(month ? 'Nobody has played this month yet' : 'Nobody has played today yet', 'Be the first!');
     const me = String(window.currentUser?.id ?? '');
+    const manage = !!T?.manage;
     const cols = month
       ? ['#', { label: 'Name', m: 'title' }, 'Department', { label: 'Points', align: 'right' }, { label: 'Right', align: 'right' }, { label: 'Streak', align: 'right' }]
       : ['#', { label: 'Name', m: 'title' }, 'Department', { label: 'Points', align: 'right' }, { label: 'Time', align: 'right' }, { label: 'Streak', align: 'right' }];
+    if (manage) cols.push({ label: '', m: 'actions' });
     return H.table(cols, rows.map((u, i) => {
       const you = u.user_id === me;
       const name = `<b style="${you ? 'color:var(--color-primary);' : ''}">${esc(u.name)}${you ? ' (you)' : ''}</b>`;
       const streak = u.streak >= 2 ? `🔥 ${u.streak}` : u.streak || '—';
-      return month
+      const row = month
         ? [medal(i), name, esc(u.department || '—'), `<b>${u.points}</b>`, `${u.correct}/${u.played}`, streak]
         : [medal(i), name, esc(u.department || '—'), `<b>${u.points}</b>`, u.correct ? secs(u.ms) : (u.points ? '' : '✗'), streak];
+      // Admin/HOD: today = that one score; month = all of that person's scores this month.
+      if (manage) {
+        row.push(month
+          ? `<button class="btn-secondary btn-sm" style="color:#b91c1c;" data-tv-deluser="${esc(u.user_id)}" data-tv-name="${esc(u.name)}" title="Delete all of this person's scores this month">Delete</button>`
+          : `<button class="btn-secondary btn-sm" style="color:#b91c1c;" data-tv-delplay="${u.play_id}" data-tv-name="${esc(u.name)}" title="Delete this score (they can play today's question again)">Delete</button>`);
+      }
+      return row;
     }), { cards: true });
   }
 
@@ -153,7 +162,7 @@ window.Pages.trivia = (() => {
     const plays = Q.plays.length
       ? H.table([{ label: 'Name', m: 'title' }, 'Department', { label: 'Points', align: 'right' }, { label: 'Time', align: 'right' }, { label: '', m: 'actions' }],
         Q.plays.map((p) => [esc(p.name), esc(p.department || '—'), p.answered ? String(p.points) : 'playing…', p.answered ? secs(p.ms_taken) : '',
-          `<button class="btn-secondary btn-sm" data-tv-reset="${p.id}" title="Let them play today's question again">Reset</button>`]), { cards: true })
+          `<button class="btn-secondary btn-sm" style="color:#b91c1c;" data-tv-delplay="${p.id}" data-tv-name="${esc(p.name)}" title="Delete this score — they can play today's question again">Reset / Delete</button>`]), { cards: true })
       : H.empty('Nobody has played today yet');
     return H.stats([
       { label: 'Questions', value: String(Q.questions.filter((m) => m.active).length) },
@@ -176,7 +185,8 @@ window.Pages.trivia = (() => {
           esc(m.options[m.answer_idx] || ''), esc(m.category), tag,
           `<div style="display:flex;gap:6px;justify-content:flex-end;">
              <button class="btn-secondary btn-sm" data-tv-edit="${esc(m.id)}">Edit</button>
-             <button class="btn-secondary btn-sm" data-tv-del="${esc(m.id)}" style="color:#b91c1c;">${m.times_used ? 'Switch off' : 'Delete'}</button>
+             <button class="btn-secondary btn-sm" data-tv-toggle="${esc(m.id)}" title="${m.active ? 'Stop it from being picked' : 'Let it be picked again'}">${m.active ? 'Off' : 'On'}</button>
+             <button class="btn-secondary btn-sm" data-tv-del="${esc(m.id)}" style="color:#b91c1c;">Delete</button>
            </div>`];
       }), { empty: 'No questions match', maxHeight: '520px', cards: true })
       + `<div style="height:14px;"></div>` + sec('Today\'s plays') + plays;
@@ -261,6 +271,19 @@ window.Pages.trivia = (() => {
 
   function bind() {
     document.getElementById('tv-play')?.addEventListener('click', () => play(refresh));
+    // Admin/HOD score deletes — on the Today and Leaderboard tables and in
+    // the Questions tab's "Today's plays".
+    document.querySelectorAll('[data-tv-delplay]').forEach((b) => b.addEventListener('click', async () => {
+      if (!window.confirm(`Delete ${b.dataset.tvName}'s score? If it is today's, they can play today's question again.`)) return;
+      try { await H.del(`${BASE}/plays/${b.dataset.tvDelplay}`); await load(); paint(); H.toast('Score deleted'); } catch (e) { H.fail(e); }
+    }));
+    document.querySelectorAll('[data-tv-deluser]').forEach((b) => b.addEventListener('click', async () => {
+      if (!window.confirm(`Delete ALL of ${b.dataset.tvName}'s scores this month? This cannot be undone.`)) return;
+      try {
+        const r = await H.post(`${BASE}/plays/delete-user`, { user_id: b.dataset.tvDeluser, from: B.day.slice(0, 8) + '01', to: B.day });
+        await load(); paint(); H.toast(`Deleted ${r.deleted} score${r.deleted === 1 ? '' : 's'}`);
+      } catch (e) { H.fail(e); }
+    }));
     if (_tab !== 'questions' || !Q) return;
     const qs = document.getElementById('tv-qs');
     qs?.addEventListener('input', () => {
@@ -275,12 +298,16 @@ window.Pages.trivia = (() => {
       editQuestion(Q.questions.find((m) => m.id === b.dataset.tvEdit))));
     document.querySelectorAll('[data-tv-del]').forEach((b) => b.addEventListener('click', async () => {
       const m = Q.questions.find((x) => x.id === b.dataset.tvDel);
-      if (!m || !window.confirm(m.times_used ? 'Switch this question off? It has been played, so it is kept for the old results.' : 'Delete this question?')) return;
-      try { await H.del(`${BASE}/questions/${encodeURIComponent(m.id)}`); Q = await H.api(`${BASE}/questions`); paint(); } catch (e) { H.fail(e); }
+      const msg = m?.id === Q.todayId
+        ? 'This is TODAY\'s question. Deleting it also deletes today\'s scores on it, and a new question is picked for everyone. Delete it permanently?'
+        : 'Delete this question permanently? (Use "Off" instead to just stop it being picked.)';
+      if (!m || !window.confirm(msg)) return;
+      try { await H.del(`${BASE}/questions/${encodeURIComponent(m.id)}`); await load(); paint(); H.toast('Question deleted'); } catch (e) { H.fail(e); }
     }));
-    document.querySelectorAll('[data-tv-reset]').forEach((b) => b.addEventListener('click', async () => {
-      if (!window.confirm('Reset this play? They can then play today\'s question again.')) return;
-      try { await H.del(`${BASE}/plays/${b.dataset.tvReset}`); await load(); paint(); H.toast('Play reset'); } catch (e) { H.fail(e); }
+    document.querySelectorAll('[data-tv-toggle]').forEach((b) => b.addEventListener('click', async () => {
+      const m = Q.questions.find((x) => x.id === b.dataset.tvToggle);
+      if (!m) return;
+      try { await H.post(`${BASE}/questions/${encodeURIComponent(m.id)}/active`, { active: !m.active }); Q = await H.api(`${BASE}/questions`); paint(); } catch (e) { H.fail(e); }
     }));
   }
 
