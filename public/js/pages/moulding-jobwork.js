@@ -275,7 +275,7 @@ window.Pages['moulding-jobwork'] = (() => {
       { label: 'Lot', m: 'title' }, 'Type', 'Goods', 'Challan / PO', { label: 'Sent (kg)', ...R }, { label: 'Loss', ...R },
       { label: 'Final wt.', ...R }, { label: 'Received', ...R }, { label: 'Balance', ...R }, 'Status', 'Dates',
     ], lots.map((l) => [
-      `<a href="#" class="mj-lot${J.lot === l.lot_no ? ' on' : ''}" data-lot="${esc(l.lot_no)}">${esc(l.lot_no)}</a>`,
+      `<a href="#" class="mj-lot${J.lot === l.lot_no ? ' on' : ''}" data-lot="${esc(l.lot_no)}" title="Is lot ke bills dekho">${esc(l.lot_no)} ${J.lot === l.lot_no ? '▴' : '▾'}</a>`,
       `${esc(l.lot_type)}${l.rate ? `<div class="mj-sub">₹${esc(l.rate)}/kg</div>` : ''}`,
       esc(l.description || ''), esc((l.docs || []).join(', ')), kg(l.sent), `${l.loss_pct || 0}%`, kg(l.final), kg(l.received),
       `<b>${kg(l.balance)}</b>`, statusPill(l.status),
@@ -339,12 +339,19 @@ window.Pages['moulding-jobwork'] = (() => {
     const inTable = H.table([{ label: 'Bill date', m: 'title' }, 'Bill no.', { label: 'Received (kg)', ...R }, ...(rate ? [{ label: 'Value', ...R }] : []), { label: 'Lot balance after', ...R }],
       ins.map((e) => [esc(H.fmtDate(e.entry_date)), esc(e.doc_no || ''), `<b>${kg(e.qty)}</b>`, ...(rate ? [rs((Number(e.qty) || 0) * rate)] : []), kg(e.lot_balance)]),
       { empty: 'Is booking ke against abhi koi bill nahi aaya' });
-    return `<div class="mj-card" style="border-color:var(--color-primary);">
+    // The tally Sajil sir asked for (30 Oct): final wt. minus every bill
+    // listed here must equal the lot's balance — say so, or show the gap.
+    const gap = (Number(l.final) || 0) - recdKg - (Number(l.balance) || 0);
+    const tally = `<div style="margin:2px 0 12px;padding:8px 12px;border-radius:8px;font-size:12.5px;background:${Math.abs(gap) < 0.005 ? '#f0fdf4' : '#fef2f2'};color:${Math.abs(gap) < 0.005 ? '#166534' : '#b91c1c'};">
+        Tally: wapas aana ${kg(l.final)} − ${ins.length} bill${ins.length === 1 ? '' : 's'} ${kg(recdKg)} = <b>${kg((Number(l.final) || 0) - recdKg)} kg</b> baaki
+        ${Math.abs(gap) < 0.005 ? '✓ lot balance se match' : `— lot balance ${kg(l.balance)} kg se ${kg(Math.abs(gap))} kg ka farak`}</div>`;
+    return `<div class="mj-card" id="jw-lot-detail" style="border-color:var(--color-primary);">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
         <b style="font-size:14px;color:#0f172a;">${esc(J.party)} — Lot ${esc(l.lot_no)} · ${esc(l.lot_type)}${rate ? ` @ ₹${esc(rate)}/kg` : ''}</b>
         <span class="mj-sub">${esc(H.fmtDate(l.first_date))} → ${esc(H.fmtDate(l.last_date))}</span>
       </div>
       ${tiles}
+      ${tally}
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">
         <div><b style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:6px;">Maal bheja (booking)</b>${outTable}</div>
         <div><b style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;margin-bottom:6px;">Bills aaye (IN)</b>${inTable}</div>
@@ -574,6 +581,9 @@ window.Pages['moulding-jobwork'] = (() => {
       document.querySelectorAll('[data-party]').forEach((b) => b.addEventListener('click', () => { J.party = b.getAttribute('data-party'); J.lot = ''; render(); }));
       document.querySelectorAll('[data-lot]').forEach((a) => a.addEventListener('click', (e) => {
         e.preventDefault(); const l = a.getAttribute('data-lot'); J.lot = J.lot === l ? '' : l; render();
+        // The detail card renders above the lots table — bring it into view,
+        // otherwise clicking a lot low in the list looks like nothing happened.
+        if (J.lot) document.getElementById('jw-lot-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }));
       document.querySelectorAll('[data-jedit]').forEach((b) => b.addEventListener('click', () => {
         const e = (J.entries || []).find((x) => x.id === b.getAttribute('data-jedit'));

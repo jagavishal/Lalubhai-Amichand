@@ -218,6 +218,87 @@ window.Pages.dashboard = (function () {
       </div>`;
   }
 
+  /* Shipment target banner (Sajil sir, 30 Oct): "5 by 31 Jan" counting down
+     as each container goes out — every Export Documentation shipment dated
+     inside the target window counts (see /api/shipment-target). Same rules as
+     _paintOnLeave(): its own fetch, silent on failure. Admin sets it here. */
+  async function _paintShipTarget() {
+    const box = document.getElementById('db-shiptarget');
+    if (!box) return;
+    const t = await Utils.apiFetch('/api/shipment-target').catch(() => null);
+    if (!t) return;
+    const esc = Utils.esc;
+    if (!t.target) {
+      if (!t.canEdit) return;
+      box.style.display = '';
+      box.innerHTML = `<button type="button" id="db-st-set" class="btn-secondary btn-sm">🚢 Set shipment target</button>`;
+      document.getElementById('db-st-set').onclick = () => _openShipTargetModal(t);
+      return;
+    }
+    const pct = Math.min(100, Math.round((t.done / t.target) * 100));
+    const daysLeft = Math.ceil((new Date(t.by + 'T23:59:59') - new Date()) / 86400000);
+    const hit = t.left === 0;
+    const color = hit ? '#16a34a' : daysLeft < 0 ? '#dc2626' : 'var(--color-primary)';
+    box.style.display = '';
+    box.innerHTML = `
+      <div class="card" style="padding:14px 18px;border-left:3px solid ${color};display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
+        <div style="font-size:2.2rem;font-weight:800;line-height:1;color:${color};min-width:52px;text-align:center;">${hit ? '✓' : t.left}</div>
+        <div style="flex:1;min-width:220px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-secondary);">
+            🚢 ${esc(t.title || 'Shipment target')} · ${t.target} by ${esc(fmt(t.by))}
+          </div>
+          <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin:3px 0 8px;">
+            ${hit ? `Target done — ${t.done} shipped 🎉`
+              : `${t.left} more to go · ${t.done} of ${t.target} shipped`
+                + (daysLeft >= 0 ? ` · ${daysLeft} day${daysLeft === 1 ? '' : 's'} left` : ' · date passed')}
+          </div>
+          <div style="height:8px;border-radius:99px;background:var(--border-light,#e2e8f0);overflow:hidden;">
+            <div style="height:100%;width:${pct}%;background:${color};border-radius:99px;transition:width .6s ease;"></div>
+          </div>
+          ${t.shipments.length ? `<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Done: ${t.shipments.map((s) => esc(s.invoiceNo)).join(', ')}</div>` : ''}
+        </div>
+        ${t.canEdit ? `<button type="button" id="db-st-set" class="btn-secondary btn-sm">Edit target</button>` : ''}
+      </div>`;
+    const btn = document.getElementById('db-st-set');
+    if (btn) btn.onclick = () => _openShipTargetModal(t);
+  }
+
+  function _openShipTargetModal(t) {
+    document.getElementById('db-st-modal')?.remove();
+    const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--border,#e2e8f0);border-radius:8px;font-size:13px;color:var(--text-primary);background:var(--surface,#fff);outline:none;';
+    const labelStyle = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:5px;';
+    const field = (id, label, type, value, ph) => `<div><label style="${labelStyle}" for="${id}">${label}</label>
+      <input id="${id}" type="${type}" value="${Utils.esc(String(value))}" placeholder="${ph || ''}"${type === 'number' ? ' min="0"' : ''} style="${inputStyle}" /></div>`;
+    document.body.insertAdjacentHTML('beforeend', window.UI.modal({
+      id: 'db-st-modal', title: 'Shipment target', hiddenByDefault: false, closeButtonId: 'db-st-x', width: 420,
+      subtitle: 'Every Export Documentation shipment dated in this window counts as done',
+      bodyHTML: field('db-st-target', 'Target (shipments)', 'number', t.target || '', '5')
+        + `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">`
+        + field('db-st-from', 'Count from', 'date', t.from || todayISO())
+        + field('db-st-by', 'Target date', 'date', t.by || '') + `</div>`
+        + field('db-st-title', 'Title (optional)', 'text', t.title || '', 'Shipment target')
+        + `<div style="font-size:11.5px;color:var(--text-muted);">Target 0 hides the banner.</div>`,
+      footerHTML: `<button type="button" id="db-st-cancel" class="btn-secondary">Cancel</button><button type="button" id="db-st-save" class="btn-primary">Save</button>`,
+    }));
+    const modal = document.getElementById('db-st-modal');
+    const close = () => modal.remove();
+    modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+    document.getElementById('db-st-x').onclick = close;
+    document.getElementById('db-st-cancel').onclick = close;
+    document.getElementById('db-st-save').onclick = async () => {
+      const val = (id) => document.getElementById(id).value.trim();
+      try {
+        await Utils.apiFetch('/api/shipment-target', {
+          method: 'PUT',
+          body: JSON.stringify({ target: val('db-st-target'), from: val('db-st-from'), by: val('db-st-by'), title: val('db-st-title') }),
+        });
+        close();
+        Utils.showToast('Shipment target saved', 'success');
+        _paintShipTarget();
+      } catch (e) { Utils.showToast(e.message || 'Could not save', 'error'); }
+    };
+  }
+
   function _openLeaveModal() {
     const page = window.Pages && window.Pages['hr-leave'];
     if (page && typeof page.applyLeave === 'function') page.applyLeave();
@@ -344,6 +425,7 @@ window.Pages.dashboard = (function () {
 
     _renderShell(el, admin, hod);
     window.Festival?.mount(document.getElementById('db-wrap'));
+    _paintShipTarget();
     _paintOnLeave();
     _paintMeetings();
     } catch(err) {
@@ -518,6 +600,7 @@ window.Pages.dashboard = (function () {
         <!-- Stat cards -->
         <!-- Who is away today, and who covers for them. Filled by _paintOnLeave()
              after the shell renders; stays empty (and invisible) when nobody is out. -->
+        <div id="db-shiptarget" style="display:none;margin-bottom:16px;"></div>
         <div id="db-onleave" style="display:none;margin-bottom:16px;"></div>
 
         <div id="db-stat-cards" style="display:grid;grid-template-columns:repeat(6,1fr);gap:1rem;margin-bottom:20px;">

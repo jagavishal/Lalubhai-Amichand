@@ -11504,6 +11504,72 @@ app.delete('/api/export-docs', requireAuth, requireSuperAdmin, async (req, res) 
   }
 });
 
+// ── Shipment target (dashboard banner) ──────────────────────────────────────
+// Sajil sir, 30 Oct 2026: "target 5 by 31 Jan — every shipment done, it comes
+// down 4, 3, 2, 1", on the dashboard everyone opens, to keep people going.
+// Admin sets {target, from, by} (app_config 'shipment_target'); "done" counts
+// itself — every Export Documentation shipment whose invoice date falls in
+// [from, by] is one container out. No sheet to keep in sync.
+
+// invoice_date is free text off the form: "21.8.2026", "21/08/2026", or ISO.
+function _shipDateISO(s) {
+  const t = String(s || '').trim();
+  let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  m = t.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+  if (!m) return '';
+  const y = m[3].length === 2 ? '20' + m[3] : m[3];
+  return `${y}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+}
+
+app.get('/api/shipment-target', requireAuth, async (req, res) => {
+  try {
+    const cfg = await q(`SELECT "value" FROM app_config WHERE "key" = 'shipment_target'`);
+    let t = null;
+    try { t = cfg.length ? JSON.parse(cfg[0].value) : null; } catch { t = null; }
+    const canEdit = isTrueAdminUser(req.session.user);
+    if (!t || !(Number(t.target) > 0)) return res.json({ target: null, canEdit });
+    await ensureSchema();
+    const rows = await q('SELECT invoice_no, invoice_date, consignee_name FROM export_shipments', []);
+    const shipments = rows
+      .map((r) => ({ invoiceNo: r.invoice_no, consignee: r.consignee_name, date: _shipDateISO(r.invoice_date) }))
+      .filter((r) => r.date && (!t.from || r.date >= t.from) && (!t.by || r.date <= t.by))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const target = Number(t.target);
+    return res.json({
+      target, from: t.from || '', by: t.by || '', title: t.title || '',
+      done: shipments.length, left: Math.max(0, target - shipments.length), shipments, canEdit,
+    });
+  } catch (e) {
+    console.error('[shipment-target] read failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/shipment-target {target, from, by, title} — Admin only; target 0 hides the banner.
+app.put('/api/shipment-target', requireAuth, async (req, res) => {
+  try {
+    if (!isTrueAdminUser(req.session.user)) return res.status(403).json({ error: 'Only Admin can set the shipment target' });
+    const b = req.body || {};
+    const iso = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '');
+    const value = {
+      target: Math.max(0, Math.floor(Number(b.target) || 0)),
+      from: iso(b.from), by: iso(b.by), title: String(b.title || '').trim().slice(0, 80),
+    };
+    if (value.target && !value.by) return res.status(400).json({ error: 'Target date is required' });
+    if (value.from && value.by && value.from > value.by) return res.status(400).json({ error: '"From" is after the target date' });
+    const json = JSON.stringify(value);
+    await pool.query(
+      `INSERT INTO app_config ("key","value") VALUES ('shipment_target',$1) ON CONFLICT ("key") DO UPDATE SET "value"=$2`,
+      [json, json],
+    );
+    return res.json({ success: true });
+  } catch (e) {
+    console.error('[shipment-target] save failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // ── Consignee Master (page: consignee-master) ───────────────────────────────
 // The same master the PI create form reads, given its own page so a new buyer
 // can be entered once instead of being re-typed into every PI.

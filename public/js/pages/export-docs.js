@@ -1345,17 +1345,26 @@ window.Pages['export-documentation'] = (() => {
 
   // Renders every generated document to a PDF data URI, off-screen (not
   // display:none — html2canvas needs layout).
+  // html2pdf renders a *clone* of the element it is given. Handing it the
+  // off-screen holder itself cloned the holder's position:absolute too, which
+  // left html2pdf's container 0px tall — every PDF came out as blank white
+  // pages (seen on the 28 Oct container). So the holder only hides things;
+  // html2pdf gets the plain wrapper inside it. scrollX/scrollY:0 because a
+  // page scrolled down (Save sits at the bottom of the long form) otherwise
+  // shifts the snapshot and blanks most of it.
   async function _generatePdfs(d, safeInv, onProgress) {
     await _ensurePdfLibs();
     const holder = document.createElement('div');
-    holder.style.cssText = 'position:absolute;left:-10000px;top:0;width:800px;background:#fff;font-family:Arial,Helvetica,sans-serif;font-size:11.5px;color:#000;';
+    holder.style.cssText = 'position:absolute;left:-10000px;top:0;width:800px;';
     document.body.appendChild(holder);
     try {
       const out = [];
       for (let i = 0; i < _DOC_SET.length; i++) {
         const [name, fn, letterhead] = _DOC_SET[i];
         if (onProgress) onProgress((i + 1) + '/' + _DOC_SET.length + ' ' + name + '…');
-        holder.innerHTML = '<style>' + _DOC_CSS + '</style><div class="sheet" style="padding:10px;">' + fn(d) + '</div>';
+        holder.innerHTML = '<div style="width:800px;background:#fff;font-family:Arial,Helvetica,sans-serif;font-size:11.5px;color:#000;">'
+          + '<style>' + _DOC_CSS + '</style><div class="sheet" style="padding:10px;">' + fn(d) + '</div></div>';
+        const src = holder.firstElementChild;
         // The letterhead image must be painted before the canvas snapshot.
         await Promise.all([...holder.querySelectorAll('img')].map(img =>
           (img.complete ? Promise.resolve() : new Promise(r => { img.onload = img.onerror = r; }))));
@@ -1370,10 +1379,10 @@ window.Pages['export-documentation'] = (() => {
             jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
             // 1.5 renders in roughly half the pixels of 2 — visibly faster on
             // the office machines, still ~160dpi on an A4 print.
-            html2canvas: { scale: 1.5, backgroundColor: '#ffffff' },
+            html2canvas: { scale: 1.5, backgroundColor: '#ffffff', scrollX: 0, scrollY: 0 },
             pagebreak: { mode: ['css', 'legacy'] },
           })
-          .from(holder)
+          .from(src)
           .outputPdf('datauristring');
         // jsPDF emits "data:application/pdf;filename=generated.pdf;base64,…" —
         // strip the filename param so the server's data-URL parser accepts it.
