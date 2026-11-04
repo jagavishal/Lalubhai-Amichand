@@ -1360,14 +1360,25 @@ function mountHrms(app, ctx) {
      from the users table — the session copy does not carry it). */
   async function selfEmployee(user) {
     if (!user) return null;
-    // user_id / email are a strong, unique identity link — set by an admin,
-    // never guessed — so a match on either is trusted immediately even if
-    // some other row happens to share this person's name.
-    const strong = await q(
-      `SELECT * FROM hr_employees WHERE user_id = $1 OR (email <> '' AND LOWER(email) = LOWER($2)) LIMIT 1`,
-      [user.id || '', user.email || ''],
-    ).catch(() => []);
-    if (strong[0]) return strong[0];
+    // user_id is the strong identity link — set by an admin, never guessed —
+    // and wins over the email. This used to be one OR'd query with LIMIT 1,
+    // so a shared mailbox (two staff, one address) could hand one person the
+    // other's row — their leave was then filed and balanced as the other's.
+    // An email match now counts only when exactly one row has that address
+    // and the row is not already linked to some other login.
+    if (user.id) {
+      const linked = await q(`SELECT * FROM hr_employees WHERE user_id = $1`, [user.id]).catch(() => []);
+      if (linked.length === 1) return linked[0];
+      if (linked.length > 1) return null;
+    }
+    if (user.email) {
+      const byMail = await q(
+        `SELECT * FROM hr_employees WHERE email <> '' AND LOWER(TRIM(email)) = LOWER(TRIM($1))`,
+        [user.email],
+      ).catch(() => []);
+      if (byMail.length === 1 && (!byMail[0].user_id || byMail[0].user_id === user.id)) return byMail[0];
+      if (byMail.length > 1) return null;
+    }
     // Below this point every match is by name/phone alone, which is not a
     // unique identifier — two employees can share a display name (common
     // enough that pickByName() above treats it as a hard rule: "two Jayeshes
@@ -4555,18 +4566,30 @@ function mountHrms(app, ctx) {
           q(`SELECT id, name, email, user_id FROM hr_employees`),
           q(`SELECT id, name, email FROM users`),
         ]);
+        // A key shared by two logins (or an email two employees carry) is no
+        // identity — it is mapped to null and skipped, never guessed.
         const byEmail = new Map();
         const byName = new Map();
+        const put = (m, k, v) => { if (k) m.set(k, m.has(k) ? null : v); };
         for (const u of users) {
-          if (u.email) byEmail.set(String(u.email).trim().toLowerCase(), u.id);
-          if (u.name) byName.set(String(u.name).trim().toLowerCase(), u.id);
+          put(byEmail, String(u.email || '').trim().toLowerCase(), u.id);
+          put(byName, String(u.name || '').trim().toLowerCase(), u.id);
         }
+        const empMail = new Map();
+        for (const e of emps) {
+          const k = String(e.email || '').trim().toLowerCase();
+          if (k) empMail.set(k, (empMail.get(k) || 0) + 1);
+        }
+        const taken = new Set(emps.map((e) => e.user_id).filter(Boolean));
         let linked = 0;
         const unmatched = [];
         for (const e of emps) {
           if (e.user_id) continue;
-          const uid = byEmail.get(String(e.email || '').trim().toLowerCase())
+          const mail = String(e.email || '').trim().toLowerCase();
+          const uid = (mail && empMail.get(mail) === 1 ? byEmail.get(mail) : null)
                    || byName.get(String(e.name || '').trim().toLowerCase());
+          if (uid && taken.has(uid)) { unmatched.push(`${e.id} — ${e.name}`); continue; }
+          if (uid) taken.add(uid);
           if (!uid) { unmatched.push(`${e.id} — ${e.name}`); continue; }
           await pool.query(`UPDATE hr_employees SET user_id = $1 WHERE id = $2`, [uid, e.id]);
           linked += 1;
