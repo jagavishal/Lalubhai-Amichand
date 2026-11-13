@@ -126,7 +126,7 @@ window.Pages.amc = (() => {
         esc(s.department), pill(s.priority), H.fmtDate(s.payment_date),
         esc(s.raised_by_name), esc(s.approver_name), esc(s.vendor_name), pill(s.status),
         `<button class="${needsMe(s) ? 'btn-primary' : 'btn-secondary'} btn-sm" data-view="${esc(s.id)}">${esc(actionLabel(s))}</button>`,
-      ]), { empty, cards: true })}
+      ]), { empty, cards: true, page: { key: 'sms-requests', sig: [_tab, _f.q, _f.status], onPage: render } })}
       <div style="font-size:11.5px;color:#94a3b8;margin-top:6px;">${list.length} request${list.length === 1 ? '' : 's'}</div>`;
   }
 

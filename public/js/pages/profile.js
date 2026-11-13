@@ -35,8 +35,8 @@ window.Pages.profile = {
     const user = window.currentUser;
     if (!user?.id) return null;
     try {
-      // Fetch the users list; find self for picture + notification email
-      const res = await fetch('/api/users');
+      // Own row only (picture + notification email) — not the whole company's.
+      const res = await fetch('/api/users?self=1');
       if (!res.ok) return null;
       const list = await res.json();
       return Array.isArray(list) ? list.find((u) => u.id === user.id) || null : null;

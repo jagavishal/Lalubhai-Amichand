@@ -188,7 +188,7 @@ window.Pages.trivia = (() => {
              <button class="btn-secondary btn-sm" data-tv-toggle="${esc(m.id)}" title="${m.active ? 'Stop it from being picked' : 'Let it be picked again'}">${m.active ? 'Off' : 'On'}</button>
              <button class="btn-secondary btn-sm" data-tv-del="${esc(m.id)}" style="color:#b91c1c;">Delete</button>
            </div>`];
-      }), { empty: 'No questions match', maxHeight: '520px', cards: true })
+      }), { empty: 'No questions match', maxHeight: '520px', cards: true, page: { key: 'tv-questions', sig: [_qf.q, _qf.cat], onPage: paint } })
       + `<div style="height:14px;"></div>` + sec('Today\'s plays') + plays;
   }
 

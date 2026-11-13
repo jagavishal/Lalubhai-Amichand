@@ -653,7 +653,10 @@ window.Pages['bulk-email'] = (() => {
              <button class="btn-ghost" data-medit="${H.esc(r.mkey)}" style="font-size:12px;padding:4px 9px;">Edit</button>
              <button class="btn-ghost" data-mdel="${H.esc(r.mkey)}" style="font-size:12px;padding:4px 9px;color:#dc2626;">Delete</button>
            </div>`,
-        ]), { maxHeight: '560px', cards: true, empty: needle ? 'No entry matches that search' : 'No addresses saved yet — upload the Excel/CSV list' })}`;
+        ]), { maxHeight: '560px', cards: true, empty: needle ? 'No entry matches that search' : 'No addresses saved yet — upload the Excel/CSV list',
+          // Up to 5,000 saved addresses — one page in the DOM; search and the
+          // CSV download still cover the whole list.
+          page: { key: 'bm-master', sig: [needle], onPage: render } })}`;
   }
 
   /* ── Upload actions ───────────────────────────────────────────────── */

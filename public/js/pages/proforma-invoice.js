@@ -1231,6 +1231,7 @@ window.Pages['proforma-invoice'] = (() => {
     const btn = document.getElementById('pic-submit-btn');
     btn.disabled = true; btn.textContent = revising ? 'Issuing revision…' : 'Creating…';
     try {
+      _listsStale(); // a new PI / order / packing list → the list tabs fetch again
       const result = await Utils.apiFetch(url, { method: 'POST', body: JSON.stringify(payload) });
       const warnings = [];
       if (!result.pdfLink) warnings.push('PDF export failed');
@@ -1258,13 +1259,26 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   /* ── PI List (in-page tab) — read-only history from the ERP PI Log tab ── */
+  /* Tab switches used to refetch every list on every click — each a full read
+     of its Google Sheet log (the PI List tab also re-read the order log for
+     its badge), so PI List → Orders → PI List read the order log three times.
+     A list fetched less than LIST_FRESH_MS ago is now repainted from memory;
+     Refresh, a row action, or creating a PI / order / packing list (which
+     calls _listsStale) still fetches. */
+  const LIST_FRESH_MS = 60 * 1000;
+  const _fetchedAt = { pil: 0, osl: 0, pkl: 0 };
+  function _listsStale() { _fetchedAt.pil = 0; _fetchedAt.osl = 0; _fetchedAt.pkl = 0; }
+  const _isFresh = (k, loaded, err) => loaded && !err && Date.now() - _fetchedAt[k] < LIST_FRESH_MS;
+
   async function _pilLoad() {
     _pilLoaded = false;
     _pilLoadError = '';
     _pilRenderTable();
     try {
       _pilRows = await Utils.apiFetch('/api/proforma-invoice/list') || [];
+      _fetchedAt.pil = Date.now();
     } catch (e) {
+      _fetchedAt.pil = 0;
       _pilRows = [];
       _pilLoadError = e.message || 'Failed to load Proforma Invoices';
     }
@@ -1345,6 +1359,7 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   function _pilRenderTable() {
+    Utils.clearPager('pi-list'); // re-mounted below when there are rows to page
     const body = document.getElementById('pil-body');
     const countEl = document.getElementById('pil-count');
     if (!body) return;
@@ -1366,7 +1381,10 @@ window.Pages['proforma-invoice'] = (() => {
       return;
     }
     const ordered = _osOrderedPiNos();
-    body.innerHTML = rows.map(v => {
+    // One page of PI families in the DOM; the filters still run over all rows.
+    const pg = Utils.pageSlice(rows, Utils.pageOf('pi-list', [_pilFBuyer, _pilFFrom, _pilFTo]));
+    Utils.mountPager(body, 'pi-list', pg, (p) => { Utils.setPage('pi-list', p); _pilRenderTable(); });
+    body.innerHTML = pg.rows.map(v => {
       const r = v.r;
       const open = _pilOpenFamilies.has(v.fam);
       const isOrdered = r.status === 'Priced' && !!r.form && ordered.has(String(r.piNo).trim());
@@ -1569,6 +1587,10 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   function _pilBindFilterBar() {
+    // Rebuilt on every visit to the tab; the filters are kept, so show them.
+    document.getElementById('pil-buyer').value = _pilFBuyer;
+    document.getElementById('pil-from').value = _pilFFrom;
+    document.getElementById('pil-to').value = _pilFTo;
     document.getElementById('pil-buyer').addEventListener('input', (e) => { _pilFBuyer = e.target.value; _pilRenderTable(); });
     document.getElementById('pil-from').addEventListener('change', (e) => { _pilFFrom = e.target.value; _pilRenderTable(); });
     document.getElementById('pil-to').addEventListener('change', (e) => { _pilFTo = e.target.value; _pilRenderTable(); });
@@ -2042,7 +2064,9 @@ window.Pages['proforma-invoice'] = (() => {
     _osRenderTable();
     try {
       _oslRows = await Utils.apiFetch('/api/order-sheet/list') || [];
+      _fetchedAt.osl = Date.now();
     } catch (e) {
+      _fetchedAt.osl = 0;
       _oslRows = [];
       _oslLoadError = e.message || 'Failed to load Order Sheets';
     }
@@ -2101,6 +2125,7 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   function _osRenderTable() {
+    Utils.clearPager('order-list'); // re-mounted below when there are rows to page
     const body = document.getElementById('osl-body');
     const countEl = document.getElementById('osl-count');
     if (!body) return;
@@ -2122,7 +2147,9 @@ window.Pages['proforma-invoice'] = (() => {
         + (_oslRows.length ? 'No Order Sheets match these filters' : 'No Order Sheets raised yet') + '</td></tr>';
       return;
     }
-    body.innerHTML = rows.map(r => ''
+    const pg = Utils.pageSlice(rows, Utils.pageOf('order-list', [_oslFBuyer, _oslFFrom, _oslFTo]));
+    Utils.mountPager(body, 'order-list', pg, (p) => { Utils.setPage('order-list', p); _osRenderTable(); });
+    body.innerHTML = pg.rows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
         + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.orderNo) + '</td>'
         + '<td data-label="Buyer Order No" style="padding:8px 10px;font-size:12.5px;font-weight:600;">' + (r.buyerOrderNo ? esc(r.buyerOrderNo) : '<span style="color:#cbd5e1;">—</span>') + '</td>'
@@ -2207,6 +2234,9 @@ window.Pages['proforma-invoice'] = (() => {
   function _osBindListBar() {
     const q = document.getElementById('osl-q');
     if (!q) return;
+    q.value = _oslFBuyer;
+    document.getElementById('osl-from').value = _oslFFrom;
+    document.getElementById('osl-to').value = _oslFTo;
     const newPi = document.getElementById('osl-new-pi');
     if (newPi) newPi.addEventListener('change', () => {
       const row = _pilRows.find(r => String(r.piNo) === newPi.value);
@@ -2416,6 +2446,7 @@ window.Pages['proforma-invoice'] = (() => {
         notes: Array.from(document.querySelectorAll('.os-note')).map(el => el.value.trim()).filter(Boolean),
         items,
       };
+      _listsStale(); // a new PI / order / packing list → the list tabs fetch again
       const out = await Utils.apiFetch('/api/order-sheet', { method: 'POST', body: JSON.stringify(body) });
       Utils.showToast('Order Sheet ' + out.orderNo + ' created', 'success');
       if (!out.pdfLink) Utils.showToast('The order is logged, but its PDF could not be filed — raise it again or export the tab by hand', 'error');
@@ -2458,7 +2489,9 @@ window.Pages['proforma-invoice'] = (() => {
     _pklRenderTable();
     try {
       _pklRows = await Utils.apiFetch('/api/packing-list/list') || [];
+      _fetchedAt.pkl = Date.now();
     } catch (e) {
+      _fetchedAt.pkl = 0;
       _pklRows = [];
       _pklLoadError = e.message || 'Failed to load Packing Lists';
     }
@@ -2521,6 +2554,7 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   function _pklRenderTable() {
+    Utils.clearPager('packing-list'); // re-mounted below when there are rows to page
     const body = document.getElementById('pkl-body');
     const countEl = document.getElementById('pkl-count');
     if (!body) return;
@@ -2540,7 +2574,9 @@ window.Pages['proforma-invoice'] = (() => {
       return;
     }
     const num = (v) => v ? esc(v) : '<span style="color:#cbd5e1;">—</span>';
-    body.innerHTML = rows.map(r => ''
+    const pg = Utils.pageSlice(rows, Utils.pageOf('packing-list', [_pklFBuyer, _pklFFrom, _pklFTo]));
+    Utils.mountPager(body, 'packing-list', pg, (p) => { Utils.setPage('packing-list', p); _pklRenderTable(); });
+    body.innerHTML = pg.rows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
         + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;white-space:nowrap;">' + esc(r.plNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">' + esc(r.plDate) + '</td>'
@@ -2568,6 +2604,9 @@ window.Pages['proforma-invoice'] = (() => {
   function _pklBindListBar() {
     const q = document.getElementById('pkl-q');
     if (!q) return;
+    q.value = _pklFBuyer;
+    document.getElementById('pkl-from').value = _pklFFrom;
+    document.getElementById('pkl-to').value = _pklFTo;
     q.addEventListener('input', (e) => { _pklFBuyer = e.target.value; _pklRenderTable(); });
     document.getElementById('pkl-from').addEventListener('change', (e) => { _pklFFrom = e.target.value; _pklRenderTable(); });
     document.getElementById('pkl-to').addEventListener('change', (e) => { _pklFTo = e.target.value; _pklRenderTable(); });
@@ -3199,6 +3238,7 @@ window.Pages['proforma-invoice'] = (() => {
         productCategory: document.getElementById('pl-category').value.trim(),
         items: items.map(({ _qty, _balance, _label, ...it }) => it),
       };
+      _listsStale(); // a new PI / order / packing list → the list tabs fetch again
       const out = await Utils.apiFetch('/api/packing-list', { method: 'POST', body: JSON.stringify(body) });
       Utils.showToast('Packing List ' + out.plNo + ' created — ' + out.totalCartons + ' cartons, ' + out.totalQty + ' pcs', 'success');
       if (!out.pdfLink) Utils.showToast('The packing list is logged, but its PDF could not be filed — raise it again or export the tab by hand', 'error');
@@ -3406,7 +3446,8 @@ window.Pages['proforma-invoice'] = (() => {
         _osBindItems();
       } else {
         _osBindListBar();
-        _osLoad();
+        if (_isFresh('osl', _oslLoaded, _oslLoadError)) _osRenderTable();
+        else _osLoad();
       }
       return;
     }
@@ -3423,7 +3464,8 @@ window.Pages['proforma-invoice'] = (() => {
         });
       } else {
         _pklBindListBar();
-        _pklLoad();
+        if (_isFresh('pkl', _pklLoaded, _pklLoadError)) _pklRenderTable();
+        else _pklLoad();
       }
       return;
     }
@@ -3436,10 +3478,11 @@ window.Pages['proforma-invoice'] = (() => {
       // navigating here) has to be painted again. _pilLoad() only ever touches
       // #pil-body, so it will not wipe it back out.
       _renderPriceModal();
-      _pilLoad();
+      if (_isFresh('pil', _pilLoaded, _pilLoadError)) _pilRenderTable();
+      else _pilLoad();
       // Which PIs already carry an order sheet is read from the same log the
       // Order Sheets tab uses; a failure here only costs the badge.
-      _osLoad().catch(() => {});
+      if (!_isFresh('osl', _oslLoaded, _oslLoadError)) _osLoad().catch(() => {});
       return;
     }
 

@@ -572,4 +572,180 @@ window.Utils = {
     );
   },
 
+  /* ── Pagination ────────────────────────────────────────────────────
+     One pager for every long list. Lists that were rendering every row they
+     had (thousands of <tr> on a busy PO log) now render one page at a time.
+
+       Utils.PAGE_SIZE                 default rows per page
+       Utils.pageSlice(arr, page, n)   → { rows, page, pages, total, from, to }
+                                         (page is clamped, so a filter that
+                                         shrinks the list never strands you on
+                                         an empty page 7)
+       Utils.pagerHTML(key, info)      the « 1 2 … 9 » bar, '' when one page
+       Utils.bindPager(root, key, fn)  fn(newPage, fullKey) on a click inside root
+
+     Search, filters, sort and export keep working on the FULL array — only the
+     rendering is sliced — so an export still contains every matching row.
+     `key` lets one page hold several independent pagers. */
+  PAGE_SIZE: 50,
+
+  pageSlice(arr, page, size) {
+    const list = Array.isArray(arr) ? arr : [];
+    const n = Math.max(1, size || this.PAGE_SIZE);
+    const total = list.length;
+    const pages = Math.max(1, Math.ceil(total / n));
+    const p = Math.min(Math.max(1, Number(page) || 1), pages);
+    const start = (p - 1) * n;
+    const rows = list.slice(start, start + n);
+    return { rows, page: p, pages, total, size: n, offset: start, from: total ? start + 1 : 0, to: start + rows.length };
+  },
+
+  pagerHTML(key, info) {
+    if (!info || info.pages <= 1) return '';
+    const { page, pages, total, from, to } = info;
+    const k = this.esc(key);
+    const nums = [];
+    const want = new Set([1, pages, page - 1, page, page + 1]);
+    if (page <= 3) { want.add(2); want.add(3); want.add(4); }
+    if (page >= pages - 2) { want.add(pages - 1); want.add(pages - 2); want.add(pages - 3); }
+    let last = 0;
+    for (let i = 1; i <= pages; i++) {
+      if (!want.has(i)) continue;
+      if (i - last > 1) nums.push('<span class="pg-gap">…</span>');
+      nums.push(`<button type="button" class="pg-btn${i === page ? ' pg-on' : ''}" data-pg-key="${k}" data-pg="${i}"${i === page ? ' aria-current="page"' : ''}>${i}</button>`);
+      last = i;
+    }
+    return `<div class="pg-bar" data-pg-bar="${k}">
+      <span class="pg-info">${from.toLocaleString('en-IN')}–${to.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')}</span>
+      <span class="pg-nums">
+        <button type="button" class="pg-btn" data-pg-key="${k}" data-pg="${page - 1}"${page <= 1 ? ' disabled' : ''} aria-label="Previous page">‹</button>
+        ${nums.join('')}
+        <button type="button" class="pg-btn" data-pg-key="${k}" data-pg="${page + 1}"${page >= pages ? ' disabled' : ''} aria-label="Next page">›</button>
+      </span>
+    </div>`;
+  },
+
+  /* Paint one page of `rows` into an existing <tbody> and keep a pager right
+     after its table — the drop-in for `tbody.innerHTML = rows.map(...)`.
+
+       Utils.renderPaged({
+         tbody,                 // the <tbody> element (or its id)
+         key: 'po-list',        // unique per list; the page is remembered under it
+         rows,                  // the FULL filtered + sorted array
+         sig: [_f1, _f2],       // anything describing the filters: when it
+                                // changes the list goes back to page 1
+         render: (pageRows, offset) => '<tr>…</tr>',
+         size,                  // optional, default PAGE_SIZE
+       })
+
+     Clicking a page re-runs the last call for that key, so the caller needs no
+     handler of its own. Returns the pageSlice info. */
+  _pgState: {},
+  renderPaged(opts) {
+    const tbody = typeof opts.tbody === 'string' ? document.getElementById(opts.tbody) : opts.tbody;
+    if (!tbody) return null;
+    const key = opts.key;
+    const sig = JSON.stringify(opts.sig === undefined ? null : opts.sig);
+    const st = this._pgState[key] || (this._pgState[key] = { page: 1, sig });
+    if (st.sig !== sig) { st.sig = sig; st.page = 1; }
+    st.opts = opts;
+    const info = this.pageSlice(opts.rows, st.page, opts.size);
+    st.page = info.page;
+    tbody.innerHTML = opts.render(info.rows, info.offset);
+
+    this.mountPager(tbody, key, info, () => {
+      const s = this._pgState[key];
+      if (!s || !s.opts) return;
+      const info2 = this.renderPaged(s.opts);
+      if (s.opts.onPage) s.opts.onPage(info2);
+    });
+    return info;
+  },
+
+  /* Put a pager (for `info` = { page, pages, total, from, to }) right after
+     the table that holds `anchor` (a <tbody>/<table> or its id) and call
+     onPage(n) when a page is clicked. Used by renderPaged, and directly by
+     lists the SERVER pages (they fetch page n in onPage). */
+  mountPager(anchor, key, info, onPage) {
+    const el = typeof anchor === 'string' ? document.getElementById(anchor) : anchor;
+    if (!el) return;
+    const table = el.tagName === 'TABLE' ? el : el.closest('table');
+    if (!table) return;
+    // After the table's scroll wrapper when the table sits alone in one,
+    // else straight after the table.
+    const wrap = table.parentElement && table.parentElement.children.length === 1 && table.parentElement !== document.body ? table.parentElement : table;
+    const hostId = 'pg-host-' + String(key).replace(/[^\w-]/g, '_');
+    let host = document.getElementById(hostId);
+    if (!host || host.previousElementSibling !== wrap) {
+      if (host) host.remove();
+      host = document.createElement('div');
+      host.id = hostId;
+      wrap.insertAdjacentElement('afterend', host);
+    }
+    host.innerHTML = this.pagerHTML(key, info);
+    host.__pgOnPage = onPage;
+    if (!host.__pgBound) {
+      host.__pgBound = true;
+      host.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-pg-key]');
+        if (!b || b.disabled || !host.__pgOnPage) return;
+        e.preventDefault();
+        const st = this._pgState[key];
+        if (st) st.page = Number(b.dataset.pg) || 1;
+        // Keep the reader at the top of the list they're paging through.
+        const t = host.previousElementSibling;
+        if (t && t.getBoundingClientRect().top < 0) t.scrollIntoView({ block: 'start' });
+        host.__pgOnPage(Number(b.dataset.pg) || 1);
+      });
+    }
+  },
+
+  /* The two-line form, for a render function that builds its own HTML:
+       const pg = Utils.pageSlice(rows, Utils.pageOf('pi-list', [filters…]));
+       Utils.mountPager(body, 'pi-list', pg, p => { Utils.setPage('pi-list', p); rerender(); });
+       body.innerHTML = pg.rows.map(…)
+     pageOf returns the remembered page, or 1 when the filters (sig) changed. */
+  pageOf(key, sig) {
+    const s = JSON.stringify(sig === undefined ? null : sig);
+    const st = this._pgState[key] || (this._pgState[key] = { page: 1, sig: s });
+    if (st.sig !== s) { st.sig = s; st.page = 1; }
+    return st.page;
+  },
+  setPage(key, page) {
+    const st = this._pgState[key] || (this._pgState[key] = { page: 1, sig: 'null' });
+    st.page = Math.max(1, Number(page) || 1);
+  },
+
+  // Forget a list's page (e.g. after a reload that should land on page 1).
+  resetPage(key) { if (this._pgState[key]) this._pgState[key].page = 1; },
+
+  // Blank a list's pager — call it wherever the tbody shows Loading / empty /
+  // error instead of rows, so the old pager doesn't linger under it.
+  clearPager(key) {
+    const host = document.getElementById('pg-host-' + String(key).replace(/[^\w-]/g, '_'));
+    if (host) host.innerHTML = '';
+  },
+
+  // Delegated, so it survives the list being re-rendered under it. Bound once
+  // per root element (a re-render that replaces root itself re-binds).
+  bindPager(root, key, onPage) {
+    if (!root) return;
+    root.__pgHandlers = root.__pgHandlers || {};
+    const first = !Object.keys(root.__pgHandlers).length;
+    root.__pgHandlers[key] = onPage;
+    if (!first) return;
+    root.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-pg-key]');
+      if (!b || b.disabled || !root.contains(b)) return;
+      // Exact key first, then its prefix before ':' — one handler can serve a
+      // family of pagers ('t:Asha', 't:Ravi' → 't'); it gets the full key too.
+      const k = b.dataset.pgKey;
+      const fn = root.__pgHandlers[k] || root.__pgHandlers[k.split(':')[0]];
+      if (!fn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      fn(Number(b.dataset.pg) || 1, k);
+    });
+  },
+
 };

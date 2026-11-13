@@ -202,9 +202,46 @@ window.HR = (function () {
                      column's `m` is 'title' (card heading), 'actions' (buttons,
                      at the card's foot) or 'hide' (dropped on phone).
        sticky: true  for wide figure grids that must stay a grid — the table
-                     scrolls sideways with the first (name) column pinned. */
-  function table(columns, rows, { empty = 'Nothing to show yet', maxHeight = '', cards = false, sticky = false } = {}) {
+                     scrolls sideways with the first (name) column pinned.
+
+     Long lists opt into paging with `page: { key, sig, onPage, size }`:
+       key     unique per list (the page is remembered under it)
+       sig     the filters in force — when it changes the list is back on page 1
+       onPage  re-renders the screen (it is called after the page changes, so
+               the screen's own row buttons get bound again)
+     Only that page of `rows` goes into the DOM; whatever the caller does with
+     the full array (counts, totals, CSV export) is unaffected. */
+  const _pageHandlers = {};
+  let _pagerBound = false;
+  function _bindPagerOnce() {
+    if (_pagerBound) return;
+    _pagerBound = true;
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest('.hr-tbl-pager [data-pg-key]');
+      if (!b || b.disabled) return;
+      const fn = _pageHandlers[b.dataset.pgKey];
+      if (!fn) return;
+      e.preventDefault();
+      window.Utils.setPage(b.dataset.pgKey, Number(b.dataset.pg));
+      const card = b.closest('.hr-tbl');
+      const wasAbove = card && card.getBoundingClientRect().top < 0;
+      fn();
+      if (wasAbove) document.querySelector(`[data-hr-tbl-key="${CSS.escape(b.dataset.pgKey)}"]`)?.scrollIntoView({ block: 'start' });
+    });
+  }
+
+  function table(columns, rows, { empty = 'Nothing to show yet', maxHeight = '', cards = false, sticky = false, page = null } = {}) {
     const cols = columns.map((c) => (typeof c === 'string' ? { label: c } : c));
+    let pagerHtml = '';
+    if (page && page.key && window.Utils?.pageSlice) {
+      const pg = window.Utils.pageSlice(rows, window.Utils.pageOf(page.key, page.sig), page.size);
+      rows = pg.rows;
+      if (typeof page.onPage === 'function') {
+        _pageHandlers[page.key] = page.onPage;
+        _bindPagerOnce();
+        pagerHtml = window.Utils.pagerHTML(page.key, pg);
+      }
+    }
     const mCls = (c) => {
       const list = [cards && c?.m ? `m-card-${c.m}` : '', c?.cls || ''].filter(Boolean);
       return list.length ? ` class="${list.join(' ')}"` : '';
@@ -215,13 +252,14 @@ window.HR = (function () {
         </tr>`).join('')
       : `<tr><td colspan="${cols.length}" style="padding:44px;text-align:center;color:#94a3b8;font-size:13px;">${esc(empty)}</td></tr>`;
     const wrapCls = ['hr-tbl', cards ? 'hr-tbl-cards' : '', sticky ? 'hr-tbl-sticky' : ''].filter(Boolean).join(' ');
-    return `<div class="${wrapCls}" style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
+    return `<div class="${wrapCls}"${page && page.key ? ` data-hr-tbl-key="${esc(page.key)}"` : ''} style="background:#fff;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
       <div class="hr-tbl-scroll" style="overflow:auto;${maxHeight ? `max-height:${maxHeight};` : ''}">
         <table${cards ? ' class="m-cards"' : ''} style="width:100%;border-collapse:collapse;">
           <thead><tr>${cols.map((c) => `<th style="${TH}${c.align === 'right' ? 'text-align:right;' : ''}">${esc(c.label)}</th>`).join('')}</tr></thead>
           <tbody>${body}</tbody>
         </table>
       </div>
+      ${pagerHtml ? `<div class="hr-tbl-pager">${pagerHtml}</div>` : ''}
     </div>`;
   }
 

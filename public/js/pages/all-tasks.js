@@ -2,7 +2,12 @@ window.Pages['all-tasks'] = (function () {
   /* ─── state ─────────────────────────────────────────────────────────────── */
   let _users    = [];
   let _grouped  = [];          // [{ doer, tasks:[] }]
-  let _masters  = [];          // every checklist occurrence, future ones included — the Master view needs them
+  let _masters  = [];          // checklist occurrences due up to today (or already done) — the list view
+  let _mastersFull = null;     // every occurrence, future ones included — fetched only when the Master view opens
+  let _mastersFullLoading = null;
+  let _groupPage = {};         // { ['t:'|'m:' + doer]: page } — an expanded group shows one page of rows
+  let _pageSig   = '';         // filters the pages were picked under; a change sends every group back to page 1
+  const GROUP_PAGE_SIZE = 50;
   let _doneMasterIds = new Set();
   let _tab      = 'Delegation';
   let _statusTab = 'All';      // 'All' | 'Pending' | 'Completed' | 'Master' (Checklist tab only)
@@ -176,9 +181,11 @@ window.Pages['all-tasks'] = (function () {
   async function fetchData() {
     const [delegations, masters, users, completions, fmsTasks] = await Promise.all([
       Utils.apiFetch('/api/delegations'),
-      Utils.apiFetch('/api/masters'),
+      // Only occurrences already due (or done): the list hides the rest, and a
+      // year of pre-generated daily rows per checklist is most of the table.
+      Utils.apiFetch('/api/masters?due=' + encodeURIComponent(new Date().toISOString().split('T')[0])),
       Utils.apiFetch('/api/users?lite=1'),
-      Utils.apiFetch('/api/checklist-completions'),
+      Utils.apiFetch('/api/checklist-completions?idsOnly=1'),
       fmsEnabled() ? Utils.apiFetch('/api/fms-dashboard') : Promise.resolve([]),
     ]);
     if (!delegations || !masters || !users) return false;
@@ -192,6 +199,9 @@ window.Pages['all-tasks'] = (function () {
     );
     _masters = masters;
     _doneMasterIds = doneIds;
+    // Any reload (a save, a delete) makes the cached full series stale.
+    _mastersFull = null;
+    if (_tab === 'Checklist' && _statusTab === 'Master') await loadFullMasters().catch(() => {});
     const todayStr = new Date().toISOString().split('T')[0];
 
     // Build grouped structure: merge delegations + checklist masters. Occurrences whose
@@ -357,6 +367,18 @@ window.Pages['all-tasks'] = (function () {
     }
   }
 
+  // The Master view folds every occurrence of a series — future ones too — so
+  // it needs the unscoped list. Fetched on first open, reused until a reload.
+  function loadFullMasters() {
+    if (_mastersFull) return Promise.resolve(_mastersFull);
+    if (!_mastersFullLoading) {
+      _mastersFullLoading = Utils.apiFetch('/api/masters')
+        .then(rows => { _mastersFull = Array.isArray(rows) ? rows : []; return _mastersFull; })
+        .finally(() => { _mastersFullLoading = null; });
+    }
+    return _mastersFullLoading;
+  }
+
   async function reload() {
     const ok = await fetchData();
     if (ok) renderContent();
@@ -463,6 +485,9 @@ window.Pages['all-tasks'] = (function () {
     const onLeave   = g.tasks.filter(t => t.status === 'leave').length;
     const open      = !!_expanded[g.doer];
     const endSerial = startSerial + g.tasks.length - 1;
+    // One page of rows per expanded group — "Expand all" on a busy month used
+    // to put every task of every doer into the DOM at once.
+    const pg = open ? Utils.pageSlice(sortTasks(g.tasks), _groupPage['t:' + g.doer], GROUP_PAGE_SIZE) : null;
 
     const pills = [
       completed > 0 ? window.UI.pill(`${completed} done`, { variant: 'success' })  : '',
@@ -491,9 +516,10 @@ window.Pages['all-tasks'] = (function () {
             </tr>
           </thead>
           <tbody>
-            ${sortTasks(g.tasks).map((t, i) => taskRowHTML(t, startSerial + i)).join('')}
+            ${pg.rows.map((t, i) => taskRowHTML(t, startSerial + pg.offset + i)).join('')}
           </tbody>
         </table>
+        ${Utils.pagerHTML('t:' + g.doer, pg)}
       </div>` : '';
 
     return `
@@ -529,7 +555,7 @@ window.Pages['all-tasks'] = (function () {
     const me = currentUserName();
     const s = _search.toLowerCase();
     const map = new Map();
-    for (const m of _masters) {
+    for (const m of (_mastersFull || [])) {
       const doer = m.assignedTo || '(Unassigned)';
       if (!admin && !sameName(doer, me)) continue;
       if (_employeeFilter !== 'All' && !sameName(doer, _employeeFilter)) continue;
@@ -649,6 +675,7 @@ window.Pages['all-tasks'] = (function () {
     const cap = (f) => f ? f.charAt(0).toUpperCase() + f.slice(1) : '—';
     const open      = !!_expanded[g.doer];
     const endSerial = startSerial + g.rows.length - 1;
+    const pg = open ? Utils.pageSlice(g.rows, _groupPage['m:' + g.doer], GROUP_PAGE_SIZE) : null;
     const pendingCnt = g.rows.reduce((n, r) => n + (r.total - r.done), 0);
     const overdueCnt = g.rows.filter(r => r.overdue).length;
     const doneAll    = g.rows.filter(r => r.total > 0 && r.done === r.total).length;
@@ -674,9 +701,9 @@ window.Pages['all-tasks'] = (function () {
             </tr>
           </thead>
           <tbody>
-            ${g.rows.map((r, i) => `
+            ${pg.rows.map((r, i) => `
               <tr class="at-table-row">
-                <td class="at-td at-c-num" style="font-size:11px;color:#94a3b8;font-family:monospace">${startSerial + i}</td>
+                <td class="at-td at-c-num" style="font-size:11px;color:#94a3b8;font-family:monospace">${startSerial + pg.offset + i}</td>
                 ${canManageMasters() ? `<td class="at-td at-c-act">${masterActionsHTML(r)}</td>` : ''}
                 <td class="at-td at-c-desc" style="max-width:320px;font-weight:500;color:#1e293b">${esc(r.task)}</td>
                 <td class="at-td${r.frequency ? '' : ' at-c-empty'}" data-label="Frequency" style="color:#64748b;white-space:nowrap;font-size:12px">${esc(cap(r.frequency))}</td>
@@ -691,6 +718,7 @@ window.Pages['all-tasks'] = (function () {
               </tr>`).join('')}
           </tbody>
         </table>
+        ${Utils.pagerHTML('m:' + g.doer, pg)}
       </div>` : '';
 
     return `
@@ -730,6 +758,10 @@ window.Pages['all-tasks'] = (function () {
   function renderContent() {
     const el = document.getElementById('main-content');
     if (!el) return;
+
+    // New tab / filter / search / sort → every group starts again at page 1.
+    const sig = JSON.stringify([_tab, _statusTab, _search, _employeeFilter, _fromDate, _toDate, _sortCol, _sortDir, _mSortCol, _mSortDir]);
+    if (sig !== _pageSig) { _pageSig = sig; _groupPage = {}; }
 
     const visGroups = getVisibleGroups();
     const totalTasks = visGroups.reduce((s, g) => s + g.tasks.length, 0);
@@ -806,8 +838,16 @@ window.Pages['all-tasks'] = (function () {
     const statusBtns = ['All', 'Pending', 'Completed', ...(_tab === 'Checklist' ? ['Master'] : [])].map(t =>
       `<button class="at-seg-btn${_statusTab === t ? ' at-seg-active' : ''}" data-stab="${esc(t)}">${esc(t)}</button>`
     ).join('');
-    const masterRowsList = masterMode ? masterRows() : [];
-    const masterGroupsList = masterMode ? masterGroups(masterRowsList) : [];
+    // The full series arrives on demand; until it has, the list card shows a
+    // loader and the page renders again when it lands.
+    const masterLoading = masterMode && !_mastersFull;
+    if (masterLoading) {
+      loadFullMasters()
+        .then(() => { if (_tab === 'Checklist' && _statusTab === 'Master') renderContent(); })
+        .catch(e => Utils.showToast(e.message || 'Could not load checklist masters', 'error'));
+    }
+    const masterRowsList = masterMode && !masterLoading ? masterRows() : [];
+    const masterGroupsList = masterMode && !masterLoading ? masterGroups(masterRowsList) : [];
 
     /* groups list */
     let serial = 1;
@@ -959,7 +999,9 @@ window.Pages['all-tasks'] = (function () {
               ${MASTER_SORTS.some(([v]) => v === _mSortCol + ':' + _mSortDir) ? '' : `<option selected>Sort: custom</option>`}
             </select>` : ''}
           </div>
-          ${masterMode ? masterViewHTML(masterGroupsList) : groupsHTML}
+          ${masterLoading
+            ? '<div style="padding:48px;text-align:center;font-size:13px;color:var(--text-muted)">Loading checklist masters…</div>'
+            : (masterMode ? masterViewHTML(masterGroupsList) : groupsHTML)}
         </div>
 
       </div>`;
@@ -969,6 +1011,11 @@ window.Pages['all-tasks'] = (function () {
 
   /* ─── event binding ─────────────────────────────────────────────────────── */
   function bindEvents() {
+    /* per-group pagers — delegated on #main-content, so they survive re-renders */
+    const mc = document.getElementById('main-content');
+    const onGroupPage = (p, key) => { _groupPage[key] = p; renderContent(); };
+    Utils.bindPager(mc, 't', onGroupPage);
+    Utils.bindPager(mc, 'm', onGroupPage);
     /* tab buttons */
     document.querySelectorAll('#at-tab-seg .at-seg-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1041,7 +1088,7 @@ window.Pages['all-tasks'] = (function () {
     }
 
     /* expand / collapse all */
-    const visGroups = (_tab === 'Checklist' && _statusTab === 'Master') ? masterGroups(masterRows()) : getVisibleGroups();
+    const visGroups = (_tab === 'Checklist' && _statusTab === 'Master') ? (_mastersFull ? masterGroups(masterRows()) : []) : getVisibleGroups();
     document.getElementById('at-expand-all')?.addEventListener('click', () => {
       visGroups.forEach(g => { _expanded[g.doer] = true; });
       renderContent();

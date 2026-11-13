@@ -268,6 +268,8 @@ const SCHEMA = [
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS end_date DATE DEFAULT NULL`,
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS remarks TEXT DEFAULT NULL`,
   `ALTER TABLE masters ADD COLUMN IF NOT EXISTS department VARCHAR(128) DEFAULT ''`,
+  // /api/masters?due= (All Tasks) only reads occurrences dated up to today.
+  `CREATE INDEX idx_masters_start_date ON masters (start_date)`,
   `CREATE TABLE IF NOT EXISTS holidays (id VARCHAR(16) PRIMARY KEY, date DATE NOT NULL, name VARCHAR(255) NOT NULL, type VARCHAR(64) DEFAULT '') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   // The old FMS feature was a hardcoded 8-step client-campaign tracker with no
   // reachable nav entry — replaced below by the Google-Sheets-backed FMS module.
@@ -4020,14 +4022,19 @@ app.get('/api/urgent-payments', requireAuth, async (req, res) => {
     await ensureSchema();
     const user = req.session.user;
     const admin = isAdminUser(user);
+    /* ?status=pending (admins only) — the Approvals tab opens on the requests
+       still waiting for a decision and used to download every request ever
+       made just to hide the decided ones. It asks for those only when "Show
+       decided requests too" is ticked. A requester always gets all of theirs. */
+    const pendingOnly = admin && req.query.status === 'pending';
     let rows;
     if (USE_DB) {
       rows = admin
-        ? await q('SELECT * FROM urgent_payments ORDER BY created_at DESC', [])
+        ? await q(`SELECT * FROM urgent_payments${pendingOnly ? " WHERE status='pending'" : ''} ORDER BY created_at DESC`, [])
         : await q('SELECT * FROM urgent_payments WHERE requested_by_id=$1 ORDER BY created_at DESC', [user.id]);
     } else {
       const store = await readStore();
-      rows = (store.urgentPayments || []).filter(r => admin || r.requested_by_id === user.id)
+      rows = (store.urgentPayments || []).filter(r => (admin || r.requested_by_id === user.id) && (!pendingOnly || (r.status || 'pending') === 'pending'))
         .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     }
     return res.json(rows.map(upOut));
@@ -4829,9 +4836,21 @@ app.get('/api/masters', requireAuth, async (req, res) => {
   const isHOD = isHODUser(sessUser);
   const userId = sessUser?.id;
   const userName = (sessUser?.name || '').trim().toLowerCase();
+  /* ?due=YYYY-MM-DD — only occurrences dated on/before that day, plus any
+     already completed. Every recurring checklist is pre-generated a year
+     ahead as one row per occurrence, so the unscoped list is mostly future
+     rows the All Tasks list throws away (it hides "not due yet" — the same
+     gate computeDashboard applies). The caller passes its own "today" so the
+     server and the page agree on the cut-off. Without ?due= the response is
+     unchanged: the Master view still gets the whole series. */
+  const due = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.due || '')) ? String(req.query.due) : null;
   if (!USE_DB) {
     const store = await readStore();
     let rows = store.masters||[];
+    if (due) {
+      const doneIds = new Set([...(store.completedMasterIds || []), ...((store.checklistCompletions || []).map(c => c.masterId || c.master_id))]);
+      rows = rows.filter(m => !m.startDate || m.startDate <= due || doneIds.has(m.id));
+    }
     if (isHOD) {
       // Department looked up fresh off store.users by id — see /api/dashboard's
       // comment on why a cached session department string isn't trustworthy.
@@ -4844,7 +4863,21 @@ app.get('/api/masters', requireAuth, async (req, res) => {
     return res.json(rows);
   }
   await ensureSchema();
-  const { rows } = await pool.query('SELECT * FROM masters ORDER BY created_at DESC');
+  // Placeholders are numbered in the order they appear in the text — the MySQL
+  // translator turns each $N into a positional ? (see pgToMysql).
+  const where = [];
+  const params = [];
+  if (due) {
+    params.push(due);
+    where.push(`(start_date IS NULL OR start_date <= $${params.length} OR id IN (SELECT master_id FROM checklist_completions))`);
+  }
+  // A plain user only ever gets their own rows (the same rule as the JS filter
+  // below, which stays as the authority) — no point shipping the company's.
+  if (!isHOD && !isAdmin) {
+    params.push(userName);
+    where.push(`LOWER(TRIM(assigned_to)) = $${params.length}`);
+  }
+  const { rows } = await pool.query(`SELECT * FROM masters${where.length ? ' WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC`, params);
   const leaveCtx = await getLeaveDayContext();
   // onLeave: the leave type when the doer's approved full-day leave covers this
   // occurrence's date — All Tasks shows it as "On Leave" instead of pending.
@@ -5480,6 +5513,22 @@ app.get('/api/checklist-completions', requireAuth, async (req, res) => {
     // been completed, not just today — a completion doesn't expire when the day changes.
     // An explicit ?date= still scopes to one day for reporting-style callers.
     const dateFilter = req.query.date || null;
+    /* ?idsOnly=1 — All Tasks only asks "has this occurrence ever been done?",
+       so it needs one master_id per completed occurrence, not every completion
+       row with its timestamps. Same shape ({ master_id }) and same scoping. */
+    const idsOnly = req.query.idsOnly === '1' && !dateFilter;
+    if (!USE_DB) {
+      const store = await readStore();
+      const ids = [...new Set([...(store.completedMasterIds || []), ...((store.checklistCompletions || []).map(c => c.masterId || c.master_id))])];
+      return res.json(ids.filter(Boolean).map(id => ({ master_id: id })));
+    }
+    if (idsOnly) {
+      const admin = isAdminUser(req.session?.user);
+      const rows = admin
+        ? await q('SELECT DISTINCT master_id FROM checklist_completions')
+        : await q('SELECT DISTINCT cc.master_id FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(TRIM(m.assigned_to)) = LOWER(TRIM($1))', [req.session?.user?.name || '']);
+      return res.json(rows);
+    }
     if (!isAdminUser(req.session?.user)) {
       let sql = `SELECT cc.* FROM checklist_completions cc JOIN masters m ON m.id = cc.master_id WHERE LOWER(TRIM(m.assigned_to)) = LOWER(TRIM($1))`;
       const params = [req.session?.user?.name || ''];
@@ -5600,11 +5649,15 @@ app.get('/api/users', requireAuth, async (req, res) => {
   // names and departments for a dropdown — they were downloading every photo
   // in the company on every open. Users and Profile still fetch the full rows.
   const lite = req.query.lite === '1';
+  // ?self=1 — just the caller's own row (Profile used to pull every user, with
+  // every photo, only to .find() itself). Same columns and same field rules.
+  const self = req.query.self === '1';
   const cols = lite
     ? 'u.id, u.name, u.email, u.phone, u.department, u.branch, u.roles, u.active, u.permissions, u.leave_approver, u.substitute_approver, u.created_at'
     : 'u.*';
   const rows = await q(`SELECT ${cols}, p.notification_email AS notif_email
-                          FROM users u LEFT JOIN profile p ON p.user_id = u.id ORDER BY u.id`);
+                          FROM users u LEFT JOIN profile p ON p.user_id = u.id${self ? ' WHERE u.id = $1' : ''} ORDER BY u.id`,
+                       self ? [req.session?.user?.id || ''] : undefined);
   const out = rows.map(({ password_hash, notif_email, ...u }) =>
     ({ ...u, notifEmail: notif_email || '', permissions: parsePermissions(u.permissions) }));
   // roles/permissions is a full map of who holds Admin/HOD and exactly what
@@ -15059,9 +15112,100 @@ function _imsTxnListQuery(direction, category, columns) {
 const IMS_TXN_LIST_COLUMNS = `t.id, t.txn_date AS date, t.item_code AS itemCode, t.item_name AS itemName,
   t.size, t.quantity, t.uom, t.department, t.vendor, t.remarks, t.status, t.created_by AS createdBy, t.created_at AS createdAt, t.source`;
 
+/* ── Paged Inward / Outward ledger ────────────────────────────────────────────
+   The list used to be "newest 1000 rows, filter in the browser": the Trading
+   ledger is already past 1000, so older entries could not be reached at all and
+   the date filter quietly searched a truncated list. With ?page= the item
+   search and date range run in SQL over the WHOLE ledger and only one page of
+   rows comes back, plus:
+     totals     — the grand Total row, over every matching row (not just the page)
+     dayTotals  — each day on the page, summed over ALL its matching rows, so a
+                  day split across two pages still shows its full subtotal
+   Cancelled rows are counted apart and left out of the quantities — the same
+   rule as the list's own roll-up. Without ?page= the old response is unchanged.
+   Rows are ordered by entry date (newest day first), then entry time — the
+   order the list groups them in. */
+function _imsLedgerWhere(direction, query) {
+  const params = [direction];
+  const category = String(query.category || '').trim();
+  let from = ' FROM ims_transactions t';
+  if (category) from += ' JOIN ims_items i ON i.item_code = t.item_code';
+  let where = ' WHERE t.direction = $1';
+  if (category) { params.push(category); where += ` AND i.category = $${params.length}`; }
+  const term = String(query.q || '').trim().toLowerCase();
+  if (term) {
+    params.push('%' + term.replace(/[\\%_]/g, m => '\\' + m) + '%');
+    where += ` AND LOWER(CONCAT(COALESCE(t.item_code,''), ' ', COALESCE(t.item_name,''))) LIKE $${params.length}`;
+  }
+  const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+  if (isDate(query.from)) { params.push(String(query.from)); where += ` AND t.txn_date >= $${params.length}`; }
+  if (isDate(query.to))   { params.push(String(query.to));   where += ` AND t.txn_date <= $${params.length}`; }
+  return { from, where, params, filtered: !!(term || isDate(query.from) || isDate(query.to)) };
+}
+// The list's own day key: String(date).slice(0, 10) of the JSON value.
+function _imsDayKey(v) {
+  if (v instanceof Date) return isNaN(v) ? '' : v.toJSON().slice(0, 10);
+  return String(v || '').slice(0, 10);
+}
+// Fold (status, uom, n, qty) aggregate rows into { active, cancelled, total, byUom }.
+function _imsFoldAgg(rows) {
+  const out = { active: 0, cancelled: 0, total: 0, byUom: {} };
+  for (const r of rows) {
+    const n = Number(r.n) || 0;
+    if (String(r.status || '') === 'Cancelled') { out.cancelled += n; continue; }
+    const qty = Number(r.qty) || 0;
+    const u = String(r.uom || '').trim() || '—';
+    out.active += n;
+    out.total += qty;
+    out.byUom[u] = (out.byUom[u] || 0) + qty;
+  }
+  return out;
+}
+async function _imsLedgerPage(direction, query) {
+  const limit = Math.min(200, Math.max(1, parseInt(query.limit, 10) || 50));
+  const w = _imsLedgerWhere(direction, query);
+  const [countRow] = await q(`SELECT COUNT(*) AS n${w.from}${w.where}`, w.params);
+  const total = Number(countRow?.n) || 0;
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(Math.max(1, parseInt(query.page, 10) || 1), pages);
+  const offset = (page - 1) * limit;
+  // LIMIT/OFFSET are inlined integers (validated above): MySQL's prepared
+  // statements reject bound LIMIT parameters on some server versions.
+  const rows = await q(`SELECT ${IMS_TXN_LIST_COLUMNS}${w.from}${w.where} ORDER BY t.txn_date DESC, t.created_at DESC LIMIT ${limit} OFFSET ${offset}`, w.params);
+  const aggCols = 'COALESCE(t.status, \'\') AS status, COALESCE(t.uom, \'\') AS uom, COUNT(*) AS n, COALESCE(SUM(t.quantity), 0) AS qty';
+  const totals = _imsFoldAgg(await q(`SELECT ${aggCols}${w.from}${w.where} GROUP BY t.status, t.uom`, w.params));
+  const dayTotals = {};
+  const days = [];
+  const seen = new Set();
+  for (const r of rows) {
+    const k = _imsDayKey(r.date);
+    if (!seen.has(k)) { seen.add(k); days.push(r.date); }
+  }
+  if (days.length) {
+    const p = w.params.slice();
+    const marks = days.map(d => { p.push(d); return '$' + p.length; });
+    const dayRows = await q(`SELECT t.txn_date AS d, ${aggCols}${w.from}${w.where} AND t.txn_date IN (${marks.join(',')}) GROUP BY t.txn_date, t.status, t.uom`, p);
+    const byDay = new Map();
+    for (const r of dayRows) {
+      const k = _imsDayKey(r.d);
+      if (!byDay.has(k)) byDay.set(k, []);
+      byDay.get(k).push(r);
+    }
+    for (const [k, list] of byDay) dayTotals[k] = _imsFoldAgg(list);
+  }
+  let all = total;
+  if (w.filtered) {
+    const u = _imsLedgerWhere(direction, { category: query.category });
+    const [allRow] = await q(`SELECT COUNT(*) AS n${u.from}${u.where}`, u.params);
+    all = Number(allRow?.n) || 0;
+  }
+  return { rows, total, all, page, pages, limit, totals, dayTotals };
+}
+
 app.get('/api/ims/inward/list', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
+    if (req.query.page) return res.json(await _imsLedgerPage('IN', req.query));
     const { sql, params } = _imsTxnListQuery('IN', String(req.query.category || '').trim(), IMS_TXN_LIST_COLUMNS);
     const rows = await q(sql, params);
     return res.json(rows);
@@ -15102,6 +15246,7 @@ app.delete('/api/ims/inward', requireAuth, requireSuperAdmin, async (req, res) =
 app.get('/api/ims/outward/list', requireAuth, async (req, res) => {
   try {
     await ensureSchema();
+    if (req.query.page) return res.json(await _imsLedgerPage('OUT', req.query));
     const { sql, params } = _imsTxnListQuery('OUT', String(req.query.category || '').trim(), IMS_TXN_LIST_COLUMNS);
     const rows = await q(sql, params);
     return res.json(rows);

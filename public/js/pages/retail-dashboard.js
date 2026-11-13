@@ -140,7 +140,8 @@ window.Pages['retail-dashboard'] = (() => {
           r.has_invoice ? `<a href="/api/retail-dashboard/expenses/${encodeURIComponent(r.id)}/invoice" target="_blank" style="color:var(--color-primary);font-weight:600;">View</a>` : '—',
           `<span style="display:inline-block;max-width:220px;white-space:normal;">${H.esc(r.note || '—')}</span>`,
         ]),
-        { maxHeight: '560px', cards: true },
+        { maxHeight: '560px', cards: true,
+          page: { key: 'rd-expenses', sig: [_search, _filters.month, _filters.branch, _filters.category], onPage: render } },
       ) : H.empty('No expenses here', all.length ? 'Nothing matches these filters.' : 'Press "+ New Expense" to log the first one.')}`;
   }
 

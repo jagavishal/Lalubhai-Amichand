@@ -148,7 +148,7 @@ window.Pages['quotation-approval'] = (() => {
           pill(s.status),
           `<button class="${needsMe(s) ? 'btn-primary' : 'btn-secondary'} btn-sm" data-view="${esc(s.id)}">${esc(actionLabel(s))}</button>`,
         ];
-      }), { empty, cards: true })}
+      }), { empty, cards: true, page: { key: 'qa-requests', sig: [_tab, _f.q, _f.status, _f.urgency], onPage: render } })}
       <div style="font-size:11.5px;color:#94a3b8;margin-top:6px;">${list.length} request${list.length === 1 ? '' : 's'}</div>`;
   }
 

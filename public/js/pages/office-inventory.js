@@ -176,7 +176,7 @@ window.Pages['office-inventory'] = (() => {
           : p.invoice_url ? `<a href="${esc(p.invoice_url)}" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;">📎 Drive</a>` : '—',
         esc(p.added_by),
         ...(D.manage ? [`<button class="btn-secondary btn-sm" data-del-pur="${esc(p.id)}" style="color:#dc2626;">Delete</button>`] : []),
-      ]), { empty: 'No purchases match', cards: true })}
+      ]), { empty: 'No purchases match', cards: true, page: { key: 'oi-purchases', sig: [f.q, f.month, f.vendor], onPage: render } })}
       <div style="font-size:11.5px;color:#94a3b8;margin-top:6px;">${list.length} line${list.length === 1 ? '' : 's'} · ${money(list.reduce((n, p) => n + p.total, 0))}</div>`;
   }
 
@@ -206,7 +206,7 @@ window.Pages['office-inventory'] = (() => {
         H.fmtDate(c.use_date), esc(c.item_name), esc(c.used_by), `${qty(c.qty)} ${esc(itemById(c.item_id)?.unit || '')}`,
         `<div style="max-width:260px;font-size:12px;color:#64748b;">${esc(c.remarks)}</div>`, esc(c.added_by),
         ...(D.manage ? [`<button class="btn-secondary btn-sm" data-del-con="${esc(c.id)}" style="color:#dc2626;">Delete</button>`] : []),
-      ]), { empty: 'No consumption matches', cards: true })}
+      ]), { empty: 'No consumption matches', cards: true, page: { key: 'oi-consumption', sig: [f.q, f.month, f.user], onPage: render } })}
       <div style="font-size:11.5px;color:#94a3b8;margin-top:6px;">${list.length} entr${list.length === 1 ? 'y' : 'ies'}</div>`;
   }
 

@@ -140,6 +140,11 @@ window.Pages['pr-creation'] = (() => {
   let _sumRows = [];
   let _sumLoaded = false;
   let _sumLoadError = '';
+  // Opening the Summary tab used to re-read the whole PR log sheet every
+  // click. A fetch younger than LIST_FRESH_MS is reused (Refresh still forces
+  // one, and creating a PR marks it stale).
+  let _sumFetchedAt = 0;
+  const LIST_FRESH_MS = 60 * 1000;
   let _sumFFormat = '';
   let _sumFDept = '';
   let _sumFParty = '';
@@ -532,6 +537,7 @@ window.Pages['pr-creation'] = (() => {
 
   async function _createSubmit(e) {
     e.preventDefault();
+    _sumFetchedAt = 0; // a new PR → the Summary tab must fetch again
     const body = { format: _format, items: _collectItems() };
     HEADER_FIELDS[_format].forEach(f => { body[f.key] = document.getElementById('pcr-' + f.key).value.trim(); });
     const party = document.getElementById('pcr-party').value.trim();
@@ -665,7 +671,9 @@ window.Pages['pr-creation'] = (() => {
     _sumRenderTable();
     try {
       _sumRows = await Utils.apiFetch('/api/pr-creation/list') || [];
+      _sumFetchedAt = Date.now();
     } catch (e) {
+      _sumFetchedAt = 0;
       _sumRows = [];
       _sumLoadError = e.message || 'Failed to load PRs';
     }
@@ -683,7 +691,7 @@ window.Pages['pr-creation'] = (() => {
     if (!sel) return;
     const current = sel.value;
     sel.innerHTML = '<option value="">All Departments</option>' + _sumDepartmentOptions().map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
-    if (current) sel.value = current;
+    if (current || _sumFDept) sel.value = current || _sumFDept;
   }
 
   // The log keeps the sheet tab name ("PURCHASE REQUISITION(PACKING_BOX)");
@@ -711,11 +719,13 @@ window.Pages['pr-creation'] = (() => {
     if (!body) return;
 
     if (!_sumLoaded) {
+      Utils.clearPager('pr-list');
       body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_sumLoadError) {
+      Utils.clearPager('pr-list');
       body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_sumLoadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
@@ -723,10 +733,12 @@ window.Pages['pr-creation'] = (() => {
     const rows = _sumFilteredRows();
     if (countEl) countEl.textContent = rows.length + ' of ' + _sumRows.length;
     if (!rows.length) {
+      Utils.clearPager('pr-list');
       body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_sumRows.length ? 'No PRs match these filters' : 'No PRs created yet') + '</td></tr>';
       return;
     }
-    body.innerHTML = rows.map(r => ''
+    // One page in the DOM at a time; the filters still run over every row.
+    Utils.renderPaged({ tbody: body, key: 'pr-list', rows, sig: [_sumFFormat, _sumFDept, _sumFParty, _sumFFrom, _sumFTo], render: (pageRows) => pageRows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
         + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.prNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:600;">' + esc(FORMAT_LABEL[_formatKey(r)] || r.format) + '</span></td>'
@@ -745,7 +757,7 @@ window.Pages['pr-creation'] = (() => {
           + Utils.ownerDeleteBtn('pcr-delete-btn', 'pr', r.prNo)
           + _pendingWithHtml(r)
         + '</td>'
-      + '</tr>').join('');
+      + '</tr>').join('') });
   }
 
   // Approval state — from the approver's email button (/pr-action) or, far
@@ -829,6 +841,11 @@ window.Pages['pr-creation'] = (() => {
   }
 
   function _sumBindFilterBar() {
+    // Rebuilt on every visit to the tab; the filters are kept, so show them.
+    document.getElementById('sum-format').value = _sumFFormat;
+    document.getElementById('sum-party').value = _sumFParty;
+    document.getElementById('sum-from').value = _sumFFrom;
+    document.getElementById('sum-to').value = _sumFTo;
     const paintQuick = () => document.querySelectorAll('#sum-quick [data-qf]').forEach(b => {
       const on = b.dataset.qf === _sumFFormat;
       b.style.background = on ? 'var(--color-primary)' : '#fff';
@@ -857,6 +874,7 @@ window.Pages['pr-creation'] = (() => {
       _sumRenderTable();
     });
     document.getElementById('sum-refresh').addEventListener('click', _sumLoad);
+    paintQuick();
   }
 
   function _summaryViewHtml() {
@@ -958,7 +976,12 @@ window.Pages['pr-creation'] = (() => {
     });
     document.querySelector('.pcr-summary-tab')?.addEventListener('click', () => { _view = 'list'; renderPage(); });
 
-    if (_view === 'list') { _sumBindFilterBar(); _sumBindRowActions(); _sumLoad(); return; }
+    if (_view === 'list') {
+      _sumBindFilterBar(); _sumBindRowActions();
+      if (_sumLoaded && !_sumLoadError && Date.now() - _sumFetchedAt < LIST_FRESH_MS) { _sumRefreshDeptOptions(); _sumRenderTable(); }
+      else _sumLoad();
+      return;
+    }
     _bindCreateView();
   }
 

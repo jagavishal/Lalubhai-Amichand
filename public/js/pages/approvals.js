@@ -250,12 +250,17 @@ window.Pages.approvals = {
   },
 
   /* ── Urgent payment requests ────────────────────────────────────────── */
+  // Admins start on the pending requests only; the decided history is fetched
+  // the first time "Show decided requests too" is ticked (_upFull marks it).
   async _fetchUrgent() {
+    const full = !this._upAdmin || this._upShowAll;
     try {
-      const rows = await Utils.apiFetch('/api/urgent-payments');
+      const rows = await Utils.apiFetch('/api/urgent-payments' + (full ? '' : '?status=pending'));
       this._urgentPayments = Array.isArray(rows) ? rows : [];
+      this._upFull = full;
     } catch {
       this._urgentPayments = [];
+      this._upFull = false;
     }
   },
 
@@ -317,7 +322,9 @@ window.Pages.approvals = {
       return toggle ? `<div class="card overflow-hidden">${toggle}${empty.replace('class="card p-14', 'class="p-14')}</div>` : empty;
     }
 
-    const rows = items.map((r, i) => {
+    const pg = Utils.pageSlice(items, Utils.pageOf('urgent', [admin, this._upShowAll]));
+    const rows = pg.rows.map((r, j) => {
+      const i = pg.offset + j;
       const s = STATUS[r.status] || STATUS.pending;
       const busy = this._upBusy === r.id;
       const pending = r.status === 'pending';
@@ -375,14 +382,22 @@ window.Pages.approvals = {
         </thead>
         <tbody>${rows}</tbody>
       </table></div>
+      ${Utils.pagerHTML('urgent', pg)}
     </div>`;
   },
 
   _bindUrgentEvents() {
     const root = document.getElementById('approvals-root');
     if (!root) return;
-    root.querySelector('#up-show-all')?.addEventListener('change', (e) => {
+    root.querySelector('#up-show-all')?.addEventListener('change', async (e) => {
       this._upShowAll = !!e.target.checked;
+      if (this._upShowAll && !this._upFull) await this._fetchUrgent();
+      this._renderContent();
+    });
+    root.querySelector('[data-pg-bar="urgent"]')?.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-pg-key]');
+      if (!b || b.disabled) return;
+      Utils.setPage('urgent', Number(b.dataset.pg));
       this._renderContent();
     });
     root.querySelectorAll('[data-up-ok]').forEach(b =>
@@ -472,6 +487,8 @@ window.Pages.approvals = {
 
     // Fetch
     // Both roles need this: an approver is frequently not an Admin.
+    this._upAdmin = !!isAdmin;
+    this._upFull = false;
     await Promise.all([
       isAdmin ? this._fetchAdmin() : this._fetchUser(),
       this._fetchLeaves(),

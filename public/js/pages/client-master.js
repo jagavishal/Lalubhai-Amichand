@@ -259,6 +259,10 @@ window.Pages['client-master'] = (() => {
       + '</div>';
     }
 
+    // One page of vendors in the DOM; search, status filter and the CSV export
+    // still work over every vendor (_filtered()).
+    const pg = Utils.pageSlice(rows, Utils.pageOf('vendors', [_q, _status]));
+
     const thS = 'padding:10px 16px;font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#64748b;background:#f8fafc;text-align:left;white-space:nowrap;';
     const actionTh = _canEdit ? '<th style="' + thS + 'text-align:right;">Actions</th>' : '';
 
@@ -276,7 +280,8 @@ window.Pages['client-master'] = (() => {
         + actionTh
       + '</tr></thead>'
       + '<tbody>'
-        + rows.map((c, i) => {
+        + pg.rows.map((c, j) => {
+          const i = pg.offset + j;
           const pill = c.status === 'active'
             ? '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;"><span style="width:5px;height:5px;border-radius:50%;background:#16a34a;"></span>Active</span>'
             : '<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;"><span style="width:5px;height:5px;border-radius:50%;background:#94a3b8;"></span>Inactive</span>';
@@ -302,7 +307,8 @@ window.Pages['client-master'] = (() => {
             + actionTd
           + '</tr>';
         }).join('')
-      + '</tbody></table></div>';
+      + '</tbody></table></div>'
+      + Utils.pagerHTML('vendors', pg);
   }
 
   function _renderVendorTab() {
@@ -870,6 +876,7 @@ window.Pages['client-master'] = (() => {
       // not just matched against an existing draft id, or history would silently miss them.
       if (exportedRows.length) {
         try {
+          _phFetchedAt = 0; // exported entries are what Payment History lists
           const patchRes = await fetch('/api/payment-entries', {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
@@ -905,7 +912,13 @@ window.Pages['client-master'] = (() => {
   }
 
   /* ── Payment History helpers ────────────────────────────────── */
+  /* Opening the History tab re-downloaded the whole payment history on every
+     click. A load younger than PH_FRESH_MS is reused; Refresh and exporting
+     entries (the only thing that adds history) still fetch. */
+  let _phFetchedAt = 0;
+  const PH_FRESH_MS = 60 * 1000;
   async function _phLoad() {
+    _phFetchedAt = 0;
     try {
       const res = await fetch('/api/payment-history');
       if (!res.ok) {
@@ -913,6 +926,7 @@ window.Pages['client-master'] = (() => {
         throw new Error(body.error || ('Failed to load payment history (' + res.status + ')'));
       }
       _phRows = await res.json();
+      _phFetchedAt = Date.now();
     } catch (e) {
       // Previously swallowed silently, so a failed fetch (expired session, DB
       // error, etc.) looked identical to "no history yet" — an empty table
@@ -1335,6 +1349,7 @@ window.Pages['client-master'] = (() => {
         b.style.fontWeight   = a ? '700' : '500';
       });
       const content = document.getElementById('cm-tab-content');
+      if (Date.now() - _phFetchedAt < PH_FRESH_MS) { _render(); return; }
       if (content) content.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;min-height:300px;"><div style="text-align:center;"><div style="width:36px;height:36px;border-radius:50%;border:3px solid #f1f5f9;border-top-color:var(--color-primary);animation:spin .7s linear infinite;margin:0 auto 12px;"></div><div style="font-size:13px;color:#94a3b8;">Loading history…</div></div></div>';
       await _phLoad();
       _render();
@@ -1371,6 +1386,13 @@ window.Pages['client-master'] = (() => {
   // Only binds what lives inside #cm-table (re-created on every search/filter
   // change). Search + status filter are bound once in _render — see the note there.
   function _bindTableButtons() {
+    document.querySelector('#cm-table [data-pg-bar]')?.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-pg-key]');
+      if (!b || b.disabled) return;
+      Utils.setPage('vendors', Number(b.dataset.pg));
+      document.getElementById('cm-table').innerHTML = _renderTable();
+      _bindTableButtons();
+    });
     document.querySelectorAll('.js-edit').forEach(btn => {
       btn.addEventListener('click', () => {
         const c = _list.find(x => String(x.id) === String(btn.dataset.id));

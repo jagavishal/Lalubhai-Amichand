@@ -474,8 +474,12 @@ window.Pages['help-ticket'] = (() => {
 
     const pay = _tab === 'payment';
     const visible = _tickets.filter(t => kindOf(t) === _tab);
+    // Admins hold every ticket ever raised; only one page of the current tab
+    // goes into the DOM (each tab keeps its own page).
+    const pgKey = 'ht-' + _tab;
+    const pg = Utils.pageSlice(visible, Utils.pageOf(pgKey));
 
-    const rows = visible.map(t => {
+    const rows = pg.rows.map(t => {
       const ss  = STATUS_STYLE[t.status] || STATUS_STYLE.open;
       const ps  = PRI_STYLE[t.priority]  || PRI_STYLE.Medium;
       // Two different people: who the ticket is about, and who typed it in.
@@ -617,9 +621,16 @@ window.Pages['help-ticket'] = (() => {
                 + (pay ? 'No payment requests yet' : 'No tickets yet') + '</td></tr>'}</tbody>
             </table>
           </div>
+          ${Utils.pagerHTML(pgKey, pg)}
         </div>
       </div>`;
 
+    el.querySelector('[data-pg-bar]')?.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-pg-key]');
+      if (!b || b.disabled) return;
+      Utils.setPage(pgKey, Number(b.dataset.pg));
+      renderPage();
+    });
     document.getElementById('ht-new-btn')?.addEventListener('click', () => { _modalOpen = true; renderModal(); });
     document.getElementById('ht-authority-btn')?.addEventListener('click', openAuthorityModal);
     el.querySelectorAll('.ht-tab').forEach(btn => btn.addEventListener('click', () => {

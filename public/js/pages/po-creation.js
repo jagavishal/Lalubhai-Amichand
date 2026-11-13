@@ -200,6 +200,11 @@ window.Pages['po-creation'] = (() => {
   let _polRows = [];
   let _polLoaded = false;
   let _polLoadError = '';
+  // When the list was last fetched. Opening the List tab used to re-read the
+  // whole PO log sheet (+ GRN log + FMS sheet) on every click; now it reuses a
+  // fetch younger than LIST_FRESH_MS unless a PO was submitted meanwhile.
+  let _polFetchedAt = 0;
+  const LIST_FRESH_MS = 60 * 1000;
   let _polFFormat = '';
   let _polFDept = '';
   let _polFParty = '';
@@ -853,7 +858,9 @@ window.Pages['po-creation'] = (() => {
     _polRenderTable();
     try {
       _polRows = await Utils.apiFetch('/api/po-creation/list') || [];
+      _polFetchedAt = Date.now();
     } catch (e) {
+      _polFetchedAt = 0;
       _polRows = [];
       _polLoadError = e.message || 'Failed to load POs';
     }
@@ -871,7 +878,7 @@ window.Pages['po-creation'] = (() => {
     if (!sel) return;
     const current = sel.value;
     sel.innerHTML = '<option value="">All Departments</option>' + _polDepartmentOptions().map(d => '<option value="' + esc(d) + '">' + esc(d) + '</option>').join('');
-    if (current) sel.value = current;
+    if (current || _polFDept) sel.value = current || _polFDept;
   }
 
   function _polFilteredRows() {
@@ -891,11 +898,13 @@ window.Pages['po-creation'] = (() => {
     if (!body) return;
 
     if (!_polLoaded) {
+      Utils.clearPager('po-list');
       body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_polLoadError) {
+      Utils.clearPager('po-list');
       body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_polLoadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
@@ -903,10 +912,12 @@ window.Pages['po-creation'] = (() => {
     const rows = _polFilteredRows();
     if (countEl) countEl.textContent = 'Showing ' + rows.length + ' of ' + _polRows.length + ' POs';
     if (!rows.length) {
+      Utils.clearPager('po-list');
       body.innerHTML = '<tr><td colspan="10" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_polRows.length ? 'No POs match these filters' : 'No POs created yet') + '</td></tr>';
       return;
     }
-    body.innerHTML = rows.map(r => ''
+    // One page in the DOM at a time; the filters above still run over all rows.
+    Utils.renderPaged({ tbody: body, key: 'po-list', rows, sig: [_polFFormat, _polFDept, _polFParty, _polFFrom, _polFTo], render: (pageRows) => pageRows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
         + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;">' + esc(r.poNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;"><span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:600;">' + esc(FORMAT_LABEL[r.format] || r.format) + '</span></td>'
@@ -928,7 +939,7 @@ window.Pages['po-creation'] = (() => {
             : '<button type="button" class="poc-cancel-btn btn-outline-danger btn-sm" data-po="' + esc(r.poNo) + '">Cancel PO</button>')
           + Utils.ownerDeleteBtn('poc-delete-btn', 'po', r.poNo)
         + '</td>'
-      + '</tr>').join('');
+      + '</tr>').join('') });
   }
 
   // Approval state, as decided from the approver's email (see /po-action in
@@ -1040,6 +1051,12 @@ window.Pages['po-creation'] = (() => {
   }
 
   function _polBindFilterBar() {
+    // The bar is rebuilt on every visit to the tab; the filters themselves are
+    // kept, so show them rather than blank inputs over a filtered list.
+    document.getElementById('pol-format').value = _polFFormat;
+    document.getElementById('pol-party').value = _polFParty;
+    document.getElementById('pol-from').value = _polFFrom;
+    document.getElementById('pol-to').value = _polFTo;
     document.getElementById('pol-format').addEventListener('change', (e) => { _polFFormat = e.target.value; _polRenderTable(); });
     document.getElementById('pol-dept').addEventListener('change', (e) => { _polFDept = e.target.value; _polRenderTable(); });
     document.getElementById('pol-party').addEventListener('input', (e) => { _polFParty = e.target.value; _polRenderTable(); });
@@ -1201,6 +1218,7 @@ window.Pages['po-creation'] = (() => {
 
   async function _submit(e) {
     e.preventDefault();
+    _polFetchedAt = 0; // a new PO → the List tab must fetch again
     const date = document.getElementById('poc-date').value;
     const department = document.getElementById('poc-department').value;
     const party = document.getElementById('poc-party').value.trim();
@@ -1367,7 +1385,12 @@ window.Pages['po-creation'] = (() => {
     if (isList) {
       _polBindFilterBar();
       _polBindRowActions();
-      _polLoad();
+      if (_polLoaded && !_polLoadError && Date.now() - _polFetchedAt < LIST_FRESH_MS) {
+        _polRefreshDeptOptions();
+        _polRenderTable();
+      } else {
+        _polLoad();
+      }
       return;
     }
 

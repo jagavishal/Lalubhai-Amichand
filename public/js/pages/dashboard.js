@@ -443,13 +443,16 @@ window.Pages.dashboard = (function () {
     const hod = isHOD(user);
 
     /* parallel fetches */
-    const [dashData, usersData, holidaysData, delegationsData] = await Promise.all([
+    // Admins used to also pull /api/delegations here — every delegation in the
+    // company, unpaged — into _state.delegations, which nothing on this page
+    // reads (the task table runs off /api/dashboard). Dropped, on open and on
+    // every refresh.
+    const [dashData, usersData, holidaysData] = await Promise.all([
       Utils.apiFetch('/api/dashboard'),
-      // Only /api/dashboard is essential — a hiccup on the dropdown/holiday/
-      // delegation lists shouldn't blank the whole page.
+      // Only /api/dashboard is essential — a hiccup on the dropdown/holiday
+      // lists shouldn't blank the whole page.
       Utils.apiFetch('/api/users?lite=1').catch(() => []),
       Utils.apiFetch('/api/holidays').catch(() => []),
-      admin ? Utils.apiFetch('/api/delegations').catch(() => []) : Promise.resolve([]),
     ]);
 
     if (!dashData) return;
@@ -457,7 +460,6 @@ window.Pages.dashboard = (function () {
     _state.data        = dashData;
     _state.users       = usersData || [];
     _state.holidays    = holidaysData || [];
-    _state.delegations = delegationsData || [];
     _state.subTab      = 'All';
     _state.userFilter  = 'All';
 
@@ -1970,13 +1972,9 @@ window.Pages.dashboard = (function () {
 
   /* ── refresh (re-fetch data, update table) ───────────────────────── */
   async function _refresh(admin) {
-    const [dashData, delegationsData] = await Promise.all([
-      Utils.apiFetch('/api/dashboard'),
-      admin ? Utils.apiFetch('/api/delegations') : Promise.resolve(_state.delegations),
-    ]);
+    const dashData = await Utils.apiFetch('/api/dashboard');
     if (!dashData) return;
     _state.data = dashData;
-    _state.delegations = delegationsData || _state.delegations;
 
     /* update stat cards */
     const wrap = document.getElementById('db-wrap');

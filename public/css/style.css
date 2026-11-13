@@ -928,3 +928,14 @@ img[data-zoom] { cursor: zoom-in; }
   .card { box-shadow: none !important; border: 1px solid #e2e8f0 !important; }
   #shell-body { margin-left: 0 !important; }
 }
+
+/* ── Pager (Utils.pagerHTML) ─────────────────────────────────────── */
+.pg-bar { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:10px 14px; border-top:1px solid var(--border-light); font-size:12.5px; color:var(--text-secondary); }
+.pg-info { white-space:nowrap; }
+.pg-nums { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+.pg-btn { min-width:30px; height:30px; padding:0 8px; border:1px solid var(--border-base); border-radius:6px; background:var(--surface); color:var(--text-primary); font-size:12.5px; font-weight:500; cursor:pointer; line-height:1; }
+.pg-btn:hover:not(:disabled):not(.pg-on) { background:var(--surface-alt); border-color:var(--border-strong); }
+.pg-btn.pg-on { background:var(--color-primary); border-color:var(--color-primary); color:#fff; cursor:default; }
+.pg-btn:disabled { opacity:.4; cursor:default; }
+.pg-gap { padding:0 2px; color:var(--text-muted); }
+@media print { .pg-bar { display:none !important; } }

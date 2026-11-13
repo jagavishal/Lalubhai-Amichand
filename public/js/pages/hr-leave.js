@@ -219,7 +219,8 @@ window.Pages['hr-leave'] = (() => {
         <div><button id="hrl-export" class="btn-secondary btn-sm" style="width:100%;">Export CSV</button></div>
       </div>
       ${H.table(shownCols, shownRows,
-        { empty: admin ? 'No leave requests for these filters' : 'You have not applied for any leave in this period', cards: true })}`;
+        { empty: admin ? 'No leave requests for these filters' : 'You have not applied for any leave in this period', cards: true,
+          page: { key: 'hr-leave-requests', sig: [_searchFilter, _typeFilter, _statusFilter, _year, _fromFilter, _toFilter], onPage: render } })}`;
   }
 
 

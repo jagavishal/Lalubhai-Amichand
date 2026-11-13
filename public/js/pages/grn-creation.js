@@ -33,6 +33,11 @@ window.Pages['grn-creation'] = (() => {
   let _grlRows = [];
   let _grlLoaded = false;
   let _grlLoadError = '';
+  // The List tab used to re-read the whole GRN log sheet on every click; a
+  // fetch younger than LIST_FRESH_MS is reused (Refresh forces one, and
+  // submitting a GRN marks it stale).
+  let _grlFetchedAt = 0;
+  const LIST_FRESH_MS = 60 * 1000;
   let _grlFVendor = '';
   let _grlFFrom = '';
   let _grlFTo = '';
@@ -481,7 +486,9 @@ window.Pages['grn-creation'] = (() => {
     _grlRenderTable();
     try {
       _grlRows = await Utils.apiFetch('/api/grn-creation/list') || [];
+      _grlFetchedAt = Date.now();
     } catch (e) {
+      _grlFetchedAt = 0;
       _grlRows = [];
       _grlLoadError = e.message || 'Failed to load GRNs';
     }
@@ -504,11 +511,13 @@ window.Pages['grn-creation'] = (() => {
     if (!body) return;
 
     if (!_grlLoaded) {
+      Utils.clearPager('grn-list');
       body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_grlLoadError) {
+      Utils.clearPager('grn-list');
       body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_grlLoadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
@@ -516,10 +525,12 @@ window.Pages['grn-creation'] = (() => {
     const rows = _grlFilteredRows();
     if (countEl) countEl.textContent = rows.length + ' of ' + _grlRows.length;
     if (!rows.length) {
+      Utils.clearPager('grn-list');
       body.innerHTML = '<tr><td colspan="9" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_grlRows.length ? 'No GRNs match these filters' : 'No GRNs created yet') + '</td></tr>';
       return;
     }
-    body.innerHTML = rows.map(r => ''
+    // One page in the DOM at a time; the filters still run over every row.
+    Utils.renderPaged({ tbody: body, key: 'grn-list', rows, sig: [_grlFVendor, _grlFFrom, _grlFTo], render: (pageRows) => pageRows.map(r => ''
       + '<tr style="border-bottom:1px solid #f1f5f9;">'
         + '<td class="m-card-title" style="padding:8px 10px;font-size:12.5px;font-weight:700;">#' + esc(r.grNo) + '</td>'
         + '<td style="padding:8px 10px;font-size:12.5px;">' + esc(r.date) + '</td>'
@@ -535,7 +546,7 @@ window.Pages['grn-creation'] = (() => {
             : '<button type="button" class="grnc-cancel-btn" data-gr="' + esc(r.grNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
           + Utils.ownerDeleteBtn('grnc-delete-btn', 'gr', r.grNo)
         + '</td>'
-      + '</tr>').join('');
+      + '</tr>').join('') });
   }
 
   function _grlBindRowActions() {
@@ -583,6 +594,10 @@ window.Pages['grn-creation'] = (() => {
   }
 
   function _grlBindFilterBar() {
+    // Rebuilt on every visit to the tab; the filters are kept, so show them.
+    document.getElementById('grnl-vendor').value = _grlFVendor;
+    document.getElementById('grnl-from').value = _grlFFrom;
+    document.getElementById('grnl-to').value = _grlFTo;
     document.getElementById('grnl-vendor').addEventListener('input', (e) => { _grlFVendor = e.target.value; _grlRenderTable(); });
     document.getElementById('grnl-from').addEventListener('change', (e) => { _grlFFrom = e.target.value; _grlRenderTable(); });
     document.getElementById('grnl-to').addEventListener('change', (e) => { _grlFTo = e.target.value; _grlRenderTable(); });
@@ -663,6 +678,7 @@ window.Pages['grn-creation'] = (() => {
 
   async function _submit(e) {
     e.preventDefault();
+    _grlFetchedAt = 0; // a new GRN → the List tab must fetch again
     const date = document.getElementById('grnc-date').value;
     const madeBy = document.getElementById('grnc-made-by').value.trim();
     // Anything still typed in the box (not yet turned into a chip) counts too.
@@ -807,7 +823,8 @@ window.Pages['grn-creation'] = (() => {
     if (isList) {
       _grlBindFilterBar();
       _grlBindRowActions();
-      _grlLoad();
+      if (_grlLoaded && !_grlLoadError && Date.now() - _grlFetchedAt < LIST_FRESH_MS) _grlRenderTable();
+      else _grlLoad();
       return;
     }
 

@@ -166,7 +166,8 @@ window.Pages['hr-assets'] = (() => {
             ${H.isOwner() ? `<button class="btn-secondary btn-sm" data-del="${H.esc(a.id)}" style="color:#dc2626;">Delete</button>` : ''}
           </div>`,
         ]),
-        { empty: _assets.length ? 'No assets match these filters' : 'No assets yet — add one, or run the sheet import from Employee Master', cards: true },
+        { empty: _assets.length ? 'No assets match these filters' : 'No assets yet — add one, or run the sheet import from Employee Master', cards: true,
+          page: { key: 'hr-assets', sig: [_filter.q, _filter.category, _filter.type, _filter.status], onPage: render } },
       )}`;
   }
 
@@ -184,7 +185,7 @@ window.Pages['hr-assets'] = (() => {
              <button class="btn-primary btn-sm" data-rep-done="${H.esc(r.id)}">Mark Done</button></div>`
           : '',
       ]),
-      { empty: 'No repairs on record', cards: true },
+      { empty: 'No repairs on record', cards: true, page: { key: 'hr-repairs', onPage: render } },
     );
   }
 

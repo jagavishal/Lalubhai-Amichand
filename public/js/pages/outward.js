@@ -39,6 +39,15 @@ window.Pages['outward'] = (() => {
   let _fItem = '';
   let _fFrom = '';
   let _fTo = '';
+  // Server-paged list (see _imsLedgerPage in server.js): _rows holds ONE page,
+  // the item search and date range run in SQL over the whole ledger, and
+  // _paged carries the totals. null = an older server answered with the plain
+  // array, and the list falls back to filtering it here.
+  let _page = 1;
+  let _paged = null;
+  let _fetchedAt = 0;        // List tab reuses a fetch younger than LIST_FRESH_MS
+  const LIST_FRESH_MS = 60 * 1000;
+  const LIST_PAGE_SIZE = 50;
 
   function _today() { return Utils.todayISO(); }
   const esc = Utils.esc;
@@ -358,20 +367,38 @@ window.Pages['outward'] = (() => {
     _loaded = false;
     _loadError = '';
     _renderTable();
-    let rows = [], err = '';
+    let rows = [], err = '', paged = null;
     try {
-      rows = await Utils.apiFetch('/api/ims/outward/list?category=' + encodeURIComponent(_category)) || [];
+      const qs = new URLSearchParams({ category: _category, page: String(_page), limit: String(LIST_PAGE_SIZE) });
+      if (_fItem.trim()) qs.set('q', _fItem.trim());
+      if (_fFrom) qs.set('from', _fFrom);
+      if (_fTo) qs.set('to', _fTo);
+      const res = await Utils.apiFetch('/api/ims/outward/list?' + qs.toString());
+      if (Array.isArray(res)) rows = res;
+      else if (res) { paged = res; rows = res.rows || []; }
     } catch (e) {
       err = e.message || 'Failed to load Outward entries';
     }
     if (gen !== _loadGen) return; // superseded — a newer load (or another book) owns the table now
     _rows = rows;
+    _paged = paged;
+    if (paged) _page = paged.page;
     _loadError = err;
     _loaded = true;
+    _fetchedAt = err ? 0 : Date.now();
     _renderTable();
   }
 
+  // A filter changed: back to page 1 of the new result (the item search is
+  // debounced so typing a code doesn't fire a request per keystroke).
+  let _filterTimer = null;
+  function _reloadFiltered(delay) {
+    clearTimeout(_filterTimer);
+    _filterTimer = setTimeout(() => { _page = 1; _load(); }, delay || 0);
+  }
+
   function _filteredRows() {
+    if (_paged) return _rows; // already filtered by the server
     return _rows.filter(r => {
       if (_fItem && !((r.itemCode || '') + ' ' + (r.itemName || '')).toLowerCase().includes(_fItem.toLowerCase())) return false;
       if (_fFrom && (r.date || '') < _fFrom) return false;
@@ -417,8 +444,22 @@ window.Pages['outward'] = (() => {
   // prefix is what the row is summing up ('Total', or a date) — the entry count
   // and the "cancelled excluded" note are appended the same way for both, so a
   // day whose only entry was cancelled reads as 0 from 0 rather than 0 from 1.
+  // Same shape as _qtySummary, from a server roll-up ({ active, cancelled,
+  // total, byUom }) that covers rows beyond the current page.
+  function _qtySummaryFromAgg(a) {
+    const uoms = Object.keys(a.byUom || {});
+    return {
+      active: { length: a.active || 0 },
+      cancelled: a.cancelled || 0,
+      total: a.total || 0,
+      uomCell: uoms.length > 1
+        ? uoms.map(u => esc(_fmtQty(a.byUom[u]) + ' ' + u)).join('<br>')
+        : esc(uoms[0] || ''),
+    };
+  }
+
   function _summaryRowHtml(prefix, rows, opts) {
-    const s = _qtySummary(rows);
+    const s = Array.isArray(rows) ? _qtySummary(rows) : _qtySummaryFromAgg(rows || {});
     const grand = !!(opts && opts.grand);
     const label = prefix + ' · ' + s.active.length + ' entr' + (s.active.length === 1 ? 'y' : 'ies')
       + (s.cancelled ? ' (' + s.cancelled + ' cancelled excluded)' : '');
@@ -464,19 +505,24 @@ window.Pages['outward'] = (() => {
     if (!body) return;
 
     if (!_loaded) {
+      Utils.clearPager('outward-list');
       body.innerHTML = '<tr><td colspan="' + _colCount() + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">Loading…</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     if (_loadError) {
+      Utils.clearPager('outward-list');
       body.innerHTML = '<tr><td colspan="' + _colCount() + '" style="padding:16px;text-align:center;color:#ef4444;font-size:12.5px;">' + esc(_loadError) + '</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
     const rows = _filteredRows();
-    if (countEl) countEl.textContent = rows.length + ' of ' + _rows.length;
+    const matchCount = _paged ? _paged.total : rows.length;
+    const allCount = _paged ? _paged.all : _rows.length;
+    if (countEl) countEl.textContent = matchCount + ' of ' + allCount;
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="' + _colCount() + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (_rows.length ? 'No entries match these filters' : 'No ' + esc(_categoryLabel) + ' Outward entries yet') + '</td></tr>';
+      Utils.clearPager('outward-list');
+      body.innerHTML = '<tr><td colspan="' + _colCount() + '" style="padding:16px;text-align:center;color:#94a3b8;font-size:12.5px;">' + (allCount ? 'No entries match these filters' : 'No ' + esc(_categoryLabel) + ' Outward entries yet') + '</td></tr>';
       return;
     }
     const rowHtml = (r) => ''
@@ -498,10 +544,21 @@ window.Pages['outward'] = (() => {
         + '</td>'
       + '</tr>';
 
+    // Paged: each day's subtotal and the grand total come from the server and
+    // cover every matching row, not just the ones on this page.
     body.innerHTML = _dayGroups(rows).map(g =>
       g.rows.map(rowHtml).join('')
-      + _summaryRowHtml(_dayLabel(g.key), g.rows)
-    ).join('') + _totalsRowHtml(rows);
+      + _summaryRowHtml(_dayLabel(g.key), (_paged && _paged.dayTotals && _paged.dayTotals[g.key]) || g.rows)
+    ).join('') + _totalsRowHtml(_paged ? (_paged.totals || {}) : rows);
+
+    if (_paged) {
+      const from = (_paged.page - 1) * _paged.limit + 1;
+      Utils.mountPager(body, 'outward-list',
+        { page: _paged.page, pages: _paged.pages, total: _paged.total, from, to: from + rows.length - 1 },
+        (p) => { _page = p; _load(); });
+    } else {
+      Utils.clearPager('outward-list');
+    }
   }
 
   function _bindRowActions() {
@@ -550,15 +607,19 @@ window.Pages['outward'] = (() => {
   }
 
   function _bindFilterBar() {
-    document.getElementById('outwl-item').addEventListener('input', (e) => { _fItem = e.target.value; _renderTable(); });
-    document.getElementById('outwl-from').addEventListener('change', (e) => { _fFrom = e.target.value; _renderTable(); });
-    document.getElementById('outwl-to').addEventListener('change', (e) => { _fTo = e.target.value; _renderTable(); });
+    // Rebuilt on every visit to the tab; the filters are kept, so show them.
+    document.getElementById('outwl-item').value = _fItem;
+    document.getElementById('outwl-from').value = _fFrom;
+    document.getElementById('outwl-to').value = _fTo;
+    document.getElementById('outwl-item').addEventListener('input', (e) => { _fItem = e.target.value; _reloadFiltered(350); });
+    document.getElementById('outwl-from').addEventListener('change', (e) => { _fFrom = e.target.value; _reloadFiltered(); });
+    document.getElementById('outwl-to').addEventListener('change', (e) => { _fTo = e.target.value; _reloadFiltered(); });
     document.getElementById('outwl-clear').addEventListener('click', () => {
       _fItem = ''; _fFrom = ''; _fTo = '';
       document.getElementById('outwl-item').value = '';
       document.getElementById('outwl-from').value = '';
       document.getElementById('outwl-to').value = '';
-      _renderTable();
+      _reloadFiltered();
     });
     document.getElementById('outwl-refresh').addEventListener('click', _load);
   }
@@ -625,6 +686,7 @@ window.Pages['outward'] = (() => {
 
   async function _submit(e) {
     e.preventDefault();
+    _fetchedAt = 0; // a new entry → the List tab must fetch again
     const date = document.getElementById('outw-date').value;
     const deptSel = document.getElementById('outw-department');
     const department = deptSel ? deptSel.value : ''; // absent on the Trading book
@@ -751,6 +813,7 @@ window.Pages['outward'] = (() => {
       _loadGen++; // drop any response still in flight for the previous book
       _rows = []; _loaded = false; _loadError = '';
       _fItem = ''; _fFrom = ''; _fTo = '';
+      _page = 1; _paged = null; _fetchedAt = 0;
     }
     _categoryLabel = _renderOpts.categoryLabel || _category;
     const el = document.getElementById(containerId);
@@ -775,7 +838,9 @@ window.Pages['outward'] = (() => {
     if (isList) {
       _bindFilterBar();
       _bindRowActions();
-      _load();
+      // Coming back to the tab reuses a fresh page instead of re-querying.
+      if (_loaded && !_loadError && Date.now() - _fetchedAt < LIST_FRESH_MS) _renderTable();
+      else _load();
       return;
     }
 

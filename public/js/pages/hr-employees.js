@@ -146,7 +146,8 @@ window.Pages['hr-employees'] = (() => {
               : (H.isOwner()
                 ? 'No employees yet — add one, or use Import from Sheet to bring across the old HRMS spreadsheet'
                 : 'No employees yet. The one-time import from the old HRMS spreadsheet has to be run from the owner account; after that everyone appears here.'),
-            cards: true },
+            cards: true,
+            page: { key: 'hr-employees', sig: [_filters.q, _filters.status, _filters.branch, _filters.department], onPage: render } },
         )}
       </div>`;
 
