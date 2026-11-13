@@ -350,6 +350,9 @@ function mountBulkMail(app, ctx) {
     const existing = (await q(`SELECT id FROM bulk_mail_files WHERE batch_id = $1 AND file_name = $2`, [batchId, base + '.pdf']))[0];
     if (existing) {
       await q(`UPDATE bulk_mail_files SET file_path = $1 WHERE id = $2`, [relPath, existing.id]);
+      // Re-dropping the same file also re-reads its PAN and match.
+      if (pan) await q(`UPDATE bulk_mail_files SET pan = $1 WHERE id = $2 AND pan = ''`, [pan, existing.id]);
+      await rematchBatch(batchId);
       return { id: existing.id, matchStatus, duplicate: true };
     }
     const n = Number((await q(`SELECT COUNT(*) AS c FROM bulk_mail_files WHERE batch_id = $1`, [batchId]))[0]?.c || 0) + 1;
@@ -497,6 +500,11 @@ function mountBulkMail(app, ctx) {
       await ensureSchema();
       const batch = (await q(`SELECT * FROM bulk_mail_batches WHERE id = $1`, [req.params.id]))[0];
       if (!batch) return res.status(404).json({ error: 'Batch not found' });
+      // Rows not yet Ready are matched again on every open, so a batch
+      // uploaded before a master change or a parser fix (BM0004: 49 PDFs
+      // saved with no PAN before the PAN was read from mid-name) catches up
+      // by itself instead of staying "Not in master list".
+      await rematchBatch(req.params.id).catch((e) => console.error('[bulk-mail] rematch on open failed:', e.message));
       const files = await q(`SELECT * FROM bulk_mail_files WHERE batch_id = $1 ORDER BY id ASC`, [req.params.id]);
       res.json({ batch, files, summary: await batchSummary(req.params.id) });
     } catch (e) { res.status(500).json({ error: e.message }); }
