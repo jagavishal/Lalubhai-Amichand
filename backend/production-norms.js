@@ -25,6 +25,18 @@
    copy of the norm and rate it was booked at — changing a rate later does
    not rewrite past wages.
 
+   Operator rates (pn_op_rates): one operator's own rate per day in a
+     department ("worker-wise salary"). The workbooks only give operator
+     tables for Rolling & cutting and Pressing; every other department has
+     one day rate for all. An operator rate applies to that department's
+     general norm rows: per pc = operator's day rate / norm pcs. A norm row
+     written for the operator himself (worker set) still wins.
+
+   Full-time pay: when the worker was on the line but the pieces fell short
+     for a reason not his own (material khatam, machine breakdown, light
+     nahi), the line carries pay_reason and is paid the day rate for the
+     hours worked — or the pieces, if they come to more.
+
    Import reads the norms workbooks themselves (upload, one or several
    files) and merges by dept + section + item + size + worker, so rows
    added or corrected here survive a re-import. The older "SPINNING (2)"
@@ -58,6 +70,11 @@ const PN_SCHEMA = [
      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
      KEY idx_pn_date_dept (entry_date, dept),
      KEY idx_pn_worker (worker)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  `CREATE TABLE IF NOT EXISTS pn_op_rates (
+     id VARCHAR(16) PRIMARY KEY,
+     data LONGTEXT NOT NULL,
+     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   /* Every change to a day already saved: who, why, and the lines before and
      after — pay is worked out from these lines, so a change must leave a trail. */
@@ -104,6 +121,20 @@ function cleanNorm(src) {
   return m;
 }
 const normKey = (m) => [m.dept, m.section, m.item, m.size, m.worker].map(norm).join('|');
+
+function cleanOpRate(src) {
+  return {
+    dept: str(src.dept, 160).toUpperCase(),
+    worker: str(src.worker, 120).toUpperCase(),
+    day_rate: r2(Math.max(0, num(src.day_rate))),
+    eff_date: isoDate(src.eff_date),
+    remarks: str(src.remarks, 300),
+  };
+}
+const opKey = (m) => [m.dept, m.worker].map(norm).join('|');
+
+// Why a norm line may be paid by time instead of pieces.
+const PAY_REASONS = ['NO MATERIAL', 'MACHINE BREAKDOWN', 'POWER CUT', 'OTHER'];
 
 /* ── Reading the norms workbooks ──────────────────────────────────── */
 
@@ -237,8 +268,8 @@ function mountProductionNorms(app, ctx) {
   /* ── Storage: tables in the DB, one JSON file in local JSON mode ── */
 
   async function readFile() {
-    try { const d = JSON.parse(await fsp.readFile(JSON_FILE, 'utf8')); return { norms: d.norms || [], entries: d.entries || [], log: d.log || [] }; }
-    catch { return { norms: [], entries: [], log: [] }; }
+    try { const d = JSON.parse(await fsp.readFile(JSON_FILE, 'utf8')); return { norms: d.norms || [], entries: d.entries || [], log: d.log || [], op_rates: d.op_rates || [] }; }
+    catch { return { norms: [], entries: [], log: [], op_rates: [] }; }
   }
   async function writeFile(d) {
     await fsp.mkdir(path.dirname(JSON_FILE), { recursive: true });
@@ -332,6 +363,28 @@ function mountProductionNorms(app, ctx) {
       const rows = await q('SELECT id, action, reason, before_data, after_data, by_name, created_at FROM pn_day_log WHERE entry_date = $1 AND dept = $2 ORDER BY id DESC LIMIT 50', [date, dept]);
       return rows.map((r) => ({ ...r, before_data: parse(r.before_data), after_data: parse(r.after_data), created_at: String(r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at) }));
     },
+    async opRates() {
+      if (!useDb) return (await readFile()).op_rates;
+      const rows = await q('SELECT id, data FROM pn_op_rates ORDER BY id');
+      return rows.map((r) => ({ ...parse(r.data), id: r.id }));
+    },
+    async saveOpRates(list) {
+      if (!useDb) {
+        const d = await readFile();
+        for (const m of list) { const i = d.op_rates.findIndex((x) => x.id === m.id); if (i >= 0) d.op_rates[i] = m; else d.op_rates.push(m); }
+        return writeFile(d);
+      }
+      for (const m of list) {
+        const data = JSON.stringify({ ...m, id: undefined });
+        const ex = await q('SELECT id FROM pn_op_rates WHERE id = $1', [m.id]);
+        if (ex.length) await q('UPDATE pn_op_rates SET data = $1, updated_at = $2 WHERE id = $3', [data, nowSql(), m.id]);
+        else await q('INSERT INTO pn_op_rates (id, data) VALUES ($1,$2)', [m.id, data]);
+      }
+    },
+    async deleteOpRate(id) {
+      if (!useDb) { const d = await readFile(); d.op_rates = d.op_rates.filter((x) => x.id !== id); return writeFile(d); }
+      await q('DELETE FROM pn_op_rates WHERE id = $1', [id]);
+    },
     async workers() {
       if (!useDb) return [...new Set((await readFile()).entries.map((e) => e.worker))];
       return (await q('SELECT DISTINCT worker FROM pn_entries')).map((r) => r.worker);
@@ -367,8 +420,46 @@ function mountProductionNorms(app, ctx) {
   /* ── Norms ─────────────────────────────────────────────────────── */
 
   app.get(`${BASE}/norms`, ...guard, route(async (req) => ({
-    manage: req.pn.manage, norms: await store.norms(), workers: await store.workers(),
+    manage: req.pn.manage, norms: await store.norms(), workers: await store.workers(), op_rates: await store.opRates(),
+    pay_reasons: PAY_REASONS,
   })));
+
+  /* ── Operator rates (worker-wise day rate per department) ──────── */
+
+  // One or many rows ({dept, worker, day_rate}); the same dept + worker
+  // updates its row. A bulk upload sends the whole sheet at once.
+  app.post(`${BASE}/op-rates`, ...guard, route(async (req) => {
+    const b = req.body || {};
+    const src = Array.isArray(b.rows) ? b.rows.slice(0, 2000) : [b];
+    const list = await store.opRates();
+    const byKey = new Map(list.map((r) => [opKey(r), r]));
+    const mint = nextId(list, 'OR', 5);
+    const id = src.length === 1 ? str(b.id, 16) : '';
+    const out = [];
+    let k = 0, added = 0, updated = 0;
+    src.forEach((x, i) => {
+      const m = cleanOpRate(x);
+      const where = src.length > 1 ? `Row ${i + 1}: ` : '';
+      if (!m.dept) bad(where + 'Department is required');
+      if (!m.worker) bad(where + 'Worker name is required');
+      if (!(m.day_rate > 0)) bad(where + `Rate per day for ${m.worker} is required`);
+      const clash = byKey.get(opKey(m));
+      if (id && clash && clash.id !== id) bad(`${m.worker} already has a rate in ${m.dept} (${clash.id}) — edit that one`);
+      const own = id ? list.find((r) => r.id === id) : clash;
+      if (id && !own) bad('That operator rate no longer exists', 404);
+      const row = { ...m, id: own ? own.id : mint(++k) };
+      if (own) updated++; else added++;
+      byKey.set(opKey(row), row);
+      out.push(row);
+    });
+    await store.saveOpRates(out);
+    return { added, updated, ids: out.map((r) => r.id) };
+  }, { manage: true }));
+
+  app.delete(`${BASE}/op-rates/:id`, ...guard, route(async (req) => {
+    await store.deleteOpRate(str(req.params.id, 16));
+    return { ok: true };
+  }, { manage: true }));
 
   app.post(`${BASE}/norms/upload`, ...guard, route(async (req) => {
     const files = Array.isArray(req.body?.files) ? req.body.files : [];
@@ -458,18 +549,22 @@ function mountProductionNorms(app, ctx) {
       const pcRate = Math.max(0, num(l.pc_rate));
       const dayRate = Math.max(0, num(l.day_rate));
       const normId = str(l.norm_id, 16);
+      // Paid by time on a norm line: the pieces fell short for a reason
+      // that isn't the worker's (see PAY_REASONS).
+      const payReason = normId && PAY_REASONS.includes(str(l.pay_reason, 40).toUpperCase()) ? str(l.pay_reason, 40).toUpperCase() : '';
       // Overtime: the day rate is for the norm's hours (8, or 10 where the
       // norm says so; always 8 for time work). Hours beyond that are paid on
       // top at day rate ÷ those hours, per hour.
       const baseHours = normId ? normHours : 8;
       const otHours = Math.max(0, hours - baseHours);
       const otAmount = dayRate && otHours ? r2(dayRate / baseHours * otHours) : 0;
-      const base = normId ? qty * pcRate : dayRate * Math.min(hours, baseHours) / baseHours;
+      const timePay = dayRate * Math.min(hours, baseHours) / baseHours;
+      const base = normId ? (payReason ? Math.max(qty * pcRate, timePay) : qty * pcRate) : timePay;
       return {
         id: `PE${stamp}${String(i).padStart(3, '0')}`, entry_date: date, dept, line_no: i + 1,
         worker: str(l.worker, 120).toUpperCase(), norm_id: normId,
         section: str(l.section, 160), item: str(l.item, 160).toUpperCase(), size: str(l.size, 64),
-        qty, hours, norm_pcs: normPcs, norm_hours: normHours, day_rate: dayRate, pc_rate: normId ? r4(pcRate) : 0,
+        qty, hours, pay_reason: payReason, op_rate: normId && l.op_rate ? 1 : 0, norm_pcs: normPcs, norm_hours: normHours, day_rate: dayRate, pc_rate: normId ? r4(pcRate) : 0,
         target: normPcs ? r4(normPcs * hours / normHours) : 0,
         // Norm lines: pieces × rate; time work (no norm): the day rate for up
         // to 8 hours. Either way overtime is added on top.
@@ -478,8 +573,11 @@ function mountProductionNorms(app, ctx) {
         remark: str(l.remark, 255),
       };
     }).filter((l) => l.worker || l.item || l.qty);
-    const badLine = lines.findIndex((l) => !l.worker || !l.item || (l.norm_id && !(l.qty > 0)));
+    // A line paid by time may have 0 pieces (no material at all that day).
+    const badLine = lines.findIndex((l) => !l.worker || !l.item || (l.norm_id && !l.pay_reason && !(l.qty > 0)));
     if (badLine >= 0) bad(`Line ${badLine + 1}: worker, item and qty are all needed`);
+    const noReason = lines.findIndex((l) => l.pay_reason === 'OTHER' && !l.remark);
+    if (noReason >= 0) bad(`Line ${noReason + 1}: full-time pay for "Other" needs a remark saying why`);
     // Changing a day that is already saved needs a reason, and is logged
     // with the lines before and after.
     const prev = await store.entries({ from: date, to: date, dept });

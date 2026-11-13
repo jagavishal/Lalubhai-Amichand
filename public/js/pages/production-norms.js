@@ -22,6 +22,9 @@ window.Pages['production-norms'] = (() => {
   let byId = new Map();
   let manage = false;
   let workerNames = [];  // suggestions: past entries + HR employees + norm operators
+  let OPS = [];          // operator rates: { dept, worker, day_rate } — worker-wise salary
+  let PAY_REASONS = ['NO MATERIAL', 'MACHINE BREAKDOWN', 'POWER CUT', 'OTHER'];
+  const PAY_LABEL = { 'NO MATERIAL': 'Material nahi', 'MACHINE BREAKDOWN': 'Machine band', 'POWER CUT': 'Light nahi', OTHER: 'Other (remark)' };
   let _tab = 'entry';
   const today = () => H.todayISO();
   const monthStart = () => today().slice(0, 8) + '01';
@@ -50,7 +53,9 @@ window.Pages['production-norms'] = (() => {
     N = d.norms || [];
     manage = !!d.manage;
     byId = new Map(N.map((r) => [r.id, r]));
-    const names = new Set([...(d.workers || []), ...N.map((r) => r.worker)].filter(Boolean));
+    OPS = d.op_rates || [];
+    if (Array.isArray(d.pay_reasons) && d.pay_reasons.length) PAY_REASONS = d.pay_reasons;
+    const names = new Set([...(d.workers || []), ...N.map((r) => r.worker), ...OPS.map((o) => o.worker)].filter(Boolean));
     try {
       const hr = await H.api('/api/hr/masters');
       (hr.employees || []).forEach((e) => { if (e?.name && !/inactive|exit|left/i.test(e.status || '')) names.add(String(e.name).toUpperCase()); });
@@ -71,16 +76,33 @@ window.Pages['production-norms'] = (() => {
     const gen = all.filter((r) => !r.worker);
     return gen.length ? gen : all;
   }
+  // The operator's own day rate in this department, if one is set.
+  const opRateOf = (dept, worker) => (worker ? OPS.find((o) => o.dept === dept && norm(o.worker) === norm(worker)) : null) || null;
   const itemsOf = (dept) => [...new Set(N.filter((r) => r.dept === dept).map((r) => r.item))];
 
   function applyNorm(l, m) {
     // No norm = time work: a ₹/day typed on the line itself survives a
     // worker or item change; one carried over from a norm does not.
-    if (!m) { Object.assign(l, { day_rate: l.norm_id ? 0 : (l.day_rate || 0), norm_id: '', norm_pcs: 0, norm_hours: 8, pc_rate: 0, section: '' }); return; }
+    if (!m) {
+      // Time work: an operator's own day rate fills in when none is typed.
+      const op = opRateOf(D.dept, l.worker);
+      const typed = l.norm_id || l.op_rate ? 0 : (l.day_rate || 0);
+      Object.assign(l, { day_rate: typed || (op ? op.day_rate : 0), op_rate: !typed && op ? 1 : 0, norm_id: '', norm_pcs: 0, norm_hours: 8, pc_rate: 0, section: '', pay_reason: '' });
+      return;
+    }
     Object.assign(l, {
       norm_id: m.id, item: m.item, size: m.size, section: m.section || '',
-      norm_pcs: Number(m.norm_pcs) || 0, norm_hours: Number(m.hours) || 8, day_rate: Number(m.day_rate) || 0, pc_rate: pcRateOf(m),
+      norm_pcs: Number(m.norm_pcs) || 0, norm_hours: Number(m.hours) || 8, day_rate: Number(m.day_rate) || 0, pc_rate: pcRateOf(m), op_rate: 0,
     });
+    // A general row (worker blank), or another operator's row borrowed for
+    // the norm (Rolling & cutting has no general rows), is paid at this
+    // operator's own day rate where one is set: per pc = his rate ÷ norm pcs.
+    // A row written for this operator himself keeps its own rate.
+    const op = !(m.worker && norm(m.worker) === norm(l.worker)) && opRateOf(D.dept, l.worker);
+    if (op) {
+      const pc = l.norm_pcs > 0 ? op.day_rate / l.norm_pcs : (Number(m.day_rate) > 0 ? l.pc_rate * op.day_rate / Number(m.day_rate) : l.pc_rate);
+      Object.assign(l, { day_rate: op.day_rate, pc_rate: pc, op_rate: 1 });
+    }
     if (!l.hours) l.hours = Number(m.hours) || 8;
   }
   // After the worker or item changes: keep the same size if the new set of
@@ -92,7 +114,7 @@ window.Pages['production-norms'] = (() => {
     if (!same) l.size = c.some((r) => norm(r.size) === norm(l.size)) ? l.size : '';
   }
 
-  const blankLine = (worker = '') => ({ worker, item: '', size: '', hours: '', qty: '', remark: '', norm_id: '', norm_pcs: 0, norm_hours: 8, day_rate: 0, pc_rate: 0, section: '' });
+  const blankLine = (worker = '') => ({ worker, item: '', size: '', hours: '', qty: '', remark: '', norm_id: '', norm_pcs: 0, norm_hours: 8, day_rate: 0, pc_rate: 0, section: '', pay_reason: '', op_rate: 0 });
   const lineCalc = (l) => {
     const hours = Number(l.hours) || Number(l.norm_hours) || 8;
     const target = l.norm_pcs ? l.norm_pcs * hours / (l.norm_hours || 8) : 0;
@@ -103,8 +125,13 @@ window.Pages['production-norms'] = (() => {
     const baseHours = l.norm_id ? (Number(l.norm_hours) || 8) : 8;
     const otHours = Math.max(0, hours - baseHours);
     const ot = dayRate && otHours ? dayRate / baseHours * otHours : 0;
-    const base = l.norm_id ? qty * (Number(l.pc_rate) || 0) : dayRate * Math.min(hours, baseHours) / baseHours;
-    return { target, eff: target ? qty / target * 100 : 0, amount: base + ot, ot, otHours };
+    const piece = qty * (Number(l.pc_rate) || 0);
+    const timePay = dayRate * Math.min(hours, baseHours) / baseHours;
+    // Full time (material nahi etc.): the day rate for the hours, or the
+    // pieces if they come to more.
+    const base = l.norm_id ? (l.pay_reason ? Math.max(piece, timePay) : piece) : timePay;
+    const topUp = l.norm_id && l.pay_reason ? Math.max(0, timePay - piece) : 0;
+    return { target, eff: target ? qty / target * 100 : 0, amount: base + ot, ot, otHours, topUp };
   };
 
   /* ── Render ───────────────────────────────────────────────────────── */
@@ -179,7 +206,12 @@ window.Pages['production-norms'] = (() => {
         <td class="num" data-c="eff-${i}">${effPill(c2.eff)}</td>
         <td class="num">${timeWork
           ? `<input data-f="day_rate" data-i="${i}" value="${esc(l.day_rate || '')}" type="number" min="0" step="1" placeholder="₹/day" title="Time work: 8 ghante ka rate" style="width:84px;text-align:right;" />`
-          : `${l.pc_rate ? rate(l.pc_rate) : '—'}${l.day_rate ? `<div class="pn-sub">₹${n0(l.day_rate)}/day</div>` : ''}`}</td>
+          : `${l.pc_rate ? rate(l.pc_rate) : '—'}${l.day_rate ? `<div class="pn-sub"${l.op_rate ? ' style="color:#0891b2;" title="Is operator ka apna rate (Norms → Operator rates)"' : ''}>₹${n0(l.day_rate)}/day${l.op_rate ? ' · apna' : ''}</div>` : ''}`}</td>
+        <td style="width:165px;min-width:165px;">${l.norm_id ? `<select data-pay="${i}" title="Pcs kam bane, par galti worker ki nahi? Pure time ka paisa do">
+            <option value="">Pcs ke hisaab</option>
+            ${PAY_REASONS.map((r) => `<option value="${esc(r)}"${r === l.pay_reason ? ' selected' : ''}>Full time · ${esc(PAY_LABEL[r] || r)}</option>`).join('')}</select>
+            ${l.pay_reason ? `<input data-f="remark" data-i="${i}" value="${esc(l.remark || '')}" placeholder="${l.pay_reason === 'OTHER' ? 'reason (zaroori)' : 'remark (optional)'}" style="margin-top:4px;" />` : ''}`
+          : `<span class="pn-sub">${l.item ? 'time work' : ''}</span>`}</td>
         <td class="num" data-c="amt-${i}">${amtCell(c2)}</td>
         <td style="width:36px;"><button class="pn-ico" data-del="${i}" title="Line hatao">✕</button></td>
       </tr>`;
@@ -196,8 +228,8 @@ window.Pages['production-norms'] = (() => {
       <div class="pn-card" style="padding:0;overflow:hidden;">
         <div style="overflow-x:auto;">
           <table class="pn-grid">
-            <thead><tr><th>#</th><th>Worker</th><th>Item</th><th>Size</th><th>Hours</th><th>Qty (pcs)</th><th class="num">Target</th><th class="num">Eff.</th><th class="num">Rate / pc</th><th class="num">Amount</th><th></th></tr></thead>
-            <tbody>${rows || `<tr><td colspan="11" style="padding:34px;text-align:center;color:#94a3b8;">“+ Line” dabao — worker, item, size aur qty daalo. Target, efficiency aur amount apne aap.</td></tr>`}</tbody>
+            <thead><tr><th>#</th><th>Worker</th><th>Item</th><th>Size</th><th>Hours</th><th>Qty (pcs)</th><th class="num">Target</th><th class="num">Eff.</th><th class="num">Rate / pc</th><th>Pay</th><th class="num">Amount</th><th></th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="12" style="padding:34px;text-align:center;color:#94a3b8;">“+ Line” dabao — worker, item, size aur qty daalo. Target, efficiency aur amount apne aap.</td></tr>`}</tbody>
           </table>
         </div>
         <div style="display:flex;gap:8px;padding:10px 16px;border-top:1px solid #f1f5f9;"><button id="pn-add" class="btn-primary btn-sm">+ Line</button></div>
@@ -208,7 +240,7 @@ window.Pages['production-norms'] = (() => {
       <div id="pn-wsum"></div>`;
   }
 
-  const amtCell = (c) => `<b>${c.amount ? rs(c.amount) : '—'}</b>${c.ot ? `<div class="pn-sub" style="color:#7c3aed;">+${rs(c.ot)} OT (${c.otHours} hr)</div>` : ''}`;
+  const amtCell = (c) => `<b>${c.amount ? rs(c.amount) : '—'}</b>${c.topUp ? `<div class="pn-sub" style="color:#0891b2;">full time (+${rs(c.topUp)})</div>` : ''}${c.ot ? `<div class="pn-sub" style="color:#7c3aed;">+${rs(c.ot)} OT (${c.otHours} hr)</div>` : ''}`;
 
   function refreshTotals() {
     let qty = 0, amt = 0;
@@ -282,7 +314,7 @@ window.Pages['production-norms'] = (() => {
           document.querySelector(next)?.focus();
         });
       } else {
-        inp.addEventListener('input', () => { l[f] = inp.value; D.dirty = true; refreshTotals(); });
+        inp.addEventListener('input', () => { l[f] = inp.value; if (f === 'day_rate') l.op_rate = 0; D.dirty = true; refreshTotals(); });
       }
       // Enter in Qty: next line, same worker (one worker, several items).
       if (f === 'qty') inp.addEventListener('keydown', (e) => {
@@ -300,6 +332,12 @@ window.Pages['production-norms'] = (() => {
     }));
     document.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', () => {
       D.lines.splice(+b.getAttribute('data-del'), 1); D.dirty = true; render();
+    }));
+    document.querySelectorAll('[data-pay]').forEach((sel) => sel.addEventListener('change', () => {
+      const i = +sel.getAttribute('data-pay');
+      D.lines[i].pay_reason = sel.value;
+      D.dirty = true; render();
+      if (sel.value) document.querySelector(`[data-f="remark"][data-i="${i}"]`)?.focus();
     }));
   }
 
@@ -330,8 +368,11 @@ window.Pages['production-norms'] = (() => {
   async function saveDay(btn) {
     const lines = D.lines.filter((l) => l.worker || l.item || l.qty);
     // A norm line needs its pieces; a time-work line (no norm) only the hours.
-    const bad = lines.findIndex((l) => !l.worker || !l.item || (l.norm_id && !(Number(l.qty) > 0)));
+    // (Full time pay may have 0 pcs — no material at all.)
+    const bad = lines.findIndex((l) => !l.worker || !l.item || (l.norm_id && !l.pay_reason && !(Number(l.qty) > 0)));
     if (bad >= 0) { H.toast(`Line ${D.lines.indexOf(lines[bad]) + 1}: worker, item aur qty teeno chahiye`, 'error'); return; }
+    const noWhy = lines.findIndex((l) => l.norm_id && l.pay_reason === 'OTHER' && !String(l.remark || '').trim());
+    if (noWhy >= 0) { H.toast(`Line ${D.lines.indexOf(lines[noWhy]) + 1}: "Full time · Other" ke liye remark mein reason likho`, 'error'); return; }
     const noRate = lines.filter((l) => !l.norm_id && !(Number(l.day_rate) > 0)).length;
     if (noRate && !(await Utils.showConfirm(`${noRate} time-work line${noRate > 1 ? 's' : ''} (bina norm) mein ₹/day nahi bhara — unka amount ₹0 rahega. Phir bhi save karein?`, { title: 'Rate missing', confirmText: 'Save' }))) return;
     // A day already saved can only be changed with a reason (kept in History).
@@ -443,7 +484,8 @@ window.Pages['production-norms'] = (() => {
       { empty: 'Is period mein koi entry nahi', cards: true });
     const detail = H.table(['Date', 'Department', 'Worker', 'Item', 'Size', { label: 'Hrs', align: 'right' }, { label: 'Qty', align: 'right' }, { label: 'Target', align: 'right' }, { label: 'Eff.', align: 'right' }, { label: 'Rate/pc', align: 'right' }, { label: 'Amount', align: 'right' }],
       lines.map((l) => [esc(H.fmtDate(l.entry_date)), esc(l.dept), `<b>${esc(l.worker)}</b>`, esc(l.item), esc(l.size || ''), l.hours, n0(l.qty), l.target ? n0(l.target) : '—',
-        effPill(l.target ? l.qty / l.target * 100 : 0), l.pc_rate ? rate(l.pc_rate) : '—', rs(l.amount)]),
+        effPill(l.target ? l.qty / l.target * 100 : 0), l.pc_rate ? rate(l.pc_rate) : '—',
+        rs(l.amount) + (l.pay_reason ? `<div class="pn-sub" style="color:#0891b2;">full time · ${esc(PAY_LABEL[l.pay_reason] || l.pay_reason)}</div>` : '')]),
       { empty: 'Koi line nahi', maxHeight: '560px' });
     return `${bar}${tiles}
       <div class="pn-card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
@@ -493,10 +535,11 @@ window.Pages['production-norms'] = (() => {
         [], ['TOTAL', '', '', sum.reduce((s, w) => s + w.qty, 0), Math.round(sum.reduce((s, w) => s + w.target, 0)), '', r2(sum.reduce((s, w) => s + w.amount, 0))]]);
       ws1['!cols'] = [24, 30, 7, 10, 11, 12, 14].map((w) => ({ wch: w }));
       const ws2 = XLSX.utils.aoa_to_sheet([[title], [],
-        ['DATE', 'DEPARTMENT', 'WORKER', 'ITEM', 'SIZE', 'HOURS', 'QTY (PCS)', '8 HRS NORM', 'TARGET', 'EFFICIENCY %', 'RATE PER DAY', 'PER PCS RATE', 'OT HRS', 'OT (Rs.)', 'AMOUNT (Rs.)', 'REMARK'],
+        ['DATE', 'DEPARTMENT', 'WORKER', 'ITEM', 'SIZE', 'HOURS', 'QTY (PCS)', '8 HRS NORM', 'TARGET', 'EFFICIENCY %', 'RATE PER DAY', 'PER PCS RATE', 'OT HRS', 'OT (Rs.)', 'PAID AS', 'AMOUNT (Rs.)', 'REMARK'],
         ...lines.map((l) => [l.entry_date, l.dept, l.worker, l.item, l.size, l.hours, l.qty, l.norm_pcs || '', l.target ? Math.round(l.target) : '', l.target ? Math.round(l.qty / l.target * 100) : '',
-          l.day_rate || '', l.pc_rate ? Math.round(l.pc_rate * 10000) / 10000 : '', l.ot_hours || '', l.ot_amount || '', r2(l.amount), l.remark || ''])]);
-      ws2['!cols'] = [11, 26, 20, 34, 10, 7, 10, 11, 9, 11, 11, 11, 8, 10, 12, 20].map((w) => ({ wch: w }));
+          l.day_rate || '', l.pc_rate ? Math.round(l.pc_rate * 10000) / 10000 : '', l.ot_hours || '', l.ot_amount || '',
+          l.pay_reason ? `FULL TIME - ${l.pay_reason}` : (l.norm_id ? 'PCS' : 'TIME WORK'), r2(l.amount), l.remark || ''])]);
+      ws2['!cols'] = [11, 26, 20, 34, 10, 7, 10, 11, 9, 11, 11, 11, 8, 10, 22, 12, 20].map((w) => ({ wch: w }));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws1, 'Worker-wise');
       XLSX.utils.book_append_sheet(wb, ws2, 'Detail');
@@ -532,7 +575,7 @@ window.Pages['production-norms'] = (() => {
         r.day_rate ? `₹${n0(r.day_rate)}` : '—', `<b>${rate(pcRateOf(r))}</b>`, esc(r.eff_date ? H.fmtDate(r.eff_date) : ''),
         manage ? `<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="btn-secondary btn-sm" data-nedit="${esc(r.id)}">Edit</button><button class="btn-secondary btn-sm" data-ndel="${esc(r.id)}" style="color:#dc2626;">✕</button></div>` : '']);
     }
-    return `${tools}
+    return `${tools}${opRatesCard()}
       <div class="pn-bar">
         <div><label>Department</label><select id="pnm-dept"><option value="">All (${N.length})</option>${depts().map((d) => `<option value="${esc(d)}"${d === F.dept ? ' selected' : ''}>${esc(d)} (${N.filter((r) => r.dept === d).length})</option>`).join('')}</select></div>
         <div style="flex:1;min-width:200px;max-width:360px;"><label>Search</label><input id="pnm-q" value="${esc(F.q)}" placeholder="item, size, worker…" style="width:100%;box-sizing:border-box;"></div>
@@ -541,8 +584,122 @@ window.Pages['production-norms'] = (() => {
         { empty: N.length ? 'Kuch match nahi hua' : 'Norms khaali hain — Excel upload karo', maxHeight: '640px' })}`;
   }
 
+  /* ── Operator rates (worker-wise salary) ─────────────────────────── */
+
+  // Each operator's own rate per day in a department. Applies to that
+  // department's general norm rows (worker = sab): per pc = his rate ÷ norm
+  // pcs. Rows made for the operator himself (Rolling & cutting) still win.
+  const generalRate = (dept) => {
+    const rates = [...new Set(N.filter((r) => r.dept === dept && !r.worker && r.day_rate > 0).map((r) => r.day_rate))];
+    return rates.length ? rates.map((x) => '₹' + n0(x)).join(' / ') : '';
+  };
+
+  function opRatesCard() {
+    const q = norm(F.q);
+    const ops = OPS.filter((o) => (!F.dept || o.dept === F.dept) && (!q || norm(o.worker).includes(q)))
+      .sort((a, b) => a.dept.localeCompare(b.dept) || a.worker.localeCompare(b.worker));
+    const rows = ops.map((o) => [`<b>${esc(o.worker)}</b>`, esc(o.dept), `<b>₹${n0(o.day_rate)}</b>`, `<span class="pn-sub">${esc(generalRate(o.dept) || '—')}</span>`,
+      esc(o.eff_date ? H.fmtDate(o.eff_date) : ''), esc(o.remarks || ''),
+      manage ? `<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="btn-secondary btn-sm" data-oedit="${esc(o.id)}">Edit</button><button class="btn-secondary btn-sm" data-odel="${esc(o.id)}" style="color:#dc2626;">✕</button></div>` : '']);
+    const tools = manage ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button id="pno-add" class="btn-secondary btn-sm">+ Operator rate</button>
+        <label class="btn-secondary btn-sm" style="cursor:pointer;">Upload Excel<input id="pno-file" type="file" accept=".xlsx,.xls,.csv" style="display:none;"></label>
+        <button id="pno-tpl" class="btn-ghost btn-sm" title="DEPARTMENT, WORKER, RATE PER DAY">Template</button></div>` : '';
+    return `<details class="pn-card"${OPS.length ? ' open' : ''}>
+      <summary style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+        <b style="font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#64748b;">Operator rates — worker-wise salary (${OPS.length})</b>${tools}</summary>
+      <div style="font-size:11.5px;color:#94a3b8;margin:8px 0;">Operator ka apna rate per day. Us department ke norms (worker “sab”) pe uska per pc rate = uska rate ÷ norm pcs — Daily Entry mein naam daalte hi lagta hai. Rolling &amp; Cutting jaise jahan operator ki apni rows hain, wahi chalti hain.</div>
+      ${H.table(['Worker', 'Department', { label: 'Rate / day', align: 'right' }, { label: 'Dept. rate', align: 'right' }, 'From', 'Remarks', { label: '', m: 'actions' }], rows,
+        { empty: OPS.length ? 'Is filter mein koi operator nahi' : 'Abhi koi operator rate nahi — “+ Operator rate” ya Excel upload karo' })}
+    </details>`;
+  }
+
+  function opModal(o) {
+    const isNew = !o || !o.id;
+    const m = o || { dept: F.dept || '' };
+    H.openModal({
+      id: 'pn-om', width: 520,
+      title: isNew ? 'Add operator rate' : `Edit ${m.worker}`,
+      subtitle: 'Is operator ka rate per day (8 ghante) is department mein',
+      bodyHTML: H.grid(`
+        ${H.select('om-dept', 'Department', m.dept, depts(), { required: true, span: 2, placeholder: 'choose…' })}
+        ${H.field('om-worker', 'Worker / operator', m.worker || '', { required: true, span: 2 })}
+        ${H.field('om-rate', 'Rate per day (₹)', m.day_rate || '', { type: 'number', step: '1', required: true })}
+        ${H.field('om-date', 'From date', m.eff_date || today(), { type: 'date' })}
+        ${H.field('om-remarks', 'Remarks', m.remarks || '', { span: 2 })}`) + `<datalist id="om-workers">${workerNames.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>`,
+      onConfirm: async () => {
+        await H.post(`${BASE}/op-rates`, { id: isNew ? '' : m.id, dept: H.val('om-dept'), worker: H.val('om-worker'), day_rate: H.val('om-rate'), eff_date: H.val('om-date'), remarks: H.val('om-remarks') });
+        H.closeModal('pn-om');
+        await loadNorms(); render();
+        H.toast('Operator rate saved');
+      },
+    });
+    document.getElementById('om-worker')?.setAttribute('list', 'om-workers');
+  }
+
+  // DEPARTMENT, WORKER (or OPERATOR / NAME), RATE PER DAY — department may be
+  // left out when a department is picked in the filter.
+  async function uploadOpRates(file) {
+    try {
+      await loadXlsx();
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+      const hi = grid.findIndex((r) => r.some((c) => /WORKER|OPERATOR|NAME/i.test(String(c))) && r.some((c) => /RATE/i.test(String(c))));
+      if (hi < 0) throw new Error('Header row nahi mila — columns: DEPARTMENT, WORKER, RATE PER DAY');
+      const Hd = grid[hi].map((c) => String(c).toUpperCase());
+      const ci = (re) => Hd.findIndex((h) => re.test(h));
+      const cD = ci(/DEP/), cW = ci(/WORKER|OPERATOR|NAME/), cR = ci(/RATE/), cDt = ci(/DATE|FROM/), cRm = ci(/REMARK/);
+      const known = new Map(depts().map((d) => [norm(d), d]));
+      const rows = [], problems = [];
+      grid.slice(hi + 1).forEach((r, k) => {
+        const worker = String(r[cW] ?? '').trim();
+        const rateV = Number(String(r[cR] ?? '').replace(/[₹,\s]/g, ''));
+        if (!worker && !rateV) return;
+        const rawDept = cD >= 0 ? String(r[cD] ?? '').trim() : '';
+        const dept = rawDept ? known.get(norm(rawDept)) : F.dept;
+        if (!dept) { problems.push(`row ${hi + k + 2}: department “${rawDept || '(blank)'}” nahi mila`); return; }
+        if (!worker || !(rateV > 0)) { problems.push(`row ${hi + k + 2}: worker aur rate dono chahiye`); return; }
+        const d = cDt >= 0 ? r[cDt] : '';
+        const eff = typeof d === 'number' && d > 30000 ? new Date(Math.round((d - 25569) * 86400000)).toISOString().slice(0, 10) : (/^\d{4}-\d{2}-\d{2}$/.test(String(d)) ? String(d) : '');
+        rows.push({ dept, worker, day_rate: rateV, eff_date: eff || today(), remarks: cRm >= 0 ? String(r[cRm] ?? '') : '' });
+      });
+      if (problems.length) throw new Error(`${problems.length} row(s) theek nahi: ${problems.slice(0, 4).join('; ')}${problems.length > 4 ? '…' : ''}`);
+      if (!rows.length) throw new Error('File mein koi operator row nahi mili');
+      const res = await H.post(`${BASE}/op-rates`, { rows });
+      await loadNorms(); render();
+      H.toast(`Operator rates: ${res.added} new, ${res.updated} updated`);
+    } catch (e) { H.fail(e); }
+  }
+
+  async function opTemplate() {
+    try {
+      await loadXlsx();
+      const list = F.dept ? [F.dept] : depts();
+      const have = OPS.filter((o) => list.includes(o.dept));
+      const ws = XLSX.utils.aoa_to_sheet([['DEPARTMENT', 'WORKER', 'RATE PER DAY', 'FROM DATE', 'REMARKS', 'DEPT. RATE (reference)'],
+        ...have.map((o) => [o.dept, o.worker, o.day_rate, o.eff_date || '', o.remarks || '', generalRate(o.dept).replace(/₹/g, '')]),
+        ...list.filter((d) => !have.some((o) => o.dept === d)).map((d) => [d, '', '', '', '', generalRate(d).replace(/₹/g, '')])]);
+      ws['!cols'] = [36, 24, 13, 12, 20, 20].map((w) => ({ wch: w }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Operator rates');
+      XLSX.writeFile(wb, fileSafe(`Operator rates${F.dept ? ' ' + F.dept : ''}.xlsx`));
+    } catch (e) { H.fail(e); }
+  }
+
   function bindNorms() {
     const $ = (id) => document.getElementById(id);
+    // Buttons sit in the <summary>; a click there must not fold the card.
+    ['pno-add', 'pno-tpl'].forEach((id) => $(id)?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); }));
+    $('pno-file')?.closest('label')?.addEventListener('click', (e) => e.stopPropagation());
+    $('pno-add')?.addEventListener('click', () => opModal(null));
+    $('pno-tpl')?.addEventListener('click', opTemplate);
+    $('pno-file')?.addEventListener('change', (e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadOpRates(f); });
+    document.querySelectorAll('[data-oedit]').forEach((b) => b.addEventListener('click', () => opModal(OPS.find((o) => o.id === b.getAttribute('data-oedit')))));
+    document.querySelectorAll('[data-odel]').forEach((b) => b.addEventListener('click', async () => {
+      const o = OPS.find((x) => x.id === b.getAttribute('data-odel'));
+      if (!o || !(await Utils.showConfirm(`${o.worker} (${o.dept}) ka operator rate hatayein? Purani entries apna rate rakhti hain.`, { title: 'Delete operator rate', confirmText: 'Delete', danger: true }))) return;
+      try { await H.del(`${BASE}/op-rates/${encodeURIComponent(o.id)}`); await loadNorms(); render(); } catch (e) { H.fail(e); }
+    }));
     $('pnm-dept')?.addEventListener('change', (e) => { F.dept = e.target.value; render(); });
     $('pnm-q')?.addEventListener('input', (e) => {
       F.q = e.target.value;

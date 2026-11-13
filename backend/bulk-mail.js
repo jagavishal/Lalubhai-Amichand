@@ -110,12 +110,30 @@ function cleanEmails(raw) {
   return parts.join(', ');
 }
 
-// "AAGPS6986H_2026-27.pdf" → { base, pan: 'AAGPS6986H', year: '2026-27' }
+// Every PAN-shaped run in a name, wherever it sits. The PAN used to be read
+// only from the very start ("AAGPS6986H_2026-27.pdf"); once files came named
+// with something in front of it ("Form16_PartA_AAGPS6986H_2026-27.pdf"), no
+// PAN was found: PDFs showed No Match, and a sheet with the new names added
+// fresh rows keyed by file name instead of updating the person's PAN row.
+// A PAN ends in a letter, so a digit right after it ("...6986H2026") is fine;
+// a letter on either side means it is part of a longer word.
+function pansIn(text) {
+  const out = [];
+  for (const m of String(text || '').toUpperCase().matchAll(/(?<![A-Z])([A-Z]{5}[0-9]{4}[A-Z])(?![A-Z])/g)) {
+    if (!out.includes(m[1])) out.push(m[1]);
+  }
+  return out;
+}
+
+// "AAGPS6986H_2026-27.pdf" / "Form16_AAGPS6986H_2026-27.pdf"
+//   → { base, pan: 'AAGPS6986H', pans: ['AAGPS6986H'], year: '2026-27' }
 function parsePdfName(name) {
   const base = String(name).replace(/^.*[\\/]/, '').replace(/\.pdf$/i, '');
-  const m = base.match(/^([A-Za-z0-9]+)[_\-\s]*(.*)$/);
-  const pan = (m ? m[1] : base).toUpperCase().trim();
-  return { base, pan: PAN_RE.test(pan) ? pan : '', year: (m && m[2] ? m[2] : '').trim() };
+  const pans = pansIn(base);
+  const y = base.match(/(?:19|20)\d{2}\s*-\s*\d{2,4}/);
+  // No "2026-27" in it: as before, whatever follows the PAN ("_FY2026").
+  const after = pans[0] ? base.slice(base.toUpperCase().indexOf(pans[0]) + 10).replace(/^[_\-\s]+/, '').trim() : '';
+  return { base, pan: pans[0] || '', pans, year: y ? y[0].replace(/\s+/g, '') : after };
 }
 
 // File key: lowercased, without .pdf — so a sheet may say either
@@ -162,7 +180,7 @@ function parseMasterSheet(buf) {
     const fileRaw = fileIdx !== -1 ? String(row[fileIdx] || '').trim() : '';
     const panCell = panIdx !== -1 ? String(row[panIdx] || '').toUpperCase().trim() : '';
     const fileKey = keyOf(fileRaw);
-    const pan = PAN_RE.test(panCell) ? panCell : (fileKey ? parsePdfName(fileRaw).pan : '');
+    const pan = pansIn(panCell)[0] || (fileKey ? parsePdfName(fileRaw).pan : '');
     if (!fileKey && !pan) continue;
     out.push({ fileKey, pan, name: String(row[nameIdx] || '').trim(), email: cleanEmails(row[emailIdx]) });
   }
@@ -208,10 +226,20 @@ function mountBulkMail(app, ctx) {
       if (r.file_key) byFile.set(r.file_key, r);
       if (!r.pan && !r.file_key) byFile.set(r.mkey, r);
     }
+    // Rows saved by file name before the PAN was read from anywhere in it:
+    // a real PAN row wins, these only fill the gaps.
+    for (const r of rows) {
+      if (r.pan) continue;
+      for (const p of pansIn(r.file_key || r.mkey)) if (!byPan.has(p)) byPan.set(p, r);
+    }
     return { byPan, byFile, size: rows.length };
   }
 
-  const lookup = (master, pan, fileKey) => (pan && master.byPan.get(pan)) || master.byFile.get(fileKey) || null;
+  // pan may be one PAN or a list (every PAN-shaped run in a file name).
+  const lookup = (master, pan, fileKey) => {
+    for (const p of [].concat(pan || [])) { const hit = master.byPan.get(p); if (hit) return hit; }
+    return master.byFile.get(fileKey) || null;
+  };
 
   /* Upsert one master entry. An incoming row with no email must never blank
      an address we already have (the sheet often lists the person with the
@@ -220,6 +248,18 @@ function mountBulkMail(app, ctx) {
   async function upsertMaster({ pan, fileKey, name, email, source, by }) {
     const mkey = masterKey(pan, fileKey);
     if (!mkey) return false;
+    // The same person saved earlier under the file name alone (no PAN read
+    // from it then): fold that row into the PAN row so it stops shadowing it,
+    // keeping its email/name where the new row has none.
+    if (pan) {
+      const olds = (await q(`SELECT * FROM bulk_mail_master WHERE pan = '' AND (mkey = $1 OR file_key LIKE $2)`, [fileKey || '', `%${pan.toLowerCase()}%`]))
+        .filter((o) => o.mkey === fileKey || pansIn(o.file_key).includes(pan));
+      for (const old of olds) {
+        await q(`DELETE FROM bulk_mail_master WHERE mkey = $1`, [old.mkey]);
+        if (!email && old.email) email = cleanEmails(old.email);
+        if (!name && old.person_name) name = old.person_name;
+      }
+    }
     await q(
       `INSERT INTO bulk_mail_master (mkey, pan, file_key, person_name, email, source, updated_by, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
@@ -252,7 +292,10 @@ function mountBulkMail(app, ctx) {
     let changed = 0;
     for (const r of rows) {
       if (r.match_status === 'Ready' && r.email) continue;
-      const hit = lookup(master, r.pan, keyOf(r.file_name));
+      // Rows stored before the PAN was read from anywhere in the name.
+      const pans = r.pan ? [r.pan] : parsePdfName(r.file_name).pans;
+      if (!r.pan && pans[0]) await q(`UPDATE bulk_mail_files SET pan = $1 WHERE id = $2`, [pans[0], r.id]);
+      const hit = lookup(master, pans, keyOf(r.file_name));
       const email = hit ? cleanEmails(hit.email) : '';
       const status = hit ? (email ? 'Ready' : 'No Email') : 'No Match';
       const name = hit?.person_name || r.person_name || '';
@@ -290,8 +333,10 @@ function mountBulkMail(app, ctx) {
      (same name) is overwritten on disk and its row kept — re-dropping the
      same folder is idempotent, not a duplicate. */
   async function addPdf(batchId, name, buf, master) {
-    const { base, pan, year } = parsePdfName(name);
-    const hit = lookup(master, pan, keyOf(base));
+    const { base, pans, year } = parsePdfName(name);
+    const hit = lookup(master, pans, keyOf(base));
+    // Store the PAN that matched (a name could hold more than one).
+    const pan = hit && hit.pan && pans.includes(hit.pan) ? hit.pan : (pans[0] || '');
     const email = hit ? cleanEmails(hit.email) : '';
     const matchStatus = hit ? (email ? 'Ready' : 'No Email') : 'No Match';
     // The name on disk is minted here, never taken raw from the upload — a

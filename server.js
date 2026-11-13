@@ -7942,6 +7942,10 @@ const PO_FORMAT_CONFIG = {
     // cell itself with no separate value cell, so there's nowhere safe to
     // write those two without overwriting the label text.
     extra: { termsAndConditionsRows: ['A60', 'A61', 'A62', 'A63', 'A64'], comments: 'B66', testCertificateRequired: 'B67' },
+    // The PR's ORDER NO (typed there with the buyer's name, "2049 (TAWSEEL)").
+    // The vendor block has no free row on this tab, so it sits under
+    // Department in the header column (row 10 was empty).
+    orderNo: { label: 'H10', value: 'J10' },
     // The signature space under "APPROVED BY" (H65): where the approver's
     // "Approver / Status / Date" stamp is printed once the PO is approved
     // from the email (see _restampPoPdf). Written blank on every create so a
@@ -7962,6 +7966,9 @@ const PO_FORMAT_CONFIG = {
       lookupCols: { description: 'B', size: 'C' } },
     summary: { fields: { shipping: 'J57', other: 'J58', discountPercent: 'I59' }, totalCell: 'J60' },
     approvalCell: 'H66',   // the H66:J69 signature merge above "Director/Authorized Signatory"
+    // Under the vendor's address (A19:C19, empty on the template) — the spot
+    // the store team marked: "Order No. aur name aana chahiye jaise PR format se".
+    orderNo: { value: 'A19', prefix: 'ORDER NO. : ' },
   },
   'Diamond PO': {
     tabName: 'Diamond PO',
@@ -7977,6 +7984,7 @@ const PO_FORMAT_CONFIG = {
       lookupCols: { description: 'B', size: 'C' } },
     summary: { fields: { gstPercent: 'J57', shipping: 'K58', other: 'K59', discountPercent: 'J60' }, totalCell: 'K61' },
     approvalCell: 'H66',   // the H66:L69 signature merge above "Director/Authorized Signatory"
+    orderNo: { value: 'A19', prefix: 'ORDER NO. : ' },   // same spot as ENR PO
   },
   // Services, not goods — the one format with no PR upstream and no ITEM_CODES
   // catalog behind it: every line is typed by hand. Its tab was built by
@@ -8667,6 +8675,12 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
     put(cfg.header.poValidity, poValidity);
     put(cfg.header.paymentTerms, paymentTerms);
     put(cfg.header.poMadeBy, poMadeBy);
+    if (cfg.orderNo) {
+      const txt = String(form.orderNo || '').replace(/\s+/g, ' ').trim();
+      if (cfg.orderNo.label) put(cfg.orderNo.label, txt ? 'ORDER NO:' : '');
+      // Leading "'" keeps an order no. like "2049" or "1/26" literal text.
+      put(cfg.orderNo.value, txt ? "'" + (cfg.orderNo.prefix || '') + txt : '');
+    }
     // Always written, blank or stamped — see approvalCell in PO_FORMAT_CONFIG.
     if (cfg.approvalCell) put(at(cfg.approvalCell), approvalStamp || '');
 
@@ -8700,7 +8714,13 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
       const row = cfg.items.firstRow + i;
       if (row > lastItemRow) return; // cannot happen: the block was grown to fit
       Object.entries(cfg.items.fields).forEach(([field, col]) => {
-        const raw = it[field];
+        let raw = it[field];
+        // PurchaseOrder's AMOUNT WITH TAX column (J) only computes when GST
+        // (H) is filled, and its Total adds GST as SUM(J) - SUM(I) — so a
+        // line with no GST came out as -amount and the PO total as ₹0
+        // (PO465, 5 Nov: one line, GST left blank, approved at ₹0). A blank
+        // GST is 0%.
+        if (field === 'gst' && String(raw ?? '').trim() === '') raw = 0;
         put(`${col}${row}`, PO_TEXT_ITEM_FIELDS.has(field) ? raw : _cleanPoItemNum(raw));
       });
     });
@@ -8710,6 +8730,24 @@ async function _fillPoTemplateAndExport(sheets, cfg, form, poNoFormatted, sheetI
         spreadsheetId: PO_CREATION_SHEET_ID,
         requestBody: { valueInputOption: 'USER_ENTERED', data },
       });
+    }
+    // The order-no cells were never used by the templates: Diamond/ENR's
+    // A19 is styled 17pt in a 20px row (clipped). Set a size that fits;
+    // cosmetic, so a failure here never stops the PO.
+    if (cfg.orderNo) {
+      const cells = [cfg.orderNo.label, cfg.orderNo.value].filter(Boolean);
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: PO_CREATION_SHEET_ID,
+        requestBody: { requests: cells.map((a1) => {
+          const m = /^([A-Z]+)(\d+)$/.exec(a1);
+          const col = _piColIndex(m[1]), row = Number(m[2]) - 1;
+          return { repeatCell: {
+            range: { sheetId: sourceSheetId, startRowIndex: row, endRowIndex: row + 1, startColumnIndex: col, endColumnIndex: col + 1 },
+            cell: { userEnteredFormat: { textFormat: { fontSize: 12, bold: true }, wrapStrategy: 'OVERFLOW_CELL', horizontalAlignment: 'LEFT' } },
+            fields: 'userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.bold,userEnteredFormat.wrapStrategy,userEnteredFormat.horizontalAlignment',
+          } };
+        }) },
+      }).catch((e) => console.error('[po-creation] order-no cell format failed:', e.message));
     }
 
     // A write is already fully recalculated internally, but both the very
@@ -8830,7 +8868,7 @@ app.post('/api/po-creation', requireAuth, sheetSerialised('po', async (req, res)
     const tab = cfg.tabName;
     if (sheetIdByTitle[tab] === undefined) return res.status(500).json({ error: `Template tab "${tab}" not found in the PO sheet` });
     const { totalAmount, pdfLink } = await _fillPoTemplateAndExport(sheets, cfg,
-      { date, prNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary, termsAndConditions, comments, testCertificateRequired },
+      { date, prNo, orderNo, department, party, shipTo, deliverySchedule, poValidity, paymentTerms, poMadeBy, items: cleanItems, summary, termsAndConditions, comments, testCertificateRequired },
       poNoFormatted, sheetIdByTitle, '', { checkLookups: true });
 
     // 5) Log this PO so the ERP can list it (the sheet is still the database —
