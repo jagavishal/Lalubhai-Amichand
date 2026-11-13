@@ -127,6 +127,8 @@ function cleanOpRate(src) {
     dept: str(src.dept, 160).toUpperCase(),
     worker: str(src.worker, 120).toUpperCase(),
     day_rate: r2(Math.max(0, num(src.day_rate))),
+    // The hours that day rate is for: 8, or 10 for a 10-hour operator.
+    hours: Math.min(24, Math.max(0, num(src.hours))) || 8,
     eff_date: isoDate(src.eff_date),
     remarks: str(src.remarks, 300),
   };

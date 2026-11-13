@@ -71,13 +71,42 @@ window.Pages['production-norms'] = (() => {
   // else gets the general rows, or — if there are none — every operator's.
   function candidates(item, worker) {
     const all = N.filter((r) => r.dept === D.dept && norm(r.item) === norm(item));
-    const own = all.filter((r) => r.worker && norm(r.worker) === norm(worker));
+    const who = pickName([...new Set(all.filter((r) => r.worker).map((r) => r.worker))], worker);
+    const own = who ? all.filter((r) => r.worker === who) : [];
     if (own.length) return own;
     const gen = all.filter((r) => !r.worker);
     return gen.length ? gen : all;
   }
+
+  // Supervisors type names their own way: "RAMSINGH" for RAM SINGH, "AMIT"
+  // for AMIT THAKOR. Same person = same letters ignoring spaces, or a single
+  // name equal to the first name of a full one.
+  const compact = (s) => norm(s).replace(/ /g, '');
+  function sameWorker(a, b) {
+    const A = norm(a), B = norm(b);
+    if (!A || !B) return false;
+    if (compact(A) === compact(B)) return true;
+    const ta = A.split(' '), tb = B.split(' ');
+    return (ta.length === 1 || tb.length === 1) && ta[0] === tb[0];
+  }
+  // Which of these names the typed one means: an exact match, else the only
+  // loose one (two AMITs in a department → neither).
+  function pickName(names, typed) {
+    if (!typed) return null;
+    const exact = names.find((n) => compact(n) === compact(typed));
+    if (exact) return exact;
+    const loose = [...new Set(names.filter((n) => sameWorker(n, typed)))];
+    return loose.length === 1 ? loose[0] : null;
+  }
   // The operator's own day rate in this department, if one is set.
-  const opRateOf = (dept, worker) => (worker ? OPS.find((o) => o.dept === dept && norm(o.worker) === norm(worker)) : null) || null;
+  function opRateOf(dept, worker) {
+    const list = OPS.filter((o) => o.dept === dept);
+    const who = pickName(list.map((o) => o.worker), worker);
+    return who ? list.find((o) => o.worker === who) : null;
+  }
+  // His rate for `hrs` hours: a rate set for a 10-hour day (₹500 / 10 hrs)
+  // is ₹400 for an 8-hour norm.
+  const opDay = (op, hrs) => op.day_rate * hrs / (Number(op.hours) || 8);
   const itemsOf = (dept) => [...new Set(N.filter((r) => r.dept === dept).map((r) => r.item))];
 
   function applyNorm(l, m) {
@@ -87,7 +116,7 @@ window.Pages['production-norms'] = (() => {
       // Time work: an operator's own day rate fills in when none is typed.
       const op = opRateOf(D.dept, l.worker);
       const typed = l.norm_id || l.op_rate ? 0 : (l.day_rate || 0);
-      Object.assign(l, { day_rate: typed || (op ? op.day_rate : 0), op_rate: !typed && op ? 1 : 0, norm_id: '', norm_pcs: 0, norm_hours: 8, pc_rate: 0, section: '', pay_reason: '' });
+      Object.assign(l, { day_rate: typed || (op ? Math.round(opDay(op, 8) * 100) / 100 : 0), op_rate: !typed && op ? 1 : 0, norm_id: '', norm_pcs: 0, norm_hours: 8, pc_rate: 0, section: '', pay_reason: '' });
       return;
     }
     Object.assign(l, {
@@ -98,10 +127,11 @@ window.Pages['production-norms'] = (() => {
     // the norm (Rolling & cutting has no general rows), is paid at this
     // operator's own day rate where one is set: per pc = his rate ÷ norm pcs.
     // A row written for this operator himself keeps its own rate.
-    const op = !(m.worker && norm(m.worker) === norm(l.worker)) && opRateOf(D.dept, l.worker);
+    const op = !(m.worker && sameWorker(m.worker, l.worker)) && opRateOf(D.dept, l.worker);
     if (op) {
-      const pc = l.norm_pcs > 0 ? op.day_rate / l.norm_pcs : (Number(m.day_rate) > 0 ? l.pc_rate * op.day_rate / Number(m.day_rate) : l.pc_rate);
-      Object.assign(l, { day_rate: op.day_rate, pc_rate: pc, op_rate: 1 });
+      const day = Math.round(opDay(op, l.norm_hours) * 100) / 100;
+      const pc = l.norm_pcs > 0 ? day / l.norm_pcs : (Number(m.day_rate) > 0 ? l.pc_rate * day / Number(m.day_rate) : l.pc_rate);
+      Object.assign(l, { day_rate: day, pc_rate: pc, op_rate: 1 });
     }
     if (!l.hours) l.hours = Number(m.hours) || 8;
   }
@@ -598,7 +628,7 @@ window.Pages['production-norms'] = (() => {
     const q = norm(F.q);
     const ops = OPS.filter((o) => (!F.dept || o.dept === F.dept) && (!q || norm(o.worker).includes(q)))
       .sort((a, b) => a.dept.localeCompare(b.dept) || a.worker.localeCompare(b.worker));
-    const rows = ops.map((o) => [`<b>${esc(o.worker)}</b>`, esc(o.dept), `<b>₹${n0(o.day_rate)}</b>`, `<span class="pn-sub">${esc(generalRate(o.dept) || '—')}</span>`,
+    const rows = ops.map((o) => [`<b>${esc(o.worker)}</b>`, esc(o.dept), `<b>₹${n0(o.day_rate)}</b>${Number(o.hours) && Number(o.hours) !== 8 ? ` <span class="pn-sub">/ ${o.hours} hrs</span>` : ''}`, `<span class="pn-sub">${esc(generalRate(o.dept) || '—')}</span>`,
       esc(o.eff_date ? H.fmtDate(o.eff_date) : ''), esc(o.remarks || ''),
       manage ? `<div style="display:flex;gap:6px;justify-content:flex-end;"><button class="btn-secondary btn-sm" data-oedit="${esc(o.id)}">Edit</button><button class="btn-secondary btn-sm" data-odel="${esc(o.id)}" style="color:#dc2626;">✕</button></div>` : '']);
     const tools = manage ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -625,16 +655,36 @@ window.Pages['production-norms'] = (() => {
         ${H.select('om-dept', 'Department', m.dept, depts(), { required: true, span: 2, placeholder: 'choose…' })}
         ${H.field('om-worker', 'Worker / operator', m.worker || '', { required: true, span: 2 })}
         ${H.field('om-rate', 'Rate per day (₹)', m.day_rate || '', { type: 'number', step: '1', required: true })}
+        ${H.field('om-hours', 'For hours', m.hours || 8, { type: 'number', step: '0.5', hint: 'normally 8; 10 if the rate is for a 10 hour day' })}
         ${H.field('om-date', 'From date', m.eff_date || today(), { type: 'date' })}
         ${H.field('om-remarks', 'Remarks', m.remarks || '', { span: 2 })}`) + `<datalist id="om-workers">${workerNames.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>`,
       onConfirm: async () => {
-        await H.post(`${BASE}/op-rates`, { id: isNew ? '' : m.id, dept: H.val('om-dept'), worker: H.val('om-worker'), day_rate: H.val('om-rate'), eff_date: H.val('om-date'), remarks: H.val('om-remarks') });
+        await H.post(`${BASE}/op-rates`, { id: isNew ? '' : m.id, dept: H.val('om-dept'), worker: H.val('om-worker'), day_rate: H.val('om-rate'), hours: H.val('om-hours'), eff_date: H.val('om-date'), remarks: H.val('om-remarks') });
         H.closeModal('pn-om');
         await loadNorms(); render();
         H.toast('Operator rate saved');
       },
     });
     document.getElementById('om-worker')?.setAttribute('list', 'om-workers');
+  }
+
+  // A department as typed on a list ("PRESSEING", "KETTLE HOLING/ FITTING")
+  // → the norms' own spelling: same letters, or the one within two typos.
+  function matchDept(raw) {
+    const c = compact(raw);
+    const all = depts();
+    const exact = all.find((d) => compact(d) === c);
+    if (exact) return exact;
+    const dist = (a, b) => {
+      const dp = Array.from({ length: b.length + 1 }, (_, j) => j);
+      for (let i = 1; i <= a.length; i++) {
+        let prev = dp[0]; dp[0] = i;
+        for (let j = 1; j <= b.length; j++) { const t = dp[j]; dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = t; }
+      }
+      return dp[b.length];
+    };
+    const near = all.filter((d) => dist(compact(d), c) <= 2);
+    return near.length === 1 ? near[0] : '';
   }
 
   // DEPARTMENT, WORKER (or OPERATOR / NAME), RATE PER DAY — department may be
@@ -644,24 +694,27 @@ window.Pages['production-norms'] = (() => {
       await loadXlsx();
       const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
       const grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
-      const hi = grid.findIndex((r) => r.some((c) => /WORKER|OPERATOR|NAME/i.test(String(c))) && r.some((c) => /RATE/i.test(String(c))));
+      const hi = grid.findIndex((r) => r.some((c) => /WORKER|OPERATOR|NAME/i.test(String(c))) && r.some((c) => /RATE|SALARY/i.test(String(c))));
       if (hi < 0) throw new Error('Header row nahi mila — columns: DEPARTMENT, WORKER, RATE PER DAY');
       const Hd = grid[hi].map((c) => String(c).toUpperCase());
       const ci = (re) => Hd.findIndex((h) => re.test(h));
-      const cD = ci(/DEP/), cW = ci(/WORKER|OPERATOR|NAME/), cR = ci(/RATE/), cDt = ci(/DATE|FROM/), cRm = ci(/REMARK/);
-      const known = new Map(depts().map((d) => [norm(d), d]));
+      const cD = ci(/DEP/), cW = ci(/WORKER|OPERATOR|NAME/), cR = ci(/RATE|SALARY/), cH = ci(/^HOURS?$|FOR HOURS/), cDt = ci(/DATE|FROM/), cRm = ci(/REMARK/);
       const rows = [], problems = [];
       grid.slice(hi + 1).forEach((r, k) => {
         const worker = String(r[cW] ?? '').trim();
-        const rateV = Number(String(r[cR] ?? '').replace(/[₹,\s]/g, ''));
+        const rateV = Number(String(r[cR] ?? '').replace(/[^0-9.]/g, ''));
         if (!worker && !rateV) return;
         const rawDept = cD >= 0 ? String(r[cD] ?? '').trim() : '';
-        const dept = rawDept ? known.get(norm(rawDept)) : F.dept;
+        const dept = rawDept ? matchDept(rawDept) : F.dept;
         if (!dept) { problems.push(`row ${hi + k + 2}: department “${rawDept || '(blank)'}” nahi mila`); return; }
         if (!worker || !(rateV > 0)) { problems.push(`row ${hi + k + 2}: worker aur rate dono chahiye`); return; }
         const d = cDt >= 0 ? r[cDt] : '';
         const eff = typeof d === 'number' && d > 30000 ? new Date(Math.round((d - 25569) * 86400000)).toISOString().slice(0, 10) : (/^\d{4}-\d{2}-\d{2}$/.test(String(d)) ? String(d) : '');
-        rows.push({ dept, worker, day_rate: rateV, eff_date: eff || today(), remarks: cRm >= 0 ? String(r[cRm] ?? '') : '' });
+        const remark = cRm >= 0 ? String(r[cRm] ?? '').trim() : '';
+        // Hours from an HOURS column, or a remark like "10 HOURS".
+        const hm = /(\d+(?:\.\d+)?)\s*H(?:OU)?RS?/i.exec(remark);
+        const hours = (cH >= 0 && Number(r[cH])) || (hm ? Number(hm[1]) : 8);
+        rows.push({ dept, worker, day_rate: rateV, hours, eff_date: eff || today(), remarks: remark });
       });
       if (problems.length) throw new Error(`${problems.length} row(s) theek nahi: ${problems.slice(0, 4).join('; ')}${problems.length > 4 ? '…' : ''}`);
       if (!rows.length) throw new Error('File mein koi operator row nahi mili');
@@ -676,10 +729,10 @@ window.Pages['production-norms'] = (() => {
       await loadXlsx();
       const list = F.dept ? [F.dept] : depts();
       const have = OPS.filter((o) => list.includes(o.dept));
-      const ws = XLSX.utils.aoa_to_sheet([['DEPARTMENT', 'WORKER', 'RATE PER DAY', 'FROM DATE', 'REMARKS', 'DEPT. RATE (reference)'],
-        ...have.map((o) => [o.dept, o.worker, o.day_rate, o.eff_date || '', o.remarks || '', generalRate(o.dept).replace(/₹/g, '')]),
-        ...list.filter((d) => !have.some((o) => o.dept === d)).map((d) => [d, '', '', '', '', generalRate(d).replace(/₹/g, '')])]);
-      ws['!cols'] = [36, 24, 13, 12, 20, 20].map((w) => ({ wch: w }));
+      const ws = XLSX.utils.aoa_to_sheet([['DEPARTMENT', 'WORKER', 'RATE PER DAY', 'HOURS', 'FROM DATE', 'REMARKS', 'DEPT. RATE (reference)'],
+        ...have.map((o) => [o.dept, o.worker, o.day_rate, o.hours || 8, o.eff_date || '', o.remarks || '', generalRate(o.dept).replace(/₹/g, '')]),
+        ...list.filter((d) => !have.some((o) => o.dept === d)).map((d) => [d, '', '', 8, '', '', generalRate(d).replace(/₹/g, '')])]);
+      ws['!cols'] = [36, 24, 13, 7, 12, 20, 20].map((w) => ({ wch: w }));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Operator rates');
       XLSX.writeFile(wb, fileSafe(`Operator rates${F.dept ? ' ' + F.dept : ''}.xlsx`));
