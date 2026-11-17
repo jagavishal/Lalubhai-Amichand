@@ -100,6 +100,8 @@ window.Pages.users = (() => {
 
     { cat: 'Retail', key: 'retail-new-expense', label: 'New Expense', same: 'retail-dashboard' },
     { cat: 'Retail', key: 'retail-dashboard', label: 'Retail Dashboard' },
+    // Retail Dashboard access already opens it; this tick gives it alone.
+    { cat: 'Retail', key: 'retail-sales', label: 'Daily Sales Report' },
 
     { cat: 'Admin Section', key: 'company-overview', label: 'CEO Dashboard', fixed: 'trueAdmin' },
     // Admin always; anyone else (HOD included) only with this tick — see

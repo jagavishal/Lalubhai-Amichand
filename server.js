@@ -465,6 +465,10 @@ SCHEMA.push(...BR_SCHEMA);
 // Ratios. See backend/mis-finance.js.
 const { MF_SCHEMA, mountMisFinance } = require('./backend/mis-finance.js');
 SCHEMA.push(...MF_SCHEMA);
+// Retail Daily Sales: per-branch daily sales / cash / credit / purchases
+// (was two Google Sheets). See backend/retail-sales.js.
+const { RS_SCHEMA, mountRetailSales } = require('./backend/retail-sales.js');
+SCHEMA.push(...RS_SCHEMA);
 
 // Office Inventory — office consumables (purchase, consumption, stock), the
 // replacement for the "Inventory Management System" sheet. Routes mounted
@@ -6760,6 +6764,23 @@ mountMisFinance(app, {
     if (isSuperAdmin(user) || rolesOf(user).includes('Admin')) return true;
     const perms = await getUserPermissions(user?.id);
     return !!(perms && Array.isArray(perms.pages) && perms.pages.includes('mis-finance'));
+  },
+});
+
+// ── Retail Daily Sales routes ─────────────────────────────────────────────────
+// Everything under /api/retail-sales/. Open to whoever has the 'retail-sales'
+// page or the Retail Dashboard (same shop people); Admin/HOD always (subject
+// to a saved Access list, like requireAdminOrPage). See backend/retail-sales.js.
+mountRetailSales(app, {
+  q, pool, ensureSchema, requireAuth, useDb: USE_DB, getGoogleAuth,
+  branches: () => _rdBranches(),
+  isAdmin: async (user) => isSuperAdmin(user) || isAdminUser(user),
+  canOpen: async (user) => {
+    if (isSuperAdmin(user)) return true;
+    const perms = await getUserPermissions(user?.id);
+    const has = (list) => ['retail-sales', 'retail-dashboard'].some((k) => list.includes(k));
+    if (isAdminUser(user)) return !perms || !perms.pages || has(perms.pages);
+    return !!(perms && perms.pages && has(perms.pages));
   },
 });
 

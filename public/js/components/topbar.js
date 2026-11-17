@@ -9,6 +9,7 @@ window.Topbar = {
     'mis':          'MIS Report',
     'mis-finance':  'MIS Financials',
     'board-resolution': 'Board Resolution',
+    'retail-sales': 'Daily Sales Report',
     'fms':          'FMS Master',
     'profile':      'Profile',
     'client-master':'',
