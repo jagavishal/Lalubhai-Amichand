@@ -7,6 +7,8 @@ window.Topbar = {
     'approvals':    'Approvals',
     'users':        'Users',
     'mis':          'MIS Report',
+    'mis-finance':  'MIS Financials',
+    'board-resolution': 'Board Resolution',
     'fms':          'FMS Master',
     'profile':      'Profile',
     'client-master':'',

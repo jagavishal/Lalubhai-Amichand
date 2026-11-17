@@ -107,6 +107,9 @@ window.Pages.users = (() => {
     // the Admin role or touch an Admin's account.
     { cat: 'Admin Section', key: 'users',        label: 'Users', explicit: true },
     { cat: 'Admin Section', key: 'mis',          label: 'MIS Report' },
+    // The company's books: Admin always; anyone else (HOD included) only with
+    // this tick — see the canOpen rule for mountMisFinance in server.js.
+    { cat: 'Admin Section', key: 'mis-finance',  label: 'MIS Financials', explicit: true },
     { cat: 'Admin Section', key: 'office-inventory', label: 'Office Inventory' },
     { cat: 'Admin Section', key: 'quotation-approval', label: 'Quotation Approval' },
     // Grant-only (see GRANT_PAGES below): ticked per person, Admins included.
@@ -114,6 +117,9 @@ window.Pages.users = (() => {
     // grant makes a person a Service Management admin — every request, the
     // vendor master and Settings.
     { cat: 'Admin Section', key: 'amc',          label: 'Service Management (admin)', grant: true },
+    // Grant-only too: everyone can raise a Board Resolution request; this
+    // makes a non-Admin see every request and change its Settings.
+    { cat: 'Admin Section', key: 'board-resolution', label: 'Board Resolution (admin)', grant: true },
 
     { cat: 'HR Section', key: 'hr-employees',  label: 'Employee Master' },
     { cat: 'HR Section', key: 'hr-org-chart',  label: 'Company Tree', fixed: 'all' },

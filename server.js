@@ -457,6 +457,14 @@ SCHEMA.push(...AMC_SCHEMA);
 // "mountQuotationApproval"). See backend/quotation-approval.js.
 const { QA_SCHEMA, mountQuotationApproval } = require('./backend/quotation-approval.js');
 SCHEMA.push(...QA_SCHEMA);
+// Board Resolution: request → CS drafts → Director approves (loop) → signed
+// copy. See backend/board-resolution.js.
+const { BR_SCHEMA, mountBoardResolution } = require('./backend/board-resolution.js');
+SCHEMA.push(...BR_SCHEMA);
+// MIS Financials: Tally Trial Balance (Excel) per division → P&L, Cash Flow,
+// Ratios. See backend/mis-finance.js.
+const { MF_SCHEMA, mountMisFinance } = require('./backend/mis-finance.js');
+SCHEMA.push(...MF_SCHEMA);
 
 // Office Inventory — office consumables (purchase, consumption, stock), the
 // replacement for the "Inventory Management System" sheet. Routes mounted
@@ -6722,6 +6730,36 @@ mountQuotationApproval(app, {
     const perms = await getUserPermissions(user?.id);
     if (isAdminUser(user)) return !perms || !perms.pages || perms.pages.includes('quotation-approval');
     return !!(perms && perms.pages && perms.pages.includes('quotation-approval'));
+  },
+});
+
+// ── Board Resolution routes ───────────────────────────────────────────────────
+// Everything under /api/board-resolution/ plus /br-action (the Director's
+// decide-from-mail page). Anyone can raise; CS and Directors come from the
+// page's own Settings; managers = Admin role, the owner, or the
+// 'board-resolution' grant. See backend/board-resolution.js.
+mountBoardResolution(app, {
+  q, pool, ensureSchema, requireAuth, withSeqId, getMailer, notifyAddressFor,
+  appOrigin: APP_ORIGIN, useDb: USE_DB, getGoogleAuth,
+  sharedDriveId: () => process.env.BR_SHARED_DRIVE_ID?.trim() || PHOTO_SHARED_DRIVE_ID,
+  tokenFor: leaveTokenFor, readToken: readLeaveToken, actionPage: _leaveActionPage,
+  isManager: async (user) => {
+    if (isSuperAdmin(user) || rolesOf(user).includes('Admin')) return true;
+    const perms = await getUserPermissions(user?.id);
+    return !!(perms && Array.isArray(perms.grants) && perms.grants.includes('board-resolution'));
+  },
+});
+
+// ── MIS Financials routes ─────────────────────────────────────────────────────
+// Everything under /api/mis-finance/. The company's books, so the Admin role
+// (or the owner) or an explicit 'mis-finance' tick in Users → Access — HOD
+// does not get it by default. Same rule as canManageUsers.
+mountMisFinance(app, {
+  q, ensureSchema, requireAuth, useDb: USE_DB,
+  canOpen: async (user) => {
+    if (isSuperAdmin(user) || rolesOf(user).includes('Admin')) return true;
+    const perms = await getUserPermissions(user?.id);
+    return !!(perms && Array.isArray(perms.pages) && perms.pages.includes('mis-finance'));
   },
 });
 

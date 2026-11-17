@@ -67,6 +67,10 @@ window.Sidebar = {
     newexpense:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>',
     // Service Management — a wrench, the maintenance mark.
     quotation:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="m9 15 2 2 4-4"/></svg>',
+    // Board Resolution — a document with a signature stroke.
+    boardres:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M7 17c1.5-2 2.5-2 3 0s1.5 1 2.5-.5 2 0 3.5.5"/><path d="M8 11h5"/></svg>',
+    // MIS Financials — a rupee over a rising line.
+    misfin:       '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/><path d="M15 8h4v4"/></svg>',
     amc:          '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
     // Company Overview — a briefcase, the plain "company/business" glyph,
     // distinct from every module's own icon since this page sits above all of them.
@@ -175,6 +179,11 @@ window.Sidebar = {
       // sees inside is decided by the API; the admin side (all requests,
       // vendors, settings) is the Users → Access grant (hasAmcAccess).
       { route: 'amc',           label: 'Service Management', icon: 'amc', alwaysShow: true },
+      // Board Resolution — anyone may request a resolution and follow it; the
+      // CS / Directors are set on the page's Settings, and seeing everyone's
+      // requests is the Admin role or the 'board-resolution' grant
+      // (backend/board-resolution.js).
+      { route: 'board-resolution', label: 'Board Resolution', icon: 'boardres', alwaysShow: true },
       // Daily Trivia — one 30-second question a day; everyone plays.
       { route: 'trivia',        label: 'Daily Trivia',   icon: 'trivia', alwaysShow: true },
       { route: 'profile',       label: 'Profile',        icon: 'profile' },
@@ -246,6 +255,10 @@ window.Sidebar = {
       // not a grant here. Mirrors canManageUsers in server.js.
       { route: 'users',         label: 'Users',        icon: 'users',        grantedOnly: true },
       { route: 'mis',           label: 'MIS Report',   icon: 'mis' },
+      // P&L / Cash Flow / Ratios from each division's Tally Trial Balance
+      // (Excel upload). The company's books: Admin role always, anyone else
+      // (HOD included) only with an explicit tick — like Users.
+      { route: 'mis-finance',   label: 'MIS Financials', icon: 'misfin', grantedOnly: true },
       // Office consumables (was the "Inventory Management System" sheet).
       // adminOnly but grantable from Users → Access, like Bulk Email; the
       // API gates on the same rule (requireAdminOrPage).
