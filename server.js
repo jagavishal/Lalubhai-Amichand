@@ -469,6 +469,10 @@ SCHEMA.push(...MF_SCHEMA);
 // (was two Google Sheets). See backend/retail-sales.js.
 const { RS_SCHEMA, mountRetailSales } = require('./backend/retail-sales.js');
 SCHEMA.push(...RS_SCHEMA);
+// Retail Shop Daily Report: the shop's own monthly sheet (sales, purchases,
+// cash) — a separate system with its own users. See backend/retail-shop-report.js.
+const { RSR_SCHEMA, mountRetailShopReport } = require('./backend/retail-shop-report.js');
+SCHEMA.push(...RSR_SCHEMA);
 
 // Office Inventory — office consumables (purchase, consumption, stock), the
 // replacement for the "Inventory Management System" sheet. Routes mounted
@@ -6767,21 +6771,28 @@ mountMisFinance(app, {
   },
 });
 
-// ── Retail Daily Sales routes ─────────────────────────────────────────────────
-// Everything under /api/retail-sales/. Open to whoever has the 'retail-sales'
-// page or the Retail Dashboard (same shop people); Admin/HOD always (subject
-// to a saved Access list, like requireAdminOrPage). See backend/retail-sales.js.
+// ── Retail daily reports ──────────────────────────────────────────────────────
+// Two separate systems with their own users, one per old Google Sheet:
+// /api/retail-sales/ (Daily Report as per Tally, page 'retail-sales') and
+// /api/retail-shop-report/ (Shop Daily Report, page 'retail-shop-report').
+// Same rule as requireAdminOrPage for each page key, as a yes/no.
+const _canOpenPageKey = (key) => async (user) => {
+  if (isSuperAdmin(user)) return true;
+  const perms = await getUserPermissions(user?.id);
+  if (isAdminUser(user)) return !perms || !perms.pages || perms.pages.includes(key);
+  return !!(perms && perms.pages && perms.pages.includes(key));
+};
 mountRetailSales(app, {
   q, pool, ensureSchema, requireAuth, useDb: USE_DB, getGoogleAuth,
   branches: () => _rdBranches(),
   isAdmin: async (user) => isSuperAdmin(user) || isAdminUser(user),
-  canOpen: async (user) => {
-    if (isSuperAdmin(user)) return true;
-    const perms = await getUserPermissions(user?.id);
-    const has = (list) => ['retail-sales', 'retail-dashboard'].some((k) => list.includes(k));
-    if (isAdminUser(user)) return !perms || !perms.pages || has(perms.pages);
-    return !!(perms && perms.pages && has(perms.pages));
-  },
+  canOpen: _canOpenPageKey('retail-sales'),
+});
+mountRetailShopReport(app, {
+  q, ensureSchema, requireAuth, useDb: USE_DB, getGoogleAuth,
+  branches: () => _rdBranches(),
+  isAdmin: async (user) => isSuperAdmin(user) || isAdminUser(user),
+  canOpen: _canOpenPageKey('retail-shop-report'),
 });
 
 // ── Office Inventory routes ───────────────────────────────────────────────────

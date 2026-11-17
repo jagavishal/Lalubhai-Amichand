@@ -11,13 +11,13 @@
       return, cash expense, cash deposited in bank and the running physical
       cash balance; credit sales (party, amount, amount received) with a
       running balance.
-   2. "Retail shop Daily report" — a month per tab, days across: cash
-      sales, returns, card + credit sales, total sales, month-to-date and
-      cumulative sales; purchases, returns, net purchases, MTD and
-      cumulative purchases; and the cash balance block. (Satellite only.)
+   (The other daily sheet, "Retail shop Daily report", is its own system
+   with its own users — backend/retail-shop-report.js. The purchase
+   columns of retail_daily are left over from when the two were one page
+   and are no longer entered.)
 
-   Here a shop enters one day once (per branch) and both layouts are drawn
-   from it. Totals, the running cash and credit balances, month-to-date
+   Here the day is entered once per branch and the register is drawn from
+   it. Totals, the running cash and credit balances, month-to-date
    and financial-year (from 1 April) cumulatives are worked out, never
    typed. The two sheets can be imported once (Settings) to carry the year
    so far over.
@@ -27,8 +27,8 @@
    retail_sales_opening = { branch: { date, cash, credit } } — the balance
    at the END of `date`; running balances start the day after.
 
-   Access: the 'retail-sales' page, or 'retail-dashboard' (the same shop
-   people); Admin/HOD always. Opening balances, import and deleting a day:
+   Access: the 'retail-sales' page only (its own users); Admin/HOD always
+   unless their Access list leaves it out. Opening balances, import and deleting a day:
    Admin/HOD.
    ===================================================================== */
 
@@ -463,22 +463,6 @@ function mountRetailSales(app, ctx) {
     }
     await writeOpening(opening);
 
-    // Purchases (Satellite's month tabs).
-    const sat = findBranch('Satellite');
-    if (sat) {
-      const pur = parseDailyTabs(await getTabs(DAILY_SHEET));
-      const from = firstDay[sat] || '0000-00-00';
-      const existing = new Set((await q(`SELECT day FROM retail_daily WHERE branch = $1 AND source = 'erp'`, [sat])).map((r) => dOut(r.day)));
-      let n = 0;
-      const today = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
-      for (const [day, p] of pur) {
-        if (day < from || day > today || (existing.has(day) && !overwrite)) continue;
-        await q(`INSERT INTO retail_daily (branch, day, purchases, purchase_return, source, updated_by, updated_at) VALUES ($1,$2,$3,$4,'sheet','Import',NOW())
-                 ON CONFLICT (branch, day) DO UPDATE SET purchases=$5, purchase_return=$6`, [sat, day, p.purchases, p.purchase_return, p.purchases, p.purchase_return]);
-        n++;
-      }
-      report.purchases = { branch: sat, days: n };
-    }
     return report;
   }));
 

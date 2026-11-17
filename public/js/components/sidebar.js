@@ -64,7 +64,8 @@ window.Sidebar = {
     retaildashboard: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="0.5"/><rect x="12" y="8" width="3" height="10" rx="0.5"/><rect x="17" y="5" width="3" height="13" rx="0.5"/></svg>',
     // New Expense — a plus in a circle, the sidebar's direct shortcut into
     // Retail Dashboard's "+ New Expense" drawer.
-    // Daily Sales Report — a receipt.
+    // Shop Daily Report — a receipt; Daily Report (Tally) — a ledger book.
+    retailtally:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z"/><path d="M8 9h8M8 13h8M8 17h4"/></svg>',
     retailsales:  '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>',
     newexpense:   '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>',
     // Service Management — a wrench, the maintenance mark.
@@ -246,11 +247,11 @@ window.Sidebar = {
       // rebuilt as a native page (see retail-dashboard.js and
       // /api/retail-dashboard/* in server.js) the same way HRMS was.
       { route: 'retail-dashboard', label: 'Retail Dashboard', icon: 'retaildashboard' },
-      // Daily sales / cash / credit / purchases per branch (was the two
-      // "Retail shop Daily report" Google Sheets). Its own page key, and the
-      // Retail Dashboard grant opens it too (aliases below; server: canOpen
-      // for mountRetailSales).
-      { route: 'retail-sales', label: 'Daily Sales Report', icon: 'retailsales' },
+      // The two daily reports that were Google Sheets — separate systems
+      // with separate users, each on its own page key (no alias): the
+      // shop's own sheet, and the one kept as per Tally.
+      { route: 'retail-shop-report', label: 'Shop Daily Report', icon: 'retailsales' },
+      { route: 'retail-sales', label: 'Daily Report (Tally)', icon: 'retailtally' },
     ]},
     { title: 'Admin Section', items: [
       // CEO Dashboard — Admin role only ("this page only show while admin
@@ -412,8 +413,8 @@ window.Sidebar = {
       ? [route, 'ims', 'inward', 'outward']
       : route === 'hr-leave'
       ? ['hr-leave', 'leave-tracker']
-      : (route === 'retail-new-expense' || route === 'retail-sales')
-      ? [route, 'retail-dashboard']
+      : route === 'retail-new-expense'
+      ? ['retail-new-expense', 'retail-dashboard']
       : (route === 'order-sheet' || route === 'packing-list')
       ? [route, 'proforma-invoice']
       : route === 'job-work'
@@ -444,8 +445,8 @@ window.Sidebar = {
       ? [item.route, 'ims', 'inward', 'outward']
       : item.route === 'hr-leave'
       ? ['hr-leave', 'leave-tracker']
-      : (item.route === 'retail-new-expense' || item.route === 'retail-sales')
-      ? [item.route, 'retail-dashboard']
+      : item.route === 'retail-new-expense'
+      ? ['retail-new-expense', 'retail-dashboard']
       : (item.route === 'order-sheet' || item.route === 'packing-list')
       ? [item.route, 'proforma-invoice']
       : item.route === 'job-work'
