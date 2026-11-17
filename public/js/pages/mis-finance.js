@@ -19,6 +19,7 @@ window.Pages['mis-finance'] = (() => {
   let _tab = 'reports';
   let _stmt = 'P';
   let _period = '';        // "from|to"
+  let _div = '';           // '' = all divisions side by side; a name = that division vs last year
   let _mapQ = '';
   let _mapOnlyOpen = false;
 
@@ -33,7 +34,7 @@ window.Pages['mis-finance'] = (() => {
     const periods = periodList();
     if (!_period || !periods.some((p) => p.key === _period)) _period = periods[0]?.key || '';
   }
-  async function refresh() { try { await load(); R = null; await render(); } catch (e) { H.fail(e); } }
+  async function refresh() { try { await load(); R = null; M = null; await render(); } catch (e) { H.fail(e); } }
 
   function periodList() {
     const seen = new Map();
@@ -72,6 +73,8 @@ window.Pages['mis-finance'] = (() => {
         .mf-tbl tr.warn td { color:#b45309; font-weight:600; background:#fffbeb; }
         .mf-tbl tr.warn td:first-child { background:#fffbeb; }
         .mf-tbl td.neg { color:#dc2626; }
+        .mf-tbl tr.d td { color:#64748b; font-size:12px; padding-top:4px; padding-bottom:4px; }
+        .mf-tbl tr.d td:first-child { padding-left:28px; }
         .mf-seg { display:inline-flex; border:1.5px solid #e2e8f0; border-radius:9px; overflow:hidden; }
         .mf-seg button { border:none; background:#fff; padding:7px 14px; font-size:12.5px; font-weight:600; color:#64748b; cursor:pointer; }
         .mf-seg button.on { background:var(--color-primary); color:#fff; }
@@ -97,7 +100,7 @@ window.Pages['mis-finance'] = (() => {
     if (v == null) return '—';
     if (kind === 'pct') return v.toFixed(1) + '%';
     if (kind === 'x') return v.toFixed(2);
-    if (kind === 'd') return Math.round(v) + ' d';
+    if (kind === 'days') return Math.round(v) + ' d';
     return H.inr0(v);
   };
 
@@ -110,13 +113,16 @@ window.Pages['mis-finance'] = (() => {
         you want split (Ctrl+F1 / Alt+F1 detailed), then <b>Export (Alt+E) → Excel</b>, and upload the file here.</div>`;
     }
     const [from, to] = _period.split('|');
-    if (!R || R.from !== from || R.to !== to) {
-      try { R = await H.api(`/api/mis-finance/report?from=${from}&to=${to}`); } catch (e) { R = { error: e.message }; }
+    const here = periods.find((p) => p.key === _period);
+    if (_div && !here.divisions.includes(_div)) _div = '';
+    if (!R || R.from !== from || R.to !== to || (R.division || '') !== _div) {
+      try { R = await H.api(`/api/mis-finance/report?from=${from}&to=${to}${_div ? '&division=' + encodeURIComponent(_div) : ''}`); } catch (e) { R = { error: e.message, from, to, division: _div }; }
     }
     if (R.error) return `<div class="mf-warn">${esc(R.error)}</div>`;
     const cols = [...R.columns.filter((c) => !c.missing), ...(R.consolidated ? [R.consolidated] : [])];
     const missing = R.columns.filter((c) => c.missing).map((c) => c.division);
     const notes = [];
+    if (R.division && !R.compare) notes.push(`No upload of ${esc(R.division)} for the same months last year — upload that Trial Balance (Tally exports it alongside when you add a comparative period) to see the comparison.`);
     if (missing.length) notes.push(`Not uploaded for this period: <b>${esc(missing.join(', '))}</b>${R.consolidated ? ' — the consolidated column leaves them out' : ''}.`);
     const unm = R.columns.filter((c) => c.unmapped);
     if (unm.length) notes.push(`Ledgers with no report head: ${unm.map((c) => `<b>${esc(c.division)}</b> (${c.unmapped})`).join(', ')} — map them on the Ledger Mapping tab.`);
@@ -137,6 +143,10 @@ window.Pages['mis-finance'] = (() => {
         <select id="mf-period" style="${H.CONTROL}max-width:330px;">
           ${periods.map((p) => `<option value="${esc(p.key)}"${p.key === _period ? ' selected' : ''}>${esc(periodLabel(p.from, p.to))} · ${p.divisions.length} division${p.divisions.length === 1 ? '' : 's'}</option>`).join('')}
         </select>
+        <select id="mf-div" style="${H.CONTROL}max-width:260px;">
+          <option value="">All divisions${here.divisions.length > 1 ? ' + consolidated' : ''}</option>
+          ${here.divisions.map((d) => `<option value="${esc(d)}"${d === _div ? ' selected' : ''}>${esc(d)} — vs last year</option>`).join('')}
+        </select>
         <div class="mf-seg">${Object.entries(STMT).map(([k, l]) => `<button data-stmt="${k}" class="${k === _stmt ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>
         <button class="btn-secondary btn-sm" id="mf-xlsx" style="margin-left:auto;">Download Excel</button>
       </div>
@@ -150,12 +160,14 @@ window.Pages['mis-finance'] = (() => {
       ${lines.map((ln, i) => {
         const [kind, label] = ln;
         if (kind === 'h') return `<tr class="h"><td colspan="${cols.length + 1}">${esc(label)}</td></tr>`;
-        const cls = ['t', 'T', 'pct', 'warn'].includes(kind) ? kind : '';
+        const cls = ['t', 'T', 'pct', 'warn', 'd'].includes(kind) ? kind : '';
         const cells = cols.map((c) => {
           const row = c[key]?.[i];
           const v = row ? row[2] : null;
           const f = key === 'R' ? kind : kind === 'pct' ? 'pct' : '';
-          return `<td class="${v != null && v < 0 && f !== 'pct' ? 'neg' : ''}">${fmtVal(f, v)}</td>`;
+          if (kind === 'warn' && v == null) return '<td></td>';
+          const txt = c.change && v != null && v > 0 ? '+' + fmtVal(f, v) : fmtVal(f, v);
+          return `<td class="${v != null && v < 0 && f !== 'pct' ? 'neg' : ''}">${txt}</td>`;
         }).join('');
         return `<tr class="${cls}"><td>${esc(label)}</td>${cells}</tr>`;
       }).join('')}
@@ -167,7 +179,7 @@ window.Pages['mis-finance'] = (() => {
     if (!XLSX) return H.fail(new Error('Could not load the Excel library — check the internet connection'));
     const cols = [...R.columns.filter((c) => !c.missing), ...(R.consolidated ? [R.consolidated] : [])];
     const wb = XLSX.utils.book_new();
-    const title = `${H.fmtDate(R.from)} to ${H.fmtDate(R.to)}`;
+    const title = `${R.division ? R.division + ' — ' : ''}${H.fmtDate(R.from)} to ${H.fmtDate(R.to)}`;
     for (const key of ['P', 'C', 'R']) {
       const withData = cols.filter((c) => c[key]);
       if (!withData.length) continue;
@@ -175,7 +187,7 @@ window.Pages['mis-finance'] = (() => {
       const aoa = [[`${STMT[key]} — ${title}`], [], ['Particulars', ...withData.map((c) => c.division)]];
       lines.forEach((ln, i) => {
         if (ln[0] === 'h') { aoa.push([ln[1]]); return; }
-        aoa.push([ln[1], ...withData.map((c) => {
+        aoa.push([(ln[0] === 'd' ? '    ' : '') + ln[1], ...withData.map((c) => {
           const v = c[key][i]?.[2];
           if (v == null) return '';
           return (key === 'R' || ln[0] === 'pct') ? Math.round(v * 100) / 100 : Math.round(v);
@@ -185,7 +197,7 @@ window.Pages['mis-finance'] = (() => {
       ws['!cols'] = [{ wch: 50 }, ...withData.map(() => ({ wch: 16 }))];
       XLSX.utils.book_append_sheet(wb, ws, STMT[key].replace(/[&]/g, 'and'));
     }
-    XLSX.writeFile(wb, `MIS Financials ${R.from} to ${R.to}.xlsx`);
+    XLSX.writeFile(wb, `MIS Financials ${R.division ? R.division + ' ' : ''}${R.from} to ${R.to}.xlsx`);
   }
 
   /* ── Uploads ──────────────────────────────────────────────────────── */
@@ -203,6 +215,7 @@ window.Pages['mis-finance'] = (() => {
   }
 
   let _sheet = null;      // rows of the chosen file
+  let _sheetName = '';    // which worksheet, when the workbook has several
   let _preview = null;
 
   function uploadForm() {
@@ -216,7 +229,8 @@ window.Pages['mis-finance'] = (() => {
             <input id="mu-file" type="file" accept=".xlsx,.xls,.xlsm,.csv" style="${H.CONTROL}padding:6px;" /></div>`
         + H.field('mu-from', 'Period From', '', { type: 'date', required: true })
         + H.field('mu-to', 'Period To', '', { type: 'date', required: true })
-        + H.field('mu-stock', 'Closing Stock (₹) — only if the Trial Balance does not show it', '', { type: 'number', step: '0.01', span: 2, hint: 'Leave blank to use Stock-in-Hand from the file' }),
+        + H.field('mu-stock', 'Closing Stock (₹) — for this period', '', { type: 'number', step: '0.01', hint: 'Tally\'s Trial Balance shows only the Opening Stock — type the closing stock (as in the old “Closing Stock (INPUT)”)' })
+        + `<div id="mu-stock2-wrap" style="display:none;">${H.field('mu-stock2', 'Closing Stock (₹) — comparative period', '', { type: 'number', step: '0.01', hint: 'For the last-year columns in the same file' })}</div>`,
       )}
       <div id="mu-preview" style="margin-top:14px;"></div>`,
       confirmText: 'Save Upload',
@@ -230,22 +244,31 @@ window.Pages['mis-finance'] = (() => {
             const XLSX = await Utils.loadXlsx();
             if (!XLSX) throw new Error('Could not load the Excel library — check the internet connection');
             const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
-            const ws = wb.Sheets[wb.SheetNames[0]];
-            _sheet = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+            // raw:false keeps the cell text as Tally formats it — "2,63,711.00 Cr" —
+            // which is where the Dr / Cr side lives.
+            const sheets = wb.SheetNames.map((name) => ({ name, rows: XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: '' }) }));
+            const has = (rows, re) => rows.slice(0, 15).some((r) => (r || []).some((c) => re.test(String(c ?? '').trim())));
+            const pick = sheets.find((x) => has(x.rows, /^particulars$/i) && (has(x.rows, /^trial balance$/i) || /trial|tb\b/i.test(x.name)))
+              || sheets.find((x) => has(x.rows, /^particulars$/i));
+            if (!pick) throw new Error('No sheet in this file has a “Particulars” column — is it the Trial Balance export?');
+            _sheet = pick.rows;
+            _sheetName = wb.SheetNames.length > 1 ? pick.name : '';
             await runPreview();
           } catch (err) { box.innerHTML = `<div class="mf-warn">${esc(err.message)}</div>`; _sheet = null; }
         });
       },
       onConfirm: async () => {
         if (!_sheet) throw new Error('Choose the Trial Balance file');
+        if (_preview?.needsClosingStock && !H.val('mu-stock')
+          && !(await Utils.showConfirm('The Trial Balance has no closing stock. Save without it? The Gross Profit will be wrong until you upload again with the closing stock.', { title: 'Closing stock', confirmText: 'Save anyway' }))) return;
         const body = {
-          division: H.val('mu-div'), from: H.val('mu-from'), to: H.val('mu-to'), closing_stock: H.val('mu-stock'),
+          division: H.val('mu-div'), from: H.val('mu-from'), to: H.val('mu-to'), closing_stock: H.val('mu-stock'), closing_stock_prev: H.val('mu-stock2'),
           file_name: document.getElementById('mu-file').files[0]?.name || '', sheet: _sheet, mappings: pickedMappings(),
         };
         if (!body.from || !body.to) throw new Error('Enter the period');
-        await H.post('/api/mis-finance/uploads', body);
+        const r = await H.post('/api/mis-finance/uploads', body);
         H.closeModal('mf-form');
-        H.toast(`${body.division} Trial Balance saved`);
+        H.toast(`${body.division} Trial Balance saved${r.comparative === 'saved' ? ` — the comparative ${periodLabel(r.comparativePeriod.from, r.comparativePeriod.to)} too` : ''}`);
         _period = `${body.from}|${body.to}`;
         _tab = 'reports';
         await refresh();
@@ -274,9 +297,13 @@ window.Pages['mis-finance'] = (() => {
     const warn = [];
     if (Math.abs(p.diffClose) > 0.5) warn.push(`The rows read do not tally: closing Dr − Cr = ₹ ${H.inr0(p.diffClose)}. A row may be counted twice or missing — check the tree below.`);
     if (!p.hasOpening) warn.push('No opening balance column — the Cash Flow will use the previous period\'s upload for this division if there is one.');
+    if (p.needsClosingStock) warn.push('This Trial Balance shows only the Opening Stock — enter the Closing Stock above.');
+    const w2 = document.getElementById('mu-stock2-wrap');
+    if (w2) w2.style.display = p.comparative ? '' : 'none';
     box.innerHTML = `
       <div class="mf-note">${p.company ? `<b>${esc(p.company)}</b> · ` : ''}${p.rows.length} rows · ${p.rows.filter((r) => r.leaf).length} ledgers counted
-        ${p.period ? ` · period ${esc(periodLabel(p.period.from, p.period.to))}` : ''}${p.hasOpening ? ' · opening + closing' : ' · closing only'}</div>
+        ${p.period ? ` · period ${esc(periodLabel(p.period.from, p.period.to))}` : ''}${p.hasOpening ? ' · opening + closing' : ' · closing only'}${_sheetName ? ` · sheet “${esc(_sheetName)}”` : ''}
+        ${p.comparative ? `<br>Also has <b>${esc(periodLabel(p.comparative.period.from, p.comparative.period.to))}</b> — saved as that period too (if it is not uploaded yet), for the last-year comparison.` : ''}</div>
       ${warn.map((w) => `<div class="mf-warn">${esc(w)}</div>`).join('')}
       ${p.unmapped.length ? `<div style="font-weight:700;font-size:12.5px;margin:6px 0;">Map these ${p.unmapped.length} ledger${p.unmapped.length === 1 ? '' : 's'} (remembered for next time)</div>
         ${H.table(['Ledger', { label: 'Closing (Dr − Cr)', align: 'right' }, 'Report head'],
@@ -329,6 +356,7 @@ window.Pages['mis-finance'] = (() => {
     document.querySelectorAll('[data-mf-tab]').forEach((b) => b.addEventListener('click', () => { _tab = b.getAttribute('data-mf-tab'); render(); }));
     $('mf-up')?.addEventListener('click', uploadForm);
     $('mf-period')?.addEventListener('change', (e) => { _period = e.target.value; render(); });
+    $('mf-div')?.addEventListener('change', (e) => { _div = e.target.value; render(); });
     document.querySelectorAll('[data-stmt]').forEach((b) => b.addEventListener('click', () => { _stmt = b.getAttribute('data-stmt'); render(); }));
     $('mf-xlsx')?.addEventListener('click', () => downloadXlsx().catch(H.fail));
     document.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {

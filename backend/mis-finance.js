@@ -111,7 +111,7 @@ const TALLY = {
 // from nesting one primary group inside the one above it).
 const PRIMARY = new Set(['capital account', 'loans liability', 'current liabilities', 'fixed assets', 'investments', 'current assets',
   'branch divisions', 'misc expenses asset', 'suspense a c', 'sales accounts', 'purchase accounts', 'direct incomes', 'direct expenses',
-  'indirect incomes', 'indirect expenses', 'opening stock', 'profit & loss a c', 'difference in opening balances']);
+  'indirect incomes', 'indirect expenses', 'profit & loss a c', 'difference in opening balances']);
 
 // Ledger-name rules inside expense / income groups.
 function ruleHead(name, parentHead) {
@@ -120,8 +120,8 @@ function ruleHead(name, parentHead) {
   if (expense) {
     if (/depreciation/.test(n)) return 'depreciation';
     if (/income\s*tax|provision for tax|current tax|deferred tax/.test(n)) return 'tax';
-    if (/interest|bank charge|finance charge|processing fee|loan charge|bank commission/.test(n)) return 'finance_cost';
-    if (/salar|wage|labou?r|bonus|provident|\bp\.?\s?f\b|e\.?s\.?i|gratuity|staff welfare|leave encash|stipend|incentive to staff/.test(n)) {
+    if (/interest|bank charge|financ(e|ial) (charge|exp|cost)|processing fee|loan charge|bank commission/.test(n)) return 'finance_cost';
+    if (/salar|wage|labou?r|bonus|employee|provident|\bp\.?\s?f\b|e\.?s\.?i|gratuity|staff welfare|leave encash|stipend|incentive to staff/.test(n)) {
       return parentHead === 'direct_exp' || parentHead === 'purchases' ? 'direct_wages' : 'employee_cost';
     }
   }
@@ -174,55 +174,63 @@ function parseTrialBalance(sheet) {
   const hr = rows.findIndex((r) => r.some((c) => /^particulars$/i.test(cellText(c))));
   if (hr < 0) throw new Error('Could not find the "Particulars" column — upload the Trial Balance exactly as Tally exports it');
   const pc = rows[hr].findIndex((c) => /^particulars$/i.test(cellText(c)));
-  const company = rows.slice(0, hr + 1).map((r) => r.map(cellText).filter(Boolean).join(' ')).find((t) => t && !/trial balance|particulars/i.test(t)) || '';
-  const headText = rows.slice(0, hr + 6).map((r) => r.map(cellText).join(' ')).join(' ');
-  const period = findPeriod(headText);
+  const company = rows.slice(0, hr + 1).map((r) => r.map(cellText).filter(Boolean).join(' ')).find((t) => t && !/trial balance|particulars|^udyam|^cin\b/i.test(t)) || '';
 
-  // The Debit / Credit header row (within a few rows of Particulars).
-  let dc = -1;
-  for (let i = hr; i < Math.min(rows.length, hr + 8); i++) {
-    if (rows[i].some((c, j) => j > pc && /^(debit|dr\.?)$/i.test(cellText(c)))) { dc = i; break; }
-  }
-  const width = Math.max(...rows.slice(hr, hr + 8).map((r) => r.length));
-  // Header label per column = the rows above, carried right across merged cells.
-  const label = (c, upto) => {
+  // First data row: a name under Particulars and an amount beside it.
+  let ds = hr + 1;
+  while (ds < rows.length && !(cellText(rows[ds][pc]) && rows[ds].some((v, j) => j > pc && amount(v)))) ds++;
+  if (ds >= rows.length) throw new Error('No ledger / group rows found under Particulars');
+  const top = Math.max(0, hr - 2);   // Tally puts the company / period a row or two above Particulars
+  const width = Math.max(...rows.slice(top, ds + 5).map((r) => r.length));
+  // Header label per column = the header rows, carried right across merged cells.
+  const label = (c) => {
     const parts = [];
-    for (let i = hr; i < upto; i++) {
+    for (let i = top; i < ds; i++) {
       let j = c;
       while (j > pc && !cellText(rows[i][j])) j--;
       const t = j > pc ? cellText(rows[i][j]) : '';
       if (t && !parts.includes(t)) parts.push(t);
     }
-    return parts.join(' ').toLowerCase();
+    return parts.join(' ');
   };
-  const kindOf = (l) => (/opening/.test(l) ? 'open' : /closing/.test(l) ? 'close' : /transaction|during/.test(l) ? 'txn' : null);
+  const kindOf = (l) => (/opening/i.test(l) ? 'open' : /closing/i.test(l) ? 'close' : /transaction|during|nett?\b/i.test(l) ? 'txn' : null);
+  const sideOf = (t) => (/^(debit|dr\.?)$/i.test(t) ? 'dr' : /^(credit|cr\.?)$/i.test(t) ? 'cr' : null);
 
-  const cols = [];   // { c, kind, side }
-  if (dc >= 0) {
-    for (let c = pc + 1; c < width; c++) {
-      const t = cellText(rows[dc][c]);
-      const side = /^(debit|dr\.?)$/i.test(t) ? 'dr' : /^(credit|cr\.?)$/i.test(t) ? 'cr' : null;
-      if (side) cols.push({ c, side, kind: kindOf(label(c, dc)) });
-    }
-    const pairs = cols.filter((x) => x.side === 'dr').length;
-    // Unlabelled pairs: one → closing; three → opening, transactions, closing; two → opening, closing.
-    const order = pairs === 1 ? ['close'] : pairs === 3 ? ['open', 'txn', 'close'] : ['open', 'close'];
-    let k = -1;
-    cols.forEach((x) => { if (x.side === 'dr') k++; if (!x.kind) x.kind = order[Math.min(k, order.length - 1)] || 'close'; });
-  } else {
-    // One column per balance with a Dr / Cr suffix.
-    for (let c = pc + 1; c < width; c++) {
-      const kind = kindOf(label(c, hr + 4));
-      if (kind) cols.push({ c, side: 'net', kind });
-    }
-    if (!cols.length) {
-      const c = rows.slice(hr + 1).reduce((best, r) => best ?? r.findIndex((v, j) => j > pc && amount(v)), null);
-      if (c != null && c > pc) cols.push({ c, side: 'net', kind: 'close' });
-    }
+  // Columns that carry amounts, each with its kind and side ('net' = one
+  // column with a Dr / Cr suffix, as Tally writes it).
+  const cols = [];
+  for (let c = pc + 1; c < width; c++) {
+    if (!rows.slice(ds, ds + 400).some((r) => amount(r[c]))) continue;
+    const l = label(c);
+    let side = null;
+    for (let i = top; i < ds; i++) side = side || sideOf(cellText(rows[i][c]));
+    cols.push({ c, side: side || 'net', kind: kindOf(l), label: l });
   }
-  const closeCols = cols.filter((x) => x.kind === 'close');
-  if (!closeCols.length) throw new Error('Could not find the closing balance columns (Debit / Credit) in the sheet');
-  const openCols = cols.filter((x) => x.kind === 'open');
+  if (!cols.length) throw new Error('Could not find the balance columns in the sheet');
+
+  // Split into period blocks (Tally can put a comparative period alongside):
+  // a block ends when a (kind, side) it already has turns up again.
+  const blocks = [];
+  let cur = null;
+  for (const x of cols) {
+    const key = `${x.kind}|${x.side}`;
+    if (!cur || (x.kind && cur.keys.has(key))) { cur = { cols: [], keys: new Set() }; blocks.push(cur); }
+    cur.cols.push(x); cur.keys.add(key);
+  }
+  for (const bl of blocks) {
+    // Unlabelled columns: one balance → closing; with Dr / Cr pairs the same rule per pair.
+    const unl = bl.cols.filter((x) => !x.kind);
+    if (unl.length) {
+      const groups = bl.cols.filter((x) => x.side !== 'cr').length;
+      const order = groups <= 1 ? ['close'] : groups === 3 ? ['open', 'txn', 'close'] : ['open', 'close'];
+      let k = -1;
+      bl.cols.forEach((x) => { if (x.side !== 'cr') k++; if (!x.kind) x.kind = order[Math.min(k, order.length - 1)]; });
+    }
+    bl.period = findPeriod(bl.cols.map((x) => x.label).join(' '));
+  }
+  const usable = blocks.filter((bl) => bl.cols.some((x) => x.kind === 'close'));
+  if (!usable.length) throw new Error('Could not find the closing balance columns in the sheet');
+  if (!usable[0].period) usable[0].period = findPeriod(rows.slice(0, ds).map((r) => r.map(cellText).join(' ')).join(' '));
 
   const net = (r, list) => {
     let v = 0, any = false;
@@ -230,28 +238,42 @@ function parseTrialBalance(sheet) {
       const a = amount(r[x.c]);
       if (!a) continue;
       any = true;
-      if (x.side === 'dr') v += Math.abs(a.v) * (a.v < 0 ? -1 : 1);
-      else if (x.side === 'cr') v -= Math.abs(a.v) * (a.v < 0 ? -1 : 1);
+      if (x.side === 'dr') v += a.v;
+      else if (x.side === 'cr') v -= a.v;
       else v += a.side === 'cr' ? -Math.abs(a.v) : a.side === 'dr' ? Math.abs(a.v) : a.v;
     }
     return any ? round2(v) : null;
   };
 
-  const out = [];
-  let grand = null;
-  for (let i = Math.max(hr, dc) + 1; i < rows.length; i++) {
-    const r = rows[i];
-    const raw = String(r[pc] ?? '');
-    const name = raw.trim();
-    if (!name) continue;
-    const close = net(r, closeCols);
-    const open = openCols.length ? net(r, openCols) : null;
-    if (/^grand\s*total$|^total$/i.test(name)) { grand = { close, open }; break; }
-    if (close == null && open == null) continue;   // a heading line
-    out.push({ name: name.slice(0, 200), indent: raw.length - raw.trimStart().length, close: close ?? 0, open: open ?? 0 });
-  }
-  if (!out.length) throw new Error('No ledger / group rows found under Particulars');
-  return { company: company.slice(0, 255), period, hasOpening: openCols.length > 0, rows: buildTree(out), grand };
+  const periods = usable.slice(0, 2).map((bl) => {
+    const closeCols = bl.cols.filter((x) => x.kind === 'close');
+    const openCols = bl.cols.filter((x) => x.kind === 'open');
+    const out = [];
+    let grand = null;
+    for (let i = ds; i < rows.length; i++) {
+      const r = rows[i];
+      const raw = String(r[pc] ?? '');
+      const name = raw.trim();
+      if (!name) continue;
+      const close = net(r, closeCols);
+      const open = openCols.length ? net(r, openCols) : null;
+      if (/^grand\s*total$|^total$/i.test(name)) { grand = { close, open }; break; }
+      if (close == null && open == null) continue;   // a heading line, or a row empty in this period
+      out.push({ name: name.slice(0, 200), indent: raw.length - raw.trimStart().length, close: close ?? 0, open: open ?? 0 });
+    }
+    return { period: bl.period, hasOpening: openCols.length > 0, rows: out.length ? buildTree(out) : [], grand };
+  }).filter((p) => p.rows.length);
+  if (!periods.length) throw new Error('No ledger / group rows found under Particulars');
+  return { company: company.slice(0, 255), ...periods[0], comparative: periods[1] || null };
+}
+
+/* Which worksheet of a workbook is the Trial Balance: the one that says
+   so near the top and has a Particulars column; else the first with
+   Particulars. `sheets` = [{ name, rows }]. */
+function pickTrialBalance(sheets) {
+  const has = (rows, re) => rows.slice(0, 15).some((r) => (r || []).some((c) => re.test(String(c ?? '').trim())));
+  return sheets.find((s) => has(s.rows, /^particulars$/i) && (has(s.rows, /^trial balance$/i) || /trial|tb\b/i.test(s.name)))
+    || sheets.find((s) => has(s.rows, /^particulars$/i)) || null;
 }
 
 /* Hierarchy: Tally puts a group's total on its own row and its members
@@ -322,7 +344,7 @@ function assignHeads(rows, map) {
 
 function headTotals(rows, map) {
   const { head, src } = assignHeads(rows, map);
-  const close = {}, open = {};
+  const close = {}, open = {}, detail = {};
   const unmapped = [];
   let sumClose = 0, sumOpen = 0;
   rows.forEach((r, i) => {
@@ -333,8 +355,15 @@ function headTotals(rows, map) {
     if (h === 'ignore') return;
     close[h] = round2((close[h] || 0) + r.close);
     open[h] = round2((open[h] || 0) + r.open);
+    // Ledger lines under each P&L head, for the detailed P&L.
+    if (HEAD[h].pl) {
+      const k = norm(r.name);
+      detail[h] = detail[h] || {};
+      const d = (detail[h][k] = detail[h][k] || { name: r.name, close: 0, open: 0 });
+      d.close = round2(d.close + r.close); d.open = round2(d.open + r.open);
+    }
   });
-  return { close, open, unmapped, head, src, diffClose: round2(sumClose), diffOpen: round2(sumOpen) };
+  return { close, open, detail, unmapped, head, src, diffClose: round2(sumClose), diffOpen: round2(sumOpen) };
 }
 
 /* ── Statements ─────────────────────────────────────────────────────── */
@@ -342,8 +371,24 @@ function headTotals(rows, map) {
 const daysBetween = (from, to) => Math.round((new Date(to + 'T00:00:00Z') - new Date(from + 'T00:00:00Z')) / 86400000) + 1;
 const div0 = (a, b) => (Math.abs(b) < 0.005 ? null : a / b);
 
-// t = { close:{head:net}, open:{head:net}, hasOpening, unmapped, diff… }
-function statements(t, from, to) {
+// Ledger names per P&L head across several columns, so every column's
+// detailed P&L has the same lines in the same order.
+const DETAIL_HEADS = ['revenue', 'direct_income', 'purchases', 'direct_exp', 'direct_wages', 'other_income', 'interest_income',
+  'employee_cost', 'indirect_exp', 'depreciation', 'finance_cost', 'tax'];
+function detailNames(list) {
+  const out = {};
+  for (const h of DETAIL_HEADS) {
+    const seen = new Map();
+    for (const t of list) for (const [k, d] of Object.entries(t.detail?.[h] || {})) if (!seen.has(k)) seen.set(k, d.name);
+    // One ledger that is the whole head adds nothing.
+    if (seen.size > 1) out[h] = [...seen.entries()];
+  }
+  return out;
+}
+
+// t = { close:{head:net}, open:{head:net}, detail, hasOpening, unmapped, diff… }
+// names = detailNames([...]) to list ledgers under the P&L heads.
+function statements(t, from, to, names = {}) {
   const v = (h, which = 'close') => { const x = (t[which][h] || 0); return HEAD[h].side === 'cr' ? -x : x; };
   // Nominal accounts: the period's own movement when the opening is known.
   const pl = (h) => round2(v(h) - (t.hasOpening ? v(h, 'open') : 0));
@@ -351,11 +396,17 @@ function statements(t, from, to) {
   const chg = (h) => round2(v(h) - v(h, 'open'));
 
   const revenue = pl('revenue') + pl('direct_income');
-  // Stock-in-Hand's own opening is the stock on the period's first day; the
-  // separate "Opening Stock" line Tally shows is the year's opening, used
-  // only when the file has no opening column.
-  const openingStock = t.hasOpening && t.open.stock != null ? v('stock', 'open') : (t.close.opening_stock != null ? v('opening_stock') : 0);
+  // Stock. Tally's Trial Balance usually shows only an "Opening Stock" line
+  // (the year's opening, under Current Assets) and no closing stock — that
+  // is typed on the upload ("Closing Stock (INPUT)" in the old sheet) and
+  // arrives here as close.stock. The stock on the period's first day is a
+  // Stock-in-Hand opening (from the file, or the previous upload's closing
+  // stock), else that Opening Stock line.
+  const hasOpenLine = t.close.opening_stock != null;
+  const openingStock = t.open.stock != null && (t.open.stock !== 0 || !hasOpenLine)
+    ? v('stock', 'open') : (hasOpenLine ? v('opening_stock') : 0);
   const closingStock = bal('stock');
+  const stockMissing = t.close.stock == null && hasOpenLine;
   const cogs = openingStock + pl('purchases') + pl('direct_exp') + pl('direct_wages') - closingStock;
   const gp = revenue - cogs;
   const otherInc = pl('other_income') + pl('interest_income');
@@ -367,30 +418,41 @@ function statements(t, from, to) {
   const pat = pbt - tax;
   const r2 = (x) => round2(x);
 
+  // A head line followed by its ledgers (when there are several).
+  const withDetail = (h, label, value) => {
+    const out = [[h, label, r2(value)]];
+    for (const [k, name] of names[h] || []) {
+      const d = t.detail?.[h]?.[k];
+      const x = d ? (HEAD[h].side === 'cr' ? -1 : 1) * (d.close - (t.hasOpening ? d.open : 0)) : 0;
+      out.push(['d', name, r2(x)]);
+    }
+    return out;
+  };
   const P = [
+    ...(stockMissing ? [['warn', 'Closing stock not entered on the upload — Gross Profit is wrong until it is', null]] : []),
     ['h', 'Revenue'],
-    ['revenue', 'Sales / Revenue', r2(pl('revenue'))],
-    ['direct_income', 'Direct Income', r2(pl('direct_income'))],
+    ...withDetail('revenue', 'Sales / Revenue', pl('revenue')),
+    ...withDetail('direct_income', 'Direct Income', pl('direct_income')),
     ['t', 'Revenue from Operations', r2(revenue)],
     ['h', 'Cost of Goods Sold'],
     ['opening_stock', 'Opening Stock', r2(openingStock)],
-    ['purchases', 'Purchases', r2(pl('purchases'))],
-    ['direct_exp', 'Direct Expenses', r2(pl('direct_exp'))],
-    ['direct_wages', 'Wages / Labour (Direct)', r2(pl('direct_wages'))],
+    ...withDetail('purchases', 'Purchases', pl('purchases')),
+    ...withDetail('direct_exp', 'Direct Expenses', pl('direct_exp')),
+    ...withDetail('direct_wages', 'Wages / Labour (Direct)', pl('direct_wages')),
     ['stock', 'Less: Closing Stock', r2(-closingStock)],
     ['t', 'Cost of Goods Sold', r2(cogs)],
     ['T', 'Gross Profit', r2(gp)],
     ['pct', 'Gross Profit %', div0(gp * 100, revenue)],
-    ['other_income', 'Other Income', r2(pl('other_income'))],
-    ['interest_income', 'Interest Income', r2(pl('interest_income'))],
-    ['employee_cost', 'Salary & Staff Cost', r2(pl('employee_cost'))],
-    ['indirect_exp', 'Other Indirect Expenses', r2(pl('indirect_exp'))],
+    ...withDetail('other_income', 'Other Income', pl('other_income')),
+    ...withDetail('interest_income', 'Interest Income', pl('interest_income')),
+    ...withDetail('employee_cost', 'Salary & Staff Cost', pl('employee_cost')),
+    ...withDetail('indirect_exp', 'Other Indirect Expenses', pl('indirect_exp')),
     ['T', 'EBITDA', r2(ebitda)],
     ['pct', 'EBITDA %', div0(ebitda * 100, revenue)],
-    ['depreciation', 'Depreciation', r2(dep)],
-    ['finance_cost', 'Interest & Finance Cost', r2(fin)],
+    ...withDetail('depreciation', 'Depreciation', dep),
+    ...withDetail('finance_cost', 'Interest & Finance Cost', fin),
     ['T', 'Profit Before Tax', r2(pbt)],
-    ['tax', 'Income Tax', r2(tax)],
+    ...withDetail('tax', 'Income Tax', tax),
     ['T', 'Net Profit', r2(pat)],
     ['pct', 'Net Profit %', div0(pat * 100, revenue)],
   ];
@@ -400,7 +462,7 @@ function statements(t, from, to) {
   if (t.hasOpening) {
     const wc = [
       ['debtors', '(Increase) / Decrease in Sundry Debtors', -chg('debtors')],
-      ['stock', '(Increase) / Decrease in Stock', -chg('stock')],
+      ['stock', '(Increase) / Decrease in Inventories', -(closingStock - openingStock)],
       ['loans_adv', '(Increase) / Decrease in Loans, Advances & Deposits', -chg('loans_adv')],
       ['other_ca', '(Increase) / Decrease in Other Current Assets', -(chg('other_ca') + chg('misc_asset'))],
       ['creditors', 'Increase / (Decrease) in Sundry Creditors', chg('creditors')],
@@ -418,13 +480,15 @@ function statements(t, from, to) {
     const od = chg('bank_od');
     const cap = chg('capital') + chg('pl_account');
     const cff = cap + loans + od - fin;
-    // Opening stock entered as its own Tally line is a P&L figure, not a
-    // movement; branch / suspense / unmapped movements are shown as they are.
-    const other = -(chg('branch') + chg('suspense')) - t.unmapped.reduce((a, u) => a + (u.close - u.open), 0);
+    // Inter-division (Branch / Divisions) transfers sit between the period's
+    // cash flow and the closing balance, as in the old sheet; suspense and
+    // unmapped ledgers likewise.
+    const branch = -chg('branch');
+    const other = -chg('suspense') - t.unmapped.reduce((a, u) => a + (u.close - u.open), 0);
     const openCash = v('cash', 'open') + v('bank', 'open');
     const closeCash = bal('cash') + bal('bank');
-    const net = cfo + cfi + cff + other;
-    const unrec = (closeCash - openCash) - net;
+    const net = cfo + cfi + cff;
+    const unrec = (closeCash - openCash) - (net + branch + other);
     C = [
       ['h', 'A. Cash Flow from Operating Activities'],
       ['', 'Net Profit Before Tax', r2(pbt)],
@@ -446,19 +510,25 @@ function statements(t, from, to) {
       ['bank_od', 'Increase / (Decrease) in Bank OD / CC', r2(od)],
       ['finance_cost', 'Interest Paid', r2(-fin)],
       ['T', 'Net Cash from Financing Activities (C)', r2(cff)],
-      ...(Math.abs(other) > 0.5 ? [['branch', 'Branch / Suspense / Unmapped Movements', r2(other)]] : []),
-      ['T', 'Net Increase / (Decrease) in Cash (A+B+C)', r2(net)],
+      ['T', 'Net Cash Inflow / (Outflow) during the Period (A+B+C)', r2(net)],
       ['', 'Opening Cash & Bank', r2(openCash)],
-      ['T', 'Closing Cash & Bank', r2(openCash + net)],
+      ['branch', 'Branch / Divisions (inter-division transfers)', r2(branch)],
+      ...(Math.abs(other) > 0.5 ? [['suspense', 'Suspense / Unmapped Ledgers', r2(other)]] : []),
+      ['T', 'Closing Cash & Bank', r2(openCash + net + branch + other)],
       ...(Math.abs(unrec) > 0.5 ? [['warn', 'Not reconciled with the closing Cash & Bank by', r2(unrec)]] : []),
       ...(Math.abs(t.diffClose || 0) > 0.5 || Math.abs(t.diffOpen || 0) > 0.5
         ? [['warn', 'Trial Balance in the file does not tally (Dr − Cr, closing)', r2(t.diffClose || 0)]] : []),
     ];
   }
 
-  // Ratios on closing balances.
-  const ca = bal('stock') + bal('debtors') + bal('cash') + bal('bank') + bal('loans_adv') + bal('other_ca');
-  const cl = bal('creditors') + bal('duties_taxes') + bal('provisions') + bal('other_cl') + bal('bank_od');
+  // Ratios on closing balances. Each current head counts on the side its
+  // balance is actually on — Duties & Taxes is often a debit (input credit
+  // not yet set off), and then it is an asset, not a liability.
+  let ca = closingStock, cl = 0;
+  for (const h of ['debtors', 'cash', 'bank', 'loans_adv', 'other_ca', 'creditors', 'duties_taxes', 'provisions', 'other_cl', 'bank_od']) {
+    const x = t.close[h] || 0;   // Dr − Cr
+    if (x > 0) ca += x; else cl -= x;
+  }
   const debt = bal('secured_loans') + bal('unsecured_loans') + bal('bank_od');
   const equity = bal('capital') + bal('pl_account') + pat;
   const days = daysBetween(from, to);
@@ -473,9 +543,9 @@ function statements(t, from, to) {
     ['x', 'Debt / Equity', div0(debt, equity)],
     ['x', 'Interest Coverage (EBIT / Interest)', div0(ebit, fin)],
     ['pct', 'Return on Capital Employed % (period)', div0(ebit * 100, equity + debt)],
-    ['d', 'Debtor Days', div0(bal('debtors') * days, revenue)],
-    ['d', 'Creditor Days', div0(bal('creditors') * days, purchases)],
-    ['d', 'Inventory Days', div0(closingStock * days, cogs)],
+    ['days', 'Debtor Days', div0(bal('debtors') * days, revenue)],
+    ['days', 'Creditor Days', div0(bal('creditors') * days, purchases)],
+    ['days', 'Inventory Days', div0(closingStock * days, cogs)],
     ['', 'Working Capital', r2(ca - cl)],
     ['', 'Total Borrowings', r2(debt)],
     ['', 'Net Worth', r2(equity)],
@@ -527,10 +597,14 @@ function mountMisFinance(app, ctx) {
   function previewOf(tb, map, extra = {}) {
     const merged = { ...map, ...extra };
     const t = headTotals(tb.rows, merged);
+    const c = tb.comparative;
     return {
       company: tb.company, period: tb.period, hasOpening: tb.hasOpening, grand: tb.grand,
       rows: tb.rows.map((r, i) => ({ name: r.name, close: r.close, open: r.open, leaf: r.leaf, depth: depth(tb.rows, i), head: t.head[i], src: t.src[i] })),
       unmapped: t.unmapped, diffClose: t.diffClose, diffOpen: t.diffOpen,
+      // The Opening Stock line with no closing stock in the file: ask for it.
+      needsClosingStock: t.close.opening_stock != null && t.close.stock == null,
+      comparative: c && c.period ? { period: c.period, hasOpening: c.hasOpening, rows: c.rows.length, diffClose: headTotals(c.rows, merged).diffClose } : null,
     };
   }
   const depth = (rows, i) => { let d = 0; let p = rows[i].parent; while (p >= 0 && d < 20) { d++; p = rows[p].parent; } return d; };
@@ -565,11 +639,7 @@ function mountMisFinance(app, ctx) {
     const to = ISO.test(b.to || '') ? b.to : bad('Enter the period To date');
     if (to < from) bad('The To date is before the From date');
     const tb = parse(b.sheet);
-    let closingStock = null;
-    if (b.closing_stock !== '' && b.closing_stock != null) {
-      closingStock = Number(String(b.closing_stock).replace(/[,₹\s]/g, ''));
-      if (!Number.isFinite(closingStock) || closingStock < 0) bad('Closing stock must be a positive number');
-    }
+    const closingStock = stockIn(b.closing_stock, 'Closing stock');
     const extra = cleanMap(b.mappings);
     if (Object.keys(extra).length) await writeCfg(CFG.map, { ...(await mapping()), ...extra });
     const rowsJson = JSON.stringify(tb.rows.map(({ name, close, open, parent, leaf }) => ({ name, close, open, parent, leaf })));
@@ -580,13 +650,40 @@ function mountMisFinance(app, ctx) {
              ON CONFLICT (division, period_from, period_to) DO UPDATE SET file_name=$10, company=$11, has_opening=$12, closing_stock=$13, rows_json=$14, uploaded_by=$15, created_at=NOW()`,
       [division, from, to, fileName, tb.company, tb.hasOpening ? 1 : 0, closingStock, rowsJson, by,
         fileName, tb.company, tb.hasOpening ? 1 : 0, closingStock, rowsJson, by]);
-    return { ok: true };
+
+    // The comparative period Tally exported alongside (usually the same
+    // months last year) is saved too — but never over an upload of its own.
+    let comparative = null;
+    const c = tb.comparative;
+    if (c && c.period && !(c.period.from === from && c.period.to === to)) {
+      const prevStock = stockIn(b.closing_stock_prev, 'Closing stock of the comparative period');
+      const exists = (await q('SELECT id, closing_stock FROM mis_tb_uploads WHERE division = $1 AND period_from = $2 AND period_to = $3',
+        [division, c.period.from, c.period.to]))[0];
+      if (!exists) {
+        await q(`INSERT INTO mis_tb_uploads (division, period_from, period_to, file_name, company, has_opening, closing_stock, rows_json, uploaded_by)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [division, c.period.from, c.period.to, (fileName + ' (comparative)').slice(0, 255), tb.company, c.hasOpening ? 1 : 0, prevStock,
+            JSON.stringify(c.rows.map(({ name, close, open, parent, leaf }) => ({ name, close, open, parent, leaf }))), by]);
+        comparative = 'saved';
+      } else {
+        if (prevStock != null && exists.closing_stock == null) await q('UPDATE mis_tb_uploads SET closing_stock = $1 WHERE id = $2', [prevStock, exists.id]);
+        comparative = 'exists';
+      }
+    }
+    return { ok: true, comparative, comparativePeriod: c?.period || null };
   }));
 
   app.delete('/api/mis-finance/uploads/:id', requireAuth, route(async (req) => {
     await q('DELETE FROM mis_tb_uploads WHERE id = $1', [Number(req.params.id)]);
     return { ok: true };
   }));
+
+  function stockIn(v, label) {
+    if (v === '' || v == null) return null;
+    const n = Number(String(v).replace(/[,₹\s]/g, ''));
+    if (!Number.isFinite(n) || n < 0) bad(`${label} must be a positive number`);
+    return round2(n);
+  }
 
   const prevDay = (iso) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); };
 
@@ -613,12 +710,25 @@ function mountMisFinance(app, ctx) {
         t.openingFrom = `${prev.division} ${dOut(prev.period_from)} → ${dOut(prev.period_to)}`;
       }
     }
+    // Stock on the first day = the closing stock typed on the upload that
+    // ends the day before (Tally's own Opening Stock line is the year's).
+    if (t.open.stock == null) {
+      const prev = all.find((x) => x.division === u.division && dOut(x.period_to) === prevDay(dOut(u.period_from)) && x.closing_stock != null);
+      if (prev) t.open.stock = round2(Number(prev.closing_stock));
+    }
     return t;
   }
   function addTotals(list) {
-    const sum = { close: {}, open: {}, unmapped: [], hasOpening: list.every((t) => t.hasOpening), diffClose: 0, diffOpen: 0 };
+    const sum = { close: {}, open: {}, detail: {}, unmapped: [], hasOpening: list.every((t) => t.hasOpening), diffClose: 0, diffOpen: 0 };
     for (const t of list) {
       for (const w of ['close', 'open']) for (const [k, x] of Object.entries(t[w])) sum[w][k] = round2((sum[w][k] || 0) + x);
+      for (const [h, m] of Object.entries(t.detail || {})) {
+        for (const [k, d] of Object.entries(m)) {
+          sum.detail[h] = sum.detail[h] || {};
+          const x = (sum.detail[h][k] = sum.detail[h][k] || { name: d.name, close: 0, open: 0 });
+          x.close = round2(x.close + d.close); x.open = round2(x.open + d.open);
+        }
+      }
       sum.unmapped.push(...t.unmapped);
       sum.diffClose = round2(sum.diffClose + t.diffClose);
       sum.diffOpen = round2(sum.diffOpen + t.diffOpen);
@@ -626,25 +736,68 @@ function mountMisFinance(app, ctx) {
     return sum;
   }
 
+  // Same dates a year earlier (29 Feb → 28 Feb).
+  const lastYear = (iso) => {
+    const [y, m, d] = iso.split('-').map(Number);
+    const last = new Date(Date.UTC(y - 1, m, 0)).getUTCDate();
+    return `${y - 1}-${String(m).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`;
+  };
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const periodName = (from, to) => {
+    const f = from.split('-').map(Number), t = to.split('-').map(Number);
+    return `${MONTHS[f[1] - 1]}${f[0] !== t[0] ? "'" + String(f[0]).slice(2) : ''}-${MONTHS[t[1] - 1]}'${String(t[0]).slice(2)}`;
+  };
+  // A column of figures minus another, line by line (the lines match).
+  const minus = (a, b) => (a && b ? a.map((ln, i) => {
+    const x = ln[2], y = b[i]?.[2];
+    return ln.length < 3 ? ln : [ln[0], ln[1], x == null || y == null ? null : round2(x - y)];
+  }) : null);
+
   app.get('/api/mis-finance/report', requireAuth, route(async (req) => {
     const from = String(req.query.from || ''), to = String(req.query.to || '');
     if (!ISO.test(from) || !ISO.test(to)) bad('Choose the period');
     const map = await mapping();
     const all = await q('SELECT * FROM mis_tb_uploads');
     const divs = await divisions();
+    const find = (d, f, t2) => all.find((x) => x.division === d && dOut(x.period_from) === f && dOut(x.period_to) === t2);
+    const meta = (u, t) => ({ file_name: u.file_name, company: u.company, openingFrom: t.openingFrom, diffClose: t.diffClose, diffOpen: t.diffOpen, unmapped: t.unmapped.length });
+
+    // One division: this period, the same period last year and the change —
+    // the layout of the old Profitability sheet.
+    const division = String(req.query.division || '');
+    if (division) {
+      if (!divs.includes(division)) bad('Unknown division');
+      const u = find(division, from, to);
+      if (!u) bad(`${division} has no upload for this period`);
+      const pf = lastYear(from), pt = lastYear(to);
+      const pu = find(division, pf, pt);
+      const t = await totalsFor(u, map, all);
+      const pt2 = pu ? await totalsFor(pu, map, all) : null;
+      const names = detailNames(pt2 ? [t, pt2] : [t]);
+      const cur = { division: periodName(from, to), ...meta(u, t), ...statements(t, from, to, names) };
+      const columns = [cur];
+      if (pt2) {
+        const prev = { division: periodName(pf, pt), ...meta(pu, pt2), ...statements(pt2, pf, pt, names) };
+        columns.push(prev, { division: 'Change', change: true, P: minus(cur.P, prev.P), C: minus(cur.C, prev.C), R: minus(cur.R, prev.R) });
+      }
+      return { from, to, days: daysBetween(from, to), division, compare: pu ? { from: pf, to: pt } : null, columns, consolidated: null };
+    }
+
     const cols = [];
     const totals = [];
     for (const d of divs) {
-      const u = all.find((x) => x.division === d && dOut(x.period_from) === from && dOut(x.period_to) === to);
+      const u = find(d, from, to);
       if (!u) { cols.push({ division: d, missing: true }); continue; }
       const t = await totalsFor(u, map, all);
       totals.push(t);
-      cols.push({ division: d, file_name: u.file_name, company: u.company, openingFrom: t.openingFrom, diffClose: t.diffClose, diffOpen: t.diffOpen,
-        unmapped: t.unmapped.length, ...statements(t, from, to) });
+      cols.push({ division: d, u, t });
     }
     if (!totals.length) bad('Nothing is uploaded for this period yet');
-    const consolidated = totals.length > 1 ? { division: 'Consolidated', ...statements(addTotals(totals), from, to) } : null;
-    return { from, to, days: daysBetween(from, to), columns: cols, consolidated };
+    const sum = totals.length > 1 ? addTotals(totals) : null;
+    const names = detailNames(sum ? [...totals, sum] : totals);
+    const columns = cols.map((c) => (c.missing ? c : { division: c.division, ...meta(c.u, c.t), ...statements(c.t, from, to, names) }));
+    const consolidated = sum ? { division: 'Consolidated', ...statements(sum, from, to, names) } : null;
+    return { from, to, days: daysBetween(from, to), columns, consolidated };
   }));
 
   // Every ledger / group name seen in the uploads, with its current head.
@@ -693,4 +846,4 @@ function mountMisFinance(app, ctx) {
   return {};
 }
 
-module.exports = { MF_SCHEMA, mountMisFinance, parseTrialBalance, headTotals, statements, HEADS };
+module.exports = { MF_SCHEMA, mountMisFinance, parseTrialBalance, pickTrialBalance, headTotals, statements, detailNames, HEADS };
