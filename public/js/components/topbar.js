@@ -21,6 +21,7 @@ window.Topbar = {
     'hr-leave':     'Leave Management',
     'hr-payroll':   'Payroll',
     'hr-reports':   'HR Reports',
+    'hr-hiring':    'Hiring & Exit FMS',
   },
 
   _calendarIcon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;color:var(--border-strong);flex-shrink:0;">

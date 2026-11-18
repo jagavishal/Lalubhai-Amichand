@@ -59,6 +59,7 @@ window.Sidebar = {
     hrpayroll:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M9 10h6M9 13h4M11 10v6"/><path d="m13.5 13 2.5 3"/></svg>',
     hrreports:    '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="1"/><rect x="12" y="8" width="3" height="10" rx="1"/><rect x="17" y="5" width="3" height="13" rx="1"/></svg>',
     // Assets — a laptop, since electronics are most of the register.
+    hiring:       '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M19 8v6M16 11h6"/></svg>',
     hrassets:     '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="10" rx="1.5"/><path d="M2 19h20"/><path d="M9 19v-1.5h6V19"/></svg>',
     // Retail Dashboard — a plain bar chart, now an in-app page.
     retaildashboard: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="12" width="3" height="6" rx="0.5"/><rect x="12" y="8" width="3" height="10" rx="0.5"/><rect x="17" y="5" width="3" height="13" rx="0.5"/></svg>',
@@ -304,6 +305,12 @@ window.Sidebar = {
       // employee has a "my assets" answer worth seeing.
       { route: 'hr-assets',     label: 'Assets',          icon: 'hrassets', alwaysShow: true },
       { route: 'hr-reports',    label: 'HR Reports',      icon: 'hrreports',  adminOnly: true },
+      // Hiring → Onboarding → Exit FMS (backend/hiring.js). alwaysShow: anyone
+      // may raise a job request, interview, or submit their own notice; what
+      // each person sees inside is decided by the API. HR / management / dues
+      // clearers are set on the page's Settings; the 'hr-hiring' grant (Users
+      // → Access) makes a non-Admin a manager of it.
+      { route: 'hr-hiring',     label: 'Hiring & Exit FMS', icon: 'hiring', alwaysShow: true },
       // alwaysShow for the same reason as Company Tree: users permissioned
       // before this page existed have an explicit pages list that cannot
       // mention it, and the policy book is for everyone by definition.

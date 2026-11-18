@@ -461,6 +461,11 @@ SCHEMA.push(...QA_SCHEMA);
 // copy. See backend/board-resolution.js.
 const { BR_SCHEMA, mountBoardResolution } = require('./backend/board-resolution.js');
 SCHEMA.push(...BR_SCHEMA);
+// Hiring FMS: job request → agencies → CVs → interview → offer approval →
+// candidate answer → onboarding checklist; plus the exit formality. See
+// backend/hiring.js.
+const { HIRE_SCHEMA, mountHiring } = require('./backend/hiring.js');
+SCHEMA.push(...HIRE_SCHEMA);
 // MIS Financials: Tally Trial Balance (Excel) per division → P&L, Cash Flow,
 // Ratios. See backend/mis-finance.js.
 const { MF_SCHEMA, mountMisFinance } = require('./backend/mis-finance.js');
@@ -6464,14 +6469,16 @@ const MEETING_RECUR_STEPS = {
   monthly: { count: 12, next: (d, i) => _checklistPlusMonths(d, i) },
 };
 
-app.post('/api/meetings', requireAuth, async (req, res) => {
-  try {
+/* Create a Scheduler meeting (one-off or repeating) — Google Meet / Zoom link
+   when configured, else the ERP's own invite mail. Shared by POST
+   /api/meetings and the Hiring FMS (interviews). Throws { status: 400 } on
+   a missing date / title. */
+async function createSchedulerMeeting(b, me) {
     await ensureSchema();
-    const b = req.body || {};
+    b = b || {};
     const date = normDate(b.date);
     const title = (b.title || '').trim();
-    if (!date || !title) return res.status(400).json({ error: 'date and title required' });
-    const me = req.session?.user;
+    if (!date || !title) throw Object.assign(new Error('date and title required'), { status: 400 });
     const attendees = Array.isArray(b.attendees) ? b.attendees.filter(Boolean).join(', ') : String(b.attendees || '').trim();
     const clientId = (b.clientId || '').trim() || null;
     const clientName = (b.clientName || '').trim();
@@ -6519,8 +6526,13 @@ app.post('/api/meetings', requireAuth, async (req, res) => {
       } catch (e) { console.error('[meetings] invite mail failed:', e.message); invite.error = e.message; }
     }
     const linkMode = location && /^https?:\/\//i.test(location) ? (made ? 'auto' : 'typed') : (b.noLink ? 'none' : (process.env.ZOOM_CLIENT_ID || process.env.GOOGLE_MEET_ORGANIZER || /^(1|true|yes)$/i.test(process.env.GOOGLE_MEET_DELEGATION || '') ? 'failed' : 'not-configured'));
-    return res.status(201).json({ success: true, id, occurrences: dates.length, link: /^https?:\/\//i.test(location) ? location : '', provider: made?.provider || '', linkMode, invite });
-  } catch (err) { return res.status(500).json({ error: err.message }); }
+    return { success: true, id, occurrences: dates.length, link: /^https?:\/\//i.test(location) ? location : '', provider: made?.provider || '', linkMode, invite };
+}
+
+app.post('/api/meetings', requireAuth, async (req, res) => {
+  try {
+    return res.status(201).json(await createSchedulerMeeting(req.body || {}, req.session?.user));
+  } catch (err) { return res.status(err.status || 500).json({ error: err.message }); }
 });
 
 app.delete('/api/meetings', requireAuth, async (req, res) => {
@@ -6755,6 +6767,24 @@ mountBoardResolution(app, {
     if (isSuperAdmin(user) || rolesOf(user).includes('Admin')) return true;
     const perms = await getUserPermissions(user?.id);
     return !!(perms && Array.isArray(perms.grants) && perms.grants.includes('board-resolution'));
+  },
+});
+
+// ── Hiring FMS routes ─────────────────────────────────────────────────────────
+// Everything under /api/hiring/ plus the public links /hire-cv (agency CV
+// upload), /hire-offer (candidate's answer) and /hire-action (interviewer /
+// management from mail). HR, management and dues clearers come from the
+// page's own Settings; managers = Admin role, owner, or the 'hr-hiring' grant.
+mountHiring(app, {
+  q, pool, ensureSchema, requireAuth, withSeqId, getMailer, notifyAddressFor,
+  appOrigin: APP_ORIGIN, useDb: USE_DB, istToday,
+  tokenFor: leaveTokenFor, readToken: readLeaveToken, actionPage: _leaveActionPage,
+  createMeeting: (b, me) => createSchedulerMeeting(b, me),
+  departments: () => listDepartments(),
+  isManager: async (user) => {
+    if (isSuperAdmin(user) || rolesOf(user).includes('Admin')) return true;
+    const perms = await getUserPermissions(user?.id);
+    return !!(perms && Array.isArray(perms.grants) && perms.grants.includes('hr-hiring'));
   },
 });
 

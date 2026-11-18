@@ -132,6 +132,9 @@ window.Pages.users = (() => {
     // alwaysShow in sidebar.js, so a checkbox here never changed anything.
     { cat: 'HR Section', key: 'hr-assets',     label: 'Assets', fixed: 'all' },
     { cat: 'HR Section', key: 'hr-reports',    label: 'HR Reports' },
+    // Grant-only: everyone can raise a job request / their notice; this makes
+    // a non-Admin see all of it and change the Hiring FMS Settings.
+    { cat: 'HR Section', key: 'hr-hiring',     label: 'Hiring & Exit FMS (admin)', grant: true },
     { cat: 'HR Section', key: 'hr-policies',   label: 'HR Policies', fixed: 'all' },
 
     { cat: 'Accounts', key: 'client-master',     label: 'Vendor Master' },
