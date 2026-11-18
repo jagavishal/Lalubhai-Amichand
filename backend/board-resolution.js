@@ -417,12 +417,16 @@ function mountBoardResolution(app, ctx) {
       // rights()), so they get the CS mails too — with no CS set, a new
       // request used to mail nobody at all.
       const admins = cfg.users.filter((u) => String(u.roles || '').split(',').map((r) => r.trim()).includes('Admin')).map((u) => u.id);
-      const cs = (await peopleWithMail(cfg.cs.length ? cfg.cs : admins, cfg.users)).map((p) => p.email);
+      // The Admin fallback is only for when neither a CS nor an extra mail
+      // address is set.
+      const cs = (await peopleWithMail(cfg.cs.length ? cfg.cs : (cfg.extraEmails.length ? [] : admins), cfg.users)).map((p) => p.email);
       const subj = `${s.id} ${s.title}${s.priority === 'Urgent' ? ' [URGENT]' : ''}`;
       const noteRow = (label) => (note ? [[label, nl2br(note)]] : []);
 
       if (stage === 'raised' || stage === 'replied') {
-        let to = uniq([...cs, ...(cfg.cs.length ? [] : cfg.extraEmails)]);
+        // A new request (and a reply) goes to the CS and every extra address
+        // in Settings; the requester is copied below.
+        let to = uniq([...cs, ...cfg.extraEmails]);
         // Nobody to draft it has a mail address: still tell the requester it
         // was received, and say why in the log.
         if (!to.length) { console.log('[br] no CS / Admin address — mailing only the requester of', id); to = uniq([requester]); }

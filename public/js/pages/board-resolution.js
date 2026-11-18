@@ -116,7 +116,7 @@ window.Pages['board-resolution'] = (() => {
     const empty = _tab === 'action' ? 'Nothing is waiting on you' : _tab === 'mine' ? 'You have not requested a resolution yet' : 'No resolutions yet';
     return `
       ${D.me.manager && D.settings && !D.settings.csSet ? `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:12px;">
-        <b>No CS chosen yet.</b> New requests are mailed to the Admins until you pick the CS in <b>Settings</b>.</div>` : ''}
+        <b>No CS chosen yet.</b> New requests are mailed to the extra email IDs in <b>Settings</b> (or the Admins when there are none).</div>` : ''}
       ${H.stats(tiles)}
       <div class="br-filt" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
         <input id="br-q" value="${esc(_f.q)}" placeholder="Search BR no., subject, person…" style="${H.CONTROL}max-width:300px;" />
@@ -400,14 +400,14 @@ window.Pages['board-resolution'] = (() => {
     const s = D.settings;
     return `
       ${!s.csSet ? `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:12px;">
-        No CS chosen yet — until one is, the Admins do the CS steps and new requests are mailed to the extra addresses below. Tick the CS and press Save.</div>` : ''}
+        No CS chosen yet — until one is, the Admins do the CS steps. New requests are mailed to the extra email IDs below (or the Admins when there are none).</div>` : ''}
       <div class="br-two" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         ${userPicker('bs-cs', 'Company Secretary (CS)', s.cs, 'Gets every new request, drafts the resolution, asks for details and uploads the signed copy.')}
         ${userPicker('bs-dir', 'Directors (approvers)', s.directors, 'Each gets the draft by mail with Approve / Request Changes / Reject, and can decide here.')}
         <div class="br-card">
           <h3>Extra email IDs</h3>
           <textarea id="bs-mail" rows="3" placeholder="cs@laltd.in" style="${H.CONTROL}resize:vertical;">${esc(s.extraEmails.join('\n'))}</textarea>
-          <div style="font-size:11.5px;color:#94a3b8;margin-top:4px;">One per line — copied on the signed-copy mail (and get new requests while no CS is set).</div>
+          <div style="font-size:11.5px;color:#94a3b8;margin-top:4px;">One per line — get every new request (the requester is copied) and the signed copy.</div>
         </div>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap;">
@@ -443,8 +443,10 @@ window.Pages['board-resolution'] = (() => {
     $('bs-save')?.addEventListener('click', async (e) => {
       const btn = e.target;
       try {
-        const body = { cs: picked('bs-cs'), directors: picked('bs-dir'), extraEmails: H.val('bs-mail').split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean) };
-        if (!body.cs.length) throw new Error('Tick the CS');
+        const body = { directors: picked('bs-dir'), extraEmails: H.val('bs-mail').split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean) };
+        // The CS is optional — without one, new requests go to the extra
+        // email IDs (or the Admins when there are none).
+        if (picked('bs-cs').length) body.cs = picked('bs-cs');
         if (!body.directors.length) throw new Error('Tick at least one Director');
         btn.disabled = true;
         await H.post('/api/board-resolution/settings', body);
