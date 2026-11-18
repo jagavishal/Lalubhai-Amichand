@@ -243,11 +243,46 @@ function parseTrialBalance(sheet) {
   }
   if (!cols.length) throw new Error('Could not find the balance columns in the sheet');
 
-  // Split into period blocks (Tally can put a comparative period alongside):
-  // a block ends when a (kind, side) it already has turns up again.
-  const blocks = [];
+  // The figures themselves first: three Dr / Cr columns side by side where
+  // Opening + Nett = Closing on every row are one period's block, whatever
+  // the header says (a hand-edited export can have its header cells merged
+  // across the wrong columns, or pasted columns beside the real ones).
+  const signed = (r, x) => {
+    const a = amount(r[x.c]);
+    if (!a) return 0;
+    return a.side === 'cr' ? -Math.abs(a.v) : a.side === 'dr' ? Math.abs(a.v) : a.v;
+  };
+  const body = [];
+  for (let i = ds; i < rows.length && body.length < 3000; i++) {
+    const name = cellText(rows[i][pc]);
+    if (/^grand\s*total$|^total$/i.test(name)) break;
+    if (name) body.push(rows[i]);
+  }
+  const fits = (a, b, c) => {
+    let n = 0, ok = 0;
+    for (const r of body) {
+      if (!amount(r[a.c]) && !amount(r[b.c]) && !amount(r[c.c])) continue;
+      n++;
+      if (Math.abs(signed(r, a) + signed(r, b) - signed(r, c)) < 0.6) ok++;
+    }
+    return n >= 3 && ok / n >= 0.95;
+  };
+  const triples = [];
+  for (let i = 0; i + 2 < cols.length;) {
+    const [a, b, c] = [cols[i], cols[i + 1], cols[i + 2]];
+    if (a.side === 'net' && b.side === 'net' && c.side === 'net' && fits(a, b, c)) {
+      a.kind = 'open'; b.kind = 'txn'; c.kind = 'close';
+      triples.push({ cols: [a, b, c], keys: new Set() });
+      i += 3;
+    } else i++;
+  }
+
+  // Else by the header: split into period blocks (Tally can put a
+  // comparative period alongside): a block ends when a (kind, side) it
+  // already has turns up again.
+  const blocks = triples.length ? triples : [];
   let cur = null;
-  for (const x of cols) {
+  for (const x of triples.length ? [] : cols) {
     const key = `${x.kind}|${x.side}`;
     if (!cur || (x.kind && cur.keys.has(key))) { cur = { cols: [], keys: new Set() }; blocks.push(cur); }
     cur.cols.push(x); cur.keys.add(key);
@@ -266,6 +301,17 @@ function parseTrialBalance(sheet) {
   const usable = blocks.filter((bl) => bl.cols.some((x) => x.kind === 'close'));
   if (!usable.length) throw new Error('Could not find the closing balance columns in the sheet');
   if (!usable[0].period) usable[0].period = findPeriod(rows.slice(0, ds).map((r) => r.map(cellText).join(' ')).join(' '));
+  // A second block with no date of its own (the period cell merged across
+  // both blocks) is Tally's comparative: the same dates a year earlier.
+  const p0 = usable[0].period;
+  if (usable[1] && p0 && (!usable[1].period || (usable[1].period.from === p0.from && usable[1].period.to === p0.to))) {
+    const back = (iso) => {
+      const [y, m, d] = iso.split('-').map(Number);
+      const last = new Date(Date.UTC(y - 1, m, 0)).getUTCDate();
+      return `${y - 1}-${String(m).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`;
+    };
+    usable[1].period = { from: back(p0.from), to: back(p0.to), assumed: true };
+  }
 
   const net = (r, list) => {
     let v = 0, any = false;

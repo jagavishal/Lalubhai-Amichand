@@ -374,7 +374,7 @@ window.Pages['mis-finance'] = (() => {
     box.innerHTML = `
       <div class="mf-note">${p.company ? `<b>${esc(p.company)}</b> · ` : ''}${p.rows.length} rows · ${p.rows.filter((r) => r.leaf).length} ledgers counted
         ${p.period ? ` · period ${esc(periodLabel(p.period.from, p.period.to))}` : ''}${p.hasOpening ? ' · opening + closing' : ' · closing only'}${_sheetName ? ` · sheet “${esc(_sheetName)}”` : ''}
-        ${p.comparative ? `<br>Also has <b>${esc(periodLabel(p.comparative.period.from, p.comparative.period.to))}</b> — saved as that period too (if it is not uploaded yet), for the last-year comparison.` : ''}</div>
+        ${p.comparative ? `<br>Also has <b>${esc(periodLabel(p.comparative.period.from, p.comparative.period.to))}</b> — saved as that period too (if it is not uploaded yet), for the last-year comparison.${p.comparative.period.assumed ? ' <i>(The file shows no date for these columns, so they are taken as the same months last year.)</i>' : ''}` : ''}</div>
       ${warn.map((w) => `<div class="mf-warn">${esc(w)}</div>`).join('')}
       ${p.unmapped.length ? `<div style="font-weight:700;font-size:12.5px;margin:6px 0;">Map these ${p.unmapped.length} ledger${p.unmapped.length === 1 ? '' : 's'} (remembered for next time)</div>
         ${H.table(['Ledger', { label: 'Closing (Dr − Cr)', align: 'right' }, 'Report head'],
