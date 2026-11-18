@@ -413,13 +413,20 @@ function mountBoardResolution(app, ctx) {
       const s = await fresh(id);
       const cfg = await settings();
       const requester = await addressOf(s.requested_by_id);
-      const cs = (await peopleWithMail(cfg.cs.length ? cfg.cs : [], cfg.users)).map((p) => p.email);
+      // Until a CS is picked in Settings the Admins do the CS steps (see
+      // rights()), so they get the CS mails too — with no CS set, a new
+      // request used to mail nobody at all.
+      const admins = cfg.users.filter((u) => String(u.roles || '').split(',').map((r) => r.trim()).includes('Admin')).map((u) => u.id);
+      const cs = (await peopleWithMail(cfg.cs.length ? cfg.cs : admins, cfg.users)).map((p) => p.email);
       const subj = `${s.id} ${s.title}${s.priority === 'Urgent' ? ' [URGENT]' : ''}`;
       const noteRow = (label) => (note ? [[label, nl2br(note)]] : []);
 
       if (stage === 'raised' || stage === 'replied') {
-        const to = cs.length ? cs : uniq(cfg.extraEmails);
-        if (!to.length) return console.log('[br] no CS address configured —', id);
+        let to = uniq([...cs, ...(cfg.cs.length ? [] : cfg.extraEmails)]);
+        // Nobody to draft it has a mail address: still tell the requester it
+        // was received, and say why in the log.
+        if (!to.length) { console.log('[br] no CS / Admin address — mailing only the requester of', id); to = uniq([requester]); }
+        if (!to.length) return console.log('[br] no address at all for', id);
         const cc = minus(uniq([requester]), to);
         await send(mailer, {
           to: to.join(', '), ...(cc.length ? { cc: cc.join(', ') } : {}),
@@ -808,6 +815,23 @@ function mountBoardResolution(app, ctx) {
     if (link) await q('UPDATE br_requests SET drive_link = $1 WHERE id = $2', [link, s.id]);
     notify(s.id, 'completed');
     return { ok: true, drive_link: link };
+  }));
+
+  /* ── Resend the mail of the step it is at (Admin) ──────────────── */
+
+  const STAGE_MAIL = {
+    [S.CS]: 'raised', [S.QUERY]: 'query', [S.PENDING]: 'drafted', [S.CHANGES]: 'changes',
+    [S.APPROVED]: 'approved', [S.DONE]: 'completed', [S.REJECTED]: 'rejected',
+  };
+  app.post('/api/board-resolution/requests/:id/resend', requireAuth, route('manager', async (req) => {
+    const { s } = await loadReq(req.params.id, req.br);
+    const stage = STAGE_MAIL[s.status];
+    if (!stage) bad(`Nothing to mail for a ${s.status} request`);
+    if (!getMailer()) bad('Mail is not set up on this server');
+    const docs = stage === 'raised' ? s.docs.filter((d) => d.kind === 'request').map((d) => d.n) : [];
+    notify(s.id, stage, { docs });
+    await logStep(s.id, 'Mail Resent', `${stage} mail`, actor(req.br));
+    return { ok: true, stage };
   }));
 
   /* ── Withdraw / delete ─────────────────────────────────────────── */

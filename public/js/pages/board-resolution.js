@@ -115,6 +115,8 @@ window.Pages['board-resolution'] = (() => {
     ] : [];
     const empty = _tab === 'action' ? 'Nothing is waiting on you' : _tab === 'mine' ? 'You have not requested a resolution yet' : 'No resolutions yet';
     return `
+      ${D.me.manager && D.settings && !D.settings.csSet ? `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:10px 14px;font-size:12.5px;margin-bottom:12px;">
+        <b>No CS chosen yet.</b> New requests are mailed to the Admins until you pick the CS in <b>Settings</b>.</div>` : ''}
       ${H.stats(tiles)}
       <div class="br-filt" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
         <input id="br-q" value="${esc(_f.q)}" placeholder="Search BR no., subject, person…" style="${H.CONTROL}max-width:300px;" />
@@ -305,6 +307,7 @@ window.Pages['board-resolution'] = (() => {
           <div style="font-size:11px;color:#94a3b8;">${H.fmtDate(n.at)} ${H.fmtTime(n.at)}</div></div>`).join('')}</div>
         <div style="display:flex;gap:8px;margin-top:18px;flex-wrap:wrap;">
           ${c.withdraw ? '<button class="btn-secondary btn-sm" id="bv-withdraw">Withdraw request</button>' : ''}
+          ${D.me.manager && s.status !== 'Withdrawn' ? '<button class="btn-secondary btn-sm" id="bv-resend">Resend mail</button>' : ''}
           ${c.del ? '<button class="btn-secondary btn-sm" id="bv-del" style="color:#dc2626;">Delete</button>' : ''}
         </div>`,
       onOpen: () => bindView(s),
@@ -364,6 +367,11 @@ window.Pages['board-resolution'] = (() => {
       const r = await H.post(`${base}/signed`, { documents, passed_date: H.val('bs-date'), note: H.val('bs-note').trim() });
       await after(r.drive_link ? `${s.id} completed — saved on Drive and mailed` : `${s.id} completed — mailed to everyone`);
     }));
+    $('bv-resend')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try { const r = await H.post(`${base}/resend`, {}); H.toast(`Mail sent again (${r.stage})`); } catch (err) { H.fail(err); }
+      e.target.disabled = false;
+    });
     $('bv-withdraw')?.addEventListener('click', async () => {
       if (!(await Utils.showConfirm(`Withdraw ${s.id}? The CS will stop working on it.`, { title: 'Withdraw request', confirmText: 'Withdraw' }))) return;
       try { await H.post(`${base}/withdraw`, {}); await after(`${s.id} withdrawn`); } catch (err) { H.fail(err); }
