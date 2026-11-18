@@ -22,9 +22,11 @@ window.Pages['mis-finance'] = (() => {
   let _div = '';           // '' = all divisions side by side; a name = that division vs last year
   let _mapQ = '';
   let _mapOnlyOpen = false;
+  let _split = {};         // ledger name → [{ h, p }] split not saved yet ('' = back to one head)
 
   const STMT = { F: 'Profitability', P: 'Profit & Loss', C: 'Cash Flow', R: 'Ratios' };
   const headLabel = (k) => D.heads.find((h) => h.key === k)?.label || '';
+  const splitText = (list) => list.map((x) => `${x.p}% ${headLabel(x.h) || '?'}`).join(' + ');
   const periodLabel = (from, to) => `${H.fmtDate(from)} → ${H.fmtDate(to)}`;
 
   /* ── Load ─────────────────────────────────────────────────────────── */
@@ -345,9 +347,14 @@ window.Pages['mis-finance'] = (() => {
     document.querySelectorAll('#mu-preview select[data-map]').forEach((s) => { if (s.value) out[s.getAttribute('data-map')] = s.value; });
     return out;
   }
+  const headOptions = (value) => {
+    const opt = (h) => `<option value="${h.key}"${h.key === value ? ' selected' : ''}>${esc(h.label)}${h.pl ? ' (P&L)' : ''}</option>`;
+    const own = D.heads.filter((h) => h.custom);
+    return D.heads.filter((h) => !h.custom).map(opt).join('')
+      + (own.length ? `<optgroup label="Your heads">${own.map(opt).join('')}</optgroup>` : '');
+  };
   const headSelect = (attr, name, value, blank = '— choose head —') => `<select ${attr}="${esc(name)}" style="${H.CONTROL}padding:5px 8px;font-size:12px;">
-      <option value="">${esc(blank)}</option>
-      ${D.heads.map((h) => `<option value="${h.key}"${h.key === value ? ' selected' : ''}>${esc(h.label)}${h.pl ? ' (P&L)' : ''}</option>`).join('')}</select>`;
+      <option value="">${esc(blank)}</option>${headOptions(value)}</select>`;
 
   async function runPreview() {
     const box = document.getElementById('mu-preview');
@@ -377,7 +384,7 @@ window.Pages['mis-finance'] = (() => {
           <table class="mf-tbl"><thead><tr><th>Particulars</th><th>Opening</th><th>Closing</th><th style="text-align:left;">Head</th></tr></thead><tbody>
           ${p.rows.map((r) => `<tr><td style="padding-left:${10 + r.depth * 16}px;${r.leaf ? '' : 'font-weight:700;'}">${esc(r.name)}</td>
             <td>${H.inr0(r.open)}</td><td>${H.inr0(r.close)}</td>
-            <td style="text-align:left;color:${r.head ? '#334155' : '#dc2626'};">${r.leaf ? esc(headLabel(r.head) || 'not mapped') + (r.src ? ` <span style="color:#94a3b8;font-size:11px;">(${esc(SRC[r.src] || r.src)})</span>` : '') : '<span style="color:#94a3b8;">group total</span>'}</td></tr>`).join('')}
+            <td style="text-align:left;color:${r.head ? '#334155' : '#dc2626'};">${r.leaf ? esc(r.headText || headLabel(r.head) || 'not mapped') + (r.src ? ` <span style="color:#94a3b8;font-size:11px;">(${esc(SRC[r.src] || r.src)})</span>` : '') : '<span style="color:#94a3b8;">group total</span>'}</td></tr>`).join('')}
           </tbody></table></div></details>`;
     box.querySelectorAll('select[data-map]').forEach((s) => s.addEventListener('change', () => { if (s.value) runPreview().catch(H.fail); }));
   }
@@ -389,18 +396,112 @@ window.Pages['mis-finance'] = (() => {
     const n = _mapQ.trim().toLowerCase();
     const list = M.filter((x) => (!n || x.name.toLowerCase().includes(n)) && (!_mapOnlyOpen || !x.head));
     const SRC = { saved: 'Saved', rule: 'By name rule', tally: 'Tally group', group: 'From its group' };
+    const own = D.heads.filter((h) => h.custom);
+    const headCell = (x) => {
+      const pending = Object.prototype.hasOwnProperty.call(_split, x.name) ? _split[x.name] : undefined;
+      const split = pending !== undefined ? (pending || null) : (x.src === 'saved' ? x.split : null);
+      if (split) {
+        return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <span style="font-size:12px;color:#0f172a;font-weight:600;">${esc(splitText(split))}</span>${pending !== undefined ? ' <span style="font-size:11px;color:#b45309;">(not saved)</span>' : ''}
+          <button class="btn-secondary btn-sm" data-msplit="${esc(x.name)}" style="padding:3px 8px;font-size:11.5px;">Edit split</button></div>`;
+      }
+      return `<div style="display:flex;gap:6px;align-items:center;">
+        ${headSelect('data-mrow', x.name, x.src === 'saved' && !x.split ? x.head : '', x.src === 'saved' ? '— back to automatic —' : x.head ? `Auto: ${x.split ? splitText(x.split) : headLabel(x.head)}` : '— not mapped —')}
+        <button class="btn-secondary btn-sm" data-msplit="${esc(x.name)}" title="Divide this ledger over two or more heads by %" style="padding:3px 8px;font-size:11.5px;white-space:nowrap;">Split %</button></div>`;
+    };
     return `
-      <div class="mf-note">Every ledger / group seen in the uploads. A ledger follows its group unless you set it here (e.g. move “Director Remuneration” to Salary & Staff Cost). Changes apply to every report straight away.</div>
+      <div class="br-card" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px 14px;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <div style="font-weight:700;font-size:13px;color:#0f172a;">Your heads</div>
+          <div style="font-size:11.5px;color:#94a3b8;">Add your own head (e.g. “Office &amp; Admin Expenses”) — it works like the head you base it on and shows as its own line in the reports.</div>
+          <button class="btn-primary btn-sm" id="mf-hadd" style="margin-left:auto;white-space:nowrap;">+ Add Head</button>
+        </div>
+        ${own.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px;">${own.map((h) => `
+          <div style="border:1px solid #e2e8f0;border-radius:9px;padding:6px 10px;font-size:12.5px;display:flex;gap:8px;align-items:center;background:#f8fafc;">
+            <b>${esc(h.label)}</b><span style="color:#94a3b8;font-size:11.5px;">works like ${esc(headLabel(h.base))}</span>
+            <button class="btn-secondary btn-sm" data-hedit="${esc(h.key)}" style="padding:2px 8px;font-size:11px;">Edit</button>
+            <button class="btn-secondary btn-sm" data-hdel="${esc(h.key)}" style="padding:2px 8px;font-size:11px;color:#dc2626;">Delete</button>
+          </div>`).join('')}</div>` : '<div style="font-size:12px;color:#94a3b8;">None yet — the built-in heads are used.</div>'}
+      </div>
+      <div class="mf-note">Every ledger / group seen in the uploads. A ledger follows its group unless you set it here (e.g. move “Director Remuneration” to Salary &amp; Staff Cost). <b>Split %</b> divides one ledger over several heads (e.g. Rent 60% Office &amp; Admin + 40% Selling). Changes apply to every report straight away.</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
         <input id="mf-mq" value="${esc(_mapQ)}" placeholder="Search ledger / group…" style="${H.CONTROL}max-width:300px;" />
         <label style="font-size:12.5px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="mf-monly"${_mapOnlyOpen ? ' checked' : ''}/> Only unmapped</label>
         <button class="btn-primary btn-sm" id="mf-msave" style="margin-left:auto;">Save Mapping</button>
       </div>
       ${H.table(['Ledger / Group', 'Type', 'Divisions', 'Report Head', 'How'],
-        list.map((x) => [esc(x.name), x.leaf ? 'Ledger' : 'Group', esc(x.divisions.join(', ')),
-          headSelect('data-mrow', x.name, x.src === 'saved' ? x.head : '', x.src === 'saved' ? '— back to automatic —' : x.head ? `Auto: ${headLabel(x.head)}` : '— not mapped —'),
-          esc(SRC[x.src] || '—')]),
+        list.map((x) => [esc(x.name), x.leaf ? 'Ledger' : 'Group', esc(x.divisions.join(', ')), headCell(x), esc(SRC[x.src] || '—')]),
         { empty: 'Upload a Trial Balance first', cards: true, page: { key: 'mf-map', sig: [_mapQ, _mapOnlyOpen], onPage: render } })}`;
+  }
+
+  function headForm(h) {
+    const bases = D.heads.filter((x) => !x.custom && x.key !== 'ignore');
+    H.openModal({
+      id: 'mf-head', width: 520, title: h ? 'Edit head' : 'Add head',
+      subtitle: 'Your own line in the reports',
+      bodyHTML: `${H.field('mh-label', 'Head name', h?.label || '', { required: true, placeholder: 'e.g. Office & Admin Expenses' })}
+        <div style="margin-top:10px;"><label style="${H.LABEL}">Works like <span style="color:#ef4444">*</span></label>
+          <select id="mh-base" style="${H.CONTROL}">${bases.map((x) => `<option value="${x.key}"${x.key === (h?.base || 'indirect_exp') ? ' selected' : ''}>${esc(x.label)}${x.pl ? ' (P&L)' : ''}</option>`).join('')}</select>
+          <div style="font-size:11.5px;color:#94a3b8;margin-top:4px;">Decides where it counts — e.g. an expense head based on “Other Indirect Expenses” comes before EBITDA in the P&amp;L.</div></div>`,
+      confirmText: h ? 'Save' : 'Add Head',
+      onConfirm: async () => {
+        await H.post('/api/mis-finance/heads', { key: h?.key, label: H.val('mh-label'), base: H.val('mh-base') });
+        H.closeModal('mf-head');
+        H.toast(h ? 'Head saved' : 'Head added — pick it for ledgers below');
+        await refresh();
+      },
+    });
+  }
+
+  function splitForm(x) {
+    const pending = Object.prototype.hasOwnProperty.call(_split, x.name) ? _split[x.name] : undefined;
+    const start = pending || (x.src === 'saved' && x.split) || [{ h: x.head || '', p: 100 }, { h: '', p: '' }];
+    const rowHTML = (r) => `<div class="mf-srow" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+        <select class="ms-h" style="${H.CONTROL}flex:1;"><option value="">— choose head —</option>${headOptions(r.h)}</select>
+        <input class="ms-p" type="number" min="0" max="100" step="0.01" value="${esc(r.p)}" placeholder="%" style="${H.CONTROL}width:90px;text-align:right;" />
+        <span style="font-size:12px;color:#64748b;">%</span>
+        <button class="btn-secondary btn-sm ms-x" style="color:#dc2626;padding:4px 9px;">✕</button></div>`;
+    const sum = () => [...document.querySelectorAll('#ms-rows .ms-p')].reduce((a, i) => a + (Number(i.value) || 0), 0);
+    const showSum = () => {
+      const t = Math.round(sum() * 100) / 100;
+      const el = document.getElementById('ms-sum');
+      if (el) { el.textContent = `Total ${t}%`; el.style.color = Math.abs(t - 100) < 0.001 ? '#15803d' : '#dc2626'; }
+    };
+    const wire = () => {
+      document.querySelectorAll('#ms-rows .ms-p').forEach((i) => { i.oninput = showSum; });
+      document.querySelectorAll('#ms-rows .ms-x').forEach((b) => { b.onclick = () => { b.closest('.mf-srow').remove(); showSum(); }; });
+      showSum();
+    };
+    H.openModal({
+      id: 'mf-split', width: 620, title: 'Split ledger over heads',
+      subtitle: x.name,
+      bodyHTML: `<div class="mf-note" style="margin-bottom:10px;">The ledger's amount is divided by these shares — the shares must add up to 100%.</div>
+        <div id="ms-rows">${start.map(rowHTML).join('')}</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <button class="btn-secondary btn-sm" id="ms-add">+ Add another head</button>
+          <span id="ms-sum" style="margin-left:auto;font-weight:700;font-size:13px;"></span></div>
+        ${(x.src === 'saved' && x.split) || pending ? '<div style="margin-top:12px;"><button class="btn-secondary btn-sm" id="ms-clear">Remove split (one head again)</button></div>' : ''}`,
+      confirmText: 'Use this split',
+      onOpen: () => {
+        wire();
+        document.getElementById('ms-add').onclick = () => { document.getElementById('ms-rows').insertAdjacentHTML('beforeend', rowHTML({ h: '', p: '' })); wire(); };
+        const c = document.getElementById('ms-clear');
+        if (c) c.onclick = () => { _split[x.name] = ''; H.closeModal('mf-split'); render(); };
+      },
+      onConfirm: async () => {
+        const list = [...document.querySelectorAll('#ms-rows .mf-srow')].map((r) => ({ h: r.querySelector('.ms-h').value, p: Number(r.querySelector('.ms-p').value) || 0 }))
+          .filter((r) => r.h || r.p);
+        if (list.some((r) => !r.h)) throw new Error('Choose the head on every line');
+        if (list.some((r) => r.p <= 0)) throw new Error('Every head needs a share above 0%');
+        if (new Set(list.map((r) => r.h)).size !== list.length) throw new Error('The same head is chosen twice');
+        const t = Math.round(list.reduce((a, r) => a + r.p, 0) * 100) / 100;
+        if (Math.abs(t - 100) > 0.001) throw new Error(`The shares add up to ${t}% — make them 100%`);
+        _split[x.name] = list;   // one head at 100% is saved as a plain mapping
+        H.closeModal('mf-split');
+        await render();
+        H.toast('Split ready — press Save Mapping');
+      },
+    });
   }
 
   /* ── Divisions ────────────────────────────────────────────────────── */
@@ -440,15 +541,29 @@ window.Pages['mis-finance'] = (() => {
     $('mf-msave')?.addEventListener('click', async (e) => {
       const set = {};
       document.querySelectorAll('select[data-mrow]').forEach((s) => {
-        const x = M.find((m) => m.name === s.getAttribute('data-mrow'));
-        const was = x && x.src === 'saved' ? x.head : '';
-        if (s.value !== was) set[s.getAttribute('data-mrow')] = s.value;
+        const name = s.getAttribute('data-mrow');
+        if (Object.prototype.hasOwnProperty.call(_split, name)) return;
+        const x = M.find((m) => m.name === name);
+        const was = x && x.src === 'saved' && !x.split ? x.head : '';
+        if (s.value !== was) set[name] = s.value;
       });
+      for (const [name, v] of Object.entries(_split)) set[name] = Array.isArray(v) && v.length === 1 ? v[0].h : v;
       if (!Object.keys(set).length) return H.toast('Nothing changed');
       e.target.disabled = true;
-      try { await H.post('/api/mis-finance/mapping', { set }); H.toast('Mapping saved'); M = null; R = null; await render(); }
+      try { await H.post('/api/mis-finance/mapping', { set }); H.toast('Mapping saved'); _split = {}; M = null; R = null; await render(); }
       catch (err) { e.target.disabled = false; H.fail(err); }
     });
+    document.querySelectorAll('[data-msplit]').forEach((b) => b.addEventListener('click', () => {
+      const x = M.find((m) => m.name === b.getAttribute('data-msplit'));
+      if (x) splitForm(x);
+    }));
+    $('mf-hadd')?.addEventListener('click', () => headForm(null));
+    document.querySelectorAll('[data-hedit]').forEach((b) => b.addEventListener('click', () => headForm(D.heads.find((h) => h.key === b.getAttribute('data-hedit')))));
+    document.querySelectorAll('[data-hdel]').forEach((b) => b.addEventListener('click', async () => {
+      const h = D.heads.find((x) => x.key === b.getAttribute('data-hdel'));
+      if (!(await Utils.showConfirm(`Delete the head “${h.label}”? Ledgers on it go back to ${headLabel(h.base)} — the totals stay the same.`, { title: 'Delete head', confirmText: 'Delete', danger: true }))) return;
+      try { await H.del(`/api/mis-finance/heads/${encodeURIComponent(h.key)}`); H.toast('Head deleted'); await refresh(); } catch (e) { H.fail(e); }
+    }));
     $('mf-dsave')?.addEventListener('click', async (e) => {
       const divisions = H.val('mf-divs').split('\n').map((x) => x.trim()).filter(Boolean);
       e.target.disabled = true;

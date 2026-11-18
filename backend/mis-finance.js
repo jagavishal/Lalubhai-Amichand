@@ -42,7 +42,7 @@ const MF_SCHEMA = [
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ];
 
-const CFG = { divisions: 'misfin_divisions', map: 'misfin_map' };
+const CFG = { divisions: 'misfin_divisions', map: 'misfin_map', heads: 'misfin_heads' };
 // The four divisions the books are kept in (Saloni, Nov 2026) — renamable on the Divisions tab.
 const DEFAULT_DIVISIONS = ['Other', 'Export', 'Trading', 'Retail'];
 
@@ -90,6 +90,41 @@ const HEADS = [
   { key: 'ignore',         label: 'Ignore (do not count)',      side: 'dr' },
 ];
 const HEAD = Object.fromEntries(HEADS.map((h) => [h.key, h]));
+
+/* Own heads, added on the Ledger Mapping tab: { key, label, base }. Each
+   one works like the built-in head it is based on (P&L or balance sheet,
+   Dr / Cr side, its line in the P&L / Cash Flow) and shows as its own line
+   — ledgers mapped to it are added up under its name. */
+function headBook(custom) {
+  const book = { ...HEAD };
+  for (const c of Array.isArray(custom) ? custom : []) {
+    const b = HEAD[c?.base];
+    if (!b || !c.key || HEAD[c.key]) continue;
+    book[c.key] = { ...b, key: c.key, label: String(c.label || ''), base: b.key, custom: true };
+  }
+  return book;
+}
+const baseOf = (book, h) => (book[h]?.custom ? book[h].base : h);
+
+/* A saved mapping is one head key, or a split [{ h, p }] with p = percent
+   adding up to 100. Returns [{ h, f }] with f a fraction, or null. */
+function partsOf(value, book) {
+  if (typeof value === 'string') return book[value] ? [{ h: value, f: 1 }] : null;
+  if (!Array.isArray(value)) return null;
+  const parts = value.filter((x) => x && book[x.h] && Number(x.p) > 0).map((x) => ({ h: x.h, f: Number(x.p) / 100 }));
+  const sum = parts.reduce((a, x) => a + x.f, 0);
+  return parts.length && Math.abs(sum - 1) < 0.0001 ? parts : null;
+}
+// Amount split by the parts; the last part takes the remainder so the
+// pieces always add back to the ledger to the paisa.
+function splitAmount(v, parts) {
+  if (parts.length === 1) return [v];
+  let left = v;
+  return parts.map((x, i) => {
+    if (i === parts.length - 1) return round2(left);
+    const y = round2(v * x.f); left -= y; return y;
+  });
+}
 
 // Tally's own primary groups and their default sub-groups.
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9&]+/g, ' ').trim();
@@ -326,24 +361,30 @@ function buildTree(rows) {
 
 /* ── Head for every row, leaves summed per head ─────────────────────── */
 
-function assignHeads(rows, map) {
+// head[i] = the row's (first) head, parts[i] = [{ h, f }] — several when
+// the ledger (or the group it sits in) is split over heads.
+function assignHeads(rows, map, custom) {
+  const book = headBook(custom);
   const head = new Array(rows.length).fill(null);
+  const parts = new Array(rows.length).fill(null);
   const src = new Array(rows.length).fill('');
+  const one = (i, h, how) => { head[i] = h; parts[i] = [{ h, f: 1 }]; src[i] = how; };
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const pHead = r.parent >= 0 ? head[r.parent] : null;
     const key = norm(r.name);
-    if (map[key] && HEAD[map[key]]) { head[i] = map[key]; src[i] = 'saved'; continue; }
-    const rule = ruleHead(r.name, pHead);
-    if (rule) { head[i] = rule; src[i] = 'rule'; continue; }
-    if (TALLY[key]) { head[i] = TALLY[key]; src[i] = 'tally'; continue; }
-    if (pHead) { head[i] = pHead; src[i] = 'group'; continue; }
+    const saved = partsOf(map[key], book);
+    if (saved) { head[i] = saved[0].h; parts[i] = saved; src[i] = 'saved'; continue; }
+    const rule = ruleHead(r.name, pHead && baseOf(book, pHead));
+    if (rule) { one(i, rule, 'rule'); continue; }
+    if (TALLY[key]) { one(i, TALLY[key], 'tally'); continue; }
+    if (pHead) { head[i] = pHead; parts[i] = parts[r.parent]; src[i] = 'group'; continue; }
   }
-  return { head, src };
+  return { head, parts, src, book };
 }
 
-function headTotals(rows, map) {
-  const { head, src } = assignHeads(rows, map);
+function headTotals(rows, map, custom) {
+  const { head, parts, src, book } = assignHeads(rows, map, custom);
   const close = {}, open = {}, detail = {};
   const unmapped = [];
   let sumClose = 0, sumOpen = 0;
@@ -363,29 +404,44 @@ function headTotals(rows, map) {
     if (!r.leaf) return;
     const g = PROFIT_GROUP[norm(rows[topOf(i)].name)];
     if (g) {
-      const k = norm(r.name);
       const x = groups[g].ledgers;
-      const d = (x[k] = x[k] || { name: r.name, close: 0, open: 0 });
-      d.close = round2(d.close + r.close); d.open = round2(d.open + r.open);
+      const ps = parts[i] || [{ h: null, f: 1 }];
+      const c = splitAmount(r.close, ps), o = splitAmount(r.open, ps);
+      ps.forEach((pt, j) => {
+        const own = pt.h && book[pt.h]?.custom;
+        const k = own ? 'head:' + pt.h : norm(r.name);
+        const d = (x[k] = x[k] || { name: own ? book[pt.h].label : r.name, close: 0, open: 0 });
+        d.close = round2(d.close + c[j]); d.open = round2(d.open + o[j]);
+      });
     }
   });
   rows.forEach((r, i) => {
     if (!r.leaf) return;
     sumClose += r.close; sumOpen += r.open;
-    const h = head[i];
-    if (!h) { unmapped.push({ name: r.name, close: r.close, open: r.open }); return; }
-    if (h === 'ignore') return;
-    close[h] = round2((close[h] || 0) + r.close);
-    open[h] = round2((open[h] || 0) + r.open);
-    // Ledger lines under each P&L head, for the detailed P&L.
-    if (HEAD[h].pl) {
-      const k = norm(r.name);
-      detail[h] = detail[h] || {};
-      const d = (detail[h][k] = detail[h][k] || { name: r.name, close: 0, open: 0 });
-      d.close = round2(d.close + r.close); d.open = round2(d.open + r.open);
-    }
+    const ps = parts[i];
+    if (!ps) { unmapped.push({ name: r.name, close: r.close, open: r.open }); return; }
+    const c = splitAmount(r.close, ps), o = splitAmount(r.open, ps);
+    ps.forEach((pt, j) => {
+      const h = baseOf(book, pt.h);
+      if (h === 'ignore') return;
+      close[h] = round2((close[h] || 0) + c[j]);
+      open[h] = round2((open[h] || 0) + o[j]);
+      // Lines under each P&L head, for the detailed P&L: the ledger, or the
+      // own head it is mapped to (its ledgers added up under that name).
+      if (HEAD[h].pl) {
+        const own = book[pt.h].custom;
+        const k = own ? 'head:' + pt.h : norm(r.name);
+        const name = own ? book[pt.h].label : ps.length > 1 ? `${r.name} (${Math.round(pt.f * 10000) / 100}%)` : r.name;
+        detail[h] = detail[h] || {};
+        const d = (detail[h][k] = detail[h][k] || { name, close: 0, open: 0 });
+        d.close = round2(d.close + c[j]); d.open = round2(d.open + o[j]);
+      }
+    });
   });
-  return { close, open, detail, groups, unmapped, head, src, diffClose: round2(sumClose), diffOpen: round2(sumOpen) };
+  // How each row was mapped, as text for the upload preview.
+  const headText = parts.map((ps) => (!ps ? '' : ps.length === 1 ? book[ps[0].h].label
+    : ps.map((x) => `${Math.round(x.f * 10000) / 100}% ${book[x.h].label}`).join(' + ')));
+  return { close, open, detail, groups, unmapped, head, headText, src, diffClose: round2(sumClose), diffOpen: round2(sumOpen) };
 }
 
 // Tally's P&L groups, as the Profitability Statement shows them.
@@ -669,6 +725,7 @@ function mountMisFinance(app, ctx) {
   }
   const divisions = async () => { const d = await readCfg(CFG.divisions); return Array.isArray(d) && d.length ? d : DEFAULT_DIVISIONS; };
   const mapping = async () => { const m = await readCfg(CFG.map); return m && typeof m === 'object' ? m : {}; };
+  const customHeads = async () => { const h = await readCfg(CFG.heads); return Array.isArray(h) ? h : []; };
 
   function route(fn) {
     return async (req, res) => {
@@ -691,17 +748,17 @@ function mountMisFinance(app, ctx) {
   const parse = (sheet) => { try { return parseTrialBalance(sheet); } catch (e) { return bad(e.message); } };
 
   // What the upload dialog shows before saving.
-  function previewOf(tb, map, extra = {}) {
+  function previewOf(tb, map, extra, custom) {
     const merged = { ...map, ...extra };
-    const t = headTotals(tb.rows, merged);
+    const t = headTotals(tb.rows, merged, custom);
     const c = tb.comparative;
     return {
       company: tb.company, period: tb.period, hasOpening: tb.hasOpening, grand: tb.grand,
-      rows: tb.rows.map((r, i) => ({ name: r.name, close: r.close, open: r.open, leaf: r.leaf, depth: depth(tb.rows, i), head: t.head[i], src: t.src[i] })),
+      rows: tb.rows.map((r, i) => ({ name: r.name, close: r.close, open: r.open, leaf: r.leaf, depth: depth(tb.rows, i), head: t.head[i], headText: t.headText[i], src: t.src[i] })),
       unmapped: t.unmapped, diffClose: t.diffClose, diffOpen: t.diffOpen,
       // The Opening Stock line with no closing stock in the file: ask for it.
       needsClosingStock: t.close.opening_stock != null && t.close.stock == null,
-      comparative: c && c.period ? { period: c.period, hasOpening: c.hasOpening, rows: c.rows.length, diffClose: headTotals(c.rows, merged).diffClose } : null,
+      comparative: c && c.period ? { period: c.period, hasOpening: c.hasOpening, rows: c.rows.length, diffClose: headTotals(c.rows, merged, custom).diffClose } : null,
     };
   }
   const depth = (rows, i) => { let d = 0; let p = rows[i].parent; while (p >= 0 && d < 20) { d++; p = rows[p].parent; } return d; };
@@ -710,7 +767,8 @@ function mountMisFinance(app, ctx) {
     const ups = await q('SELECT id, division, period_from, period_to, file_name, company, has_opening, closing_stock, uploaded_by, created_at FROM mis_tb_uploads ORDER BY period_to DESC, division');
     return {
       divisions: await divisions(),
-      heads: HEADS.map(({ key, label, pl }) => ({ key, label, pl: !!pl })),
+      heads: [...HEADS.map(({ key, label, pl }) => ({ key, label, pl: !!pl })),
+        ...Object.values(headBook(await customHeads())).filter((h) => h.custom).map(({ key, label, pl, base }) => ({ key, label, pl: !!pl, base, custom: true }))],
       uploads: ups.map((u) => ({ id: u.id, division: u.division, from: dOut(u.period_from), to: dOut(u.period_to), file_name: u.file_name, company: u.company,
         has_opening: !!Number(u.has_opening), closing_stock: u.closing_stock == null ? null : Number(u.closing_stock), uploaded_by: u.uploaded_by, at: u.created_at instanceof Date ? u.created_at.toISOString() : u.created_at })),
     };
@@ -718,13 +776,30 @@ function mountMisFinance(app, ctx) {
 
   app.post('/api/mis-finance/preview', requireAuth, route(async (req) => {
     const tb = parse(req.body?.sheet);
-    return previewOf(tb, await mapping(), cleanMap(req.body?.mappings));
+    const custom = await customHeads();
+    return previewOf(tb, await mapping(), cleanMap(req.body?.mappings, custom), custom);
   }));
 
-  function cleanMap(m) {
+  // One head key, or a split [{ h, p }] (percent, adding up to 100).
+  function cleanValue(v, book) {
+    if (typeof v === 'string') return book[v] ? v : undefined;
+    if (!Array.isArray(v)) return undefined;
+    const list = v.map((x) => ({ h: String(x?.h || ''), p: Math.round(Number(x?.p) * 100) / 100 })).filter((x) => x.h && x.p);
+    if (!list.length) return undefined;
+    for (const x of list) {
+      if (!book[x.h]) bad('Unknown head in the split');
+      if (!(x.p > 0 && x.p <= 100)) bad('Each share must be between 0 and 100 %');
+    }
+    if (new Set(list.map((x) => x.h)).size !== list.length) bad('The same head is twice in the split');
+    const sum = list.reduce((a, x) => a + x.p, 0);
+    if (Math.abs(sum - 100) > 0.001) bad(`The split adds up to ${Math.round(sum * 100) / 100}% — it must be 100%`);
+    return list.length === 1 ? list[0].h : list;
+  }
+  function cleanMap(m, custom) {
     const out = {};
     if (!m || typeof m !== 'object') return out;
-    for (const [k, h] of Object.entries(m)) { const key = norm(k); if (key && HEAD[h]) out[key] = h; }
+    const book = headBook(custom);
+    for (const [k, h] of Object.entries(m)) { const key = norm(k); const v = cleanValue(h, book); if (key && v !== undefined) out[key] = v; }
     return out;
   }
 
@@ -737,7 +812,7 @@ function mountMisFinance(app, ctx) {
     if (to < from) bad('The To date is before the From date');
     const tb = parse(b.sheet);
     const closingStock = stockIn(b.closing_stock, 'Closing stock');
-    const extra = cleanMap(b.mappings);
+    const extra = cleanMap(b.mappings, await customHeads());
     if (Object.keys(extra).length) await writeCfg(CFG.map, { ...(await mapping()), ...extra });
     const rowsJson = JSON.stringify(tb.rows.map(({ name, close, open, parent, leaf }) => ({ name, close, open, parent, leaf })));
     const by = req.session.user.name || req.session.user.email || '';
@@ -786,9 +861,9 @@ function mountMisFinance(app, ctx) {
 
   // One upload as head totals; an upload without opening balances borrows
   // them from the same division's upload that ends the day before.
-  async function totalsFor(u, map, all) {
+  async function totalsFor(u, map, all, custom) {
     const rows = JSON.parse(u.rows_json || '[]');
-    const t = headTotals(rows, map);
+    const t = headTotals(rows, map, custom);
     // Typed on the upload when the Trial Balance shows stock at its opening value.
     if (u.closing_stock != null) t.close.stock = round2(Number(u.closing_stock));
     t.hasOpening = !!Number(u.has_opening);
@@ -796,7 +871,7 @@ function mountMisFinance(app, ctx) {
     if (!t.hasOpening) {
       const prev = all.find((x) => x.division === u.division && dOut(x.period_to) === prevDay(dOut(u.period_from)));
       if (prev) {
-        const p = headTotals(JSON.parse(prev.rows_json || '[]'), map);
+        const p = headTotals(JSON.parse(prev.rows_json || '[]'), map, custom);
         // Nominal accounts restart at a new financial year (1 April).
         const fyStart = dOut(u.period_from).slice(5) === '04-01';
         t.open = {};
@@ -864,6 +939,7 @@ function mountMisFinance(app, ctx) {
     const from = String(req.query.from || ''), to = String(req.query.to || '');
     if (!ISO.test(from) || !ISO.test(to)) bad('Choose the period');
     const map = await mapping();
+    const custom = await customHeads();
     const all = await q('SELECT * FROM mis_tb_uploads');
     const divs = await divisions();
     const find = (d, f, t2) => all.find((x) => x.division === d && dOut(x.period_from) === f && dOut(x.period_to) === t2);
@@ -878,8 +954,8 @@ function mountMisFinance(app, ctx) {
       if (!u) bad(`${division} has no upload for this period`);
       const pf = lastYear(from), pt = lastYear(to);
       const pu = find(division, pf, pt);
-      const t = await totalsFor(u, map, all);
-      const pt2 = pu ? await totalsFor(pu, map, all) : null;
+      const t = await totalsFor(u, map, all, custom);
+      const pt2 = pu ? await totalsFor(pu, map, all, custom) : null;
       const names = detailNames(pt2 ? [t, pt2] : [t]);
       const cur = { division: periodName(from, to), ...meta(u, t), ...statements(t, from, to, names) };
       const columns = [cur];
@@ -895,7 +971,7 @@ function mountMisFinance(app, ctx) {
     for (const d of divs) {
       const u = find(d, from, to);
       if (!u) { cols.push({ division: d, missing: true }); continue; }
-      const t = await totalsFor(u, map, all);
+      const t = await totalsFor(u, map, all, custom);
       totals.push(t);
       cols.push({ division: d, u, t });
     }
@@ -910,14 +986,16 @@ function mountMisFinance(app, ctx) {
   // Every ledger / group name seen in the uploads, with its current head.
   app.get('/api/mis-finance/mapping', requireAuth, route(async () => {
     const map = await mapping();
+    const custom = await customHeads();
     const all = await q('SELECT division, rows_json FROM mis_tb_uploads');
     const seen = new Map();
     for (const u of all) {
       const rows = JSON.parse(u.rows_json || '[]');
-      const { head, src } = assignHeads(rows, map);
+      const { head, parts, src } = assignHeads(rows, map, custom);
       rows.forEach((r, i) => {
         const k = norm(r.name);
-        if (!seen.has(k)) seen.set(k, { name: r.name, head: head[i], src: src[i], leaf: r.leaf, divisions: new Set() });
+        const split = parts[i] && parts[i].length > 1 ? parts[i].map((x) => ({ h: x.h, p: Math.round(x.f * 10000) / 100 })) : null;
+        if (!seen.has(k)) seen.set(k, { name: r.name, head: head[i], split, src: src[i], leaf: r.leaf, divisions: new Set() });
         seen.get(k).divisions.add(u.division);
       });
     }
@@ -927,14 +1005,61 @@ function mountMisFinance(app, ctx) {
   app.post('/api/mis-finance/mapping', requireAuth, route(async (req) => {
     const b = req.body || {};
     const cur = await mapping();
+    const book = headBook(await customHeads());
     for (const [k, h] of Object.entries(b.set || {})) {
       const key = norm(k);
       if (!key) continue;
-      if (h === '' || h == null) delete cur[key];
-      else if (HEAD[h]) cur[key] = h;
+      if (h === '' || h == null) { delete cur[key]; continue; }
+      const v = cleanValue(h, book);
+      if (v !== undefined) cur[key] = v;
     }
     await writeCfg(CFG.map, cur);
     return { ok: true };
+  }));
+
+  // Own heads: add / rename (key given) / delete.
+  app.post('/api/mis-finance/heads', requireAuth, route(async (req) => {
+    const b = req.body || {};
+    const label = String(b.label || '').trim().slice(0, 80);
+    if (!label) bad('Type the head name');
+    if (!HEAD[b.base] || b.base === 'ignore') bad('Choose what the head works like');
+    const list = await customHeads();
+    const book = headBook(list);
+    const clash = Object.values(book).find((h) => h.label.toLowerCase() === label.toLowerCase() && h.key !== b.key);
+    if (clash) bad(`There is already a head called “${clash.label}”`);
+    let key = String(b.key || '');
+    if (key) {
+      const x = list.find((h) => h.key === key);
+      if (!x) bad('That head is not there any more');
+      x.label = label; x.base = b.base;
+    } else {
+      if (list.length >= 200) bad('Too many heads');
+      key = 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      list.push({ key, label, base: b.base });
+    }
+    await writeCfg(CFG.heads, list);
+    return { ok: true, key };
+  }));
+
+  app.delete('/api/mis-finance/heads/:key', requireAuth, route(async (req) => {
+    const key = String(req.params.key || '');
+    const list = await customHeads();
+    const x = list.find((h) => h.key === key);
+    if (!x) bad('That head is not there any more');
+    // Ledgers on it go to the head it was based on — the totals stay the same.
+    const map = await mapping();
+    let moved = 0;
+    for (const [k, v] of Object.entries(map)) {
+      if (v === key) { map[k] = x.base; moved++; continue; }
+      if (!Array.isArray(v) || !v.some((p) => p.h === key)) continue;
+      moved++;
+      const merged = new Map();
+      for (const p of v) { const h = p.h === key ? x.base : p.h; merged.set(h, Math.round(((merged.get(h) || 0) + Number(p.p)) * 100) / 100); }
+      map[k] = merged.size === 1 ? [...merged.keys()][0] : [...merged].map(([h, p]) => ({ h, p }));
+    }
+    await writeCfg(CFG.map, map);
+    await writeCfg(CFG.heads, list.filter((h) => h.key !== key));
+    return { ok: true, moved };
   }));
 
   app.post('/api/mis-finance/divisions', requireAuth, route(async (req) => {
