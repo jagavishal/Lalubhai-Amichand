@@ -17,13 +17,13 @@ window.Pages['mis-finance'] = (() => {
   let R = null;            // last report
   let M = null;            // mapping list
   let _tab = 'reports';
-  let _stmt = 'P';
+  let _stmt = 'F';
   let _period = '';        // "from|to"
   let _div = '';           // '' = all divisions side by side; a name = that division vs last year
   let _mapQ = '';
   let _mapOnlyOpen = false;
 
-  const STMT = { P: 'Profit & Loss', C: 'Cash Flow', R: 'Ratios' };
+  const STMT = { F: 'Profitability', P: 'Profit & Loss', C: 'Cash Flow', R: 'Ratios' };
   const headLabel = (k) => D.heads.find((h) => h.key === k)?.label || '';
   const periodLabel = (from, to) => `${H.fmtDate(from)} → ${H.fmtDate(to)}`;
 
@@ -73,6 +73,18 @@ window.Pages['mis-finance'] = (() => {
         .mf-tbl tr.warn td { color:#b45309; font-weight:600; background:#fffbeb; }
         .mf-tbl tr.warn td:first-child { background:#fffbeb; }
         .mf-tbl td.neg { color:#dc2626; }
+        .mf-pf td { padding-top:4px; padding-bottom:4px; border-bottom:none; }
+        .mf-pf tr.H td { font-weight:800; color:#0f172a; padding-top:8px; }
+        .mf-pf tr.l td:first-child { padding-left:22px; }
+        .mf-pf tr.ll td:first-child { padding-left:40px; }
+        .mf-pf tr.l td, .mf-pf tr.ll td { color:#334155; }
+        .mf-pf tr.G td { font-weight:800; color:#0f172a; border-top:1.5px solid #0f172a; border-bottom:1.5px solid #0f172a; background:#f8fafc; }
+        .mf-pf tr.G td:first-child { background:#f8fafc; }
+        .mf-pf tr.memo td { font-style:italic; color:#64748b; }
+        .mf-pf tr.sec td { font-weight:800; color:#0f172a; padding-top:10px; text-align:left; }
+        .mf-pf tr.chk td { color:#64748b; font-size:12px; }
+        .mf-pf tr.chk td.bad { color:#dc2626; font-weight:700; }
+        .mf-pf tr.sp td { height:8px; padding:0; }
         .mf-tbl tr.d td { color:#64748b; font-size:12px; padding-top:4px; padding-bottom:4px; }
         .mf-tbl tr.d td:first-child { padding-left:28px; }
         .mf-seg { display:inline-flex; border:1.5px solid #e2e8f0; border-radius:9px; overflow:hidden; }
@@ -135,6 +147,8 @@ window.Pages['mis-finance'] = (() => {
       table = `<div class="mf-warn">The Cash Flow needs opening balances. ${esc(no.join(', '))}: upload the Trial Balance with the Opening Balance column turned on (F12 in Tally), or upload the previous period too so its closing is used as the opening.</div>`;
       const ok = cols.filter((c) => c.C);
       if (ok.length) table += stmtTable(ok, ok[0].C, 'C');
+    } else if (_stmt === 'F') {
+      table = profitTable(cols);
     } else {
       table = stmtTable(cols, lines, _stmt);
     }
@@ -153,6 +167,37 @@ window.Pages['mis-finance'] = (() => {
       ${notes.length ? `<div class="mf-note">${notes.join('<br>')}</div>` : ''}
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;max-height:72vh;">${table}</div>
       <div style="font-size:11.5px;color:#94a3b8;margin-top:6px;">${R.days} days · amounts in ₹ · ratios use closing balances; day counts use the period's ${R.days} days</div>`;
+  }
+
+  // As the books print it: no decimals, a loss in brackets, nil as "-".
+  const acct = (v) => {
+    if (v == null) return '';
+    // Half away from zero, as Excel rounds (−2,320,781.5 → (2,320,782)).
+    const n = Math.sign(v) * Math.round(Math.abs(v));
+    if (n === 0) return '-';
+    return n < 0 ? `(${H.inr0(-n)})` : H.inr0(n);
+  };
+  const MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const endMonth = (iso) => { const [y, m] = iso.split('-').map(Number); return `${MON3[m - 1]}'${String(y).slice(2)}`; };
+  const profitTitle = () => `Profitability Statement for the period ended ${endMonth(R.to)}${R.division ? ` - ${R.division} Division` : ''}`;
+
+  function profitTable(cols) {
+    const lines = cols[0].F;
+    return `<div style="padding:14px 16px 4px;font-size:16px;font-weight:800;color:#0f172a;">${esc(profitTitle())}</div>
+      <table class="mf-tbl mf-pf"><thead><tr><th>Particulars</th>${cols.map((c) => `<th>${esc(c.division)}</th>`).join('')}</tr></thead><tbody>
+      ${lines.map((ln, i) => {
+        const [kind, label] = ln;
+        if (kind === 'sp') return `<tr class="sp"><td colspan="${cols.length + 1}"></td></tr>`;
+        if (kind === 'sec') return `<tr class="sec"><td colspan="${cols.length + 1}">${esc(label)}</td></tr>`;
+        const cells = cols.map((c) => {
+          const v = c.F?.[i]?.[2];
+          if (kind === 'chk' && c.change) return '<td></td>';
+          const bad = kind === 'chk' && v != null && Math.abs(v) > 0.5;
+          return `<td class="${bad ? 'bad' : ''}">${acct(v)}</td>`;
+        }).join('');
+        return `<tr class="${kind}"><td>${esc(label)}</td>${cells}</tr>`;
+      }).join('')}
+    </tbody></table>`;
   }
 
   function stmtTable(cols, lines, key) {
@@ -180,6 +225,25 @@ window.Pages['mis-finance'] = (() => {
     const cols = [...R.columns.filter((c) => !c.missing), ...(R.consolidated ? [R.consolidated] : [])];
     const wb = XLSX.utils.book_new();
     const title = `${R.division ? R.division + ' — ' : ''}${H.fmtDate(R.from)} to ${H.fmtDate(R.to)}`;
+    {
+      const withData = cols.filter((c) => c.F);
+      const lines = withData[0].F;
+      const aoa = [[profitTitle()], [], ['Particulars', ...withData.map((c) => c.division)]];
+      lines.forEach((ln, i) => {
+        if (ln[0] === 'sp') { aoa.push([]); return; }
+        if (ln[0] === 'sec') { aoa.push([ln[1]]); return; }
+        const pad = ln[0] === 'l' ? '   ' : ln[0] === 'll' ? '      ' : '';
+        aoa.push([pad + ln[1], ...withData.map((c) => {
+          const v = c.F[i]?.[2];
+          return v == null || (ln[0] === 'chk' && c.change) ? '' : Math.sign(v) * Math.round(Math.abs(v));
+        })]);
+      });
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 52 }, ...withData.map(() => ({ wch: 16 }))];
+      // Excel shows these like the old sheet: 1,234 · (1,234) · -
+      for (const addr of Object.keys(ws)) if (!addr.startsWith('!') && typeof ws[addr].v === 'number') ws[addr].z = '#,##0;(#,##0);"-"';
+      XLSX.utils.book_append_sheet(wb, ws, 'Profitability');
+    }
     for (const key of ['P', 'C', 'R']) {
       const withData = cols.filter((c) => c[key]);
       if (!withData.length) continue;

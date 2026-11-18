@@ -43,8 +43,8 @@ const MF_SCHEMA = [
 ];
 
 const CFG = { divisions: 'misfin_divisions', map: 'misfin_map' };
-// The ERP's own four business sections (sidebar) — renamable in Settings.
-const DEFAULT_DIVISIONS = ['Factory', 'Export', 'Trading', 'Retail'];
+// The four divisions the books are kept in (Saloni, Nov 2026) — renamable on the Divisions tab.
+const DEFAULT_DIVISIONS = ['Other', 'Export', 'Trading', 'Retail'];
 
 /* ── Report heads ──────────────────────────────────────────────────
    side: 'dr' heads are positive when debit (assets, expenses), 'cr' when
@@ -347,6 +347,28 @@ function headTotals(rows, map) {
   const close = {}, open = {}, detail = {};
   const unmapped = [];
   let sumClose = 0, sumOpen = 0;
+  // The Profitability Statement lists ledgers under their Tally group
+  // (Sales Accounts, Direct Incomes …), as the books have them — not split
+  // into report heads. `groups[g]` = { rowClose, rowOpen, ledgers }.
+  const groups = {};
+  const topOf = (i) => { let j = i; let n = 0; while (rows[j].parent >= 0 && n++ < 50) j = rows[j].parent; return j; };
+  rows.forEach((r, i) => {
+    if (r.parent >= 0) return;
+    const g = PROFIT_GROUP[norm(r.name)];
+    if (!g) return;
+    const x = (groups[g] = groups[g] || { rowClose: 0, rowOpen: 0, ledgers: {} });
+    x.rowClose = round2(x.rowClose + r.close); x.rowOpen = round2(x.rowOpen + r.open);
+  });
+  rows.forEach((r, i) => {
+    if (!r.leaf) return;
+    const g = PROFIT_GROUP[norm(rows[topOf(i)].name)];
+    if (g) {
+      const k = norm(r.name);
+      const x = groups[g].ledgers;
+      const d = (x[k] = x[k] || { name: r.name, close: 0, open: 0 });
+      d.close = round2(d.close + r.close); d.open = round2(d.open + r.open);
+    }
+  });
   rows.forEach((r, i) => {
     if (!r.leaf) return;
     sumClose += r.close; sumOpen += r.open;
@@ -363,8 +385,19 @@ function headTotals(rows, map) {
       d.close = round2(d.close + r.close); d.open = round2(d.open + r.open);
     }
   });
-  return { close, open, detail, unmapped, head, src, diffClose: round2(sumClose), diffOpen: round2(sumOpen) };
+  return { close, open, detail, groups, unmapped, head, src, diffClose: round2(sumClose), diffOpen: round2(sumOpen) };
 }
+
+// Tally's P&L groups, as the Profitability Statement shows them.
+const PROFIT_GROUP = {
+  'sales accounts': 'sales', 'sales account': 'sales',
+  'direct incomes': 'dinc', 'income direct': 'dinc',
+  'purchase accounts': 'purch', 'purchase account': 'purch',
+  'direct expenses': 'dexp', 'expenses direct': 'dexp',
+  'indirect incomes': 'iinc', 'income indirect': 'iinc',
+  'indirect expenses': 'iexp', 'expenses indirect': 'iexp',
+};
+const PROFIT_SIDE = { sales: -1, dinc: -1, iinc: -1, purch: 1, dexp: 1, iexp: 1 };
 
 /* ── Statements ─────────────────────────────────────────────────────── */
 
@@ -383,7 +416,71 @@ function detailNames(list) {
     // One ledger that is the whole head adds nothing.
     if (seen.size > 1) out[h] = [...seen.entries()];
   }
+  out.__F = {};
+  for (const g of Object.keys(PROFIT_SIDE)) {
+    // Trial Balance order; a ledger only one column has goes in after the
+    // ledger it follows there, not at the end.
+    const order = [];
+    const name = new Map();
+    for (const t of list) {
+      let after = -1;
+      for (const [k, d] of Object.entries(t.groups?.[g]?.ledgers || {})) {
+        const at = order.indexOf(k);
+        if (at >= 0) { after = at; continue; }
+        order.splice(after + 1, 0, k);
+        name.set(k, d.name);
+        after += 1;
+      }
+    }
+    out.__F[g] = order.map((k) => [k, name.get(k)]);
+  }
   return out;
+}
+
+/* The Profitability Statement, line for line as the old sheet:
+   [kind, label, value, sign]. kind: 'H' group total (bold), 'l' a line,
+   'll' a ledger under a sub-total, 'G' Gross / Net profit, 'memo', 'sec' a
+   heading, 'chk' a statement-less-TB check, 'sp' a blank row. sign = how
+   the line moves profit (+1 income, −1 cost) — the Variance column is
+   (this − last) × sign, so a better year is positive throughout. */
+function profitability(t, names, stock) {
+  const F = names.__F || {};
+  const g = (k) => t.groups?.[k] || { rowClose: 0, rowOpen: 0, ledgers: {} };
+  // Incomes (credit) and costs (debit) both come out positive.
+  const val = (k, d) => (PROFIT_SIDE[k] < 0 ? round2(-(d.close - (t.hasOpening ? d.open : 0))) : round2(d.close - (t.hasOpening ? d.open : 0)));
+  const ledgers = (k, kind, sign) => (F[k] || []).map(([key, name]) => [kind, name, val(k, g(k).ledgers[key] || { close: 0, open: 0 }), sign]);
+  const total = (k) => round2((F[k] || []).reduce((a, [key]) => a + val(k, g(k).ledgers[key] || { close: 0, open: 0 }), 0));
+  const tb = (k) => val(k, { close: g(k).rowClose, open: g(k).rowOpen });
+  const sales = total('sales'), dinc = total('dinc'), purch = total('purch'), dexp = total('dexp'), iinc = total('iinc'), iexp = total('iexp');
+  const cogs = round2(stock.open + purch + dexp - stock.close);
+  const gp = round2(sales + dinc - cogs);
+  const np = round2(gp + iinc - iexp);
+  const dexpLines = F.dexp || [];
+  const interestOnLoan = round2(Object.values(g('iexp').ledgers).filter((d) => /interest\s*on\s*loan|loan\s*interest/i.test(d.name))
+    .reduce((a, d) => a + (d.close - (t.hasOpening ? d.open : 0)), 0));
+  return [
+    ['H', 'Sales', sales, 1], ...ledgers('sales', 'l', 1), ['sp'],
+    ['H', 'Direct Income', dinc, 1], ...ledgers('dinc', 'l', 1), ['sp'],
+    ['H', 'Cost of Goods Sold', cogs, -1],
+    ['l', 'Opening Stock', round2(stock.open), -1],
+    ['l', 'Add: Purchases', purch, -1], ...ledgers('purch', 'll', -1),
+    ...(dexpLines.length === 1
+      ? [['l', `Add: Direct Expenses - ${dexpLines[0][1]}`, dexp, -1]]
+      : [['l', 'Add: Direct Expenses', dexp, -1], ...ledgers('dexp', 'll', -1)]),
+    ['l', 'Less: Closing Stock (INPUT)', round2(stock.close), 1], ['sp'],
+    ['G', 'Gross Profit', gp, 1], ['sp'],
+    ['H', 'Indirect Incomes', iinc, 1], ...ledgers('iinc', 'l', 1), ['sp'],
+    ['H', 'Total Indirect Expenses', iexp, -1], ...ledgers('iexp', 'l', -1), ['sp'],
+    ['G', 'Net Profit / (Loss) before allocation', np, 1], ['sp'],
+    ['memo', 'Memo: Interest on Loan (part of Financial Expenses)', interestOnLoan, -1], ['sp'],
+    ['sec', 'Checks against trial balance (should all be nil)'],
+    ['chk', 'Sales: statement less TB', round2(sales - tb('sales')), 0],
+    ['chk', 'Direct incomes: statement less TB', round2(dinc - tb('dinc')), 0],
+    ['chk', 'Purchases: statement less TB', round2(purch - tb('purch')), 0],
+    ['chk', 'Direct expenses: statement less TB', round2(dexp - tb('dexp')), 0],
+    ['chk', 'Indirect incomes: statement less TB', round2(iinc - tb('iinc')), 0],
+    ['chk', 'Indirect expenses: statement less TB', round2(iexp - tb('iexp')), 0],
+  ];
 }
 
 // t = { close:{head:net}, open:{head:net}, detail, hasOpening, unmapped, diff… }
@@ -551,7 +648,7 @@ function statements(t, from, to, names = {}) {
     ['', 'Net Worth', r2(equity)],
   ].map(([k, l, x]) => [k, l, x == null ? null : Math.round(x * 100) / 100]);
 
-  return { P, C, R, days };
+  return { F: profitability(t, names, { open: openingStock, close: closingStock }), P, C, R, days };
 }
 
 /* ===================================================================== */
@@ -719,8 +816,16 @@ function mountMisFinance(app, ctx) {
     return t;
   }
   function addTotals(list) {
-    const sum = { close: {}, open: {}, detail: {}, unmapped: [], hasOpening: list.every((t) => t.hasOpening), diffClose: 0, diffOpen: 0 };
+    const sum = { close: {}, open: {}, detail: {}, groups: {}, unmapped: [], hasOpening: list.every((t) => t.hasOpening), diffClose: 0, diffOpen: 0 };
     for (const t of list) {
+      for (const [gk, gv] of Object.entries(t.groups || {})) {
+        const x = (sum.groups[gk] = sum.groups[gk] || { rowClose: 0, rowOpen: 0, ledgers: {} });
+        x.rowClose = round2(x.rowClose + gv.rowClose); x.rowOpen = round2(x.rowOpen + gv.rowOpen);
+        for (const [k, d] of Object.entries(gv.ledgers)) {
+          const y = (x.ledgers[k] = x.ledgers[k] || { name: d.name, close: 0, open: 0 });
+          y.close = round2(y.close + d.close); y.open = round2(y.open + d.open);
+        }
+      }
       for (const w of ['close', 'open']) for (const [k, x] of Object.entries(t[w])) sum[w][k] = round2((sum[w][k] || 0) + x);
       for (const [h, m] of Object.entries(t.detail || {})) {
         for (const [k, d] of Object.entries(m)) {
@@ -750,7 +855,9 @@ function mountMisFinance(app, ctx) {
   // A column of figures minus another, line by line (the lines match).
   const minus = (a, b) => (a && b ? a.map((ln, i) => {
     const x = ln[2], y = b[i]?.[2];
-    return ln.length < 3 ? ln : [ln[0], ln[1], x == null || y == null ? null : round2(x - y)];
+    if (ln.length < 3) return ln;
+    const sign = ln.length > 3 ? ln[3] : 1;
+    return [ln[0], ln[1], x == null || y == null || sign === 0 ? null : round2((x - y) * sign), sign];
   }) : null);
 
   app.get('/api/mis-finance/report', requireAuth, route(async (req) => {
@@ -778,7 +885,7 @@ function mountMisFinance(app, ctx) {
       const columns = [cur];
       if (pt2) {
         const prev = { division: periodName(pf, pt), ...meta(pu, pt2), ...statements(pt2, pf, pt, names) };
-        columns.push(prev, { division: 'Change', change: true, P: minus(cur.P, prev.P), C: minus(cur.C, prev.C), R: minus(cur.R, prev.R) });
+        columns.push(prev, { division: 'Variance', change: true, F: minus(cur.F, prev.F), P: minus(cur.P, prev.P), C: minus(cur.C, prev.C), R: minus(cur.R, prev.R) });
       }
       return { from, to, days: daysBetween(from, to), division, compare: pu ? { from: pf, to: pt } : null, columns, consolidated: null };
     }
