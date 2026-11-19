@@ -347,6 +347,10 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS urgent_payments (id VARCHAR(16) PRIMARY KEY, request_date DATE DEFAULT NULL, requested_by VARCHAR(255) NOT NULL DEFAULT '', requested_by_id VARCHAR(16) DEFAULT NULL, department VARCHAR(128) DEFAULT '', payee VARCHAR(255) NOT NULL, amount DECIMAL(15,2) NOT NULL DEFAULT 0, purpose TEXT DEFAULT NULL, payment_mode VARCHAR(32) DEFAULT '', required_by DATE DEFAULT NULL, reference_no VARCHAR(128) DEFAULT '', bank_details TEXT DEFAULT NULL, remarks TEXT DEFAULT NULL, status VARCHAR(16) NOT NULL DEFAULT 'pending', decided_by VARCHAR(255) DEFAULT '', decided_at DATETIME DEFAULT NULL, decision_note TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE INDEX idx_up_status ON urgent_payments (status)`,
   `ALTER TABLE urgent_payments ADD COLUMN IF NOT EXISTS documents TEXT DEFAULT NULL`,
+  // New product / new consignee requests waiting on the master approver
+  // (Shival, 2026-11-19: "once I approve only it should be available").
+  `CREATE TABLE IF NOT EXISTS master_requests (id VARCHAR(16) PRIMARY KEY, kind VARCHAR(16) NOT NULL, title VARCHAR(255) NOT NULL DEFAULT '', payload TEXT DEFAULT NULL, requested_by VARCHAR(255) NOT NULL DEFAULT '', requested_by_id VARCHAR(16) DEFAULT NULL, requested_email VARCHAR(255) DEFAULT '', status VARCHAR(16) NOT NULL DEFAULT 'pending', decided_by VARCHAR(255) DEFAULT '', decided_at DATETIME DEFAULT NULL, decision_note TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  `CREATE INDEX idx_mr_status ON master_requests (status)`,
   `CREATE TABLE IF NOT EXISTS announcements (id VARCHAR(16) PRIMARY KEY, title VARCHAR(255) NOT NULL, message TEXT DEFAULT NULL, posted_by VARCHAR(255) NOT NULL DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS vendor_submissions (id VARCHAR(16) PRIMARY KEY, business_name VARCHAR(255) NOT NULL, contact_person VARCHAR(255) DEFAULT '', phone VARCHAR(64) DEFAULT '', email VARCHAR(255) DEFAULT '', gst_no VARCHAR(32) DEFAULT '', address TEXT DEFAULT NULL, products TEXT DEFAULT NULL, notes TEXT DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
   `CREATE TABLE IF NOT EXISTS pr_requisitions (id VARCHAR(16) PRIMARY KEY, pr_no VARCHAR(64) NOT NULL, filled_by VARCHAR(255) NOT NULL DEFAULT '', vendors TEXT DEFAULT NULL, vendor_other VARCHAR(255) DEFAULT '', department TEXT DEFAULT NULL, department_other VARCHAR(255) DEFAULT '', accessory_product TEXT DEFAULT NULL, brazing_product TEXT DEFAULT NULL, cnc_product VARCHAR(255) DEFAULT '', consumable_product TEXT DEFAULT NULL, electric_product TEXT DEFAULT NULL, packing_product TEXT DEFAULT NULL, pressing_product TEXT DEFAULT NULL, washing_product TEXT DEFAULT NULL, welding_product TEXT DEFAULT NULL, new_product VARCHAR(255) DEFAULT '', current_stock VARCHAR(64) NOT NULL DEFAULT '', quantity_required VARCHAR(64) NOT NULL DEFAULT '', previous_rate VARCHAR(64) NOT NULL DEFAULT '', created_by VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -782,7 +786,7 @@ async function fixCollations() {
   // add new tables here the same day they're added to SCHEMA above.
   const tables = ['users','delegations','masters','clients','checklist_completions','daily_tasks','leaves','user_sessions',
     'fms_sheets','fms_sheet_steps','fms_step_doers','fms_extra_rows','fms_intake_fields',
-    'holidays','profile','app_config','dev_backups','help_tickets','urgent_payments','announcements',
+    'holidays','profile','app_config','dev_backups','help_tickets','urgent_payments','master_requests','announcements',
     'vendor_submissions','pr_requisitions','payment_entries','ims_items','ims_transactions','departments',
     'hr_employees','hr_salary_structure','hr_leave_types','hr_leave_balances','hr_attendance',
     'hr_payroll_runs','hr_payslips','hr_onboarding','hr_exits','hr_documents'];
@@ -11793,52 +11797,41 @@ app.get('/api/consignee-master', requireAuth, async (req, res) => {
   }
 });
 
-// POST /api/consignee-master — appends one buyer to the export team's own
-// fetch_consignee sheet. Like the product master, this writes into the
-// customer's "PI Export (Final)" workbook rather than an app table, so it is
-// permission-gated: Admin/HOD always, anyone else only if granted 'add' from
-// Users → Access.
-//
-// Only columns A:F are writable. G:I are the gutter, and J:P are an
-// IMPORTRANGE of a different workbook ("Final Consignee") that this app has no
-// access to — which is also why the form has no Contact No. / Email ID: those
-// two columns live only in that imported master.
-// sheetSerialised: the duplicate-name check below is read-check-append with
-// nothing else guarding it — two near-simultaneous submissions of the same
-// new consignee name would both pass "not already present" and both get
-// appended, producing two rows for the same buyer in the master the PI
-// typeahead reads from. Same lock key style already used for order/packing.
-app.post('/api/consignee-master', requireAuth, sheetSerialised('consignee', async (req, res) => {
-  try {
-    const allowed = await userCanUseFeature(req.session.user, 'consignee-master', 'add');
-    if (!allowed) return res.status(403).json({ error: 'You do not have permission to add a consignee' });
+function _consigneeFromBody(b) {
+  const val = (k) => String((b || {})[k] || '').trim();
+  const c = {
+    name: val('name'), paymentTerms: val('paymentTerms'), placeOfDelivery: val('placeOfDelivery'),
+    portOfLoading: val('portOfLoading'), portOfDischarge: val('portOfDischarge'), address: val('address'),
+  };
+  if (!c.name) throw Object.assign(new Error('Consignee Name is required'), { status: 400 });
+  // Every buyer already on the sheet carries all three, and a PI cannot be
+  // raised without them — a row missing any is not worth adding.
+  if (!c.placeOfDelivery || !c.portOfLoading || !c.portOfDischarge) {
+    throw Object.assign(new Error('Place of Delivery, Port of Loading and Port of Discharge are required'), { status: 400 });
+  }
+  return c;
+}
 
-    const b = req.body || {};
-    const val = (k) => String(b[k] || '').trim();
-    const name = val('name');
-    const placeOfDelivery = val('placeOfDelivery');
-    const portOfLoading = val('portOfLoading');
-    const portOfDischarge = val('portOfDischarge');
-    if (!name) return res.status(400).json({ error: 'Consignee Name is required' });
-    // Every buyer already on the sheet carries all three, and a PI cannot be
-    // raised without them — a row missing any is not worth adding.
-    if (!placeOfDelivery || !portOfLoading || !portOfDischarge) {
-      return res.status(400).json({ error: 'Place of Delivery, Port of Loading and Port of Discharge are required' });
-    }
+// The master is keyed by name — a duplicate makes the PI typeahead
+// ambiguous, and the two rows drift apart from there.
+async function _consigneeClash(name) {
+  const existing = await _loadPiConsigneeMaster();
+  const key = _piConsigneeKey(name);
+  const clash = existing.find(c => _piConsigneeKey(c.name) === key);
+  if (clash) throw Object.assign(new Error(`"${clash.name}" is already in the consignee master`), { status: 409 });
+}
 
+// The one place a consignee row is written — a master approver's direct add
+// and an approved request both land here, under the 'consignee' sheet lock
+// (the duplicate check below is read-check-append with nothing else guarding
+// it, so two near-simultaneous adds would otherwise both get through).
+function _consigneeAppend(c) {
+  return withSheetLock('consignee', async () => {
     const auth = getGoogleAuth();
-    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    if (!auth) throw new Error('Google Sheets is not configured on this server');
     const { google } = require('googleapis');
     const sheets = google.sheets({ version: 'v4', auth });
-
-    // The master is keyed by name — a duplicate makes the PI typeahead
-    // ambiguous, and the two rows drift apart from there.
-    const existing = await _loadPiConsigneeMaster();
-    const key = _piConsigneeKey(name);
-    const clash = existing.find(c => _piConsigneeKey(c.name) === key);
-    if (clash) return res.status(409).json({ error: `"${clash.name}" is already in the consignee master` });
-
-    const address = val('address');
+    await _consigneeClash(c.name);
     const src = PI_FMT.CONSIGNEE_SOURCE;
     await sheets.spreadsheets.values.append({
       spreadsheetId: src.spreadsheetId,
@@ -11851,21 +11844,321 @@ app.post('/api/consignee-master', requireAuth, sheetSerialised('consignee', asyn
       // block in J:P and break it. Appending over the blank rows below the
       // A:F table leaves everything to the right alone.
       requestBody: {
-        values: [[name, val('paymentTerms'), placeOfDelivery, portOfLoading, portOfDischarge, address]],
+        values: [[c.name, c.paymentTerms, c.placeOfDelivery, c.portOfLoading, c.portOfDischarge, c.address]],
       },
     });
     _piConsigneeCache = null;   // the next PI typeahead must see it, TTL or not
+    const [address1, address2] = _piSplitAddress(c.address);
+    return { name: c.name, address1, address2, contact: '', paymentTerms: c.paymentTerms, portOfLoading: c.portOfLoading, portOfDischarge: c.portOfDischarge, placeOfDelivery: c.placeOfDelivery };
+  });
+}
 
-    const [address1, address2] = _piSplitAddress(address);
-    return res.json({
-      success: true,
-      consignee: { name, address1, address2, contact: '', paymentTerms: val('paymentTerms'), portOfLoading, portOfDischarge, placeOfDelivery },
-    });
+// POST /api/consignee-master — appends one buyer to the export team's own
+// fetch_consignee sheet. Asking needs the 'add' tick from Users → Access (or
+// Admin/HOD); adding straight away needs a master approver — anyone else's
+// consignee is held as a request until the approver accepts it.
+app.post('/api/consignee-master', requireAuth, async (req, res) => {
+  try {
+    const user = req.session.user;
+    const allowed = await userCanUseFeature(user, 'consignee-master', 'add');
+    if (!allowed) return res.status(403).json({ error: 'You do not have permission to add a consignee' });
+    const c = _consigneeFromBody(req.body);
+    await _consigneeClash(c.name);
+    if (!(await isMasterApprover(user))) {
+      await _masterPendingClash('consignee', c.name);
+      const request = await createMasterRequest('consignee', c.name, c, user);
+      return res.json({ success: true, pending: true, request });
+    }
+    const consignee = await _consigneeAppend(c);
+    return res.json({ success: true, consignee });
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
     console.error('[consignee-master] add failed:', e.message);
     return res.status(500).json({ error: e.message });
   }
-}));
+});
+
+/* ── New product / consignee approval ─────────────────────────────────────────
+   Shival (2026-11-19): "once I approve only it should be available — this
+   will limit people creating new products. Same for adding new consignee."
+   Anyone with the add tick can still fill the form, but unless they are a
+   master approver the row is parked in master_requests and only written to
+   the sheet when an approver accepts it (Approvals tab, or the mail buttons).
+   Approvers are app_config 'master_approval_notify' (emails or login names),
+   seeded with Shival; the site owner always counts as one. Admin/HOD do NOT
+   bypass it — limiting who creates masters is the point. */
+const MASTER_APPROVERS_SEED = ['shivalshah@laltd.in'];
+const MR_TOKEN_NS = 'mr:';
+const MR_KIND_LABEL = { product: 'New Product', consignee: 'New Consignee' };
+const mrActionUrl = (id, decision, email) =>
+  `${APP_ORIGIN}/mr-action?t=${encodeURIComponent(leaveTokenFor(MR_TOKEN_NS + id, decision, email))}`;
+
+async function masterApprovers() {
+  return _notifyRecipients('master_approval_notify', MASTER_APPROVERS_SEED).catch(() => MASTER_APPROVERS_SEED.slice());
+}
+async function isMasterApprover(user) {
+  if (!user) return false;
+  if (isSuperAdmin(user)) return true;
+  const email = String(user.email || '').trim().toLowerCase();
+  return !!email && (await masterApprovers()).includes(email);
+}
+async function _mrNameForEmail(email) {
+  const e = String(email || '').trim().toLowerCase();
+  try {
+    if (USE_DB) {
+      const r = (await q('SELECT name FROM users WHERE LOWER(TRIM(email))=$1', [e]))[0];
+      if (r && r.name) return r.name;
+    } else {
+      const u = ((await readStore()).users || []).find(x => String(x.email || '').trim().toLowerCase() === e);
+      if (u && u.name) return u.name;
+    }
+  } catch {}
+  return e;
+}
+
+function mrOut(r) {
+  if (!r) return r;
+  let payload = r.payload;
+  if (typeof payload === 'string') { try { payload = JSON.parse(payload); } catch { payload = {}; } }
+  return {
+    id: r.id, kind: r.kind, title: r.title, payload: payload || {},
+    requested_by: r.requested_by, requested_by_id: r.requested_by_id, requested_email: r.requested_email || '',
+    status: r.status || 'pending', decided_by: r.decided_by || '', decided_at: r.decided_at || null,
+    decision_note: r.decision_note || '', created_at: r.created_at,
+  };
+}
+
+async function _mrAll() {
+  await ensureSchema();
+  if (USE_DB) return (await q('SELECT * FROM master_requests ORDER BY created_at DESC', [])).map(mrOut);
+  const store = await readStore();
+  return (store.masterRequests || []).map(mrOut).sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+}
+async function _mrGet(id) {
+  await ensureSchema();
+  if (USE_DB) return mrOut((await q('SELECT * FROM master_requests WHERE id=$1', [id]))[0]);
+  return mrOut(((await readStore()).masterRequests || []).find(r => r.id === id));
+}
+
+// Two people asking for the same model / buyer at once would otherwise give
+// the approver two requests, the second of which fails on approval.
+async function _masterPendingClash(kind, title) {
+  const norm = (t) => kind === 'consignee' ? _piConsigneeKey(t) : String(t || '').trim().toLowerCase();
+  const key = norm(title);
+  const same = (await _mrAll()).find(r => r.kind === kind && r.status === 'pending' && norm(r.title) === key);
+  if (same) throw Object.assign(new Error(`"${title}" is already waiting for approval (${same.id}, asked by ${same.requested_by})`), { status: 409 });
+}
+
+const _mrRows = (r) => {
+  const p = r.payload || {};
+  const base = [['Request No.', r.id], ['Asked By', r.requested_by]];
+  if (r.kind === 'product') {
+    return base.concat([
+      ['Model No.', p.modelNo], ['Item Name', p.itemName], ['Size', p.size], ['SWG', p.swg],
+      ['Per Box Packing', p.perBoxPacking], ['Per Box CBM', p.perBoxCbm], ['Per Pcs Weight', p.perPcsWeight],
+    ]);
+  }
+  return base.concat([
+    ['Consignee', p.name], ['Address', p.address], ['Payment Terms', p.paymentTerms],
+    ['Place of Delivery', p.placeOfDelivery], ['Port of Loading', p.portOfLoading], ['Port of Discharge', p.portOfDischarge],
+  ]);
+};
+
+async function createMasterRequest(kind, title, payload, user) {
+  await ensureSchema();
+  const row = {
+    kind, title: String(title).slice(0, 255), payload: JSON.stringify(payload),
+    requested_by: user.name || user.email || '', requested_by_id: user.id || null,
+    requested_email: String(user.email || '').trim().toLowerCase(), status: 'pending',
+  };
+  let id;
+  if (USE_DB) {
+    id = await withSeqId('master_requests', 'MR', 4, (nid) => pool.query(
+      `INSERT INTO master_requests (id,kind,title,payload,requested_by,requested_by_id,requested_email,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [nid, row.kind, row.title, row.payload, row.requested_by, row.requested_by_id, row.requested_email, row.status]));
+  } else {
+    const store = await readStore();
+    store.masterRequests = store.masterRequests || [];
+    let n = 0;
+    for (const r of store.masterRequests) { const t = String(r.id || '').replace(/^MR/, ''); if (/^\d+$/.test(t)) n = Math.max(n, +t); }
+    id = 'MR' + String(n + 1).padStart(4, '0');
+    store.masterRequests.push({ ...row, id, created_at: new Date().toISOString() });
+    await writeStore(store);
+  }
+  const saved = mrOut({ ...row, id, created_at: new Date() });
+  _sendMasterRequestMail(saved, 'raised').catch(e => console.error('[master-request] mail failed:', e.message));
+  return saved;
+}
+
+async function _sendMasterRequestMail(r, stage) {
+  const mailer = getMailer();
+  if (!mailer) { console.log('[email] master request mail skipped — SMTP not configured'); return; }
+  const label = MR_KIND_LABEL[r.kind] || 'New Master';
+  const from = `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`;
+  const esc = escHtml;
+  const rows = _mrRows(r).map(([k, v]) => [k, v ? esc(v) : '']);
+  if (stage === 'raised') {
+    for (const email of await masterApprovers()) {
+      await mailer.sendMail({
+        from, to: email,
+        subject: `${label} for approval — ${r.title} (${r.requested_by})`,
+        html: _leaveMailHtml({
+          heading: `${label} — approval needed`,
+          colour: '#0150AA',
+          lead: `<b>${esc(r.requested_by)}</b> wants to add ${r.kind === 'product' ? 'a product to the product master' : 'a consignee to the consignee master'}. It will not be available on any PI until you approve it.`,
+          rows,
+          actions: _decisionButtons(mrActionUrl(r.id, 'Approved', email), mrActionUrl(r.id, 'Rejected', email)),
+          footer: 'Either button opens a page asking you to confirm. You can also decide it under <b>Approvals → New Product / Consignee</b> in the ERP.',
+        }),
+      });
+      console.log('[email] master request', r.id, 'approval mail sent to:', email);
+    }
+    return;
+  }
+  if (!r.requested_email) return;
+  const approved = r.status === 'Approved';
+  await mailer.sendMail({
+    from, to: r.requested_email,
+    subject: `${label} ${r.status} — ${r.title}`,
+    html: _leaveMailHtml({
+      heading: `${label} ${r.status}`,
+      colour: approved ? '#15803d' : '#b91c1c',
+      lead: `Your request to add <b>${esc(r.title)}</b> has been <b>${esc(String(r.status).toLowerCase())}</b> by <b>${esc(r.decided_by)}</b>.`
+        + (approved ? ' It can now be picked on a PI.' : ''),
+      rows: rows.concat(r.decision_note ? [['Note', esc(r.decision_note)]] : []),
+    }),
+  });
+  console.log('[email] master request', r.id, stage, 'mail sent to:', r.requested_email);
+}
+
+/* Approving writes the row into the sheet first and only then marks the
+   request — if the write fails (say the same model was added meanwhile) the
+   request stays pending with the reason, instead of claiming an approval that
+   never reached the sheet. Two approvals racing are caught by the sheet's own
+   duplicate check on the second write. */
+async function decideMasterRequest(id, decision, decidedBy, note) {
+  const current = await _mrGet(id);
+  if (!current) return { status: 404, error: 'Request not found' };
+  if (current.status !== 'pending') return { status: 409, error: `Already ${current.status}`, row: current };
+  if (decision === 'Approved') {
+    try {
+      if (current.kind === 'product') await _piProductAppend(_piProductFromBody(current.payload));
+      else await _consigneeAppend(_consigneeFromBody(current.payload));
+    } catch (e) {
+      return { status: e.status || 500, error: 'Could not add it: ' + e.message, row: current };
+    }
+  }
+  if (USE_DB) {
+    await pool.query(
+      `UPDATE master_requests SET status=$1, decided_by=$2, decided_at=NOW(), decision_note=$3 WHERE id=$4 AND status='pending'`,
+      [decision, decidedBy, note, id]);
+  } else {
+    const store = await readStore();
+    const r = (store.masterRequests || []).find(x => x.id === id);
+    if (r && r.status === 'pending') {
+      Object.assign(r, { status: decision, decided_by: decidedBy, decided_at: new Date().toISOString(), decision_note: note });
+      await writeStore(store);
+    }
+  }
+  const saved = await _mrGet(id);
+  _sendMasterRequestMail(saved, 'decided').catch(e => console.error('[master-request] decision mail failed:', e.message));
+  return { saved };
+}
+
+// GET /api/master-requests — an approver sees every request; anyone else
+// only the ones they asked for.
+app.get('/api/master-requests', requireAuth, async (req, res) => {
+  try {
+    const user = req.session.user;
+    const approver = await isMasterApprover(user);
+    const rows = (await _mrAll()).filter(r => approver || r.requested_by_id === user.id);
+    return res.json({ approver, rows });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/master-requests', requireAuth, async (req, res) => {
+  try {
+    const user = req.session.user;
+    if (!(await isMasterApprover(user))) return res.status(403).json({ error: 'Only the product / consignee approver can decide this' });
+    const { id, status, note } = req.body || {};
+    if (!id) return res.status(400).json({ error: 'id required' });
+    const decision = /^approved$/i.test(status) ? 'Approved' : /^rejected$/i.test(status) ? 'Rejected' : null;
+    if (!decision) return res.status(400).json({ error: 'status must be Approved or Rejected' });
+    const out = await decideMasterRequest(String(id), decision, user.name || user.email || '', String(note || '').trim());
+    if (out.error) return res.status(out.status).json({ error: out.error });
+    return res.json(out.saved);
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+// Deciding from the mail — same shape as /up-action: the signed token is the
+// authorisation, GET only shows a confirm page, POST decides.
+async function _mrForToken(token) {
+  const claim = readLeaveToken(token);
+  if (!claim || !String(claim.id).startsWith(MR_TOKEN_NS)) {
+    return { error: 'This link is not valid. Open Approvals → New Product / Consignee in the ERP instead.' };
+  }
+  const row = await _mrGet(claim.id.slice(MR_TOKEN_NS.length));
+  if (!row) return { error: 'That request no longer exists.' };
+  const email = String(claim.email || '').toLowerCase();
+  if (!(await masterApprovers()).includes(email) && !isSuperAdminEmail(email)) {
+    return { error: 'This link belongs to someone who is no longer the product / consignee approver.' };
+  }
+  return { claim, row, approverName: await _mrNameForEmail(email) };
+}
+
+const _mrPageRows = (r) => _mrRows(r).map(([k, v]) => [k, v || '—']);
+const _mrAlreadyPage = (r) => _leaveActionPage({
+  title: 'Already decided', tone: 'plain',
+  lead: `This request was already marked <b>${escHtml(r.status)}</b>${r.decided_by ? ' by ' + escHtml(r.decided_by) : ''}. Nothing more to do.`,
+  rows: _mrPageRows(r),
+});
+
+app.get('/mr-action', async (req, res) => {
+  try {
+    const { error, claim, row } = await _mrForToken(req.query.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    if (row.status !== 'pending') return res.send(_mrAlreadyPage(row));
+    const good = /^approved$/i.test(claim.decision);
+    const other = good ? 'Rejected' : 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? `Approve ${row.title}?` : `Reject ${row.title}?`,
+      tone: good ? 'good' : 'bad',
+      lead: `You are about to <b>${good ? 'approve' : 'reject'}</b> <b>${escHtml(row.requested_by)}</b>'s ${escHtml((MR_KIND_LABEL[row.kind] || '').toLowerCase())}.${good ? ' It will be added to the master straight away.' : ''}`,
+      rows: _mrPageRows(row),
+      form: `<form method="POST" action="/mr-action">
+               <input type="hidden" name="t" value="${escHtml(String(req.query.t))}">
+               <button type="submit">Yes, ${good ? 'approve' : 'reject'} it</button>
+             </form>`,
+      note: `Meant to do the opposite? <a href="/mr-action?t=${encodeURIComponent(leaveTokenFor(MR_TOKEN_NS + row.id, other, claim.email))}">Switch to ${other}</a>.`,
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Something went wrong', tone: 'bad', lead: escHtml(e.message) }));
+  }
+});
+
+app.post('/mr-action', async (req, res) => {
+  try {
+    const { error, claim, row, approverName } = await _mrForToken(req.body?.t);
+    if (error) return res.status(400).send(_leaveActionPage({ title: 'Link not usable', tone: 'bad', lead: escHtml(error) }));
+    if (row.status !== 'pending') return res.send(_mrAlreadyPage(row));
+    const status = /^approved$/i.test(claim.decision) ? 'Approved' : 'Rejected';
+    const out = await decideMasterRequest(row.id, status, approverName, '');
+    if (out.error) {
+      if (out.row && out.row.status !== 'pending') return res.send(_mrAlreadyPage(out.row));
+      return res.status(out.status || 500).send(_leaveActionPage({ title: 'Could not approve', tone: 'bad', lead: escHtml(out.error), rows: _mrPageRows(row) }));
+    }
+    const good = status === 'Approved';
+    res.send(_leaveActionPage({
+      title: good ? 'Approved' : 'Rejected',
+      tone: good ? 'good' : 'bad',
+      lead: `<b>${escHtml(row.title)}</b> has been ${good ? 'added to the master and can now be picked on a PI' : 'rejected'}. <b>${escHtml(row.requested_by)}</b> has been emailed.`,
+      rows: _mrPageRows(row),
+      note: 'You can close this tab.',
+    }));
+  } catch (e) {
+    res.status(500).send(_leaveActionPage({ title: 'Could not record the decision', tone: 'bad', lead: escHtml(e.message) }));
+  }
+});
 
 // GET /api/proforma-invoice/masters?date=YYYY-MM-DD — next PI number for that
 // date's financial year, the boilerplate defaults the create form pre-fills
@@ -12020,70 +12313,95 @@ async function _uploadPiProductPhoto(dataUrl, modelNo) {
   return `https://drive.google.com/thumbnail?id=${file.data.id}&sz=w400`;
 }
 
+// Shapes and checks a new product the same way whether it is being added now
+// or held for approval. Throws { status, message } on a bad request.
+function _piProductFromBody(b) {
+  const modelNo = String(b.modelNo || '').trim();
+  const itemName = String(b.itemName || '').trim();
+  if (!modelNo || !itemName) throw Object.assign(new Error('Model No. and Item Name are required'), { status: 400 });
+  return {
+    modelNo, itemName,
+    size: String(b.size || '').trim(),
+    swg: String(b.swg || '').trim(),
+    perBoxPacking: String(b.perBoxPacking || '').trim(),
+    perBoxCbm: String(b.perBoxCbm || '').trim(),
+    perPcsWeight: String(b.perPcsWeight || '').trim(),
+    imageUrl: String(b.imageUrl || '').trim(),
+  };
+}
+
+// The master is keyed by Model No. — a duplicate would make the typeahead
+// ambiguous and silently price the wrong line later.
+async function _piProductClash(modelNo) {
+  const existing = await _loadPiProductCatalog();
+  if (existing.some(p => p.modelNo.toLowerCase() === String(modelNo).toLowerCase())) {
+    throw Object.assign(new Error(`Model No. "${modelNo}" is already in the product master`), { status: 409 });
+  }
+  return existing;
+}
+
+// Best effort: the product is still worth saving without its picture, but the
+// caller reports photoSaved so the user is told.
+async function _piProductPhoto(product, photo) {
+  if (!photo) return true;
+  try {
+    product.imageUrl = (await _uploadPiProductPhoto(photo, product.modelNo)) || product.imageUrl;
+  } catch (e) {
+    console.error('[pi-product] photo upload failed:', e.message);
+  }
+  return !!product.imageUrl;
+}
+
+// The one place a product row is written to "PI Export (Final)" — used by a
+// master approver's direct add and by an approved request.
+async function _piProductAppend(product) {
+  const auth = getGoogleAuth();
+  if (!auth) throw new Error('Google Sheets is not configured on this server');
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const existing = await _piProductClash(product.modelNo);
+  const src = PI_FMT.PRODUCT_SOURCE;
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: src.spreadsheetId,
+    range: `'${src.tab}'!A:I`,
+    valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: {
+      values: [[
+        existing.length + 1, product.modelNo, product.itemName, product.size, product.swg,
+        product.perBoxPacking, product.perBoxCbm, product.perPcsWeight, product.imageUrl,
+      ]],
+    },
+  });
+  _piProductCache = null;   // the next typeahead must see it, cache TTL or not
+  return product;
+}
+
 // POST /api/proforma-invoice/products — adds a finished good to the shared
-// product master so it is immediately pickable on this PI (and every future
-// one). This writes into the customer's own "PI Export (Final)" workbook, not
-// an app-local table, which is why it is permission-gated the same way pricing
-// is: Admin/HOD always, anyone else only if granted 'add_product' from
-// Users → Access.
+// product master (the customer's own "PI Export (Final)" workbook). Who may
+// ask: Admin/HOD, or anyone granted 'add_product' from Users → Access. Who may
+// add straight away: only a master approver (see masterApprovers) — anyone
+// else's product is held as a request until the approver accepts it.
 app.post('/api/proforma-invoice/products', requireAuth, async (req, res) => {
   try {
-    const allowed = await userCanUseFeature(req.session.user, 'proforma-invoice', 'add_product');
+    const user = req.session.user;
+    const allowed = await userCanUseFeature(user, 'proforma-invoice', 'add_product');
     if (!allowed) return res.status(403).json({ error: 'You do not have permission to add a product' });
 
     const b = req.body || {};
-    const modelNo = String(b.modelNo || '').trim();
-    const itemName = String(b.itemName || '').trim();
-    if (!modelNo || !itemName) return res.status(400).json({ error: 'Model No. and Item Name are required' });
-
-    const auth = getGoogleAuth();
-    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
-    const { google } = require('googleapis');
-    const sheets = google.sheets({ version: 'v4', auth });
-
-    // The master is keyed by Model No. — a duplicate would make the typeahead
-    // ambiguous and silently price the wrong line later.
-    const existing = await _loadPiProductCatalog();
-    if (existing.some(p => p.modelNo.toLowerCase() === modelNo.toLowerCase())) {
-      return res.status(409).json({ error: `Model No. "${modelNo}" is already in the product master` });
+    const product = _piProductFromBody(b);
+    await _piProductClash(product.modelNo);
+    if (!(await isMasterApprover(user))) {
+      await _masterPendingClash('product', product.modelNo);
+      const photoSaved = await _piProductPhoto(product, b.photo);
+      const request = await createMasterRequest('product', product.modelNo, product, user);
+      return res.json({ success: true, pending: true, request, product, photoSaved });
     }
-
-    const product = {
-      modelNo, itemName,
-      size: String(b.size || '').trim(),
-      swg: String(b.swg || '').trim(),
-      perBoxPacking: String(b.perBoxPacking || '').trim(),
-      perBoxCbm: String(b.perBoxCbm || '').trim(),
-      perPcsWeight: String(b.perPcsWeight || '').trim(),
-      imageUrl: String(b.imageUrl || '').trim(),
-    };
-    if (b.photo) {
-      try {
-        product.imageUrl = (await _uploadPiProductPhoto(b.photo, modelNo)) || product.imageUrl;
-      } catch (e) {
-        // The product itself is still worth saving — the photo can be added
-        // later — but the user must be told the picture didn't make it.
-        console.error('[pi-product] photo upload failed:', e.message);
-      }
-    }
-
-    const src = PI_FMT.PRODUCT_SOURCE;
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: src.spreadsheetId,
-      range: `'${src.tab}'!A:I`,
-      valueInputOption: 'USER_ENTERED',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: {
-        values: [[
-          existing.length + 1, product.modelNo, product.itemName, product.size, product.swg,
-          product.perBoxPacking, product.perBoxCbm, product.perPcsWeight, product.imageUrl,
-        ]],
-      },
-    });
-    _piProductCache = null;   // the next typeahead must see it, cache TTL or not
-
-    return res.json({ success: true, product, photoSaved: !b.photo || !!product.imageUrl });
+    const photoSaved = await _piProductPhoto(product, b.photo);
+    await _piProductAppend(product);
+    return res.json({ success: true, product, photoSaved });
   } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
     console.error('[pi-product] add failed:', e.message);
     return res.status(500).json({ error: e.message });
   }

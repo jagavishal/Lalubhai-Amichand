@@ -21,7 +21,12 @@ window.Pages.approvals = {
   // delegator) — an Admin/HOD used to get every approval-required task
   // company-wide unconditionally. Checking this re-fetches unscoped.
   _taskShowAll: false,
-  _upDecide: null,          // { id, status } while the decision modal is open
+  _upDecide: null,
+  // New product / consignee requests — see _fetchMasterReqs.
+  _masterReqs: [],
+  _mrApprover: false,
+  _mrShowAll: false,
+  _mrBusy: '',          // { id, status } while the decision modal is open
   _seenRevise: new Set(),
   _seenApprovals: new Set(),
   _grantTask: null,
@@ -467,6 +472,159 @@ window.Pages.approvals = {
     return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 8h12M6 13l6 8M6 13h4a4 4 0 0 0 0-8"/></svg>`;
   },
 
+  /* ── New product / consignee requests ───────────────────────────────── */
+  // The approver (app_config master_approval_notify, Shival) sees every
+  // request and decides the pending ones; anyone else sees what they asked for.
+  async _fetchMasterReqs() {
+    try {
+      const d = await Utils.apiFetch('/api/master-requests');
+      this._masterReqs = Array.isArray(d?.rows) ? d.rows : [];
+      this._mrApprover = !!d?.approver;
+    } catch {
+      this._masterReqs = [];
+      this._mrApprover = false;
+    }
+  },
+
+  _mrPending() { return this._masterReqs.filter(r => r.status === 'pending').length; },
+
+  _mrDetail(r) {
+    const esc = this._esc.bind(this);
+    const p = r.payload || {};
+    const bits = r.kind === 'product'
+      ? [p.itemName, p.size && 'Size ' + p.size, p.swg && 'SWG ' + p.swg, p.perBoxPacking && p.perBoxPacking + '/box',
+         p.perBoxCbm && 'CBM ' + p.perBoxCbm, p.perPcsWeight && p.perPcsWeight + ' kg/pc']
+      : [p.address, p.paymentTerms, p.placeOfDelivery && 'Delivery: ' + p.placeOfDelivery,
+         p.portOfLoading && 'POL: ' + p.portOfLoading, p.portOfDischarge && 'POD: ' + p.portOfDischarge];
+    const photo = r.kind === 'product' && p.imageUrl
+      ? `<img src="${esc(p.imageUrl)}" alt="" style="width:44px;height:44px;object-fit:contain;border-radius:6px;border:1px solid #e2e8f0;float:left;margin-right:8px;">` : '';
+    return photo + bits.filter(Boolean).map(esc).join(' · ');
+  },
+
+  _buildMasterTable() {
+    const esc = this._esc.bind(this);
+    const approver = this._mrApprover;
+    const all = this._masterReqs;
+    const items = approver && !this._mrShowAll ? all.filter(r => r.status === 'pending') : all;
+    const STATUS = {
+      pending:  { label: 'Pending',  cls: 'bg-amber-50 text-amber-700'     },
+      Approved: { label: 'Approved', cls: 'bg-emerald-50 text-emerald-700' },
+      Rejected: { label: 'Rejected', cls: 'bg-red-50 text-red-700'         },
+    };
+    const toggle = approver ? `<div class="flex items-center justify-between flex-wrap gap-2 px-4 py-2.5 border-b border-slate-100 bg-white">
+        <div class="text-[12px] text-slate-500">${items.length} request${items.length === 1 ? '' : 's'}${this._mrShowAll ? '' : ' waiting for your approval'}</div>
+        <label class="flex items-center gap-2 text-[12px] text-slate-600 cursor-pointer">
+          <input type="checkbox" id="mr-show-all" ${this._mrShowAll ? 'checked' : ''}> Show decided requests too
+        </label>
+      </div>` : '';
+    if (!items.length) {
+      const empty = this._emptyState(this._masterIconSvg('w-8 h-8 text-primary-400'),
+        approver && !this._mrShowAll ? 'Nothing waiting for approval' : 'No new product / consignee requests',
+        'New products (Proforma Invoice → + New Product) and new consignees (Consignee Master) land here until approved.');
+      return toggle ? `<div class="card overflow-hidden">${toggle}${empty.replace('class="card p-14', 'class="p-14')}</div>` : empty;
+    }
+    const rows = items.map((r, i) => {
+      const s = STATUS[r.status] || STATUS.pending;
+      const pending = r.status === 'pending';
+      const busy = this._mrBusy === r.id;
+      const decided = !pending && (r.decided_by || r.decision_note)
+        ? `<div class="text-[11px] text-slate-400 mt-1">by ${esc(r.decided_by || '—')}${r.decision_note ? ' · ' + esc(r.decision_note) : ''}</div>` : '';
+      return `<tr class="table-row" ${pending && approver ? 'style="background:rgba(245,158,11,0.06)"' : ''}>
+        <td class="table-td text-slate-400 text-xs font-mono m-card-hide">${i + 1}</td>
+        <td class="table-td whitespace-nowrap m-card-title">
+          <div class="font-semibold text-slate-800">${esc(r.title)}</div>
+          <div class="text-[11px] text-slate-400">${r.kind === 'product' ? 'New Product' : 'New Consignee'} · ${esc(r.id)} · ${this._fmt(r.created_at)}</div>
+        </td>
+        <td class="table-td text-slate-700">${esc(r.requested_by || '—')}</td>
+        <td class="table-td text-slate-600 max-w-[340px] text-[12px]">${this._mrDetail(r)}</td>
+        <td class="table-td"><span class="pill font-semibold ${s.cls}">${s.label}</span>${decided}</td>
+        ${approver ? `<td class="table-td whitespace-nowrap m-card-actions">${pending ? `
+          <div class="flex gap-1.5">
+            <button data-mr-ok="${esc(r.id)}" class="pill bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer" ${busy ? 'disabled' : ''}>${busy ? '…' : 'Approve'}</button>
+            <button data-mr-no="${esc(r.id)}" class="pill bg-red-50 text-red-700 hover:bg-red-100 cursor-pointer" ${busy ? 'disabled' : ''}>Reject</button>
+          </div>` : '<span class="text-[11px] text-slate-400">—</span>'}</td>` : ''}
+      </tr>`;
+    }).join('');
+    return `<div class="card overflow-hidden">
+      ${toggle}
+      <div class="overflow-x-auto"><table class="w-full text-sm m-cards">
+        <thead class="bg-slate-50/80"><tr>
+          <th class="table-th">#</th><th class="table-th">Request</th><th class="table-th">Asked By</th>
+          <th class="table-th">Details</th><th class="table-th">Status</th>
+          ${approver ? '<th class="table-th">Action</th>' : ''}
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>`;
+  },
+
+  async _decideMaster(id, status, note) {
+    this._mrBusy = id;
+    this._renderContent();
+    try {
+      const r = await Utils.apiFetch('/api/master-requests', { method: 'PATCH', body: JSON.stringify({ id, status, note }) });
+      if (r && r.id) this._masterReqs = this._masterReqs.map(x => x.id === r.id ? r : x);
+      Utils.showToast(status === 'Approved' ? (r?.title || 'It') + ' added — the requester has been mailed' : 'Request rejected');
+    } catch (e) {
+      Utils.showToast(e.message || 'Could not record the decision', 'error');
+    }
+    this._mrBusy = '';
+    document.getElementById('mr-decide-overlay')?.remove();
+    this._renderContent();
+  },
+
+  _bindMasterEvents() {
+    const root = document.getElementById('approvals-root');
+    if (!root) return;
+    root.querySelector('#mr-show-all')?.addEventListener('change', (e) => {
+      this._mrShowAll = !!e.target.checked;
+      this._renderContent();
+    });
+    const open = (id, status) => {
+      const r = this._masterReqs.find(x => x.id === id);
+      if (!r) return;
+      const esc = this._esc.bind(this);
+      const approve = status === 'Approved';
+      document.getElementById('mr-decide-overlay')?.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'mr-decide-overlay';
+      overlay.className = 'fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4';
+      overlay.innerHTML = `
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+          <div class="px-6 py-4 border-b border-slate-100">
+            <h2 class="text-base font-semibold">${approve ? 'Approve' : 'Reject'} ${r.kind === 'product' ? 'New Product' : 'New Consignee'}</h2>
+            <p class="text-xs text-slate-500 mt-0.5">${esc(r.title)} · asked by ${esc(r.requested_by || '—')}</p>
+          </div>
+          <div class="p-6 space-y-3">
+            <div class="rounded-lg bg-slate-50 border border-slate-100 p-3 text-xs text-slate-600" style="overflow:hidden">${this._mrDetail(r) || '—'}</div>
+            ${approve ? '<p class="text-xs text-slate-500">It is added to the master straight away and can be picked on any PI.</p>' : ''}
+            <div>
+              <label class="block text-[10.5px] font-bold uppercase tracking-wider text-slate-500 mb-1">Note (optional)</label>
+              <textarea id="mr-decide-note" rows="2" class="w-full text-sm rounded-lg border border-slate-200 px-3 py-2" style="resize:none;font-family:inherit;outline:none;" placeholder="${approve ? '' : 'Why is this being rejected?'}"></textarea>
+            </div>
+          </div>
+          <div class="px-6 py-4 border-t border-slate-100 flex justify-end gap-2">
+            <button id="mr-decide-cancel" class="btn-secondary">Cancel</button>
+            <button id="mr-decide-confirm" class="${approve ? 'btn-success' : 'btn-danger'}">${approve ? 'Approve & Add' : 'Reject'}</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const close = () => overlay.remove();
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+      overlay.querySelector('#mr-decide-cancel').addEventListener('click', close);
+      overlay.querySelector('#mr-decide-confirm').addEventListener('click', (e) => {
+        e.currentTarget.disabled = true; e.currentTarget.textContent = 'Saving…';
+        this._decideMaster(r.id, status, overlay.querySelector('#mr-decide-note').value.trim());
+      });
+    };
+    root.querySelectorAll('[data-mr-ok]').forEach(b => b.addEventListener('click', () => open(b.dataset.mrOk, 'Approved')));
+    root.querySelectorAll('[data-mr-no]').forEach(b => b.addEventListener('click', () => open(b.dataset.mrNo, 'Rejected')));
+  },
+
+  _masterIconSvg(cls) {
+    return `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>`;
+  },
+
   /* ── render entry ──────────────────────────────────────── */
   async render() {
     const el = document.getElementById('main-content');
@@ -493,6 +651,7 @@ window.Pages.approvals = {
       isAdmin ? this._fetchAdmin() : this._fetchUser(),
       this._fetchLeaves(),
       this._fetchUrgent(),
+      this._fetchMasterReqs(),
     ]);
 
     this._renderContent();
@@ -523,17 +682,20 @@ window.Pages.approvals = {
           ${key}<span class="pill ${pill}">${count}</span></button>`;
       };
       const hasLeave = this._leaveRequests.length > 0;
-      const valid = ['My Requests', 'Urgent Payment'].concat(hasLeave ? ['Leave Requests'] : []);
+      const hasMaster = this._mrApprover || this._masterReqs.length > 0;
+      const valid = ['My Requests', 'Urgent Payment'].concat(hasLeave ? ['Leave Requests'] : [], hasMaster ? ['New Product / Consignee'] : []);
       if (!valid.includes(this._tab)) this._tab = hasLeave ? 'Leave Requests' : 'My Requests';
       const upPending = this._urgentPayments.filter(r => r.status === 'pending').length;
       const content = this._tab === 'My Requests' ? this._buildUserView()
         : this._tab === 'Urgent Payment' ? this._buildUrgentTable(false)
+        : this._tab === 'New Product / Consignee' ? this._buildMasterTable()
         : this._buildLeaveTable();
       root.innerHTML = `${this._mobileTitle()}
         <div class="ap-tabs flex gap-2 flex-wrap">
           ${hasLeave ? tab('Leave Requests', this._leaveRequests.length) : ''}
           ${tab('My Requests', this._myRequests.length)}
           ${tab('Urgent Payment', upPending)}
+          ${hasMaster ? tab('New Product / Consignee', this._mrApprover ? this._mrPending() : 0) : ''}
         </div>
         <div id="approvals-content">${content}</div>${this._mobileCss()}`;
       root.querySelectorAll('.approvals-tab').forEach(btn => {
@@ -544,6 +706,7 @@ window.Pages.approvals = {
     // Approve/Reject live in both shells, so they are bound once here.
     this._bindLeaveEvents();
     this._bindUrgentEvents();
+    this._bindMasterEvents();
 
     // Re-attach grant modal if open
     if (this._grantTask) {
@@ -558,6 +721,7 @@ window.Pages.approvals = {
       { key: 'Task Approvals',  count: this._taskApprovals.length,  icon: 'task'   },
       { key: 'Leave Requests',  count: this._leaveRequests.length,  icon: 'leave'  },
       { key: 'Urgent Payment',  count: this._urgentPayments.filter(r => r.status === 'pending').length, icon: 'urgent' },
+      { key: 'New Product / Consignee', count: this._mrApprover ? this._mrPending() : 0, icon: 'master' },
     ];
 
     const tabHtml = tabs.map(({ key, count, icon }) => {
@@ -569,6 +733,7 @@ window.Pages.approvals = {
       const iconHtml = icon === 'revise' ? this._reviseIconSvg('w-4 h-4')
         : icon === 'leave' ? this._leaveIconSvg('w-4 h-4')
         : icon === 'urgent' ? this._urgentIconSvg('w-4 h-4')
+        : icon === 'master' ? this._masterIconSvg('w-4 h-4')
         : this._taskIconSvg('w-4 h-4');
       const iconColorCls = active ? 'text-primary-600' : 'text-slate-400';
       return `<button data-tab="${key}" class="approvals-tab flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition border ${btnCls}">
@@ -585,6 +750,8 @@ window.Pages.approvals = {
       contentHtml = this._buildLeaveTable();
     } else if (this._tab === 'Urgent Payment') {
       contentHtml = this._buildUrgentTable(true);
+    } else if (this._tab === 'New Product / Consignee') {
+      contentHtml = this._buildMasterTable();
     } else {
       contentHtml = this._buildTaskApprovalsTable();
     }

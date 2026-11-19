@@ -915,6 +915,15 @@ window.Pages['proforma-invoice'] = (() => {
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
       const result = await Utils.apiFetch('/api/proforma-invoice/products', { method: 'POST', body: JSON.stringify(payload) });
+      if (result.pending) {
+        // Not in the master yet — the approver has to accept it first, so
+        // there is nothing to drop onto this PI.
+        Utils.showToast('Product ' + result.product.modelNo + ' sent for approval — it can be picked once approved'
+          + (result.photoSaved ? '' : ' (photo upload failed)'), 'success');
+        _newProductOpen = false; _newProductPhoto = null;
+        _renderNewProductModal();
+        return;
+      }
       Utils.showToast('Product ' + result.product.modelNo + ' added'
         + (result.photoSaved ? '' : ' — photo upload failed, add it later'), result.photoSaved ? 'success' : 'warning');
       _newProductOpen = false; _newProductPhoto = null;

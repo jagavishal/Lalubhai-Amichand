@@ -174,6 +174,13 @@ window.Pages['consignee-master'] = (() => {
     try {
       const data = await Utils.apiFetch('/api/consignee-master', { method: 'POST', body: JSON.stringify(payload) });
       if (!data) return;
+      if (data.pending) {
+        // Held for the approver — not in the master until accepted.
+        Utils.showToast(payload.name + ' sent for approval — it will appear here once approved', 'success');
+        _view = 'list';
+        render();
+        return;
+      }
       Utils.showToast(payload.name + ' added to the consignee master', 'success');
       // Straight into the list, filtered to the new row — cheaper than a
       // reload and it shows exactly what landed in the sheet.
