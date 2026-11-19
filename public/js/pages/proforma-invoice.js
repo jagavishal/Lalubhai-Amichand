@@ -2705,7 +2705,9 @@ window.Pages['proforma-invoice'] = (() => {
     const perCarton = _num(line.perCartonHint);
     const cartons = perCarton > 0 ? Math.floor(line.balanceQty / perCarton) : 0;
     return {
-      barcode: '',
+      // Pre-loaded from the sticker master by the line's client code; the
+      // packer can still type over it.
+      barcode: line.barcodeHint || '',
       cartons: cartons > 0 ? String(cartons) : '',
       perCarton: perCarton > 0 ? String(perCarton) : '',
       packedQty: '',
@@ -2983,36 +2985,45 @@ window.Pages['proforma-invoice'] = (() => {
   }
 
   // Column set of the line table, in the order the printed document has them.
+  // `w` is the column's min-width in px and `al` its alignment — header and
+  // cells share both, so a number's heading sits over the number. Without
+  // fixed widths the auto table layout let a long Item Code (no-wrap) eat the
+  // row and squeezed Description into a wrapped sliver, while the inputs
+  // (width:100%) collapsed — the "alignment" complaint of 19 Nov.
   const _PL_LINE_COLS = [
-    { label: 'Order No.', kind: 'ro' },
-    { label: 'Item Code', kind: 'ro' },
-    { label: 'Description', kind: 'ro', wide: true },
-    { label: 'Size', kind: 'ro' },
-    { label: 'Size (MM)', kind: 'ro' },
-    { label: 'Barcode', kind: 'in', field: 'barcode' },
-    { label: 'Carton No.', kind: 'calc' },
-    { label: 'Ordered', kind: 'ro' },
-    { label: 'Already Packed', kind: 'ro' },
-    { label: 'Balance', kind: 'ro' },
-    { label: 'Total Cartons', kind: 'in', field: 'cartons' },
-    { label: 'Pcs / Carton', kind: 'in', field: 'perCarton' },
-    { label: 'Packed Qty', kind: 'in', field: 'packedQty' },
-    { label: 'Net Wt / Carton', kind: 'in', field: 'netPerCarton' },
-    { label: 'Gr. Wt / Carton', kind: 'in', field: 'grossPerCarton' },
-    { label: 'CBM / Carton', kind: 'in', field: 'cbmPerCarton' },
-    { label: 'Total Net Wt', kind: 'calc' },
-    { label: 'Total Gr. Wt', kind: 'calc' },
-    { label: 'Total CBM', kind: 'calc' },
-    { label: 'Per Pcs Wt', kind: 'calc' },
+    { label: 'Order No.', kind: 'ro', w: 112 },
+    { label: 'Item Code', kind: 'ro', w: 130 },
+    { label: 'Description', kind: 'ro', w: 210 },
+    { label: 'Size', kind: 'ro', w: 64 },
+    { label: 'Size (MM)', kind: 'ro', w: 58 },
+    { label: 'Barcode', kind: 'in', field: 'barcode', w: 128 },
+    { label: 'Carton No.', kind: 'calc', w: 76, al: 'center' },
+    { label: 'Ordered', kind: 'ro', w: 64, al: 'right' },
+    { label: 'Already Packed', kind: 'ro', w: 64, al: 'right' },
+    { label: 'Balance', kind: 'ro', w: 64, al: 'right' },
+    { label: 'Total Cartons', kind: 'in', field: 'cartons', w: 72, al: 'right' },
+    { label: 'Pcs / Carton', kind: 'in', field: 'perCarton', w: 72, al: 'right' },
+    { label: 'Packed Qty', kind: 'in', field: 'packedQty', w: 80, al: 'right' },
+    { label: 'Net Wt / Carton', kind: 'in', field: 'netPerCarton', w: 80, al: 'right' },
+    { label: 'Gr. Wt / Carton', kind: 'in', field: 'grossPerCarton', w: 80, al: 'right' },
+    { label: 'CBM / Carton', kind: 'in', field: 'cbmPerCarton', w: 86, al: 'right' },
+    { label: 'Total Net Wt', kind: 'calc', w: 76, al: 'right' },
+    { label: 'Total Gr. Wt', kind: 'calc', w: 76, al: 'right' },
+    { label: 'Total CBM', kind: 'calc', w: 76, al: 'right' },
+    { label: 'Per Pcs Wt', kind: 'calc', w: 70, al: 'right' },
   ];
+  const _PL_COL_BY_FIELD = {};
+  _PL_LINE_COLS.forEach(c => { if (c.field) _PL_COL_BY_FIELD[c.field] = c; });
 
   function _plLinesHtml() {
     const orders = _plPickedOrders();
     if (!orders.length) {
       return '<div style="padding:18px;text-align:center;color:#94a3b8;font-size:12.5px;border:1px dashed #e2e8f0;border-radius:10px;">Tick the orders in the Order No. box above and their lines appear here.</div>';
     }
-    const ro = 'padding:5px 7px;font-size:11.5px;white-space:nowrap;';
-    const calc = 'padding:5px 7px;font-size:11.5px;white-space:nowrap;text-align:right;color:#475569;background:#f8fafc;';
+    const ro = 'padding:7px 7px;font-size:11.5px;white-space:nowrap;vertical-align:top;';
+    // Item Code / Description wrap inside their column instead of widening it.
+    const wrap = 'padding:7px 7px;font-size:11.5px;white-space:normal;word-break:break-word;line-height:1.35;vertical-align:top;';
+    const calc = 'padding:7px 7px;font-size:11.5px;white-space:nowrap;text-align:right;color:#475569;background:#f8fafc;vertical-align:top;';
     const rows = [];
     orders.forEach(o => o.lines.forEach(line => {
       // A line with nothing left is shown, greyed and locked — seeing that it
@@ -3022,13 +3033,13 @@ window.Pages['proforma-invoice'] = (() => {
       const v = _plNew.values[key] || (_plNew.values[key] = done
         ? { barcode: '', cartons: '', perCarton: '', packedQty: '', netPerCarton: '', grossPerCarton: '', cbmPerCarton: '', auto: {} }
         : _plSeedValues(line));
-      const cell = (f, extra) => '<td style="padding:4px 5px;"><input type="text" data-field="' + f + '" value="' + esc(v[f] == null ? '' : v[f]) + '"'
-        + (done ? ' disabled' : '') + (extra || '') + ' style="' + _cellInput + 'font-size:11.5px;padding:5px 6px;' + (done ? 'background:#f8fafc;color:#cbd5e1;' : '') + '" /></td>';
+      const cell = (f, extra) => '<td style="padding:3px 4px;vertical-align:top;"><input type="text" data-field="' + f + '" value="' + esc(v[f] == null ? '' : v[f]) + '"'
+        + (done ? ' disabled' : '') + (extra || '') + ' style="' + _cellInput + 'font-size:11.5px;padding:5px 6px;text-align:' + (_PL_COL_BY_FIELD[f].al || 'left') + ';' + (done ? 'background:#f8fafc;color:#cbd5e1;' : '') + '" /></td>';
       rows.push('<tr class="pl-line-row" data-key="' + esc(key) + '" data-order="' + esc(o.orderNo) + '" data-line="' + line.lineIdx + '" data-balance="' + line.balanceQty + '" style="border-bottom:1px solid #f1f5f9;' + (done ? 'opacity:.55;' : '') + '">'
         + '<td style="' + ro + 'font-weight:600;color:#475569;">' + esc(o.orderNo) + '</td>'
-        + '<td style="' + ro + '">' + esc(line.modelNo) + '</td>'
-        + '<td style="padding:5px 7px;font-size:11.5px;min-width:150px;">' + esc(line.itemName) + '</td>'
-        + '<td style="' + ro + '">' + esc(line.size) + '</td>'
+        + '<td style="' + wrap + '">' + esc(line.modelNo) + '</td>'
+        + '<td style="' + wrap + '">' + esc(line.itemName) + '</td>'
+        + '<td style="' + wrap + '">' + esc(line.size) + '</td>'
         + '<td style="' + ro + '">' + esc(line.swg) + '</td>'
         + cell('barcode')
         + '<td class="pl-carton-no" style="' + calc + 'text-align:center;">—</td>'
@@ -3048,10 +3059,11 @@ window.Pages['proforma-invoice'] = (() => {
       + '</tr>');
     }));
     return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
-      + '<table style="width:100%;border-collapse:collapse;min-width:1720px;">'
+      + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;min-width:' + _PL_LINE_COLS.reduce((s, c) => s + c.w, 0) + 'px;">'
+        + '<colgroup>' + _PL_LINE_COLS.map(c => '<col style="width:' + c.w + 'px;">').join('') + '</colgroup>'
         + '<thead><tr style="background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-          + _PL_LINE_COLS.map(c => '<th style="padding:6px 7px;text-align:' + (c.kind === 'calc' ? 'right' : 'left') + ';font-size:10px;color:'
-              + (c.kind === 'calc' ? '#cbd5e1' : '#94a3b8') + ';text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;">'
+          + _PL_LINE_COLS.map(c => '<th style="padding:6px 7px;text-align:' + (c.al || 'left') + ';vertical-align:bottom;font-size:10px;line-height:1.25;color:'
+              + (c.kind === 'calc' ? '#cbd5e1' : '#94a3b8') + ';text-transform:uppercase;letter-spacing:.04em;white-space:normal;">'
               + esc(c.label) + (c.kind === 'calc' ? ' *' : '') + '</th>').join('')
         + '</tr></thead>'
         + '<tbody id="pl-lines-tbody">' + rows.join('') + '</tbody>'

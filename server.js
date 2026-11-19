@@ -13678,7 +13678,38 @@ function _plPackedByLine(packingLists, exceptPlNo) {
 // balanceQty is floored at 0: an order edited down after a shipment went out
 // would otherwise report a negative balance and read as if goods were owed
 // back, when what it means is "nothing more to send".
-function _plOrderLines(order, packed) {
+// Pre-loaded barcodes for the packing form, from the sticker master
+// (PR sheet ITEM_CODE(PACKING_STICKER): H = Product ID, I = Barcode). The
+// Product ID is the buyer's own code — the same thing the PI/order line carries
+// as Client Code (Saif Plus "001-0243" etc.), so that is the match. Lines with
+// no client code fall back to item name + size, but only where exactly one
+// sticker row has that pair: a guessed barcode on a carton is worse than a
+// blank one the packer fills in.
+function _plNormKey(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+
+async function _plBarcodeLookup() {
+  let rows = [];
+  try { rows = await _loadPrItemCatalog('PACKING_STICKER'); }
+  catch (e) { console.error('[packing-list] sticker master read failed:', e.message); }
+  const byCode = new Map();
+  const byNameSize = new Map(); // key -> barcode, or null when ambiguous
+  rows.forEach(r => {
+    const barcode = String(r.barcode || '').trim();
+    if (!barcode) return;
+    const code = String(r.customerCodeRef || '').trim().toLowerCase();
+    if (code && !byCode.has(code)) byCode.set(code, barcode);
+    const k = _plNormKey(r.description) + '|' + _plNormKey(r.size);
+    byNameSize.set(k, byNameSize.has(k) && byNameSize.get(k) !== barcode ? null : barcode);
+  });
+  return (line) => {
+    const code = String(line.clientCode || '').trim().toLowerCase();
+    if (code && byCode.has(code)) return byCode.get(code);
+    if (code) return ''; // a client code the master does not know — don't guess by name
+    return byNameSize.get(_plNormKey(line.itemName) + '|' + _plNormKey(line.size)) || '';
+  };
+}
+
+function _plOrderLines(order, packed, barcodeOf) {
   return ((order.form && order.form.items) || []).map((it, i) => {
     const orderedQty = _plNum(it.qty);
     const packedQty = packed.get(_plLineKey(order.orderNo, i)) || 0;
@@ -13700,6 +13731,7 @@ function _plOrderLines(order, packed) {
       perCartonHint: _plNum(it.packing) || (orderCartons > 0 ? _plRound(orderedQty / orderCartons, 0) : 0),
       netPerCartonHint: orderCartons > 0 ? _plRound(orderWeight / orderCartons, 3) : 0,
       cbmPerCartonHint: orderCartons > 0 ? _plRound(orderCbm / orderCartons, 5) : 0,
+      barcodeHint: barcodeOf ? barcodeOf({ clientCode: it.clientCode, itemName: it.itemName, size: it.size }) : '',
     };
   });
 }
@@ -13740,11 +13772,12 @@ app.get('/api/packing-list/pending', requireAuth, async (req, res) => {
     await _plFillBuyerOrderNos(sheets, orders);
     const packed = _plPackedByLine(packingLists);
     const showAll = String(req.query.all || '') === '1';
+    const barcodeOf = await _plBarcodeLookup();
 
     const rows = orders
       .filter(o => o.status !== PL_FMT.ORDER_STATUS.cancelled && o.form)
       .map(o => {
-        const lines = _plOrderLines(o, packed);
+        const lines = _plOrderLines(o, packed, barcodeOf);
         const f = o.form || {};
         return {
           orderNo: o.orderNo, orderDate: o.orderDate, piNo: o.piNo, buyerOrderNo: o.buyerOrderNo,
