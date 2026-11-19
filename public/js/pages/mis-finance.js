@@ -283,9 +283,11 @@ window.Pages['mis-finance'] = (() => {
   let _sheet = null;      // rows of the chosen file
   let _sheetName = '';    // which worksheet, when the workbook has several
   let _preview = null;
+  let _picks = {};        // ledger → head chosen in this upload panel
+  let _pickRows = [];     // those ledgers, so they stay listed once mapped
 
   function uploadForm() {
-    _sheet = null; _preview = null;
+    _sheet = null; _preview = null; _picks = {}; _pickRows = [];
     H.openModal({
       id: 'mf-form', width: 900, title: 'Upload Tally Trial Balance',
       subtitle: 'Exported from Tally to Excel — one division, one period',
@@ -343,9 +345,11 @@ window.Pages['mis-finance'] = (() => {
   }
 
   function pickedMappings() {
-    const out = {};
-    document.querySelectorAll('#mu-preview select[data-map]').forEach((s) => { if (s.value) out[s.getAttribute('data-map')] = s.value; });
-    return out;
+    document.querySelectorAll('#mu-preview select[data-map]').forEach((s) => {
+      const name = s.getAttribute('data-map');
+      if (s.value && s.value !== NEW) _picks[name] = s.value; else delete _picks[name];
+    });
+    return { ..._picks };
   }
   const headOptions = (value) => {
     const opt = (h) => `<option value="${h.key}"${h.key === value ? ' selected' : ''}>${esc(h.label)}${h.pl ? ' (P&L)' : ''}</option>`;
@@ -353,13 +357,70 @@ window.Pages['mis-finance'] = (() => {
     return D.heads.filter((h) => !h.custom).map(opt).join('')
       + (own.length ? `<optgroup label="Your heads">${own.map(opt).join('')}</optgroup>` : '');
   };
-  const headSelect = (attr, name, value, blank = '— choose head —') => `<select ${attr}="${esc(name)}" style="${H.CONTROL}padding:5px 8px;font-size:12px;">
-      <option value="">${esc(blank)}</option>${headOptions(value)}</select>`;
+  const NEW = '__new';
+  const newOpt = `<option value="${NEW}">+ New head…</option>`;
+  const headSelect = (attr, name, value, blank = '— choose head —') => `<select ${attr}="${esc(name)}" data-prev="${esc(value || '')}" style="${H.CONTROL}padding:5px 8px;font-size:12px;">
+      <option value="">${esc(blank)}</option>${headOptions(value)}${newOpt}</select>`;
+
+  /* "+ New head…" in any head dropdown: make the head right there, then
+     pick it in that dropdown. Capture phase, so the dropdown's own change
+     handler never sees the placeholder value. Every head dropdown on the
+     screen gets the new head too. */
+  let _newBound = false;
+  function bindNewHead() {
+    if (_newBound) return;
+    _newBound = true;
+    document.addEventListener('change', (e) => {
+      const sel = e.target;
+      if (!(sel instanceof HTMLSelectElement) || sel.dataset.prev === undefined) return;
+      if (sel.value !== NEW) { sel.dataset.prev = sel.value; return; }
+      e.stopImmediatePropagation();
+      sel.value = sel.dataset.prev || '';
+      headForm(null, async (key) => {
+        await load();
+        document.querySelectorAll('select[data-prev]').forEach((x) => {
+          const keep = x === sel ? key : x.value;
+          const blank = x.querySelector('option[value=""]')?.outerHTML || '';
+          x.innerHTML = blank + headOptions(keep) + newOpt;
+          x.value = keep;
+          x.dataset.prev = keep;
+        });
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }, true);
+  }
+
+  // "Put the ticked ledgers under one head" — the bar above a ledger list.
+  const bulkBar = (id, what) => `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:8px 10px;margin:6px 0 8px;">
+      <label style="font-size:12.5px;display:flex;gap:6px;align-items:center;font-weight:600;"><input type="checkbox" id="${id}-all"/> Tick all</label>
+      <span style="font-size:12px;color:#64748b;">then put the ticked ${what} under</span>
+      <select id="${id}-h" data-prev="" style="${H.CONTROL}padding:5px 8px;font-size:12px;max-width:260px;width:auto;"><option value="">— choose head —</option>${headOptions('')}${newOpt}</select>
+      <button class="btn-primary btn-sm" id="${id}-go">Apply to ticked</button>
+      <span id="${id}-n" style="font-size:11.5px;color:#94a3b8;"></span></div>`;
+  function wireBulk(id, boxSel, apply) {
+    const $ = (x) => document.getElementById(x);
+    const boxes = () => [...document.querySelectorAll(boxSel)];
+    const count = () => { const n = boxes().filter((b) => b.checked).length; const el = $(`${id}-n`); if (el) el.textContent = n ? `${n} ticked` : ''; };
+    $(`${id}-all`)?.addEventListener('change', (e) => { boxes().forEach((b) => { b.checked = e.target.checked; }); count(); });
+    boxes().forEach((b) => b.addEventListener('change', count));
+    $(`${id}-go`)?.addEventListener('click', async (e) => {
+      const head = $(`${id}-h`).value;
+      const names = boxes().filter((b) => b.checked).map((b) => b.value);
+      if (!names.length) return H.fail(new Error('Tick the ledgers first'));
+      if (!head || head === NEW) return H.fail(new Error('Choose the head'));
+      e.target.disabled = true;
+      try { await apply(names, head); } catch (err) { H.fail(err); } finally { e.target.disabled = false; }
+    });
+  }
 
   async function runPreview() {
     const box = document.getElementById('mu-preview');
-    _preview = await H.post('/api/mis-finance/preview', { sheet: _sheet, mappings: pickedMappings() });
+    const keep = pickedMappings();
+    _preview = await H.post('/api/mis-finance/preview', { sheet: _sheet, mappings: keep });
     const p = _preview;
+    for (const u of p.unmapped) if (!_pickRows.some((x) => x.name === u.name)) _pickRows.push(u);
+    const toMap = _pickRows.filter((u) => keep[u.name] || p.unmapped.some((x) => x.name === u.name));
+    const open = toMap.filter((u) => !keep[u.name]).length;
     if (p.period) {
       if (!H.val('mu-from')) document.getElementById('mu-from').value = p.period.from;
       if (!H.val('mu-to')) document.getElementById('mu-to').value = p.period.to;
@@ -376,9 +437,11 @@ window.Pages['mis-finance'] = (() => {
         ${p.period ? ` · period ${esc(periodLabel(p.period.from, p.period.to))}` : ''}${p.hasOpening ? ' · opening + closing' : ' · closing only'}${_sheetName ? ` · sheet “${esc(_sheetName)}”` : ''}
         ${p.comparative ? `<br>Also has <b>${esc(periodLabel(p.comparative.period.from, p.comparative.period.to))}</b> — saved as that period too (if it is not uploaded yet), for the last-year comparison.${p.comparative.period.assumed ? ' <i>(The file shows no date for these columns, so they are taken as the same months last year.)</i>' : ''}` : ''}</div>
       ${warn.map((w) => `<div class="mf-warn">${esc(w)}</div>`).join('')}
-      ${p.unmapped.length ? `<div style="font-weight:700;font-size:12.5px;margin:6px 0;">Map these ${p.unmapped.length} ledger${p.unmapped.length === 1 ? '' : 's'} (remembered for next time)</div>
-        ${H.table(['Ledger', { label: 'Closing (Dr − Cr)', align: 'right' }, 'Report head'],
-          p.unmapped.map((u) => [esc(u.name), H.inr0(u.close), headSelect('data-map', u.name, '')]), { cards: true })}` : ''}
+      ${toMap.length ? `<div style="font-weight:700;font-size:12.5px;margin:6px 0;">Map these ${toMap.length} ledger${toMap.length === 1 ? '' : 's'} (remembered for next time)
+          <span style="font-weight:400;color:${open ? '#b45309' : '#15803d'};">· ${open ? `${open} still to map` : 'all mapped'}</span></div>
+        ${toMap.length > 1 ? bulkBar('mu-bulk', 'ledgers') : ''}
+        ${H.table(['', 'Ledger', { label: 'Closing (Dr − Cr)', align: 'right' }, 'Report head'],
+          toMap.map((u) => [`<input type="checkbox" class="mu-tick" value="${esc(u.name)}"/>`, esc(u.name), H.inr0(u.close), headSelect('data-map', u.name, keep[u.name] || '')]), { cards: true })}` : ''}
       <details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12.5px;font-weight:600;color:var(--color-primary);">Show how every row was read</summary>
         <div style="max-height:340px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;margin-top:6px;">
           <table class="mf-tbl"><thead><tr><th>Particulars</th><th>Opening</th><th>Closing</th><th style="text-align:left;">Head</th></tr></thead><tbody>
@@ -387,6 +450,12 @@ window.Pages['mis-finance'] = (() => {
             <td style="text-align:left;color:${r.head ? '#334155' : '#dc2626'};">${r.leaf ? esc(r.headText || headLabel(r.head) || 'not mapped') + (r.src ? ` <span style="color:#94a3b8;font-size:11px;">(${esc(SRC[r.src] || r.src)})</span>` : '') : '<span style="color:#94a3b8;">group total</span>'}</td></tr>`).join('')}
           </tbody></table></div></details>`;
     box.querySelectorAll('select[data-map]').forEach((s) => s.addEventListener('change', () => { if (s.value) runPreview().catch(H.fail); }));
+    bindNewHead();
+    wireBulk('mu-bulk', '#mu-preview .mu-tick', async (names, head) => {
+      box.querySelectorAll('select[data-map]').forEach((s) => { if (names.includes(s.getAttribute('data-map'))) s.value = head; });
+      await runPreview();
+      H.toast(`${names.length} ledger${names.length === 1 ? '' : 's'} put under ${headLabel(head)}`);
+    });
   }
 
   /* ── Mapping ──────────────────────────────────────────────────────── */
@@ -429,12 +498,13 @@ window.Pages['mis-finance'] = (() => {
         <label style="font-size:12.5px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="mf-monly"${_mapOnlyOpen ? ' checked' : ''}/> Only unmapped</label>
         <button class="btn-primary btn-sm" id="mf-msave" style="margin-left:auto;">Save Mapping</button>
       </div>
-      ${H.table(['Ledger / Group', 'Type', 'Divisions', 'Report Head', 'How'],
-        list.map((x) => [esc(x.name), x.leaf ? 'Ledger' : 'Group', esc(x.divisions.join(', ')), headCell(x), esc(SRC[x.src] || '—')]),
+      ${list.length ? bulkBar('mf-bulk', 'ledgers on this page') : ''}
+      ${H.table(['', 'Ledger / Group', 'Type', 'Divisions', 'Report Head', 'How'],
+        list.map((x) => [`<input type="checkbox" class="mf-tick" value="${esc(x.name)}"/>`, esc(x.name), x.leaf ? 'Ledger' : 'Group', esc(x.divisions.join(', ')), headCell(x), esc(SRC[x.src] || '—')]),
         { empty: 'Upload a Trial Balance first', cards: true, page: { key: 'mf-map', sig: [_mapQ, _mapOnlyOpen], onPage: render } })}`;
   }
 
-  function headForm(h) {
+  function headForm(h, onAdded) {
     const bases = D.heads.filter((x) => !x.custom && x.key !== 'ignore');
     H.openModal({
       id: 'mf-head', width: 520, title: h ? 'Edit head' : 'Add head',
@@ -445,8 +515,10 @@ window.Pages['mis-finance'] = (() => {
           <div style="font-size:11.5px;color:#94a3b8;margin-top:4px;">Decides where it counts — e.g. an expense head based on “Other Indirect Expenses” comes before EBITDA in the P&amp;L.</div></div>`,
       confirmText: h ? 'Save' : 'Add Head',
       onConfirm: async () => {
-        await H.post('/api/mis-finance/heads', { key: h?.key, label: H.val('mh-label'), base: H.val('mh-base') });
+        const label = H.val('mh-label').trim();
+        const r = await H.post('/api/mis-finance/heads', { key: h?.key, label, base: H.val('mh-base') });
         H.closeModal('mf-head');
+        if (onAdded) { await onAdded(r.key); H.toast(`Head “${label}” added and picked`); return; }
         H.toast(h ? 'Head saved' : 'Head added — pick it for ledgers below');
         await refresh();
       },
@@ -457,7 +529,7 @@ window.Pages['mis-finance'] = (() => {
     const pending = Object.prototype.hasOwnProperty.call(_split, x.name) ? _split[x.name] : undefined;
     const start = pending || (x.src === 'saved' && x.split) || [{ h: x.head || '', p: 100 }, { h: '', p: '' }];
     const rowHTML = (r) => `<div class="mf-srow" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-        <select class="ms-h" style="${H.CONTROL}flex:1;"><option value="">— choose head —</option>${headOptions(r.h)}</select>
+        <select class="ms-h" data-prev="${esc(r.h || '')}" style="${H.CONTROL}flex:1;"><option value="">— choose head —</option>${headOptions(r.h)}${newOpt}</select>
         <input class="ms-p" type="number" min="0" max="100" step="0.01" value="${esc(r.p)}" placeholder="%" style="${H.CONTROL}width:90px;text-align:right;" />
         <span style="font-size:12px;color:#64748b;">%</span>
         <button class="btn-secondary btn-sm ms-x" style="color:#dc2626;padding:4px 9px;">✕</button></div>`;
@@ -518,6 +590,7 @@ window.Pages['mis-finance'] = (() => {
 
   function bind() {
     const $ = (id) => document.getElementById(id);
+    bindNewHead();
     document.querySelectorAll('[data-mf-tab]').forEach((b) => b.addEventListener('click', () => { _tab = b.getAttribute('data-mf-tab'); render(); }));
     $('mf-up')?.addEventListener('click', uploadForm);
     $('mf-period')?.addEventListener('change', (e) => { _period = e.target.value; render(); });
@@ -538,7 +611,7 @@ window.Pages['mis-finance'] = (() => {
       }, 250);
     });
     $('mf-monly')?.addEventListener('change', (e) => { _mapOnlyOpen = e.target.checked; render(); });
-    $('mf-msave')?.addEventListener('click', async (e) => {
+    async function saveMapping(btn) {
       const set = {};
       document.querySelectorAll('select[data-mrow]').forEach((s) => {
         const name = s.getAttribute('data-mrow');
@@ -549,9 +622,19 @@ window.Pages['mis-finance'] = (() => {
       });
       for (const [name, v] of Object.entries(_split)) set[name] = Array.isArray(v) && v.length === 1 ? v[0].h : v;
       if (!Object.keys(set).length) return H.toast('Nothing changed');
-      e.target.disabled = true;
+      if (btn) btn.disabled = true;
       try { await H.post('/api/mis-finance/mapping', { set }); H.toast('Mapping saved'); _split = {}; M = null; R = null; await render(); }
-      catch (err) { e.target.disabled = false; H.fail(err); }
+      catch (err) { if (btn) btn.disabled = false; H.fail(err); }
+    }
+    $('mf-msave')?.addEventListener('click', (e) => saveMapping(e.target));
+    // Ticked rows → one head, saved straight away (with any other unsaved edits).
+    wireBulk('mf-bulk', '.mf-tick', async (names, head) => {
+      for (const name of names) {
+        const sel = [...document.querySelectorAll('select[data-mrow]')].find((x) => x.getAttribute('data-mrow') === name);
+        if (sel && !Object.prototype.hasOwnProperty.call(_split, name)) sel.value = head;
+        else _split[name] = head;   // a split row becomes one head again
+      }
+      await saveMapping(null);
     });
     document.querySelectorAll('[data-msplit]').forEach((b) => b.addEventListener('click', () => {
       const x = M.find((m) => m.name === b.getAttribute('data-msplit'));
