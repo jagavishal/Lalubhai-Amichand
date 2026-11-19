@@ -180,6 +180,7 @@ window.Pages.users = (() => {
     ],
     'proforma-invoice': [
       { key: 'set_price', label: 'Add/Edit Price' },
+      { key: 'add_product', label: 'Create New Product' },
     ],
   };
 
