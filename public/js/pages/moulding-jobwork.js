@@ -251,6 +251,7 @@ window.Pages['moulding-jobwork'] = (() => {
   /* ── Job work tab ─────────────────────────────────────────────────── */
 
   const lotsOf = (party) => J.lots.filter((l) => l.party === party);
+  const _lotSeq = (no) => Number(String(no || '').replace(/\D+/g, '')) || 0;
   const lotLabel = (l) => `${l.lot_no} · ${l.lot_type}${l.rate ? ` @ ₹${l.rate}` : ''}${l.docs?.length ? ` · ${l.docs.join(', ')}` : ''} — ${kg(l.balance)} kg left`;
 
   function jwTab() {
@@ -276,7 +277,9 @@ window.Pages['moulding-jobwork'] = (() => {
       </button>`;
     }).join('')}</div>`;
 
-    const lots = lotsOf(J.party);
+    // Newest lot on top, L01 last — the list only grows, and the open lot is
+    // the one being worked (Sajil sir, 19 Nov: "descending order mein chahiye").
+    const lots = lotsOf(J.party).slice().sort((a, b) => _lotSeq(b.lot_no) - _lotSeq(a.lot_no));
     const R = { align: 'right', nowrap: true };
     const lotTable = H.table([
       // Phone cards keep what tells the story — final, received, balance,

@@ -2991,6 +2991,7 @@ window.Pages['proforma-invoice'] = (() => {
   // row and squeezed Description into a wrapped sliver, while the inputs
   // (width:100%) collapsed — the "alignment" complaint of 19 Nov.
   const _PL_LINE_COLS = [
+    { label: 'Move', kind: 'move', w: 50, al: 'center' },
     { label: 'Order No.', kind: 'ro', w: 112 },
     { label: 'Item Code', kind: 'ro', w: 130 },
     { label: 'Description', kind: 'ro', w: 210 },
@@ -3025,7 +3026,17 @@ window.Pages['proforma-invoice'] = (() => {
     const wrap = 'padding:7px 7px;font-size:11.5px;white-space:normal;word-break:break-word;line-height:1.35;vertical-align:top;';
     const calc = 'padding:7px 7px;font-size:11.5px;white-space:nowrap;text-align:right;color:#475569;background:#f8fafc;vertical-align:top;';
     const rows = [];
-    orders.forEach(o => o.lines.forEach(line => {
+    // Row order is the packer's to set (drag / ▲▼ — Sajil sir, 19 Nov: an
+    // item landing at the end should be movable up). Carton numbers run down
+    // the rows in this order and the server keeps the order it is sent.
+    const entries = [];
+    orders.forEach(o => o.lines.forEach(line => entries.push({ o, line, key: _plLineKey(o.orderNo, line.lineIdx), i: entries.length })));
+    const pos = new Map((_plNew.order || []).map((k, i) => [k, i]));
+    const rank = (e) => pos.has(e.key) ? pos.get(e.key) : 1e6 + e.i;
+    entries.sort((a, b) => rank(a) - rank(b));
+    _plNew.order = entries.map(e => e.key);
+    const mvBtn = 'display:block;width:22px;height:16px;line-height:14px;padding:0;margin:0 auto;border:1px solid #e2e8f0;border-radius:4px;background:#fff;color:#64748b;font-size:9px;cursor:pointer;';
+    entries.forEach(({ o, line }) => {
       // A line with nothing left is shown, greyed and locked — seeing that it
       // is done is more useful than wondering where it went.
       const done = line.balanceQty <= 0;
@@ -3036,8 +3047,19 @@ window.Pages['proforma-invoice'] = (() => {
       const cell = (f, extra) => '<td style="padding:3px 4px;vertical-align:top;"><input type="text" data-field="' + f + '" value="' + esc(v[f] == null ? '' : v[f]) + '"'
         + (done ? ' disabled' : '') + (extra || '') + ' style="' + _cellInput + 'font-size:11.5px;padding:5px 6px;text-align:' + (_PL_COL_BY_FIELD[f].al || 'left') + ';' + (done ? 'background:#f8fafc;color:#cbd5e1;' : '') + '" /></td>';
       rows.push('<tr class="pl-line-row" data-key="' + esc(key) + '" data-order="' + esc(o.orderNo) + '" data-line="' + line.lineIdx + '" data-balance="' + line.balanceQty + '" style="border-bottom:1px solid #f1f5f9;' + (done ? 'opacity:.55;' : '') + '">'
-        + '<td style="' + ro + 'font-weight:600;color:#475569;">' + esc(o.orderNo) + '</td>'
-        + '<td style="' + wrap + '">' + esc(line.modelNo) + '</td>'
+        // The buyer's own order no. and item code (Saif Plus "001-0243")
+        // ride under ours — the printed sheet carries both in ORDER NO. /
+        // BUYER CODE, and the packer matches cartons by them.
+        + '<td style="padding:4px 2px;vertical-align:top;text-align:center;white-space:nowrap;">'
+          + '<span class="pl-drag" title="Drag to move this line" style="display:inline-block;cursor:grab;color:#94a3b8;font-size:14px;line-height:1;padding:0 2px;vertical-align:middle;">⠿</span>'
+          + '<span style="display:inline-block;vertical-align:middle;">'
+            + '<button type="button" data-move="up" title="Move up" style="' + mvBtn + 'margin-bottom:2px;">▲</button>'
+            + '<button type="button" data-move="down" title="Move down" style="' + mvBtn + '">▼</button>'
+          + '</span></td>'
+        + '<td style="' + ro + 'font-weight:600;color:#475569;">' + esc(o.orderNo)
+          + (o.buyerOrderNo ? '<div style="font-weight:500;font-size:10.5px;color:#64748b;margin-top:2px;">Buyer: ' + esc(o.buyerOrderNo) + '</div>' : '') + '</td>'
+        + '<td style="' + wrap + '">' + esc(line.modelNo)
+          + (line.clientCode ? '<div style="font-size:10.5px;color:#1d4ed8;font-weight:600;margin-top:2px;">Buyer code: ' + esc(line.clientCode) + '</div>' : '') + '</td>'
         + '<td style="' + wrap + '">' + esc(line.itemName) + '</td>'
         + '<td style="' + wrap + '">' + esc(line.size) + '</td>'
         + '<td style="' + ro + '">' + esc(line.swg) + '</td>'
@@ -3057,7 +3079,7 @@ window.Pages['proforma-invoice'] = (() => {
         + '<td class="pl-cbm-total" style="' + calc + '">—</td>'
         + '<td class="pl-per-pcs" style="' + calc + '">—</td>'
       + '</tr>');
-    }));
+    });
     return '<div style="overflow-x:auto;border:1px solid #e2e8f0;border-radius:10px;">'
       + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;min-width:' + _PL_LINE_COLS.reduce((s, c) => s + c.w, 0) + 'px;">'
         + '<colgroup>' + _PL_LINE_COLS.map(c => '<col style="width:' + c.w + 'px;">').join('') + '</colgroup>'
@@ -3189,6 +3211,56 @@ window.Pages['proforma-invoice'] = (() => {
         // then on it stops following cartons × pcs-per-carton.
         if (input.dataset.field === 'packedQty') input.dataset.auto = '0';
         _plRecalc();
+      });
+
+      // Reordering lines: ▲▼ buttons, or drag by the ⠿ handle. Only the
+      // handle makes a row draggable, so text in the inputs still selects.
+      const syncOrder = () => {
+        _plNew.order = Array.from(tbody.querySelectorAll('.pl-line-row')).map(r => r.dataset.key);
+        _plRecalc();
+      };
+      tbody.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-move]');
+        if (!btn) return;
+        const row = btn.closest('.pl-line-row');
+        if (btn.dataset.move === 'up' && row.previousElementSibling) tbody.insertBefore(row, row.previousElementSibling);
+        else if (btn.dataset.move === 'down' && row.nextElementSibling) tbody.insertBefore(row.nextElementSibling, row);
+        else return;
+        syncOrder();
+      });
+      let dragRow = null;
+      tbody.addEventListener('mousedown', (e) => {
+        const h = e.target.closest('.pl-drag');
+        if (h) h.closest('.pl-line-row').draggable = true;
+      });
+      // A click on the handle that never became a drag must not leave the row
+      // draggable — that blocks selecting text in its inputs.
+      tbody.addEventListener('mouseup', (e) => {
+        const h = e.target.closest('.pl-drag');
+        if (h && !dragRow) h.closest('.pl-line-row').draggable = false;
+      });
+      tbody.addEventListener('dragstart', (e) => {
+        dragRow = e.target.closest && e.target.closest('.pl-line-row');
+        if (!dragRow) return;
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', dragRow.dataset.key); } catch (_) {}
+        dragRow.style.background = '#eff6ff';
+      });
+      tbody.addEventListener('dragover', (e) => {
+        if (!dragRow) return;
+        e.preventDefault();
+        const over = e.target.closest('.pl-line-row');
+        if (!over || over === dragRow) return;
+        const r = over.getBoundingClientRect();
+        tbody.insertBefore(dragRow, (e.clientY - r.top) > r.height / 2 ? over.nextElementSibling : over);
+      });
+      tbody.addEventListener('drop', (e) => { if (dragRow) e.preventDefault(); });
+      tbody.addEventListener('dragend', () => {
+        if (!dragRow) return;
+        dragRow.draggable = false;
+        dragRow.style.background = '';
+        dragRow = null;
+        syncOrder();
       });
     }
     _plRecalc();

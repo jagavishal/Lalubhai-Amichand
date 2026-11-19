@@ -13999,8 +13999,13 @@ async function _fillPackingTemplate(sheets, form, templateSheetId) {
   // The ORDER NO. cell carries the buyer's own item code on a second line
   // when the order line has one ("buyer ka code bhi aana chahiye order number
   // ke sath").
-  const cellText = (it, field) => field === 'orderNo' && it.clientCode
-    ? `${it.orderNo || ''}\n${it.clientCode}` : it[field];
+  // ITEM CODE leads with the buyer's code too (Sajil sir, 19 Nov: "customer
+  // ka item code yahan par aana chahiye"), ours kept on the line below.
+  const cellText = (it, field) => {
+    if (field === 'orderNo' && it.clientCode) return `${it.orderNo || ''}\n${it.clientCode}`;
+    if (field === 'itemCode' && it.clientCode) return `${it.clientCode}\n${it.itemCode || ''}`;
+    return it[field];
+  };
   items.forEach((it, i) => {
     const row = L.itemsFirstRow + i;
     if (row > L.itemsLastRow) return;   // beyond capacity — see the cap in _plCollectLines
