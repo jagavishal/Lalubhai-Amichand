@@ -84,6 +84,27 @@ const BR_SCHEMA = [
      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   `CREATE INDEX idx_br_log_req ON br_log (request_id)`,
+  /* The Board Resolution register (Jayesh, 19 Nov 2026): what the
+     LAL\ROC\FY 2025-26\Board Resolution folder was — one numbered entry
+     per resolution / certified true copy per financial year (0, 1, 2.1 …),
+     with the signed copy and, kept apart, the file it was drafted from.
+     Filled by a completed request, or uploaded directly. */
+  `CREATE TABLE IF NOT EXISTS br_register (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     fy VARCHAR(9) NOT NULL,
+     reg_no VARCHAR(16) NOT NULL,
+     title VARCHAR(255) NOT NULL,
+     kind VARCHAR(40) NOT NULL DEFAULT 'Board Resolution',
+     passed_on DATE DEFAULT NULL,
+     status VARCHAR(16) NOT NULL DEFAULT 'Final',
+     request_id VARCHAR(16) DEFAULT NULL,
+     notes TEXT,
+     documents TEXT,
+     created_by VARCHAR(255) DEFAULT '',
+     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     UNIQUE KEY uq_br_reg (fy, reg_no)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ];
 
 const CATEGORIES = [
@@ -105,7 +126,19 @@ const S = {
 const STATUSES = Object.values(S);
 const OPEN = [S.CS, S.QUERY, S.PENDING, S.CHANGES, S.APPROVED];
 const TOKEN_NS = 'br:';
-const CFG = { cs: 'br_cs', directors: 'br_directors', extraEmails: 'br_cc_emails' };
+const CFG = { cs: 'br_cs', directors: 'br_directors', extraEmails: 'br_cc_emails', keepers: 'br_register_users' };
+const REG_KINDS = ['Board Resolution', 'CTC (Certified True Copy)', 'Circular Resolution', 'General Meeting (AGM / EGM)', 'Other'];
+const REG_STATUS = ['Final', 'Draft', 'Cancelled'];
+// Financial year of a date: April → March, as "2025-26".
+const fyOf = (iso) => {
+  const [y, m] = String(iso || '').split('-').map(Number);
+  if (!y || !m) return null;
+  const a = m >= 4 ? y : y - 1;
+  return `${a}-${String((a + 1) % 100).padStart(2, '0')}`;
+};
+const FY_RE = /^\d{4}-\d{2}$/;
+// "2.10" sorts after "2.9": each part as a number.
+const noKey = (no) => String(no || '').split(/[.\-/]/).map((x) => String(parseInt(x, 10) || 0).padStart(5, '0')).join('.');
 const DEFAULT_DIRECTORS = ['Saloni Anchan'];
 const DRIVE_FOLDER_NAME = 'Board Resolutions';
 
@@ -254,7 +287,7 @@ function mountBoardResolution(app, ctx) {
   }
 
   async function settings() {
-    const [cs, directors, extraEmails, users] = await Promise.all([readCfg('cs'), readCfg('directors'), readCfg('extraEmails'), activeUsers()]);
+    const [cs, directors, extraEmails, keepers, users] = await Promise.all([readCfg('cs'), readCfg('directors'), readCfg('extraEmails'), readCfg('keepers'), activeUsers()]);
     const live = new Set(users.map((u) => u.id));
     const ids = (list) => (Array.isArray(list) ? list.map(String).filter((id) => live.has(id)) : null);
     const byName = DEFAULT_DIRECTORS.map((n) => users.find((u) => String(u.name || '').trim().toLowerCase() === n.toLowerCase())).filter(Boolean);
@@ -263,7 +296,9 @@ function mountBoardResolution(app, ctx) {
       cs: ids(cs) ?? [],
       directors: ids(directors) ?? (byName.length ? byName : admins).map((u) => u.id),
       extraEmails: Array.isArray(extraEmails) ? extraEmails.filter((e) => EMAIL_RE.test(e)) : [],
-      csSet: Array.isArray(cs), directorsSet: Array.isArray(directors),
+      keepers: ids(keepers) ?? (Array.isArray(extraEmails)
+        ? users.filter((u) => u.email && extraEmails.some((e) => String(e).toLowerCase() === String(u.email).toLowerCase())).map((u) => u.id) : []),
+      csSet: Array.isArray(cs), directorsSet: Array.isArray(directors), keepersSet: Array.isArray(keepers),
       users,
     };
   }
@@ -285,6 +320,7 @@ function mountBoardResolution(app, ctx) {
           director: cfg.directors.includes(user.id),
         };
         me.all = me.manager || me.cs || me.director;
+        me.register = me.all || cfg.keepers.includes(user.id);
         if (need === 'manager' && !me.manager) return res.status(403).json({ error: 'Only an Admin (or someone given Board Resolution admin in Users → Access) can change these settings' });
         req.br = me;
         const out = await fn(req, res);
@@ -569,15 +605,19 @@ function mountBoardResolution(app, ctx) {
     const requests = rows.map(reqOut).filter((s) => visible(s, me)).map((s) => ({ ...s, can: rights(s, me) }));
     const byId = new Map(me.cfg.users.map((u) => [u.id, u]));
     const out = {
-      me: { id: me.user.id, name: me.user.name, department: me.user.department || '', manager: me.manager, cs: me.cs, director: me.director, all: me.all },
+      me: { id: me.user.id, name: me.user.name, department: me.user.department || '', manager: me.manager, cs: me.cs, director: me.director, all: me.all, register: me.register },
       requests,
       lists: { CATEGORIES, MEETING_TYPES, PRIORITIES, STATUSES, OPEN },
       cs: me.cfg.cs.map((id) => byId.get(id)?.name).filter(Boolean),
       directors: me.cfg.directors.map((id) => byId.get(id)?.name).filter(Boolean),
     };
     if (me.manager) {
-      out.settings = { cs: me.cfg.cs, directors: me.cfg.directors, extraEmails: me.cfg.extraEmails, csSet: me.cfg.csSet, directorsSet: me.cfg.directorsSet };
+      out.settings = { cs: me.cfg.cs, directors: me.cfg.directors, extraEmails: me.cfg.extraEmails, keepers: me.cfg.keepers, csSet: me.cfg.csSet, directorsSet: me.cfg.directorsSet, keepersSet: me.cfg.keepersSet };
       out.users = me.cfg.users.map((u) => ({ id: u.id, name: u.name, department: u.department || '' }));
+    }
+    if (me.register) {
+      out.register = (await q('SELECT * FROM br_register')).map(regOut).sort((a, b) => b.fy.localeCompare(a.fy) || noKey(a.no).localeCompare(noKey(b.no)));
+      out.regLists = { KINDS: REG_KINDS, STATUS: REG_STATUS, currentFy: fyOf(new Date().toISOString().slice(0, 10)) };
     }
     return out;
   }));
@@ -818,7 +858,9 @@ function mountBoardResolution(app, ctx) {
     try { link = await saveToDrive(s, files[0]); } catch (e) { console.error('[br] Drive save failed for', s.id, '—', e.message); }
     if (link) await q('UPDATE br_requests SET drive_link = $1 WHERE id = $2', [link, s.id]);
     notify(s.id, 'completed');
-    return { ok: true, drive_link: link };
+    let registered = null;
+    try { registered = await registerRequest(s.id, req.br.by); } catch (e) { console.error('[br] register add failed for', s.id, '—', e.message); }
+    return { ok: true, drive_link: link, registered };
   }));
 
   /* ── Resend the mail of the step it is at (Admin) ──────────────── */
@@ -883,7 +925,161 @@ function mountBoardResolution(app, ctx) {
       if (wrong) bad(`"${wrong}" is not a valid email address`);
       await writeCfg('extraEmails', [...new Set(list)].slice(0, 30));
     }
+    if (b.keepers !== undefined) await writeCfg('keepers', ids(b.keepers, 'Register keepers'));
     return { ok: true };
+  }));
+
+  /* ── Register ──────────────────────────────────────────────────── */
+
+  const regDir = (id) => `register-${id}`;
+  function regOut(r) {
+    const docs = parseJson(r.documents, []).map((d, n) => ({ name: d.name, size: d.size, kind: d.kind, by: d.by || '', at: d.at || null, n }));
+    return {
+      id: Number(r.id), fy: r.fy, no: r.reg_no, title: r.title, kind: r.kind, passed_on: dstr(r.passed_on), status: r.status,
+      request_id: r.request_id || null, notes: r.notes || '', docs, created_by: r.created_by || '', created_at: tsOut(r.created_at), updated_at: tsOut(r.updated_at),
+    };
+  }
+  const needReg = (me) => { if (!me.register) throw new UserError('Only the register keepers (Settings), the CS, Directors and Admins can open the register', 403); };
+  async function loadReg(id) {
+    const row = (await q('SELECT * FROM br_register WHERE id = $1', [Number(id)]))[0];
+    if (!row) throw new UserError('Register entry not found', 404);
+    return { e: regOut(row), row };
+  }
+  async function nextNo(fy) {
+    const nums = (await q('SELECT reg_no AS no FROM br_register WHERE fy = $1', [fy])).map((r) => parseInt(String(r.no), 10)).filter((n) => Number.isFinite(n));
+    return String(nums.length ? Math.max(...nums) + 1 : 1);
+  }
+  async function addRegDocs(id, stored) {
+    const row = (await q('SELECT documents FROM br_register WHERE id = $1', [id]))[0];
+    await q('UPDATE br_register SET documents = $1, updated_at = NOW() WHERE id = $2', [JSON.stringify([...parseJson(row?.documents, []), ...stored]), id]);
+  }
+  function regFields(b, { partial } = {}) {
+    const out = {};
+    if (!partial || b.title !== undefined) out.title = str(b.title) || bad('Write the subject of the resolution');
+    if (!partial || b.kind !== undefined) out.kind = REG_KINDS.includes(b.kind) ? b.kind : REG_KINDS[0];
+    if (!partial || b.status !== undefined) out.status = REG_STATUS.includes(b.status) ? b.status : 'Final';
+    if (!partial || b.passed_on !== undefined) out.passed_on = optDate(b.passed_on, 'Date');
+    if (!partial || b.notes !== undefined) out.notes = str(b.notes, 4000);
+    if (b.no !== undefined && str(b.no, 16)) {
+      out.no = str(b.no, 16);
+      if (!/^\d+([.\-/]\d+)*[a-z]?$/i.test(out.no)) bad(`"${out.no}" is not a register number — use 1, 2, 2.1 …`);
+    }
+    if (b.fy !== undefined && str(b.fy, 9)) out.fy = FY_RE.test(str(b.fy, 9)) ? str(b.fy, 9) : bad('Financial year must look like 2025-26');
+    return out;
+  }
+  const SIGNED_TYPES = ['pdf', 'jpg', 'png', 'webp'];
+  const SOURCE_TYPES = ['doc', 'docx', 'pdf', 'xls', 'xlsx'];
+
+  app.post('/api/board-resolution/register', requireAuth, route(null, async (req) => {
+    needReg(req.br);
+    const b = req.body || {};
+    const f = regFields(b);
+    const fy = f.fy || fyOf(f.passed_on || new Date().toISOString().slice(0, 10));
+    const signed = decodeFiles(b.signed, 'Signed copy', { only: SIGNED_TYPES });
+    const source = decodeFiles(b.source, 'Source file', { only: SOURCE_TYPES });
+    if (signed.length > 1 || source.length > 1) bad('One signed copy and one source file per entry');
+    if (!signed.length && !source.length) bad('Attach the signed copy, the source (draft) file, or both');
+    const no = f.no || await nextNo(fy);
+    let id;
+    try {
+      const r = await pool.query(`INSERT INTO br_register (fy, reg_no, title, kind, passed_on, status, request_id, notes, documents, created_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'[]',$9)`, [fy, no, f.title, f.kind, f.passed_on, f.status, str(b.request_id, 16) || null, f.notes, req.br.by]);
+      id = r.insertId ?? r.rows?.[0]?.id;
+      if (!id) id = (await q('SELECT id FROM br_register WHERE fy = $1 AND reg_no = $2', [fy, no]))[0]?.id;
+    } catch (e) {
+      if (e.code === 'ER_DUP_ENTRY' || e.code === '23505') bad(`No. ${no} is already used in FY ${fy}`);
+      throw e;
+    }
+    const stored = [...await writeFiles(regDir(id), signed, { kind: 'signed', by: req.br.by }), ...await writeFiles(regDir(id), source, { kind: 'source', by: req.br.by })];
+    await addRegDocs(id, stored);
+    return { id: Number(id), fy, no };
+  }));
+
+  app.patch('/api/board-resolution/register/:id', requireAuth, route(null, async (req) => {
+    needReg(req.br);
+    const { e, row } = await loadReg(req.params.id);
+    const b = req.body || {};
+    const f = regFields(b, { partial: true });
+    const sets = []; const params = [];
+    for (const [k, v] of Object.entries(f)) { params.push(v); sets.push(`${k === 'no' ? 'reg_no' : k} = $${params.length}`); }
+    if (sets.length) {
+      params.push(e.id);
+      try { await q(`UPDATE br_register SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${params.length}`, params); }
+      catch (err) { if (err.code === 'ER_DUP_ENTRY' || err.code === '23505') bad(`No. ${f.no || e.no} is already used in FY ${f.fy || e.fy}`); throw err; }
+    }
+    // A new file replaces the one of the same kind (kept in the list as older).
+    const signed = decodeFiles(b.signed, 'Signed copy', { only: SIGNED_TYPES });
+    const source = decodeFiles(b.source, 'Source file', { only: SOURCE_TYPES });
+    if (signed.length > 1 || source.length > 1) bad('One signed copy and one source file at a time');
+    const stored = [...await writeFiles(regDir(e.id), signed, { kind: 'signed', by: req.br.by }), ...await writeFiles(regDir(e.id), source, { kind: 'source', by: req.br.by })];
+    if (stored.length) {
+      const old = parseJson(row.documents, []).map((d) => (stored.some((x) => x.kind === d.kind) && !d.kind.startsWith('old-') ? { ...d, kind: 'old-' + d.kind } : d));
+      await q('UPDATE br_register SET documents = $1, updated_at = NOW() WHERE id = $2', [JSON.stringify([...old, ...stored]), e.id]);
+    }
+    return { ok: true };
+  }));
+
+  app.get('/api/board-resolution/register/:id/documents/:n', requireAuth, route(null, async (req, res) => {
+    needReg(req.br);
+    const { row } = await loadReg(req.params.id);
+    const doc = parseJson(row.documents, [])[parseInt(req.params.n, 10)];
+    if (!doc || !doc.file) throw new UserError('Document not found', 404);
+    res.download(path.join(UPLOAD_ROOT, regDir(row.id), path.basename(doc.file)), doc.name, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: 'The file is missing on the server' });
+    });
+  }));
+
+  app.delete('/api/board-resolution/register/:id', requireAuth, route(null, async (req) => {
+    needReg(req.br);
+    if (!req.br.manager) bad('Only an Admin can delete a register entry — mark it Cancelled instead');
+    const { e } = await loadReg(req.params.id);
+    await q('DELETE FROM br_register WHERE id = $1', [e.id]);
+    fs.promises.rm(path.join(UPLOAD_ROOT, regDir(e.id)), { recursive: true, force: true }).catch(() => {});
+    return { ok: true };
+  }));
+
+  // A completed request goes on the register: next number in the FY of the
+  // date it was passed, its signed copy, and the last draft as the source.
+  async function registerRequest(id, by) {
+    const had = (await q('SELECT id FROM br_register WHERE request_id = $1', [id]))[0];
+    if (had) return { id: Number(had.id), existing: true };
+    const s = await fresh(id);
+    const passed = s.passed_date || new Date().toISOString().slice(0, 10);
+    const fy = fyOf(passed);
+    const all = parseJson((await q('SELECT documents FROM br_requests WHERE id = $1', [id]))[0]?.documents, []);
+    const signed = s.signed_doc != null ? all[s.signed_doc] : null;
+    const draft = [...all].reverse().find((d) => d.kind === 'director' || d.kind === 'draft') || null;
+    const kind = s.meeting_type === 'Circular Resolution' ? 'Circular Resolution' : /General Meeting/.test(s.meeting_type) ? 'General Meeting (AGM / EGM)' : 'Board Resolution';
+    let regId = null, no = null;
+    for (let tries = 0; tries < 4 && !regId; tries++) {
+      no = await nextNo(fy);
+      try {
+        const r = await pool.query(`INSERT INTO br_register (fy, reg_no, title, kind, passed_on, status, request_id, notes, documents, created_by)
+          VALUES ($1,$2,$3,$4,$5,'Final',$6,$7,'[]',$8)`, [fy, no, s.title, kind, passed, s.id, `From request ${s.id}`, by]);
+        regId = r.insertId ?? (await q('SELECT id FROM br_register WHERE fy = $1 AND reg_no = $2', [fy, no]))[0]?.id;
+      } catch (e) { if (!(e.code === 'ER_DUP_ENTRY' || e.code === '23505')) throw e; }
+    }
+    if (!regId) return null;
+    const dir = path.join(UPLOAD_ROOT, regDir(regId));
+    await fs.promises.mkdir(dir, { recursive: true });
+    const stored = [];
+    for (const [d, k] of [[signed, 'signed'], [draft, 'source']]) {
+      if (!d || !d.file) continue;
+      const src = path.join(UPLOAD_ROOT, s.id, path.basename(d.file));
+      if (!fs.existsSync(src)) continue;
+      await fs.promises.copyFile(src, path.join(dir, path.basename(d.file)));
+      stored.push({ name: d.name, file: path.basename(d.file), size: d.size, type: d.type, kind: k, by, at: new Date().toISOString() });
+    }
+    await addRegDocs(regId, stored);
+    await logStep(s.id, 'Added to Register', `FY ${fy} · No. ${no}`, { id: null, name: 'System' });
+    return { id: Number(regId), fy, no };
+  }
+  // A request completed before the register existed: add it by hand.
+  app.post('/api/board-resolution/requests/:id/register', requireAuth, route(null, async (req) => {
+    needReg(req.br);
+    const { s } = await loadReq(req.params.id, req.br);
+    if (s.status !== S.DONE) bad('Only a completed request goes on the register');
+    return { ok: true, ...(await registerRequest(s.id, req.br.by)) };
   }));
 
   return {};

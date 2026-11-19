@@ -49,6 +49,7 @@ window.Pages['board-resolution'] = (() => {
     if (D.me.all || act) t.push({ key: 'action', label: 'Needs My Action', count: act });
     t.push({ key: 'mine', label: 'My Requests', count: D.requests.filter((s) => s.requested_by_id === D.me.id).length });
     if (D.me.all) t.push({ key: 'all', label: 'All Resolutions', count: D.requests.length });
+    if (D.me.register) t.push({ key: 'register', label: 'Register', count: (D.register || []).filter((e) => e.fy === D.regLists.currentFy && e.status === 'Final').length });
     if (D.me.manager) t.push({ key: 'settings', label: 'Settings' });
     return t;
   }
@@ -76,7 +77,7 @@ window.Pages['board-resolution'] = (() => {
       ${H.header('Board Resolution', 'Request → CS drafts → Director approves → signed copy',
         '<button id="br-new" class="btn-primary btn-sm">+ Request a Resolution</button>')}
       ${H.tabs('br', tabsFor(), _tab)}
-      ${_tab === 'settings' ? settingsTab() : listTab()}
+      ${_tab === 'settings' ? settingsTab() : _tab === 'register' ? registerTab() : listTab()}
     </div>`;
     bind();
   }
@@ -298,6 +299,12 @@ window.Pages['board-resolution'] = (() => {
         </div>
         <div style="font-size:12.5px;color:#334155;margin-top:10px;white-space:pre-wrap;">${esc(s.description)}</div>
         ${s.drive_link ? `<div style="margin-top:8px;"><a class="br-doc" href="${esc(s.drive_link)}" target="_blank" rel="noopener">Open the signed copy on Drive ↗</a></div>` : ''}
+        ${(() => {
+          if (!D.me.register || s.status !== 'Completed') return '';
+          const e = (D.register || []).find((x) => x.request_id === s.id);
+          return e ? `<div style="margin-top:8px;font-size:12.5px;">On the register: <b>FY ${esc(e.fy)} · No. ${esc(e.no)}</b></div>`
+            : '<div style="margin-top:8px;"><button class="btn-secondary btn-sm" id="bv-register">Add to Register</button></div>';
+        })()}
         ${groups ? sub('Documents') + groups : ''}
         ${sub('History')}
         <div>${d.log.map((n) => `<div style="border-left:3px solid ${ACTION_COLOUR[n.action] || (n.action.startsWith('Draft') ? '#0150AA' : '#cbd5e1')};padding:4px 0 4px 10px;margin:6px 0;">
@@ -367,6 +374,10 @@ window.Pages['board-resolution'] = (() => {
       const r = await H.post(`${base}/signed`, { documents, passed_date: H.val('bs-date'), note: H.val('bs-note').trim() });
       await after(r.drive_link ? `${s.id} completed — saved on Drive and mailed` : `${s.id} completed — mailed to everyone`);
     }));
+    $('bv-register')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try { const r = await H.post(`${base}/register`, {}); await after(`On the register — FY ${r.fy} · No. ${r.no}`); } catch (err) { e.target.disabled = false; H.fail(err); }
+    });
     $('bv-resend')?.addEventListener('click', async (e) => {
       e.target.disabled = true;
       try { const r = await H.post(`${base}/resend`, {}); H.toast(`Mail sent again (${r.stage})`); } catch (err) { H.fail(err); }
@@ -380,6 +391,176 @@ window.Pages['board-resolution'] = (() => {
       if (!(await Utils.showConfirm(`Delete ${s.id}, its history and files? This cannot be undone.`, { title: 'Delete', confirmText: 'Delete', danger: true }))) return;
       try { await H.del(base); await after('Deleted'); } catch (err) { H.fail(err); }
     });
+  }
+
+  /* ── Register ─────────────────────────────────────────────────────
+     What the LAL\ROC\FY 2025-26\Board Resolution folder was: numbered
+     entries per financial year, each with the signed copy and, apart, the
+     file it was drafted from. Draft / Cancelled were sub-folders there and
+     are a status here. A completed request lands here by itself. ── */
+
+  const _rf = { fy: '', status: 'Final', q: '' };
+  const regHref = (e, n) => `/api/board-resolution/register/${e.id}/documents/${n}`;
+  const fyList = () => [...new Set([D.regLists.currentFy, ...(D.register || []).map((e) => e.fy)])].sort().reverse();
+  const REG_VARIANT = { Final: 'success', Draft: 'warning', Cancelled: 'neutral' };
+  const docOf = (e, kind) => e.docs.find((d) => d.kind === kind);
+  const noKey = (no) => String(no || '').split(/[.\-/]/).map((x) => String(parseInt(x, 10) || 0).padStart(5, '0')).join('.');
+
+  function registerTab() {
+    if (!_rf.fy) _rf.fy = D.regLists.currentFy;
+    const n = _rf.q.trim().toLowerCase();
+    const list = (D.register || []).filter((e) => e.fy === _rf.fy && (_rf.status === 'All' || e.status === _rf.status)
+      && (!n || [e.no, e.title, e.kind, e.notes, e.request_id].join(' ').toLowerCase().includes(n)))
+      .sort((a, b) => noKey(a.no).localeCompare(noKey(b.no)));
+    const inFy = (D.register || []).filter((e) => e.fy === _rf.fy);
+    const fileCell = (e, kind) => { const d = docOf(e, kind); return d ? `<a class="br-doc" href="${regHref(e, d.n)}" target="_blank" rel="noopener">📎 ${esc(d.name)}</a>` : '<span style="color:#cbd5e1;">—</span>'; };
+    return `
+      <div class="br-filt" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
+        <select id="rg-fy" style="${H.CONTROL}max-width:150px;font-weight:700;">${fyList().map((f) => `<option value="${f}"${f === _rf.fy ? ' selected' : ''}>FY ${f}</option>`).join('')}</select>
+        <select id="rg-status" style="${H.CONTROL}max-width:170px;">${['Final', 'Draft', 'Cancelled', 'All'].map((x) => `<option value="${x}"${x === _rf.status ? ' selected' : ''}>${x === 'All' ? 'All' : x} (${x === 'All' ? inFy.length : inFy.filter((e) => e.status === x).length})</option>`).join('')}</select>
+        <input id="rg-q" value="${esc(_rf.q)}" placeholder="Search no., subject…" style="${H.CONTROL}max-width:260px;" />
+        <span style="margin-left:auto;display:flex;gap:8px;">
+          <button class="btn-secondary btn-sm" id="rg-bulk">Upload many files…</button>
+          <button class="btn-primary btn-sm" id="rg-add">+ Add to Register</button></span>
+      </div>
+      ${H.table([{ label: 'No.', nowrap: true }, { label: 'Subject', m: 'title' }, 'Type', 'Date', 'Status', 'Signed Copy', 'Source File', 'From', { label: '', m: 'actions' }],
+        list.map((e) => [
+          `<b>${esc(e.no)}</b>`, esc(e.title) + (e.notes ? `<div style="font-size:11px;color:#94a3b8;">${esc(e.notes)}</div>` : ''),
+          esc(e.kind), e.passed_on ? H.fmtDate(e.passed_on) : '—', H.pill(e.status, REG_VARIANT[e.status] || 'neutral'),
+          fileCell(e, 'signed'), fileCell(e, 'source'),
+          e.request_id ? `<button class="br-link" data-view="${esc(e.request_id)}">${esc(e.request_id)}</button>` : '<span style="color:#94a3b8;">Uploaded</span>',
+          `<button class="btn-secondary btn-sm" data-reg="${e.id}">Edit</button>`,
+        ]), { empty: `Nothing in FY ${_rf.fy}${_rf.status === 'All' ? '' : ' (' + _rf.status + ')'} yet`, cards: true, page: { key: 'br-reg', sig: [_rf.fy, _rf.status, _rf.q], onPage: render } })}
+      <div style="font-size:11.5px;color:#94a3b8;margin-top:6px;">A request completed here goes on the register by itself (next number, signed copy + last draft). Made outside the ERP? Add it, or upload a whole folder of files at once.</div>`;
+  }
+
+  function regForm(e) {
+    const fy = e?.fy || _rf.fy || D.regLists.currentFy;
+    H.openModal({
+      id: 'br-reg', width: 720, title: e ? `FY ${e.fy} · No. ${e.no}` : 'Add to Register', subtitle: e ? e.title : 'A resolution / CTC made outside the request flow',
+      bodyHTML: H.grid(
+        H.field('rg-fyv', 'Financial year', fy, { placeholder: '2025-26' })
+        + H.field('rg-no', 'No.', e?.no || '', { placeholder: 'blank = next number', hint: '1, 2, 2.1 … as in the folder' })
+        + H.field('rg-title', 'Subject', e?.title || '', { required: true, span: 2 })
+        + H.select('rg-kind', 'Type', e?.kind || D.regLists.KINDS[0], D.regLists.KINDS)
+        + H.field('rg-date', 'Date', e?.passed_on || '', { type: 'date' })
+        + H.select('rg-st', 'Status', e?.status || 'Final', D.regLists.STATUS)
+        + '<div></div>'
+        + fileInput('rg-signed', e && docOf(e, 'signed') ? 'Replace signed copy' : 'Signed copy', '.pdf,.jpg,.jpeg,.png,application/pdf,image/*', { multiple: false, hint: e && docOf(e, 'signed') ? `Now: ${docOf(e, 'signed').name}` : 'PDF / scan' })
+        + fileInput('rg-source', e && docOf(e, 'source') ? 'Replace source file' : 'Source file (draft it was made from)', '.doc,.docx,.pdf,.xls,.xlsx', { multiple: false, hint: e && docOf(e, 'source') ? `Now: ${docOf(e, 'source').name}` : 'Word usually' })
+        + H.textarea('rg-notes', 'Notes', e?.notes || '', { rows: 2 })
+        + (e ? `<div style="grid-column:span 2;font-size:11.5px;color:#94a3b8;">Added by ${esc(e.created_by)} on ${H.fmtDate(e.created_at)}${e.docs.some((d) => d.kind.startsWith('old-')) ? ` · older files: ${e.docs.filter((d) => d.kind.startsWith('old-')).map((d) => `<a class="br-doc" href="${regHref(e, d.n)}" target="_blank" rel="noopener">${esc(d.name)}</a>`).join(', ')}` : ''}</div>` : ''),
+      ),
+      confirmText: e ? 'Save' : 'Add',
+      onConfirm: async () => {
+        const body = { fy: H.val('rg-fyv').trim(), no: H.val('rg-no').trim(), title: H.val('rg-title').trim(), kind: H.val('rg-kind'),
+          passed_on: H.val('rg-date'), status: H.val('rg-st'), notes: H.val('rg-notes').trim() };
+        if (!body.title) throw new Error('Write the subject');
+        body.signed = await readFiles(document.getElementById('rg-signed'), 'Signed copy', 1);
+        body.source = await readFiles(document.getElementById('rg-source'), 'Source file', 1);
+        let r;
+        if (e) { await H.patch(`/api/board-resolution/register/${e.id}`, body); r = { fy: body.fy || e.fy, no: body.no || e.no }; }
+        else r = await H.post('/api/board-resolution/register', body);
+        H.closeModal('br-reg');
+        H.toast(`Saved — FY ${r.fy} · No. ${r.no}`);
+        _rf.fy = r.fy;
+        await refresh();
+      },
+    });
+  }
+
+  /* Many files at once — number, subject, date and type read from file
+     names like "2.4 BR to open bank account for Solar Loan with HDFC
+     Bank_15-4-2025.pdf". A Word file with the same name is its source. */
+  function parseName(file) {
+    const stem = file.replace(/\.[^.]+$/, '').trim();
+    let rest = stem, no = '', date = '';
+    const m = /^(\d+(?:\.\d+)*)\.?\s+(.*)$/.exec(rest);
+    if (m) { no = m[1]; rest = m[2]; }
+    const d = /[_\s-]+(\d{1,2})[-.](\d{1,2})[-.](\d{4})$/.exec(rest);
+    if (d) {
+      date = `${d[3]}-${d[2].padStart(2, '0')}-${d[1].padStart(2, '0')}`;
+      rest = rest.slice(0, d.index);
+    }
+    const kind = /^CTC\b|^CTC_/i.test(rest) ? 'CTC (Certified True Copy)' : /circular/i.test(rest) ? 'Circular Resolution' : /\bAGM\b|\bEGM\b/i.test(rest) ? 'General Meeting (AGM / EGM)' : 'Board Resolution';
+    const title = rest.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+    return { stem: stem.toLowerCase(), no, date, kind, title: title || stem };
+  }
+  function bulkForm() {
+    let items = [];
+    H.openModal({
+      id: 'br-bulk', width: 980, title: 'Upload many files to the Register', subtitle: 'Pick the files of one financial year (e.g. everything in FY 2025-26\\Board Resolution)',
+      bodyHTML: `${H.grid(
+        H.field('rb-fy', 'Financial year', _rf.fy || D.regLists.currentFy, { placeholder: '2025-26' })
+        + H.select('rb-st', 'Status for all', 'Final', D.regLists.STATUS, { hint: 'Upload the Draft / Cancelled folders separately with that status' })
+        + `<div style="grid-column:span 2;"><label style="${H.LABEL}">Files</label><input id="rb-files" type="file" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style="${H.CONTROL}padding:6px;" />
+            <div style="font-size:10.5px;color:#94a3b8;margin-top:3px;">PDFs are the signed copies; a Word file with the same name goes with it as the source. 4 MB per file.</div></div>`)}
+        <div id="rb-list" style="margin-top:12px;"></div>`,
+      confirmText: 'Upload All',
+      onOpen: () => {
+        document.getElementById('rb-files').addEventListener('change', (ev) => {
+          const files = [...ev.target.files];
+          const groups = new Map();
+          for (const f of files) {
+            const p = parseName(f.name);
+            const g = groups.get(p.stem) || { ...p, signed: null, source: null };
+            if (/\.(docx?|xlsx?)$/i.test(f.name)) g.source = f; else g.signed = g.signed || f;
+            groups.set(p.stem, g);
+          }
+          items = [...groups.values()].sort((a, b) => noKey(a.no).localeCompare(noKey(b.no)));
+          document.getElementById('rb-list').innerHTML = items.length ? `<div style="max-height:420px;overflow:auto;border:1px solid #e2e8f0;border-radius:10px;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:#f8fafc;text-align:left;">
+              <th style="padding:6px;">No.</th><th style="padding:6px;">Subject</th><th style="padding:6px;">Type</th><th style="padding:6px;">Date</th><th style="padding:6px;">Files</th><th style="padding:6px;"></th></tr></thead>
+            <tbody>${items.map((it, i) => `<tr data-i="${i}" style="border-top:1px solid #f1f5f9;">
+              <td style="padding:4px;"><input class="rb-no" value="${esc(it.no)}" placeholder="next" style="${H.CONTROL}width:64px;padding:4px 6px;" /></td>
+              <td style="padding:4px;"><input class="rb-title" value="${esc(it.title)}" style="${H.CONTROL}padding:4px 6px;" /></td>
+              <td style="padding:4px;"><select class="rb-kind" style="${H.CONTROL}padding:4px 6px;">${D.regLists.KINDS.map((k) => `<option${k === it.kind ? ' selected' : ''}>${esc(k)}</option>`).join('')}</select></td>
+              <td style="padding:4px;"><input class="rb-date" type="date" value="${esc(it.date)}" style="${H.CONTROL}padding:4px 6px;" /></td>
+              <td style="padding:4px;font-size:11px;color:#475569;">${it.signed ? '📄 ' + esc(it.signed.name) : ''}${it.source ? '<br>📝 ' + esc(it.source.name) : ''}</td>
+              <td style="padding:4px;" class="rb-out"></td></tr>`).join('')}</tbody></table></div>
+            <div style="font-size:11.5px;color:#64748b;margin-top:6px;">${items.length} entr${items.length === 1 ? 'y' : 'ies'} — check the numbers and subjects, then Upload All.</div>` : '';
+        });
+      },
+      onConfirm: async () => {
+        if (!items.length) throw new Error('Pick the files');
+        const fy = H.val('rb-fy').trim(), status = H.val('rb-st');
+        let okN = 0, bad = 0;
+        for (const [i, it] of items.entries()) {
+          const row = document.querySelector(`#rb-list tr[data-i="${i}"]`);
+          const out = row.querySelector('.rb-out');
+          if (out.dataset.done) continue;
+          out.innerHTML = '<span style="color:#64748b;">…</span>';
+          try {
+            const wrap = async (f) => (f ? [await new Promise((res, rej) => { if (f.size > 4 * 1024 * 1024) return rej(new Error(`"${f.name}" is over 4 MB`)); const r = new FileReader(); r.onload = () => res({ name: f.name, dataUrl: r.result }); r.onerror = () => rej(new Error('Could not read ' + f.name)); r.readAsDataURL(f); })] : []);
+            const r = await H.post('/api/board-resolution/register', {
+              fy, status, no: row.querySelector('.rb-no').value.trim(), title: row.querySelector('.rb-title').value.trim(),
+              kind: row.querySelector('.rb-kind').value, passed_on: row.querySelector('.rb-date').value,
+              signed: await wrap(it.signed), source: await wrap(it.source),
+            });
+            out.innerHTML = `<span style="color:#16a34a;font-weight:700;">✓ ${esc(r.no)}</span>`; out.dataset.done = '1'; okN++;
+          } catch (err) { out.innerHTML = `<span style="color:#dc2626;">${esc(err.message)}</span>`; bad++; }
+        }
+        if (bad) { H.toast(`${okN} added, ${bad} not — fix those rows and press Upload All again`, 'error'); _rf.fy = fy; return; }
+        H.closeModal('br-bulk');
+        H.toast(`${okN} added to FY ${fy}`);
+        _rf.fy = fy; _rf.status = status;
+        await refresh();
+      },
+    });
+  }
+
+  function bindRegister() {
+    const $ = (id) => document.getElementById(id);
+    $('rg-fy')?.addEventListener('change', (e) => { _rf.fy = e.target.value; render(); });
+    $('rg-status')?.addEventListener('change', (e) => { _rf.status = e.target.value; render(); });
+    let t;
+    $('rg-q')?.addEventListener('input', (e) => {
+      clearTimeout(t);
+      t = setTimeout(() => { _rf.q = e.target.value; render(); const a = $('rg-q'); if (a) { a.focus(); a.setSelectionRange(a.value.length, a.value.length); } }, 250);
+    });
+    $('rg-add')?.addEventListener('click', () => regForm(null));
+    $('rg-bulk')?.addEventListener('click', bulkForm);
+    document.querySelectorAll('[data-reg]').forEach((b) => b.addEventListener('click', () => regForm(D.register.find((e) => String(e.id) === b.getAttribute('data-reg')))));
   }
 
   /* ── Settings ─────────────────────────────────────────────────────── */
@@ -404,6 +585,7 @@ window.Pages['board-resolution'] = (() => {
       <div class="br-two" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         ${userPicker('bs-cs', 'Company Secretary (CS)', s.cs, 'Gets every new request, drafts the resolution, asks for details and uploads the signed copy.')}
         ${userPicker('bs-dir', 'Directors (approvers)', s.directors, 'Each gets the draft by mail with Approve / Request Changes / Reject, and can decide here.')}
+        ${userPicker('bs-keep', 'Register keepers', s.keepers, `Can see and fill the Register (numbered resolutions per financial year)${s.keepersSet ? '' : ' — until saved: the logins on the extra email list'}. CS, Directors and Admins always can.`)}
         <div class="br-card">
           <h3>Extra email IDs</h3>
           <textarea id="bs-mail" rows="3" placeholder="cs@laltd.in" style="${H.CONTROL}resize:vertical;">${esc(s.extraEmails.join('\n'))}</textarea>
@@ -422,6 +604,7 @@ window.Pages['board-resolution'] = (() => {
     const $ = (id) => document.getElementById(id);
     document.querySelectorAll('[data-br-tab]').forEach((b) => b.addEventListener('click', () => { _tab = b.getAttribute('data-br-tab'); render(); }));
     $('br-new')?.addEventListener('click', requestForm);
+    if (_tab === 'register') bindRegister();
     let t;
     $('br-q')?.addEventListener('input', (e) => {
       clearTimeout(t);
@@ -435,7 +618,7 @@ window.Pages['board-resolution'] = (() => {
     $('br-export')?.addEventListener('click', exportList);
     document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => view(b.getAttribute('data-view'))));
 
-    ['bs-cs', 'bs-dir'].forEach((id) => $(`${id}-q`)?.addEventListener('input', (e) => {
+    ['bs-cs', 'bs-dir', 'bs-keep'].forEach((id) => $(`${id}-q`)?.addEventListener('input', (e) => {
       const n = e.target.value.trim().toLowerCase();
       document.querySelectorAll(`#${id} [data-row]`).forEach((row) => { row.style.display = !n || row.getAttribute('data-row').includes(n) ? 'flex' : 'none'; });
     }));
@@ -443,7 +626,7 @@ window.Pages['board-resolution'] = (() => {
     $('bs-save')?.addEventListener('click', async (e) => {
       const btn = e.target;
       try {
-        const body = { directors: picked('bs-dir'), extraEmails: H.val('bs-mail').split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean) };
+        const body = { directors: picked('bs-dir'), keepers: picked('bs-keep'), extraEmails: H.val('bs-mail').split(/[\n,;]+/).map((x) => x.trim()).filter(Boolean) };
         // The CS is optional — without one, new requests go to the extra
         // email IDs (or the Admins when there are none).
         if (picked('bs-cs').length) body.cs = picked('bs-cs');
