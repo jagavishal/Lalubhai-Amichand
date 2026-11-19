@@ -269,13 +269,14 @@ window.Pages['mis-finance'] = (() => {
   /* ── Uploads ──────────────────────────────────────────────────────── */
 
   function uploadsTab() {
-    return `${H.table(['Division', 'Period', 'File', 'Tally Company', 'Opening', 'Closing Stock', 'Uploaded', { label: '', m: 'actions' }],
+    return `${H.table(['Division', 'Period', 'File', 'Tally Company', 'Opening', 'Opening Stock', 'Closing Stock', 'Uploaded', { label: '', m: 'actions' }],
       D.uploads.map((u) => [
         `<b>${esc(u.division)}</b>`, esc(periodLabel(u.from, u.to)), esc(u.file_name || '—'), esc(u.company || '—'),
         u.has_opening ? H.pill('In file', 'success') : H.pill('No', 'neutral'),
+        u.opening_stock == null ? '<span style="color:#94a3b8;">from Tally</span>' : '₹ ' + H.inr0(u.opening_stock),
         u.closing_stock == null ? '—' : '₹ ' + H.inr0(u.closing_stock),
         `${esc(u.uploaded_by)}<div style="font-size:11px;color:#94a3b8;">${H.fmtDate(u.at)}</div>`,
-        `<button class="btn-secondary btn-sm" data-del="${u.id}" style="color:#dc2626;">Delete</button>`,
+        `<button class="btn-secondary btn-sm" data-stock="${u.id}">Edit Stock</button> <button class="btn-secondary btn-sm" data-del="${u.id}" style="color:#dc2626;">Delete</button>`,
       ]), { empty: 'No Trial Balance uploaded yet', cards: true })}
       <div style="font-size:11.5px;color:#94a3b8;margin-top:6px;">Uploading the same division and period again replaces it.</div>`;
   }
@@ -297,8 +298,11 @@ window.Pages['mis-finance'] = (() => {
             <input id="mu-file" type="file" accept=".xlsx,.xls,.xlsm,.csv" style="${H.CONTROL}padding:6px;" /></div>`
         + H.field('mu-from', 'Period From', '', { type: 'date', required: true })
         + H.field('mu-to', 'Period To', '', { type: 'date', required: true })
+        + H.field('mu-ostock', 'Opening Stock (₹) — for this period', '', { type: 'number', step: '0.01', hint: 'Leave blank to take it from Tally. Type it when your own stock summary differs (Export).' })
         + H.field('mu-stock', 'Closing Stock (₹) — for this period', '', { type: 'number', step: '0.01', hint: 'Tally\'s Trial Balance shows only the Opening Stock — type the closing stock (as in the old “Closing Stock (INPUT)”)' })
-        + `<div id="mu-stock2-wrap" style="display:none;">${H.field('mu-stock2', 'Closing Stock (₹) — comparative period', '', { type: 'number', step: '0.01', hint: 'For the last-year columns in the same file' })}</div>`,
+        + `<div id="mu-stock2-wrap" style="display:none;grid-column:span 2;"><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;" class="m-grid-1">
+            ${H.field('mu-ostock2', 'Opening Stock (₹) — comparative period', '', { type: 'number', step: '0.01', hint: 'Last-year columns in the same file · blank = from Tally' })}
+            ${H.field('mu-stock2', 'Closing Stock (₹) — comparative period', '', { type: 'number', step: '0.01', hint: 'For the last-year columns in the same file' })}</div></div>`,
       )}
       <div id="mu-preview" style="margin-top:14px;"></div>`,
       confirmText: 'Save Upload',
@@ -331,6 +335,7 @@ window.Pages['mis-finance'] = (() => {
           && !(await Utils.showConfirm('The Trial Balance has no closing stock. Save without it? The Gross Profit will be wrong until you upload again with the closing stock.', { title: 'Closing stock', confirmText: 'Save anyway' }))) return;
         const body = {
           division: H.val('mu-div'), from: H.val('mu-from'), to: H.val('mu-to'), closing_stock: H.val('mu-stock'), closing_stock_prev: H.val('mu-stock2'),
+          opening_stock: H.val('mu-ostock'), opening_stock_prev: H.val('mu-ostock2'),
           file_name: document.getElementById('mu-file').files[0]?.name || '', sheet: _sheet, mappings: pickedMappings(),
         };
         if (!body.from || !body.to) throw new Error('Enter the period');
@@ -428,6 +433,8 @@ window.Pages['mis-finance'] = (() => {
     const SRC = { saved: 'saved', rule: 'by name', tally: 'Tally group', group: 'from group' };
     const warn = [];
     if (Math.abs(p.diffClose) > 0.5) warn.push(`The rows read do not tally: closing Dr − Cr = ₹ ${H.inr0(p.diffClose)}. A row may be counted twice or missing — check the tree below.`);
+    const tsNote = p.tallyStock && Math.abs(p.tallyStock.close) > 0.5
+      ? `Tally's Current Assets total includes its own closing-stock figure of ₹ ${H.inr0(p.tallyStock.close)} (not on any ledger). It is left out — the Closing Stock you type is used instead.` : '';
     if (!p.hasOpening) warn.push('No opening balance column — the Cash Flow will use the previous period\'s upload for this division if there is one.');
     if (p.needsClosingStock) warn.push('This Trial Balance shows only the Opening Stock — enter the Closing Stock above.');
     const w2 = document.getElementById('mu-stock2-wrap');
@@ -437,6 +444,7 @@ window.Pages['mis-finance'] = (() => {
         ${p.period ? ` · period ${esc(periodLabel(p.period.from, p.period.to))}` : ''}${p.hasOpening ? ' · opening + closing' : ' · closing only'}${_sheetName ? ` · sheet “${esc(_sheetName)}”` : ''}
         ${p.comparative ? `<br>Also has <b>${esc(periodLabel(p.comparative.period.from, p.comparative.period.to))}</b> — saved as that period too (if it is not uploaded yet), for the last-year comparison.${p.comparative.period.assumed ? ' <i>(The file shows no date for these columns, so they are taken as the same months last year.)</i>' : ''}` : ''}</div>
       ${warn.map((w) => `<div class="mf-warn">${esc(w)}</div>`).join('')}
+      ${tsNote ? `<div class="mf-note">${esc(tsNote)}</div>` : ''}
       ${toMap.length ? `<div style="font-weight:700;font-size:12.5px;margin:6px 0;">Map these ${toMap.length} ledger${toMap.length === 1 ? '' : 's'} (remembered for next time)
           <span style="font-weight:400;color:${open ? '#b45309' : '#15803d'};">· ${open ? `${open} still to map` : 'all mapped'}</span></div>
         ${toMap.length > 1 ? bulkBar('mu-bulk', 'ledgers') : ''}
@@ -597,6 +605,20 @@ window.Pages['mis-finance'] = (() => {
     $('mf-div')?.addEventListener('change', (e) => { _div = e.target.value; render(); });
     document.querySelectorAll('[data-stmt]').forEach((b) => b.addEventListener('click', () => { _stmt = b.getAttribute('data-stmt'); render(); }));
     $('mf-xlsx')?.addEventListener('click', () => downloadXlsx().catch(H.fail));
+    document.querySelectorAll('[data-stock]').forEach((b) => b.addEventListener('click', () => {
+      const u = D.uploads.find((x) => String(x.id) === b.getAttribute('data-stock'));
+      H.openModal({
+        id: 'mf-stock', width: 520, title: 'Stock for this upload', subtitle: `${u.division} · ${periodLabel(u.from, u.to)}`,
+        bodyHTML: H.grid(
+          H.field('ms-open', 'Opening Stock (₹)', u.opening_stock ?? '', { type: 'number', step: '0.01', hint: 'Blank = from Tally' })
+          + H.field('ms-close', 'Closing Stock (₹)', u.closing_stock ?? '', { type: 'number', step: '0.01' })),
+        confirmText: 'Save',
+        onConfirm: async () => {
+          await H.patch(`/api/mis-finance/uploads/${u.id}`, { opening_stock: H.val('ms-open'), closing_stock: H.val('ms-close') });
+          H.closeModal('mf-stock'); H.toast('Stock saved'); await refresh();
+        },
+      });
+    }));
     document.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
       const u = D.uploads.find((x) => String(x.id) === b.getAttribute('data-del'));
       if (!(await Utils.showConfirm(`Delete the ${u.division} Trial Balance for ${periodLabel(u.from, u.to)}?`, { title: 'Delete upload', confirmText: 'Delete', danger: true }))) return;
