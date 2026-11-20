@@ -126,16 +126,25 @@ window.Pages.trivia = (() => {
     }), { cards: true });
   }
 
+  // The big-screen board (/trivia-screen) inside the page, with the plain
+  // tables folded away below it — open by themselves on a phone, where the
+  // board is cramped, and where Admin/HOD's Delete buttons live.
+  const boardFrame = (tables, label) => `<div style="border-radius:18px;overflow:hidden;box-shadow:0 12px 30px rgba(30,27,75,.25);background:#1e1b4b;margin-bottom:14px;">
+        <iframe src="/trivia-screen" title="Daily Trivia leaderboard" allow="fullscreen" style="display:block;width:100%;aspect-ratio:16/9;min-height:420px;border:0;"></iframe>
+      </div>
+      <details${window.innerWidth < 768 ? ' open' : ''} style="margin-top:6px;"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--color-primary);margin-bottom:10px;">${label}${T.manage ? ' · manage scores' : ''}</summary>${tables}</details>`;
+
   function todayHtml() {
     const s = B.todayStats;
-    return heroHtml()
-      + H.stats([
+    // Today shows the big screen too (20 Nov 2026: "yaha 2nd wali screen aani chahiye").
+    const tables = H.stats([
         { label: 'Played today', value: String(s.played) },
         { label: 'Got it right', value: String(s.correct), color: '#059669' },
         { label: 'Top score', value: String(B.today[0]?.points ?? 0), hint: B.today[0]?.name || '' },
       ])
       + sec(`Today · ${fmtDay(B.day)}`)
       + rankTable(B.today);
+    return heroHtml() + boardFrame(tables, 'Table view');
   }
 
   /* ── Leaderboard ──────────────────────────────────────────────── */
@@ -149,12 +158,8 @@ window.Pages.trivia = (() => {
     const tables = sec(`This month · ${month}`) + rankTable(B.month, { month: true })
       + `<div style="height:14px;"></div>` + sec('Departments (average points per play, so big teams don\'t win just by size)') + depts;
     // The Leaderboard is the big-screen board itself (20 Nov 2026: "leader
-    // board pe ye screen aana chahiye"); the tables stay below for phones
-    // and for Admin/HOD's delete buttons.
-    return `<div style="border-radius:18px;overflow:hidden;box-shadow:0 12px 30px rgba(30,27,75,.25);background:#1e1b4b;margin-bottom:14px;">
-        <iframe src="/trivia-screen" title="Daily Trivia leaderboard" allow="fullscreen" style="display:block;width:100%;aspect-ratio:16/9;min-height:420px;border:0;"></iframe>
-      </div>
-      <details${window.innerWidth < 768 ? ' open' : ''} style="margin-top:6px;"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--color-primary);margin-bottom:10px;">Table view${T.manage ? ' · manage scores' : ''}</summary>${tables}</details>`;
+    // board pe ye screen aana chahiye").
+    return boardFrame(tables, 'Table view — this month & departments');
   }
 
   // Open straight on the Leaderboard (the Dashboard's "Leaderboard" button).
