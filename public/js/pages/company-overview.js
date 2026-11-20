@@ -485,8 +485,16 @@ window.Pages['company-overview'] = (() => {
       <span class="ceo-rx-l">Cheer the export team</span></div>`;
   }
 
-  // Stock: each IMS book's items and quantity on hand (counts — no rates kept).
-  function _stockCard(st) {
+  // Stock: the closing stock value typed on each division's Trial Balance
+  // upload (₹), then each IMS book's items and quantity on hand (IMS keeps
+  // no rates, so those are counts).
+  function _stockCard(st, divisions) {
+    const val = (re) => (divisions || []).filter((d) => !d.missing && re.test(d.division) && d.closingStock != null);
+    const valRow = (d) => `<a class="ceo-lrow" href="#mis-finance" style="text-decoration:none;color:inherit;">
+        <span class="ceo-av">${icon(/retail/i.test(d.division) ? 'shop' : 'stock')}</span>
+        <div><b>${esc(d.division)}</b><small>Closing stock as on ${esc(dayMon(d.to))} (Tally TB)</small></div>
+        <span class="ceo-chip">${inrShort(d.closingStock)}</span></a>`;
+    const exportVal = val(/export/i), tradingVal = val(/trad/i), retailVal = val(/retail/i);
     const ORDER = ['Stores', 'ALU', 'Accessories', 'Trading'];
     const NAME = { Stores: 'IMS Stores', ALU: 'IMS Aluminium & SS', Accessories: 'IMS Accessories', Trading: 'IMS Trading' };
     const HREF = { Stores: '#ims-stores', ALU: '#ims-alu', Accessories: '#ims-accessories', Trading: '#ims-trading' };
@@ -498,10 +506,11 @@ window.Pages['company-overview'] = (() => {
         <span class="ceo-chip">${b.items} item${b.items === 1 ? '' : 's'}${b.low ? ` · <span style="color:var(--ceo-crit);">${b.low} low</span>` : ''}</span></a>`;
     const exportBooks = books.filter((b) => b.category !== 'Trading');
     const trading = books.filter((b) => b.category === 'Trading');
-    const body = (books.length ? `${exportBooks.length ? '<div class="ceo-subh" style="margin-top:0;">Export</div>' + exportBooks.map(row).join('') : ''}
-        ${trading.length ? '<div class="ceo-subh">Trading</div>' + trading.map(row).join('') : ''}` : empty('No IMS stock yet.'))
-      + `<div class="ceo-subh">Retail</div><div class="ceo-lrow"><span class="ceo-av">${icon('shop')}</span><div><b>Satellite · Bopal</b><small>Shop stock is not kept in the ERP yet</small></div></div>`;
-    return card('Stock', 'Quantity on hand per stock book', '', body);
+    const body = `<div class="ceo-subh" style="margin-top:0;">Export</div>${exportVal.map(valRow).join('')}${exportBooks.map(row).join('')}
+        <div class="ceo-subh">Trading</div>${tradingVal.map(valRow).join('')}${trading.map(row).join('')}
+        <div class="ceo-subh">Retail</div>${retailVal.length ? retailVal.map(valRow).join('')
+          : `<div class="ceo-lrow"><span class="ceo-av">${icon('shop')}</span><div><b>Satellite · Bopal</b><small>Type the closing stock on the shops' Trial Balance upload</small></div></div>`}`;
+    return card('Stock', 'Closing stock value (Tally) and quantity on hand (IMS)', '', body);
   }
 
   /* ── render ──────────────────────────────────────────────────────────── */
@@ -679,7 +688,7 @@ window.Pages['company-overview'] = (() => {
           ${_shipCard()}
         </div>
         <div class="ceo-grid">
-          ${_stockCard(d.stock)}
+          ${_stockCard(d.stock, d.finance.divisions)}
           ${_leave(d.leave)}
           ${_meetings(d.meetings, d.today)}
           ${_misChart()}
