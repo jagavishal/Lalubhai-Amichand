@@ -229,6 +229,8 @@ window.Pages.dashboard = (function () {
     const esc = Utils.esc;
     const fresh = (iso) => iso && Date.now() - new Date(iso).getTime() < 3 * 86400000;
     const when = (iso) => (iso ? new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '');
+    // Admin / HOD can take one down here (the Announcements page is off the menu).
+    const canDel = isAdmin(window.currentUser);
     box.style.display = '';
     box.innerHTML = `
       <div class="card" style="padding:14px 18px;border-left:3px solid #d97706;">
@@ -237,11 +239,16 @@ window.Pages.dashboard = (function () {
           ${list.length > 3 ? `<a href="#announcements" style="font-size:12px;font-weight:600;color:var(--color-primary);text-decoration:none;">All ${list.length} →</a>` : ''}
         </div>
         ${list.slice(0, 3).map((a, i) => `<div style="${i ? 'border-top:1px solid var(--border-light,#e2e8f0);padding-top:8px;margin-top:8px;' : ''}">
-          <div style="font-size:14px;font-weight:700;color:var(--text-primary);">${esc(a.title)}${fresh(a.created_at) ? ' <span style="font-size:10.5px;font-weight:700;color:#fff;background:#d97706;border-radius:99px;padding:1px 7px;vertical-align:2px;">NEW</span>' : ''}</div>
+          <div style="font-size:14px;font-weight:700;color:var(--text-primary);display:flex;gap:8px;align-items:flex-start;"><span style="flex:1;">${esc(a.title)}${fresh(a.created_at) ? ' <span style="font-size:10.5px;font-weight:700;color:#fff;background:#d97706;border-radius:99px;padding:1px 7px;vertical-align:2px;">NEW</span>' : ''}</span>${canDel ? `<button type="button" data-ann-del="${esc(a.id)}" title="Delete this announcement" style="border:none;background:transparent;color:var(--text-muted);cursor:pointer;font-size:13px;padding:0 2px;">✕</button>` : ''}</div>
           ${a.message ? `<div style="font-size:13px;color:var(--text-secondary);white-space:pre-wrap;margin-top:3px;line-height:1.45;">${esc(a.message)}</div>` : ''}
           <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">${esc(a.posted_by || '')} · ${esc(when(a.created_at))}</div>
         </div>`).join('')}
       </div>`;
+    box.querySelectorAll('[data-ann-del]').forEach((b) => b.addEventListener('click', async () => {
+      if (!(await Utils.showConfirm('Delete this announcement? It goes from everyone\'s Dashboard.', { title: 'Delete announcement', confirmText: 'Delete', danger: true }))) return;
+      try { await Utils.apiFetch('/api/announcements?id=' + encodeURIComponent(b.dataset.annDel), { method: 'DELETE' }); Utils.showToast('Announcement deleted', 'success'); _paintAnnouncements(); }
+      catch (e) { Utils.showToast(e.message || 'Could not delete', 'error'); }
+    }));
   }
 
   /* Reactions on the shipment banner (Saloni, 20 Nov 2026): cheer the
