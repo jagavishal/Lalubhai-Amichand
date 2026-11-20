@@ -17,7 +17,10 @@ window.Pages['mis-finance'] = (() => {
   let R = null;            // last report
   let M = null;            // mapping list
   let _tab = 'reports';
-  let _stmt = 'F';
+  // Opens on Profit & Loss: the Profitability view is hidden (Jayesh, 20 Nov
+  // 2026: "same as Profit and Loss") — still in the Excel download.
+  let _stmt = 'P';
+  const HIDDEN_STMT = ['F'];
   let _period = '';        // "from|to"
   let _div = '';           // '' = all divisions side by side; a name = that division vs last year
   let _mapQ = '';
@@ -163,7 +166,7 @@ window.Pages['mis-finance'] = (() => {
           <option value="">All divisions${here.divisions.length > 1 ? ' + consolidated' : ''}</option>
           ${here.divisions.map((d) => `<option value="${esc(d)}"${d === _div ? ' selected' : ''}>${esc(d)} — vs last year</option>`).join('')}
         </select>
-        <div class="mf-seg">${Object.entries(STMT).map(([k, l]) => `<button data-stmt="${k}" class="${k === _stmt ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>
+        <div class="mf-seg">${Object.entries(STMT).filter(([k]) => !HIDDEN_STMT.includes(k)).map(([k, l]) => `<button data-stmt="${k}" class="${k === _stmt ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>
         <button class="btn-secondary btn-sm" id="mf-xlsx" style="margin-left:auto;">Download Excel</button>
       </div>
       ${notes.length ? `<div class="mf-note">${notes.join('<br>')}</div>` : ''}
