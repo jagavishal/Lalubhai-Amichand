@@ -149,7 +149,7 @@ const TALLY = {
 };
 // Primary groups never sit under another row (stops a coincidental sum
 // from nesting one primary group inside the one above it).
-const PRIMARY = new Set(['branch transfer purchase', 'unadjusted forex gain loss', 'capital account', 'loans liability', 'current liabilities', 'fixed assets', 'investments', 'current assets',
+const PRIMARY = new Set(['capital account', 'loans liability', 'current liabilities', 'fixed assets', 'investments', 'current assets',
   'branch divisions', 'misc expenses asset', 'suspense a c', 'sales accounts', 'purchase accounts', 'direct incomes', 'direct expenses',
   'indirect incomes', 'indirect expenses', 'profit & loss a c', 'difference in opening balances']);
 
@@ -420,6 +420,16 @@ function buildTree(rows) {
   return rows;
 }
 
+/* A saved upload's rows with the tree worked out again by the current rules,
+   so a fix to buildTree reaches uploads made before it (no re-upload). The
+   uploads carry no indentation, so this is the same sum-based tree. */
+function storedRows(json) {
+  let rows = [];
+  try { rows = JSON.parse(json || '[]'); } catch { rows = []; }
+  if (!Array.isArray(rows) || !rows.length) return [];
+  return buildTree(rows.map(({ name, close, open }) => ({ name, close: Number(close) || 0, open: Number(open) || 0, indent: 0 })));
+}
+
 /* ── Head for every row, leaves summed per head ─────────────────────── */
 
 // head[i] = the row's (first) head, parts[i] = [{ h, f }] — several when
@@ -454,16 +464,29 @@ function headTotals(rows, map, custom) {
   // into report heads. `groups[g]` = { rowClose, rowOpen, ledgers }.
   const groups = {};
   const topOf = (i) => { let j = i; let n = 0; while (rows[j].parent >= 0 && n++ < 50) j = rows[j].parent; return j; };
+  // A top-level row's Profitability group: by its own name, else — for a
+  // branch-transfer group named after the branch ("LALTD Inward Satellite"
+  // holding "Branch Transfer - Purchase", Retail Bopal TB) — by its ledgers'.
+  const groupOf = (i) => {
+    const own = PROFIT_GROUP[norm(rows[i].name)];
+    if (own) return own;
+    for (let k = i + 1; k < rows.length && k < i + 60; k++) {
+      if (rows[k].parent !== i) continue;
+      const g = PROFIT_GROUP[norm(rows[k].name)];
+      if (g === 'btp' || g === 'sales') return g;
+    }
+    return null;
+  };
   rows.forEach((r, i) => {
     if (r.parent >= 0) return;
-    const g = PROFIT_GROUP[norm(r.name)];
+    const g = groupOf(i);
     if (!g) return;
     const x = (groups[g] = groups[g] || { rowClose: 0, rowOpen: 0, ledgers: {} });
     x.rowClose = round2(x.rowClose + r.close); x.rowOpen = round2(x.rowOpen + r.open);
   });
   rows.forEach((r, i) => {
     if (!r.leaf) return;
-    const g = PROFIT_GROUP[norm(rows[topOf(i)].name)];
+    const g = groupOf(topOf(i));
     if (g) {
       const x = groups[g].ledgers;
       const ps = parts[i] || [{ h: null, f: 1 }];
@@ -529,6 +552,8 @@ const PROFIT_GROUP = {
   // As in Jayesh's Export Profitability sheet: branch transfers in are part
   // of the cost of goods; unadjusted forex is its own line before net profit.
   'branch transfer purchase': 'btp',
+  // Branch transfers out are part of the sales (as the P&L counts them).
+  'branch transfer sales': 'sales',
   'unadjusted forex gain loss': 'fx',
 };
 const PROFIT_SIDE = { sales: -1, dinc: -1, iinc: -1, purch: 1, btp: 1, dexp: 1, iexp: 1, fx: -1 };
@@ -962,7 +987,7 @@ function mountMisFinance(app, ctx) {
   // One upload as head totals; an upload without opening balances borrows
   // them from the same division's upload that ends the day before.
   async function totalsFor(u, map, all, custom) {
-    const rows = JSON.parse(u.rows_json || '[]');
+    const rows = storedRows(u.rows_json);
     const t = headTotals(rows, map, custom);
     // Typed on the upload when the Trial Balance shows stock at its opening value.
     if (u.closing_stock != null) t.close.stock = round2(Number(u.closing_stock));
@@ -971,7 +996,7 @@ function mountMisFinance(app, ctx) {
     if (!t.hasOpening) {
       const prev = all.find((x) => x.division === u.division && dOut(x.period_to) === prevDay(dOut(u.period_from)));
       if (prev) {
-        const p = headTotals(JSON.parse(prev.rows_json || '[]'), map, custom);
+        const p = headTotals(storedRows(prev.rows_json), map, custom);
         // Nominal accounts restart at a new financial year (1 April).
         const fyStart = dOut(u.period_from).slice(5) === '04-01';
         t.open = {};
@@ -1092,7 +1117,7 @@ function mountMisFinance(app, ctx) {
     const all = await q('SELECT division, rows_json FROM mis_tb_uploads');
     const seen = new Map();
     for (const u of all) {
-      const rows = JSON.parse(u.rows_json || '[]');
+      const rows = storedRows(u.rows_json);
       const { head, parts, src } = assignHeads(rows, map, custom);
       rows.forEach((r, i) => {
         const k = norm(r.name);
