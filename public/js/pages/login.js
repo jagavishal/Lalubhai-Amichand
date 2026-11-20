@@ -498,12 +498,12 @@ window.Pages.login = {
           if (window.Sidebar)  window.Sidebar.render(data.user);
           if (window.Topbar)   window.Topbar.render(data.user);
           if (window.Router) {
+            // Where to land is set before the router starts, so only that page
+            // renders (see main.js).
+            history.replaceState(null, '', '#' + (data.user?.mustChangePassword ? 'profile' : window.Router.home()));
             window.Router.init();
             if (data.user?.mustChangePassword) {
-              window.Router.navigate('profile');
               window.Utils?.showToast?.('Please set your own password to finish signing in.', 'info');
-            } else {
-              window.Router.navigate(window.Router.home());
             }
           }
         }

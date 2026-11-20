@@ -15,8 +15,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('login-page').style.display='none';
     window.Sidebar?.render(user);
     window.Topbar?.render(user);
+    // Landing page set BEFORE the router starts: navigating after init let the
+    // (slow, async) Dashboard render first and then paint over the CEO page.
+    if (!window.location.hash || window.location.hash==='#') history.replaceState(null, '', '#' + window.Router.home());
     window.Router.init();
-    if (!window.location.hash || window.location.hash==='#') window.Router.navigate(window.Router.home());
   } else {
     document.getElementById('app-shell').style.display='none';
     document.getElementById('login-page').style.display='flex';
