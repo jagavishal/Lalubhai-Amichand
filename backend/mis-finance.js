@@ -1177,7 +1177,29 @@ function mountMisFinance(app, ctx) {
     return { ok: true };
   }));
 
-  return {};
+  /* For the CEO Dashboard (Saloni, 20 Nov 2026: "financials ka totals"):
+     each division's most recent upload → Sales, Gross Profit, Net Profit,
+     worked out exactly as the Profitability statement does. */
+  async function summary() {
+    if (!useDb) return [];
+    await ensureSchema();
+    const [map, custom, all, divs] = await Promise.all([mapping(), customHeads(), q('SELECT * FROM mis_tb_uploads'), divisions()]);
+    const pick = (F, re) => { const x = (F || []).find((l) => l[0] && re.test(String(l[1] || ''))); return x ? round2(x[2]) : null; };
+    const out = [];
+    for (const d of divs) {
+      // Newest period that ends last; a comparative copy never outranks its own upload.
+      const u = all.filter((x) => x.division === d).sort((a, b) => dOut(b.period_to).localeCompare(dOut(a.period_to)) || dOut(a.period_from).localeCompare(dOut(b.period_from)))[0];
+      if (!u) { out.push({ division: d, missing: true }); continue; }
+      const from = dOut(u.period_from), to = dOut(u.period_to);
+      const t = await totalsFor(u, map, all, custom);
+      const st = statements(t, from, to, detailNames([t]));
+      out.push({ division: d, from, to, closingStock: u.closing_stock == null ? null : Number(u.closing_stock),
+        sales: pick(st.F, /^Sales$/), gp: pick(st.F, /^Gross Profit$/), np: pick(st.F, /^Net Profit/) });
+    }
+    return out;
+  }
+
+  return { summary };
 }
 
 module.exports = { MF_SCHEMA, mountMisFinance, parseTrialBalance, pickTrialBalance, headTotals, statements, detailNames, HEADS };

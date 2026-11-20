@@ -30,8 +30,9 @@ window.Pages['retail-sales'] = (() => {
   const money = (v) => (v == null ? '—' : '₹ ' + Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 }));
   const monthName = (ym) => { const [y, m] = ym.split('-').map(Number); return new Date(y, m - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }); };
 
-  // The entry form, in the order the day is counted. Every label in
-  // English, Hindi and Gujarati — the people filling it read those.
+  // The entry form, in the order the day is counted. English only (Shravan,
+  // 20 Nov 2026: "sirf English rakho") — the Hindi / Gujarati words are kept
+  // in the list below but no longer shown.
   const FIELDS = [
     { group: ['Card', 'कार्ड', 'કાર્ડ'], colour: '#2563eb', items: [
       ['card_sales', 'Card sale', 'कार्ड बिक्री', 'કાર્ડ વેચાણ'],
@@ -58,8 +59,8 @@ window.Pages['retail-sales'] = (() => {
   const dayLabel = (iso) => {
     const t = istToday();
     const y = new Date(t + 'T00:00:00Z'); y.setUTCDate(y.getUTCDate() - 1);
-    if (iso === t) return 'Today · आज · આજે';
-    if (iso === y.toISOString().slice(0, 10)) return 'Yesterday · कल · ગઈકાલે';
+    if (iso === t) return 'Today';
+    if (iso === y.toISOString().slice(0, 10)) return 'Yesterday';
     return new Date(iso + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'long', timeZone: 'UTC' });
   };
 
@@ -89,9 +90,9 @@ window.Pages['retail-sales'] = (() => {
     const el = document.getElementById('main-content');
     if (!el) return;
     const tabs = [
-      { key: 'entry', label: 'Daily Entry · एंट्री' },
-      { key: 'register', label: 'Register · रजिस्टर' },
-      { key: 'credit', label: 'Udhaar · उधार' },
+      { key: 'entry', label: 'Daily Entry' },
+      { key: 'register', label: 'Register' },
+      { key: 'credit', label: 'Udhaar (Credit)' },
     ];
     if (M.admin) tabs.push({ key: 'settings', label: 'Settings' });
     const body = !_branch ? H.empty('No branches yet', 'Add the branches on Retail Dashboard → Manage Lists.')
@@ -192,23 +193,23 @@ window.Pages['retail-sales'] = (() => {
           <input id="rs-date" type="date" value="${esc(_date)}" max="${today}" /></div>
         <button type="button" id="rs-next" title="Next day" ${_date >= today ? 'disabled' : ''}>▶</button>
       </div>
-      ${_saved ? `<div class="se-note" style="background:#dcfce7;border:2px solid #16a34a;color:#14532d;font-weight:800;font-size:17px;text-align:center;">✓ Saved · सेव हो गया · સેવ થઈ ગયું</div>` : ''}
-      ${!_saved && filled ? `<div class="se-note" style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;">This day is already filled. Change a number and press Save again.<br><small>यह दिन भर दिया है — बदलना हो तो बदलकर फिर से Save दबाएँ · આ દિવસ ભરાઈ ગયો છે — બદલવું હોય તો બદલીને ફરી Save દબાવો</small></div>` : ''}
+      ${_saved ? `<div class="se-note" style="background:#dcfce7;border:2px solid #16a34a;color:#14532d;font-weight:800;font-size:17px;text-align:center;">✓ Saved</div>` : ''}
+      ${!_saved && filled ? `<div class="se-note" style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;">This day is already filled. Change a number and press Save again.</div>` : ''}
       ${d.before_opening ? `<div class="se-note" style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;">Before the opening balance date — this day does not change the cash.</div>` : ''}
       <div id="rs-entry">
         ${FIELDS.map((g) => `<div class="se-group" style="border-left-color:${g.colour};">
-          <h3 style="color:${g.colour};">${esc(g.group[0])} <span>· ${esc(g.group[1])} · ${esc(g.group[2])}</span></h3>
-          ${g.items.map(([k, en, hi, gu]) => `<div class="se-row"><label for="rs-${k}">${esc(en)}<small>${esc(hi)} · ${esc(gu)}</small></label>
+          <h3 style="color:${g.colour};">${esc(g.group[0])}</h3>
+          ${g.items.map(([k, en]) => `<div class="se-row"><label for="rs-${k}">${esc(en)}</label>
             <input id="rs-${k}" data-f="${k}" class="se-in" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${esc(val(k))}" /></div>`).join('')}
         </div>`).join('')}
         <div class="se-group" style="border-left-color:#7c3aed;">
-          <h3 style="color:#7c3aed;">Udhaar (credit) <span>· उधार · ઉધાર</span></h3>
+          <h3 style="color:#7c3aed;">Udhaar (credit)</h3>
           <datalist id="rs-parties">${(d.parties || []).map((p) => `<option value="${esc(p)}">`).join('')}</datalist>
           <div id="rs-credit">${lines.map(creditRow).join('')}</div>
-          <button type="button" class="se-add" id="rs-add-credit">+ Add party · पार्टी जोड़ें · પાર્ટી ઉમેરો</button>
+          <button type="button" class="se-add" id="rs-add-credit">+ Add party</button>
         </div>
         <div class="se-sum" id="rs-calc"></div>
-        <button type="button" class="se-save" id="rs-save">Save · सेव करें · સેવ કરો</button>
+        <button type="button" class="se-save" id="rs-save">Save</button>
         ${M.admin ? `<details class="se-admin"><summary style="cursor:pointer;color:#64748b;">Admin options</summary>
           <div class="rs-card" style="margin-top:8px;">
             <div style="font-size:12.5px;color:#475569;margin-bottom:8px;">Card bank charge: <b id="rs-charge-card"></b> · UPI bank charge: <b id="rs-charge-upi"></b> · Difference from Tally: <b id="rs-tally-diff"></b></div>
@@ -220,13 +221,13 @@ window.Pages['retail-sales'] = (() => {
   }
   const creditRow = (c = {}) => `<div class="se-cr rs-cr">
       <div style="display:flex;gap:8px;align-items:end;">
-        <div style="flex:1;"><small>Party name · पार्टी का नाम · પાર્ટીનું નામ</small>
+        <div style="flex:1;"><small>Party name</small>
           <input class="se-in txt" list="rs-parties" value="${esc(c.party || '')}" placeholder="Name" data-c="party" /></div>
         <button type="button" data-del-credit title="Remove" style="width:50px;height:50px;border-radius:10px;border:2px solid #fecaca;background:#fff;color:#dc2626;font-size:20px;cursor:pointer;">✕</button>
       </div>
       <div class="two">
-        <div><small>Udhaar given · उधार दिया · ઉધાર આપ્યું</small><input class="se-in" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${esc(c.sale || '')}" data-c="sale" /></div>
-        <div><small>Money came back · पैसा आया · પૈસા આવ્યા</small><input class="se-in" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${esc(c.received || '')}" data-c="received" /></div>
+        <div><small>Udhaar given</small><input class="se-in" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${esc(c.sale || '')}" data-c="sale" /></div>
+        <div><small>Money came back</small><input class="se-in" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${esc(c.received || '')}" data-c="received" /></div>
       </div></div>`;
 
   function readEntry() {
@@ -248,9 +249,9 @@ window.Pages['retail-sales'] = (() => {
     const cr = x.credit.reduce((a, c) => a + (Number(c.received) || 0), 0);
     const total = v('cash_sales') + v('card_sales') + v('upi_sales') + cs - v('sales_return');
     const close = DAY.cash_open + v('cash_sales') + v('cash_received') - v('sales_return') - v('cash_expense') - v('cash_deposit');
-    box.innerHTML = `<div><small>Total sale · कुल बिक्री · કુલ વેચાણ</small><b>${money(total)}</b></div>
-      <div class="cash"><small>Cash in drawer · गल्ले में नकद · ગલ્લામાં રોકડ</small><b>${money(close)}</b></div>
-      <div class="cred"><small>Udhaar pending · बाकी उधार · બાકી ઉધાર</small><b>${money(DAY.credit_open + cs - cr)}</b></div>`;
+    box.innerHTML = `<div><small>Total sale</small><b>${money(total)}</b></div>
+      <div class="cash"><small>Cash in drawer</small><b>${money(close)}</b></div>
+      <div class="cred"><small>Udhaar pending</small><b>${money(DAY.credit_open + cs - cr)}</b></div>`;
     const put = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = money(n); };
     put('rs-charge-card', v('card_sales') - v('card_received'));
     put('rs-charge-upi', v('upi_sales') - v('upi_received'));
@@ -260,7 +261,9 @@ window.Pages['retail-sales'] = (() => {
   /* ── As per Tally register (a row per day) ─────────────────────────── */
 
   const REG = [
-    { g: 'Sales', cols: [['tally_sales', 'Amount (Tally)'], ['total_sales', 'Total']] },
+    // One sales column (Shravan, 20 Nov 2026): the Tally amount, called
+    // Total Sales — the extra computed "Total" column is gone.
+    { g: 'Sales', cols: [['tally_sales', 'Total Sales']] },
     { g: 'Credit Card', cols: [['card_sales', 'Sales'], ['card_received', 'Recd in Bank'], ['card_charge', 'Bal / Charge']] },
     { g: 'Paytm / UPI', cols: [['upi_sales', 'Sales'], ['upi_received', 'Recd in Bank'], ['upi_charge', 'Bal / Charge']] },
     { g: 'Cash', cols: [['cash_sales', 'Sales'], ['cash_received', 'Cash Recd'], ['sales_return', 'Return'], ['cash_expense', 'Expense'], ['cash_deposit', 'Deposited'], ['cash_close', 'Balance (Physical)']] },
@@ -313,11 +316,36 @@ window.Pages['retail-sales'] = (() => {
       { label: 'Parties with balance', value: c.parties.filter((p) => Math.abs(p.balance) > 0.5).length },
       ...(c.openingCredit ? [{ label: 'Opening credit balance', value: money(c.openingCredit) }] : []),
     ])}
-    ${H.table(['Party', { label: 'Credit Sales', align: 'right' }, { label: 'Received', align: 'right' }, { label: 'Balance', align: 'right' }, 'First', 'Last'],
-      c.parties.map((p) => [`<b>${esc(p.party)}</b><div style="font-size:11px;color:#94a3b8;">${p.lines.length} entr${p.lines.length === 1 ? 'y' : 'ies'}</div>`,
-        n0(p.sale), n0(p.received), `<b style="color:${p.balance > 0.5 ? '#d97706' : '#16a34a'};">${n0(p.balance)}</b>`, H.fmtDate(p.first), H.fmtDate(p.last)]),
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px;"><button class="btn-primary btn-sm" id="rs-settle-any">+ Record money received</button></div>
+    ${H.table(['Party', { label: 'Credit Sales', align: 'right' }, { label: 'Received', align: 'right' }, { label: 'Balance', align: 'right' }, 'First', 'Last', { label: '', m: 'actions' }],
+      c.parties.map((p, i) => [`<b>${esc(p.party)}</b><div style="font-size:11px;color:#94a3b8;">${p.lines.length} entr${p.lines.length === 1 ? 'y' : 'ies'}</div>`,
+        n0(p.sale), n0(p.received), `<b style="color:${p.balance > 0.5 ? '#d97706' : '#16a34a'};">${n0(p.balance)}</b>`, H.fmtDate(p.first), H.fmtDate(p.last),
+        p.balance > 0.5 ? `<button class="btn-secondary btn-sm" data-settle="${i}">Settle</button>` : '<span style="font-size:11.5px;color:#16a34a;">Settled</span>']),
       { empty: 'No credit sales yet', cards: true, page: { key: 'rs-credit', sig: [_branch], onPage: render } })}
-    <div style="font-size:11.5px;color:#94a3b8;margin-top:6px;">Parties are grouped by the name exactly as typed — type the same name each time so a party's sales and payments meet.</div>`;
+    <div style="font-size:11.5px;color:#94a3b8;margin-top:6px;">Parties are grouped by the name exactly as typed — type the same name each time so a party's sales and payments meet. <b>Settle</b> records the money that came back on the day it came; the register shows it on that day.</div>`;
+  }
+
+  function settleForm(p) {
+    const parties = (CREDIT?.parties || []).map((x) => x.party);
+    H.openModal({
+      id: 'rs-settle', width: 460, title: p ? `Settle — ${p.party}` : 'Money received against udhaar',
+      subtitle: p ? `Balance ${money(p.balance)} · ${_branch}` : _branch,
+      bodyHTML: `${H.grid(
+        (p ? '' : `<div style="grid-column:span 2;"><label style="${H.LABEL}">Party</label><input id="st-party" list="st-parties" style="${H.CONTROL}" placeholder="Name as typed on the sale" /><datalist id="st-parties">${parties.map((x) => `<option value="${esc(x)}">`).join('')}</datalist></div>`)
+        + H.field('st-amount', 'Amount received (₹)', p ? p.balance : '', { type: 'number', step: '0.01' })
+        + H.field('st-date', 'Date it came', istToday(), { type: 'date' })
+        + H.field('st-note', 'Note (optional)', '', { span: 2, placeholder: 'e.g. cheque no., UPI ref' }))}`,
+      confirmText: 'Save',
+      onConfirm: async () => {
+        const body = { branch: _branch, party: p ? p.party : H.val('st-party').trim(), amount: H.val('st-amount'), date: H.val('st-date'), note: H.val('st-note').trim() };
+        if (!body.party) throw new Error('Write the party name');
+        if (!(Number(body.amount) > 0)) throw new Error('Write the amount received');
+        await H.post('/api/retail-sales/credit/settle', body);
+        H.closeModal('rs-settle');
+        H.toast(`${money(Number(body.amount))} received from ${body.party} — on ${H.fmtDate(body.date)}`);
+        await show();
+      },
+    });
   }
 
   /* ── Settings ─────────────────────────────────────────────────────── */
@@ -361,6 +389,8 @@ window.Pages['retail-sales'] = (() => {
     $('rs-month')?.addEventListener('change', (e) => { if (e.target.value) { _month = e.target.value; show(); } });
     $('rs-xlsx')?.addEventListener('click', () => downloadXlsx().catch(H.fail));
     document.querySelectorAll('[data-open]').forEach((r) => r.addEventListener('click', () => { _date = r.getAttribute('data-open'); _tab = 'entry'; show(); }));
+    document.querySelectorAll('[data-settle]').forEach((b) => b.addEventListener('click', () => settleForm(CREDIT.parties[Number(b.getAttribute('data-settle'))])));
+    $('rs-settle-any')?.addEventListener('click', () => settleForm(null));
 
     if (_tab === 'entry' && DAY) {
       const box = $('rs-credit');
@@ -372,14 +402,14 @@ window.Pages['retail-sales'] = (() => {
         const btn = e.target;
         try {
           const body = { branch: _branch, date: _date, ...readEntry() };
-          if (body.credit.some((c) => !c.party)) throw new Error('Write the party name · पार्टी का नाम लिखें · પાર્ટીનું નામ લખો');
-          btn.disabled = true; btn.textContent = 'Saving… · सेव हो रहा है…';
+          if (body.credit.some((c) => !c.party)) throw new Error('Write the party name');
+          btn.disabled = true; btn.textContent = 'Saving…';
           await H.api('/api/retail-sales/day', { method: 'PUT', body: JSON.stringify(body) });
           M.lastDay[_branch] = !M.lastDay[_branch] || _date > M.lastDay[_branch] ? _date : M.lastDay[_branch];
           _saved = true;
           await show();
           window.scrollTo({ top: 0, behavior: 'smooth' });
-        } catch (err) { btn.disabled = false; btn.textContent = 'Save · सेव करें · સેવ કરો'; H.fail(err); }
+        } catch (err) { btn.disabled = false; btn.textContent = 'Save'; H.fail(err); }
       });
       $('rs-del')?.addEventListener('click', async () => {
         if (!(await Utils.showConfirm(`Delete ${_branch}'s entry for ${H.fmtDate(_date)}? Balances after it will change.`, { title: 'Delete day', confirmText: 'Delete', danger: true }))) return;

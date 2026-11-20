@@ -3,6 +3,12 @@ const _SPIN = '<div style="display:flex;align-items:center;justify-content:cente
 window.Router = {
   navigate(page) { window.location.hash = '#' + page; },
 
+  // Where a login lands: the CEO Dashboard for whoever may open it (the
+  // Admin role — Saloni, 20 Nov 2026), else the Dashboard.
+  home() {
+    return window.Sidebar?.canAccess && window.Sidebar.canAccess('company-overview') ? 'company-overview' : 'dashboard';
+  },
+
   init() {
     window.addEventListener('hashchange', () => this._render());
     this._render();
@@ -26,7 +32,7 @@ window.Router = {
   _render() {
     const page = (window.location.hash || '').replace('#', '') || 'dashboard';
     if (!window.currentUser && page !== 'login') { this.navigate('login'); return; }
-    if (window.currentUser && page === 'login')  { this.navigate('dashboard'); return; }
+    if (window.currentUser && page === 'login')  { this.navigate(this.home()); return; }
 
     /* Page access was enforced only by leaving links out of the sidebar, which
        is decoration — anybody could type #users or #hr-payroll and the module

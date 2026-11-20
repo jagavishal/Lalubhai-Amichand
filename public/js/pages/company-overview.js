@@ -1,11 +1,12 @@
 window.Pages = window.Pages || {};
 
 // ── CEO Dashboard (route: company-overview) ─────────────────────────────────
-// Admin-only rollup: tasks the admins have handed out, meetings, urgent
-// payments, leave, and the MIS chart. PO/PR are deliberately not here ("PO, PR
-// CEO ke liye jaruri nahi hai"). Data: GET /api/company-overview + GET /api/mis
-// (so the MIS chart always matches the MIS Report page). Charts are plain
-// inline SVG/HTML — no chart library — with a hover tooltip on every mark.
+// Admin-only. Rebuilt 20 Nov 2026 on Saloni's brief ("mujhe financials dekhna
+// hai — decision making mein help kare"): sales (retail daily report, export
+// orders, trading), each division's Sales / GP / NP from the Tally Trial
+// Balance uploads, the export shipment tracker, stock, then who is on leave,
+// meetings and the MIS chart. Tasks and urgent payments are off it. Data:
+// GET /api/company-overview + /api/mis + /api/shipment-target(/reactions).
 window.Pages['company-overview'] = (() => {
   const esc = Utils.esc;
 
@@ -18,6 +19,18 @@ window.Pages['company-overview'] = (() => {
     if (n >= 1e3) return '₹' + (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, '') + 'K';
     return '₹' + Math.round(n);
   };
+  const money = (n, cur) => (cur && cur !== 'INR'
+    ? (cur === 'USD' ? '$' : cur + ' ') + (Number(n) || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })
+    : inr(n));
+  const moneyShort = (n, cur) => {
+    if (!cur || cur === 'INR') return inrShort(n);
+    n = Number(n) || 0;
+    const sym = cur === 'USD' ? '$' : cur + ' ';
+    if (n >= 1e6) return sym + (n / 1e6).toFixed(n >= 1e7 ? 0 : 2).replace(/\.?0+$/, '') + 'M';
+    if (n >= 1e3) return sym + (n / 1e3).toFixed(n >= 1e5 ? 0 : 1).replace(/\.0$/, '') + 'K';
+    return sym + Math.round(n);
+  };
+  const byCur = (o) => { const e = Object.entries(o || {}).filter(([, v]) => v); return e.length ? e.map(([c, v]) => moneyShort(v, c)).join(' + ') : '—'; };
   const dayMon = (iso) => {
     if (!iso) return '—';
     const d = new Date(iso + 'T00:00:00');
@@ -43,7 +56,8 @@ window.Pages['company-overview'] = (() => {
   let _mis = null;          // { rows, error }
   let _misPeriod = 'month'; // 'week' | 'month'
   let _showAllTeam = false;
-  let _leaveReq = null;     // { rows, error } — pending leave requests THIS admin approves
+  let _ship = null;         // /api/shipment-target
+  let _shipRx = [];         // reactions
 
   function _isoOffset(iso, days) {
     const d = new Date(iso + 'T00:00:00Z');
@@ -63,7 +77,7 @@ window.Pages['company-overview'] = (() => {
     try { _data = await Utils.apiFetch('/api/company-overview'); }
     catch (e) { _error = e.message || 'Failed to load'; }
     _render();
-    if (_data) { _loadMis(); _loadLeaveRequests(); }
+    if (_data) { _loadMis(); _loadShip(); }
   }
   async function _loadMis() {
     _mis = null; _render();
@@ -74,20 +88,11 @@ window.Pages['company-overview'] = (() => {
     } catch (e) { _mis = { rows: [], error: e.message || 'Failed to load MIS' }; }
     _render();
   }
-  // "jo leave jis admin ko approve krni hai vo hi aani chahiye" — reuses the
-  // Approvals page's own forApprover=me scoping (backend/hrms.js), so this
-  // card only ever shows requests THIS logged-in admin (or their leave
-  // substitute) is actually the one to decide — never the whole company's.
-  async function _loadLeaveRequests() {
-    _leaveReq = null; _render();
-    // "vohi leave aani chahiye jo mujhe approve krni hai" — always the
-    // logged-in admin's own approval queue (GET /api/hr/leaves's own
-    // forApprover=me, the same match the Approvals page already trusts),
-    // never a company-wide fallback.
+  async function _loadShip() {
     try {
-      const rows = await Utils.apiFetch('/api/hr/leaves?forApprover=me&status=Pending');
-      _leaveReq = { rows: Array.isArray(rows) ? rows : [] };
-    } catch (e) { _leaveReq = { rows: [], error: e.message || 'Failed to load leave requests' }; }
+      const [t, r] = await Promise.all([Utils.apiFetch('/api/shipment-target'), Utils.apiFetch('/api/shipment-target/reactions').catch(() => null)]);
+      _ship = t; _shipRx = (r && r.reactions) || [];
+    } catch { _ship = null; }
     _render();
   }
 
@@ -98,6 +103,10 @@ window.Pages['company-overview'] = (() => {
     meet: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4M16 2v4M3 10h18"/>',
     pay: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/>',
     leave: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 8 5 5M22 8l-5 5"/>',
+    shop: '<path d="M3 9l1.5-5h15L21 9"/><path d="M4 9v11h16V9"/><path d="M3 9h18"/><path d="M9 20v-6h6v6"/>',
+    ship: '<path d="M2 20c1.5 1 3 1 4.5 0s3-1 4.5 0 3 1 4.5 0 3-1 4.5 0"/><path d="M4 16l-1-5h18l-1 5"/><path d="M12 11V4M8 7h8"/>',
+    trade: '<path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/>',
+    stock: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',
   };
   const icon = (k) => '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + ICON[k] + '</svg>';
 
@@ -164,37 +173,6 @@ window.Pages['company-overview'] = (() => {
   }
 
   /* ── sections ────────────────────────────────────────────────────────── */
-  function _taskStatus(t) {
-    const onTime = Math.max(0, t.pending - t.overdue);
-    const segs = [
-      { label: 'Done', value: t.done, color: 'var(--ceo-good)' },
-      { label: 'Pending (on time)', value: onTime, color: 'var(--ceo-warn)' },
-      { label: 'Overdue', value: t.overdue, color: 'var(--ceo-crit)' },
-    ];
-    const pct = t.total ? Math.round(t.done / t.total * 100) : 0;
-    const rows = segs.map(s => `<div class="ceo-srow"><i style="background:${s.color}"></i><span>${esc(s.label)}</span><b>${s.value}</b><em>${t.total ? Math.round(s.value / t.total * 100) : 0}%</em></div>`).join('');
-    return card('Task status', 'All tasks given by admins', link('#all-tasks', 'All Tasks'),
-      `<div class="ceo-donut-wrap">${_donut(segs, pct + '%', 'completed')}<div class="ceo-srows">${rows}
-        <div class="ceo-srow ceo-srow-total"><span>Total</span><b>${t.total}</b></div></div></div>`);
-  }
-
-  function _team(t) {
-    const pending = t.byAssignee.filter(r => r.pending > 0);
-    const list = _showAllTeam ? pending : pending.slice(0, 8);
-    const body = list.length ? `<div class="ceo-tablewrap"><table class="ceo-table ceo-team-tbl m-cards">
-      <thead><tr><th>Employee</th><th class="r">Pending</th><th class="r">Overdue</th><th class="r">Revise</th><th>Given By</th></tr></thead>
-      <tbody>${list.map(r => `<tr>
-          <td class="m-card-title"><div class="ceo-person"><span class="ceo-av">${esc(initials(r.name))}</span><b>${esc(r.name)}</b></div></td>
-          <td class="r num">${r.pending}</td>
-          <td class="r num">${r.overdue ? `<span class="ceo-badge ceo-badge-crit">${r.overdue}</span>` : '<span class="ceo-dim">0</span>'}</td>
-          <td class="r num">${r.revise ? `<span class="ceo-badge ceo-badge-warn">${r.revise}</span>` : '<span class="ceo-dim">0</span>'}</td>
-          <td><small>${esc(r.givenBy.join(', ') || '—')}</small></td>
-        </tr>`).join('')}</tbody></table></div>
-      ${pending.length > 8 ? `<button class="ceo-more" id="ceo-team-more">${_showAllTeam ? 'Show less' : 'Show all ' + pending.length + ' employees'}</button>` : ''}`
-      : empty('Nobody has a pending task from an admin right now.');
-    return card('Team tasks', 'Employees with pending tasks — sorted by overdue, then pending', link('#all-tasks', 'All Tasks'), body);
-  }
-
   function _meetings(m, today) {
     const byDay = {};
     for (const x of m.upcoming) (byDay[x.date] = byDay[x.date] || []).push(x);
@@ -417,20 +395,6 @@ window.Pages['company-overview'] = (() => {
     return card('On leave today', l.onLeaveToday.length + ' out today', link('#hr-leave', 'Leave'), today + up);
   }
 
-  function _leaveRequests() {
-    const item = (x) => `<div class="ceo-lrow"><span class="ceo-av">${esc(initials(x.name))}</span>
-      <div><b>${esc(x.name)}</b><small>${esc(dayMon(x.from))}${x.to !== x.from ? ' – ' + esc(dayMon(x.to)) : ''}</small></div><span class="ceo-chip">${esc(x.type)}</span></div>`;
-    let body, count = '';
-    if (!_leaveReq) body = empty('Loading…');
-    else if (_leaveReq.error) body = empty('Could not load: ' + _leaveReq.error);
-    else {
-      const rows = _leaveReq.rows.map(r => ({ name: r.employee_name || r.user_name || '—', type: r.leave_type || r.type || 'Leave', from: r.from_date, to: r.to_date }));
-      body = rows.length ? rows.map(item).join('') : empty('No leave requests waiting on your decision.');
-      count = rows.length + ' waiting on your decision';
-    }
-    return card('Leave requests', count, link('#hr-leave', 'Leave'), body);
-  }
-
   function _misChart() {
     const toggle = `<div class="ceo-seg">${[['week', 'This week'], ['month', 'This month']].map(([k, l]) =>
       `<button data-mis-period="${k}" class="${_misPeriod === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
@@ -457,30 +421,87 @@ window.Pages['company-overview'] = (() => {
     return card('Team performance (MIS)', 'Delegation tasks due in the period', toggle, body);
   }
 
-  function _payments(p) {
-    const has = p.monthly.some(m => m.approvedAmount);
-    const chart = has ? _columns({
-      labels: p.monthly.map(m => monName(m.month)),
-      tipLabels: p.monthly.map(m => new Date(m.month + '-01T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })),
-      series: [{ name: 'Approved', color: 'var(--ceo-s1)', values: p.monthly.map(m => m.approvedAmount), tipFmt: inr }],
-      fmt: inrShort, height: 170,
-    }) : empty('No approved urgent payments in the last 6 months.');
-    const stat = (label, count, amount, tone) => `<div class="ceo-mini"><div class="ceo-mini-v">${count}</div><div class="ceo-mini-l"><span class="ceo-dot ceo-dot-${tone}"></span>${esc(label)}</div>${amount ? `<div class="ceo-mini-a">${amount}</div>` : ''}</div>`;
-    return card('Urgent payments', 'Approved amount by month — last 6 months', link('#approvals', 'Approvals'),
-      `<div class="ceo-minis">${stat('Pending', p.pendingCount, inr(p.pendingAmount), 'warn')}${stat('Approved this month', p.approvedMonthCount, inr(p.approvedMonthAmount), 'good')}${stat('Rejected this month', p.rejectedMonthCount, '', 'crit')}</div>
-       ${chart}`);
+  /* Sales: the retail daily report (per shop), export orders (PI value of
+     every order not cancelled) and trading (its Tally Trial Balance). */
+  function _sales(f) {
+    const r = f.retail || [];
+    const sum = (k) => r.reduce((a, x) => a + (Number(x[k]) || 0), 0);
+    const shops = r.map((x) => `${esc(x.branch)} ${inrShort(x.mtd)}`).join(' · ') || 'No shop entries yet';
+    const last = r.map((x) => x.lastDay).filter(Boolean).sort().pop();
+    const ex = f.export;
+    const trading = (f.divisions || []).find((d) => /trad/i.test(d.division) && !d.missing);
+    const tiles = [
+      _tile('shop', 'Retail sales · this month', inrShort(sum('mtd')), shops, 'accent', '#retail-sales'),
+      _tile('shop', 'Retail sales · this year', inrShort(sum('fy')), last ? 'Daily Report, last entry ' + dayMon(last) : 'Daily Report (as per Tally)', 'accent', '#retail-sales'),
+      _tile('ship', 'Export orders · this month', ex ? byCur(ex.month) : '—', ex ? `${ex.count.month} order${ex.count.month === 1 ? '' : 's'} (PI value)` : esc(f.errors?.export || 'Order sheet not reachable'), 'accent', '#order-sheet'),
+      _tile('ship', 'Export orders · this year', ex ? byCur(ex.fy) : '—', ex ? `${ex.count.fy} orders · not yet packed ${byCur(ex.open)}` : '', 'accent', '#order-sheet'),
+      _tile('trade', 'Trading sales', trading ? inrShort(trading.sales) : '—', trading ? 'Tally TB ' + dayMon(trading.from) + ' – ' + dayMon(trading.to) : 'No Trading Trial Balance uploaded', 'accent', '#mis-finance'),
+    ];
+    return `<div class="ceo-sech">Sales</div><div class="ceo-tiles">${tiles.join('')}</div>`;
   }
 
-  function _paymentRequests(p) {
-    const pill = (s) => {
-      const t = s === 'Approved' ? 'good' : s === 'Rejected' ? 'crit' : 'warn';
-      return `<span class="ceo-badge ceo-badge-${t}">${esc(s === 'pending' ? 'Pending' : s)}</span>`;
-    };
-    const body = p.recent.length ? `<div class="ceo-tablewrap"><table class="ceo-table">
-      <thead><tr><th>Payee</th><th class="r">Amount</th><th>Status</th></tr></thead>
-      <tbody>${p.recent.map(r => `<tr><td><b>${esc(r.payee)}</b><small>${esc(r.requestedBy || '—')} · ${esc(dayMon(r.createdAt))}</small></td>
-        <td class="r num">${inr(r.amount)}</td><td>${pill(r.status)}</td></tr>`).join('')}</tbody></table></div>` : empty('No urgent payment requests yet.');
-    return card('Latest payment requests', 'Urgent payments, newest first', link('#approvals', 'Approvals'), body);
+  // Each division's latest Tally Trial Balance (MIS Financials).
+  function _financials(f) {
+    const d = (f.divisions || []);
+    const have = d.filter((x) => !x.missing);
+    const sign = (v) => (v == null ? '—' : `<span style="color:${v < 0 ? 'var(--ceo-crit)' : 'var(--ceo-ink)'}">${v < 0 ? '(' + inrShort(-v) + ')' : inrShort(v)}</span>`);
+    const tot = (k) => have.reduce((a, x) => a + (Number(x[k]) || 0), 0);
+    const body = have.length ? `<div class="ceo-tablewrap"><table class="ceo-table m-cards">
+      <thead><tr><th>Division</th><th>Period</th><th class="r">Sales</th><th class="r">Gross Profit</th><th class="r">Net Profit</th></tr></thead>
+      <tbody>${d.map((x) => x.missing ? `<tr><td class="m-card-title"><b>${esc(x.division)}</b></td><td colspan="4" class="ceo-dim">No Trial Balance uploaded yet</td></tr>`
+        : `<tr><td class="m-card-title"><b>${esc(x.division)}</b></td><td><small style="display:inline;">${esc(dayMon(x.from))} – ${esc(dayMon(x.to))}</small>${x.closingStock == null ? ' <span class="ceo-badge ceo-badge-warn" title="Gross Profit needs the closing stock">no closing stock</span>' : ''}</td>
+          <td class="r num">${sign(x.sales)}</td><td class="r num">${sign(x.gp)}</td><td class="r num"><b>${sign(x.np)}</b></td></tr>`).join('')}
+        ${have.length > 1 ? `<tr><td><b>Total</b></td><td></td><td class="r num"><b>${sign(tot('sales'))}</b></td><td class="r num"><b>${sign(tot('gp'))}</b></td><td class="r num"><b>${sign(tot('np'))}</b></td></tr>` : ''}
+      </tbody></table></div>
+      <p class="ceo-foot">From each division's latest Tally Trial Balance — periods can differ. ${link('#mis-finance', 'MIS Financials')}</p>`
+      : empty(f.errors?.mis ? 'Could not read the Trial Balances: ' + f.errors.mis : 'No Trial Balance uploaded yet — Jayesh uploads them on MIS Financials.');
+    return card('Financials', 'Sales, Gross Profit and Net Profit per division', link('#mis-finance', 'MIS Financials'), body, 'ceo-span2');
+  }
+
+  // Export tracker: the shipment target banner, with reactions for the team.
+  function _shipCard() {
+    const t = _ship;
+    let body;
+    if (!t) body = empty('Loading…');
+    else if (!t.target) body = empty('No shipment target set.') + (t.canEdit ? '<p class="ceo-foot">Set it on the Dashboard.</p>' : '');
+    else {
+      const pct = Math.min(100, Math.round((t.done / t.target) * 100));
+      const daysLeft = Math.ceil((new Date(t.by + 'T23:59:59') - new Date()) / 86400000);
+      const hit = t.left === 0;
+      const col = hit ? 'var(--ceo-good)' : daysLeft < 0 ? 'var(--ceo-crit)' : 'var(--ceo-accent)';
+      body = `<div style="display:flex;align-items:center;gap:16px;">
+          <div style="font-size:34px;font-weight:800;color:${col};min-width:44px;text-align:center;line-height:1;">${hit ? '✓' : t.left}</div>
+          <div style="flex:1;min-width:0;"><div style="font-size:13.5px;font-weight:700;">${hit ? `Target done — ${t.done} shipped 🎉` : `${t.left} more to go · ${t.done} of ${t.target} shipped`}</div>
+            <div style="font-size:12px;color:var(--ceo-muted);margin:2px 0 8px;">by ${esc(dayMon(t.by))}${daysLeft >= 0 ? ` · ${daysLeft} day${daysLeft === 1 ? '' : 's'} left` : ' · date passed'}</div>
+            <div style="height:8px;border-radius:99px;background:var(--ceo-grid);overflow:hidden;"><div style="height:100%;width:${pct}%;background:${col};"></div></div></div></div>
+        ${t.shipments?.length ? `<div style="font-size:11.5px;color:var(--ceo-muted);margin-top:8px;">Done: ${t.shipments.map((x) => esc(x.invoiceNo)).join(', ')}</div>` : ''}
+        ${_reactions()}`;
+    }
+    return card('🚢 ' + esc(t?.title || 'Export shipment target'), t?.target ? `${t.target} shipments by ${esc(dayMon(t.by))}` : 'Export Documentation shipments', link('#export-documentation', 'Export Docs'), body);
+  }
+  function _reactions() {
+    if (!_shipRx.length) return '';
+    return `<div class="ceo-rx">${_shipRx.map((r) => `<button type="button" class="ceo-rx-b${r.mine ? ' on' : ''}" data-rx="${esc(r.emoji)}"${r.names.length ? tipAttr([r.emoji + ' ' + r.count, ...r.names.slice(0, 12)]) : ''}>${r.emoji}${r.count ? `<b>${r.count}</b>` : ''}</button>`).join('')}
+      <span class="ceo-rx-l">Cheer the export team</span></div>`;
+  }
+
+  // Stock: each IMS book's items and quantity on hand (counts — no rates kept).
+  function _stockCard(st) {
+    const ORDER = ['Stores', 'ALU', 'Accessories', 'Trading'];
+    const NAME = { Stores: 'IMS Stores', ALU: 'IMS Aluminium & SS', Accessories: 'IMS Accessories', Trading: 'IMS Trading' };
+    const HREF = { Stores: '#ims-stores', ALU: '#ims-alu', Accessories: '#ims-accessories', Trading: '#ims-trading' };
+    const books = (st.ims || []).slice().sort((a, b) => (ORDER.indexOf(a.category) + 99) % 99 - (ORDER.indexOf(b.category) + 99) % 99);
+    const qty = (b) => Object.entries(b.byUom).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([u, v]) => `${v.toLocaleString('en-IN', { maximumFractionDigits: 2 })} ${esc(u)}`).join(' · ');
+    const row = (b) => `<a class="ceo-lrow" href="${HREF[b.category] || '#ims-stores'}" style="text-decoration:none;color:inherit;">
+        <span class="ceo-av">${icon('stock')}</span>
+        <div><b>${esc(NAME[b.category] || b.category)}</b><small>${qty(b) || '—'}</small></div>
+        <span class="ceo-chip">${b.items} item${b.items === 1 ? '' : 's'}${b.low ? ` · <span style="color:var(--ceo-crit);">${b.low} low</span>` : ''}</span></a>`;
+    const exportBooks = books.filter((b) => b.category !== 'Trading');
+    const trading = books.filter((b) => b.category === 'Trading');
+    const body = (books.length ? `${exportBooks.length ? '<div class="ceo-subh" style="margin-top:0;">Export</div>' + exportBooks.map(row).join('') : ''}
+        ${trading.length ? '<div class="ceo-subh">Trading</div>' + trading.map(row).join('') : ''}` : empty('No IMS stock yet.'))
+      + `<div class="ceo-subh">Retail</div><div class="ceo-lrow"><span class="ceo-av">${icon('shop')}</span><div><b>Satellite · Bopal</b><small>Shop stock is not kept in the ERP yet</small></div></div>`;
+    return card('Stock', 'Quantity on hand per stock book', '', body);
   }
 
   /* ── render ──────────────────────────────────────────────────────────── */
@@ -592,6 +613,14 @@ window.Pages['company-overview'] = (() => {
       padding:7px 10px; border-radius:8px; white-space:pre; box-shadow:0 6px 18px rgba(0,0,0,.18); display:none; }
     .ceo-tip b { font-weight:700; }
     .ceo-updated { font-size:11.5px; color:var(--ceo-muted); text-align:right; margin-top:14px; }
+    .ceo-sech { font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; color:var(--ceo-ink2); margin:4px 0 8px; }
+    .ceo-tile-v { font-size:24px; }
+    .ceo-rx { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:12px; }
+    .ceo-rx-b { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--ceo-border); background:var(--ceo-surface); border-radius:999px; padding:4px 10px; font-size:15px; cursor:pointer; }
+    .ceo-rx-b b { font-size:12px; color:var(--ceo-ink2); }
+    .ceo-rx-b.on { background:var(--ceo-tone-bg); border-color:var(--ceo-accent); }
+    .ceo-rx-b:hover { background:var(--ceo-hover); }
+    .ceo-rx-l { font-size:11.5px; color:var(--ceo-muted); }
     /* Phone (<768px): KPI tiles in a 2-up grid, tighter cards, team table as cards */
     @media (max-width:767px) {
       .ceo { padding-bottom:16px; }
@@ -643,23 +672,17 @@ window.Pages['company-overview'] = (() => {
     } else if (!_data) {
       body = `<div class="ceo-empty" style="padding:80px 0;">Loading dashboard…</div>`;
     } else {
-      const d = _data, t = d.tasks.totals;
-      body = `<div class="ceo-tiles">
-          ${_tile('tasks', 'Open tasks', t.pending, t.total + ' given by admins', 'accent', '#all-tasks')}
-          ${_tile('alert', 'Overdue', t.overdue, 'past due, not done', t.overdue ? 'crit' : 'good', '#all-tasks')}
-          ${_tile('meet', 'Meetings today', d.meetings.today, d.meetings.next7Days + ' in the next 7 days', 'accent', '#scheduler')}
-          ${_tile('pay', 'Payments pending', d.payments.pendingCount, inr(d.payments.pendingAmount) + ' awaiting approval', d.payments.pendingCount ? 'warn' : 'good', '#approvals')}
-          ${_tile('leave', 'On leave today', d.leave.onLeaveToday.length, d.leave.pendingRequests + ' leave request' + (d.leave.pendingRequests === 1 ? '' : 's') + ' pending', 'accent', '#hr-leave')}
+      const d = _data;
+      body = `${_sales(d.finance)}
+        <div class="ceo-grid" style="margin-bottom:16px;">
+          ${_financials(d.finance)}
+          ${_shipCard()}
         </div>
         <div class="ceo-grid">
+          ${_stockCard(d.stock)}
           ${_leave(d.leave)}
-          ${_leaveRequests()}
           ${_meetings(d.meetings, d.today)}
-          ${_team(d.tasks)}
-          ${_taskStatus(t)}
           ${_misChart()}
-          ${_paymentRequests(d.payments)}
-          ${_payments(d.payments)}
         </div>
         <div class="ceo-updated">Updated ${new Date(d.generatedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</div>`;
     }
@@ -671,9 +694,13 @@ window.Pages['company-overview'] = (() => {
 
     const root = el.querySelector('.ceo');
     document.getElementById('co-refresh')?.addEventListener('click', _load);
+    root.querySelectorAll('[data-rx]').forEach((b) => b.addEventListener('click', async () => {
+      b.disabled = true;
+      try { const r = await Utils.apiFetch('/api/shipment-target/react', { method: 'POST', body: JSON.stringify({ emoji: b.dataset.rx }) }); _shipRx = r.reactions || []; _render(); }
+      catch (e) { b.disabled = false; Utils.showToast(e.message || 'Could not react', 'error'); }
+    }));
     document.getElementById('ceo-add-meeting')?.addEventListener('click', _openAddMeetingModal);
     document.getElementById('co-retry')?.addEventListener('click', _load);
-    document.getElementById('ceo-team-more')?.addEventListener('click', () => { _showAllTeam = !_showAllTeam; _render(); });
     root.querySelectorAll('[data-mis-period]').forEach(b => b.addEventListener('click', () => {
       if (_misPeriod === b.dataset.misPeriod) return;
       _misPeriod = b.dataset.misPeriod;

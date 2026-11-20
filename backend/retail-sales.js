@@ -475,8 +475,51 @@ function mountRetailSales(app, ctx) {
              ON CONFLICT (branch, day) DO UPDATE SET ${set}, source='sheet', updated_by='Import', updated_at=NOW()`, [branch, day, ...vals, ...vals]);
   }
 
+  /* Udhaar settled (Shravan, 20 Nov 2026): a party pays back a credit sale
+     from an earlier day. Saved as a "money came back" line on the day it
+     came, so that day's register and the running balance show it; the
+     Daily Entry form for that day carries it along like any other line. */
+  app.post('/api/retail-sales/credit/settle', requireAuth, route(null, async (req) => {
+    const b = req.body || {};
+    const branch = await branchIn(b.branch);
+    const day = String(b.date || '');
+    if (!ISO_RE.test(day)) bad('Choose the date the money came');
+    const istToday = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+    if (day > istToday) bad('That date is in the future');
+    const party = String(b.party || '').trim().slice(0, 255) || bad('Write the party name');
+    const amount = num(b.amount);
+    if (!(amount > 0)) bad('Write the amount received');
+    const opening = (await readOpening())[branch];
+    if (opening && day <= opening.date) bad(`That date is inside the opening balance (${opening.date}) — pick a later date`);
+    const note = String(b.note || '').trim().slice(0, 240);
+    await q('INSERT INTO retail_credit (branch, day, party, sale, received, note, source) VALUES ($1,$2,$3,0,$4,$5,\'erp\')',
+      [branch, day, party, amount, note ? `Settled: ${note}` : 'Settled']);
+    return { ok: true };
+  }));
+
+  /* For the CEO Dashboard: this month's and this financial year's sales per
+     branch (cash + card + UPI + credit − returns, as the register totals it),
+     and the last day entered. */
+  async function summary() {
+    if (!useDb) return [];
+    await ensureSchema();
+    const today = new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+    const out = [];
+    for (const branch of await branches()) {
+      const { out: days } = await branchDays(branch, today);
+      const list = [...days.values()];
+      const last = list[list.length - 1];
+      const inMonth = last && last.day.slice(0, 7) === today.slice(0, 7);
+      const inFy = last && fyStart(last.day) === fyStart(today);
+      const credit = list.length ? last.credit_close : 0;
+      out.push({ branch, lastDay: last ? last.day : null, mtd: inMonth ? last.mtd_sales : 0, fy: inFy ? last.fy_sales : 0,
+        today: last && last.day === today ? last.total_sales : null, creditOutstanding: credit, cash: last ? last.cash_close : null });
+    }
+    return out;
+  }
+
   void pool;
-  return {};
+  return { summary };
 }
 
 module.exports = { RS_SCHEMA, mountRetailSales, computeDays, parseTallyTab, parseDailyTabs };

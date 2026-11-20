@@ -218,6 +218,53 @@ window.Pages.dashboard = (function () {
       </div>`;
   }
 
+  /* Announcements on everyone's Dashboard (Saloni, 20 Nov 2026: "employees
+     ko announcement dikhna chahiye — button ke andar nahi"). The latest
+     three; the Announcements page (no longer on the menu) has them all. */
+  async function _paintAnnouncements() {
+    const box = document.getElementById('db-announce');
+    if (!box) return;
+    const list = await Utils.apiFetch('/api/announcements').catch(() => null);
+    if (!Array.isArray(list) || !list.length) { box.style.display = 'none'; return; }
+    const esc = Utils.esc;
+    const fresh = (iso) => iso && Date.now() - new Date(iso).getTime() < 3 * 86400000;
+    const when = (iso) => (iso ? new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '');
+    box.style.display = '';
+    box.innerHTML = `
+      <div class="card" style="padding:14px 18px;border-left:3px solid #d97706;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-secondary);">📣 Announcements</div>
+          ${list.length > 3 ? `<a href="#announcements" style="font-size:12px;font-weight:600;color:var(--color-primary);text-decoration:none;">All ${list.length} →</a>` : ''}
+        </div>
+        ${list.slice(0, 3).map((a, i) => `<div style="${i ? 'border-top:1px solid var(--border-light,#e2e8f0);padding-top:8px;margin-top:8px;' : ''}">
+          <div style="font-size:14px;font-weight:700;color:var(--text-primary);">${esc(a.title)}${fresh(a.created_at) ? ' <span style="font-size:10.5px;font-weight:700;color:#fff;background:#d97706;border-radius:99px;padding:1px 7px;vertical-align:2px;">NEW</span>' : ''}</div>
+          ${a.message ? `<div style="font-size:13px;color:var(--text-secondary);white-space:pre-wrap;margin-top:3px;line-height:1.45;">${esc(a.message)}</div>` : ''}
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">${esc(a.posted_by || '')} · ${esc(when(a.created_at))}</div>
+        </div>`).join('')}
+      </div>`;
+  }
+
+  /* Reactions on the shipment banner (Saloni, 20 Nov 2026): cheer the
+     export team on. One tap adds yours, another takes it back. */
+  async function _paintShipReactions() {
+    const row = document.getElementById('db-st-rx');
+    if (!row) return;
+    const r = await Utils.apiFetch('/api/shipment-target/reactions').catch(() => null);
+    const list = (r && r.reactions) || [];
+    if (!list.length) { row.innerHTML = ''; return; }
+    const esc = Utils.esc;
+    row.innerHTML = list.map((x) => `<button type="button" data-st-rx="${esc(x.emoji)}" title="${esc(x.names.length ? x.names.slice(0, 15).join(', ') : 'React')}"
+        style="display:inline-flex;align-items:center;gap:5px;border:1px solid ${x.mine ? 'var(--color-primary)' : 'var(--border-light,#e2e8f0)'};background:${x.mine ? 'rgba(1,80,170,.08)' : 'var(--surface,#fff)'};border-radius:99px;padding:3px 10px;font-size:15px;cursor:pointer;">
+        ${x.emoji}${x.count ? `<b style="font-size:12px;color:var(--text-secondary);">${x.count}</b>` : ''}</button>`).join('')
+      + '<span style="font-size:11px;color:var(--text-muted);">Cheer the export team</span>';
+    row.querySelectorAll('[data-st-rx]').forEach((b) => b.addEventListener('click', async () => {
+      b.disabled = true;
+      try { await Utils.apiFetch('/api/shipment-target/react', { method: 'POST', body: JSON.stringify({ emoji: b.dataset.stRx }) }); }
+      catch (e) { Utils.showToast(e.message || 'Could not react', 'error'); }
+      _paintShipReactions();
+    }));
+  }
+
   /* Shipment target banner (Sajil sir, 30 Oct): "5 by 31 Jan" counting down
      as each container goes out — every Export Documentation shipment dated
      inside the target window counts (see /api/shipment-target). Same rules as
@@ -256,11 +303,13 @@ window.Pages.dashboard = (function () {
             <div style="height:100%;width:${pct}%;background:${color};border-radius:99px;transition:width .6s ease;"></div>
           </div>
           ${t.shipments.length ? `<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Done: ${t.shipments.map((s) => esc(s.invoiceNo)).join(', ')}</div>` : ''}
+          <div id="db-st-rx" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px;"></div>
         </div>
         ${t.canEdit ? `<button type="button" id="db-st-set" class="btn-secondary btn-sm">Edit target</button>` : ''}
       </div>`;
     const btn = document.getElementById('db-st-set');
     if (btn) btn.onclick = () => _openShipTargetModal(t);
+    _paintShipReactions();
   }
 
   /* Daily Trivia strip: "Play today's question" until played, then the
@@ -465,6 +514,7 @@ window.Pages.dashboard = (function () {
 
     _renderShell(el, admin, hod);
     window.Festival?.mount(document.getElementById('db-wrap'));
+    _paintAnnouncements();
     _paintShipTarget();
     _paintTrivia();
     _paintOnLeave();
@@ -617,10 +667,10 @@ window.Pages.dashboard = (function () {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
               Service Request
             </button>
-            <button id="db-btn-announcement" class="btn-secondary db-qa">
+            ${admin ? `<button id="db-btn-announcement" class="btn-secondary db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
               Announcement
-            </button>
+            </button>` : ''}
             <button id="db-btn-leave" class="btn-secondary db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M12 14v4M10 16h4"/></svg>
               Apply Leave
@@ -641,6 +691,7 @@ window.Pages.dashboard = (function () {
         <!-- Stat cards -->
         <!-- Who is away today, and who covers for them. Filled by _paintOnLeave()
              after the shell renders; stays empty (and invisible) when nobody is out. -->
+        <div id="db-announce" style="display:none;margin-bottom:16px;"></div>
         <div id="db-shiptarget" style="display:none;margin-bottom:16px;"></div>
         <div id="db-trivia" style="display:none;margin-bottom:16px;"></div>
         <div id="db-onleave" style="display:none;margin-bottom:16px;"></div>
@@ -1570,6 +1621,7 @@ window.Pages.dashboard = (function () {
         });
         closeModal();
         Utils.showToast('Announcement posted!', 'success');
+        _paintAnnouncements();
       } catch (e) {
         errEl.textContent = e.message || 'Failed to post announcement.';
         errEl.style.display = 'block';

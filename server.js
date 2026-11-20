@@ -6796,7 +6796,7 @@ mountHiring(app, {
 // Everything under /api/mis-finance/. The company's books, so the Admin role
 // (or the owner) or an explicit 'mis-finance' tick in Users → Access — HOD
 // does not get it by default. Same rule as canManageUsers.
-mountMisFinance(app, {
+const misFinance = mountMisFinance(app, {
   q, ensureSchema, requireAuth, useDb: USE_DB,
   canOpen: async (user) => {
     if (isSuperAdmin(user) || rolesOf(user).includes('Admin')) return true;
@@ -6816,7 +6816,7 @@ const _canOpenPageKey = (key) => async (user) => {
   if (isAdminUser(user)) return !perms || !perms.pages || perms.pages.includes(key);
   return !!(perms && perms.pages && perms.pages.includes(key));
 };
-mountRetailSales(app, {
+const retailSales = mountRetailSales(app, {
   q, pool, ensureSchema, requireAuth, useDb: USE_DB, getGoogleAuth,
   branches: () => _rdBranches(),
   isAdmin: async (user) => isSuperAdmin(user) || isAdminUser(user),
@@ -11754,6 +11754,51 @@ app.get('/api/shipment-target', requireAuth, async (req, res) => {
   }
 });
 
+/* Reactions on the banner (Saloni, 20 Nov 2026): anyone can cheer the export
+   team on — 👏 🎉 🔥 💪 ❤️ 🚢, one tap to add, again to take it back. Kept
+   per target (app_config 'shipment_target_reactions', keyed by the target's
+   date + count) so a new target starts with none. */
+const SHIP_REACTIONS = ['👏', '🎉', '🔥', '💪', '❤️', '🚢'];
+async function _shipReactions() {
+  const [cfg, rx] = await Promise.all([
+    q(`SELECT "value" FROM app_config WHERE "key" = 'shipment_target'`),
+    q(`SELECT "value" FROM app_config WHERE "key" = 'shipment_target_reactions'`),
+  ]);
+  let t = null, r = null;
+  try { t = cfg.length ? JSON.parse(cfg[0].value) : null; } catch { t = null; }
+  try { r = rx.length ? JSON.parse(rx[0].value) : null; } catch { r = null; }
+  const key = t && Number(t.target) > 0 ? `${t.target}|${t.from || ''}|${t.by || ''}` : '';
+  return { key, list: r && r.key === key && r.list && typeof r.list === 'object' ? r.list : {} };
+}
+const _shipReactionsOut = (list, me) => SHIP_REACTIONS.map((e) => {
+  const who = Array.isArray(list[e]) ? list[e] : [];
+  return { emoji: e, count: who.length, names: who.map((x) => x.name), mine: who.some((x) => x.id === me) };
+});
+app.get('/api/shipment-target/reactions', requireAuth, async (req, res) => {
+  try {
+    if (!USE_DB) return res.json({ reactions: [] });
+    const { key, list } = await _shipReactions();
+    return res.json({ key, reactions: key ? _shipReactionsOut(list, req.session.user.id) : [] });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+app.post('/api/shipment-target/react', requireAuth, async (req, res) => {
+  try {
+    if (!USE_DB) return res.status(503).json({ error: 'Needs the database' });
+    const emoji = String(req.body?.emoji || '');
+    if (!SHIP_REACTIONS.includes(emoji)) return res.status(400).json({ error: 'Pick one of the reactions' });
+    const { key, list } = await _shipReactions();
+    if (!key) return res.status(400).json({ error: 'There is no shipment target right now' });
+    const u = req.session.user;
+    const who = Array.isArray(list[emoji]) ? list[emoji] : [];
+    const i = who.findIndex((x) => x.id === u.id);
+    if (i >= 0) who.splice(i, 1); else who.push({ id: u.id, name: u.name || u.email || '', at: new Date().toISOString() });
+    list[emoji] = who.slice(-500);
+    const json = JSON.stringify({ key, list });
+    await pool.query(`INSERT INTO app_config ("key","value") VALUES ('shipment_target_reactions',$1) ON CONFLICT ("key") DO UPDATE SET "value"=$2`, [json, json]);
+    return res.json({ reactions: _shipReactionsOut(list, u.id) });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
 // PUT /api/shipment-target {target, from, by, title} — Admin only; target 0 hides the banner.
 app.put('/api/shipment-target', requireAuth, async (req, res) => {
   try {
@@ -16421,72 +16466,86 @@ function requireTrueAdmin(req, res, next) {
 let _companyOverviewCache = null; // { at, data }
 const COMPANY_OVERVIEW_TTL_MS = 2 * 60 * 1000;
 
+/* Export order value (Saloni, 20 Nov 2026): every Order Sheet that is not
+   cancelled, at the total of the PI it was made from — grouped by currency
+   (the PIs carry it on their form) for this month and this financial year. */
+async function _exportOrderTotals(today) {
+  const auth = getGoogleAuth();
+  if (!auth) return null;
+  const { google } = require('googleapis');
+  const sheets = google.sheets({ version: 'v4', auth });
+  const [orders, pis] = await Promise.all([
+    sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${ORDER_LOG_TAB}'!A2:J`, valueRenderOption: 'FORMATTED_VALUE' }),
+    sheets.spreadsheets.values.get({ spreadsheetId: PI_CREATION_SHEET_ID, range: `'${PI_CREATION_LOG_TAB}'!A2:K`, valueRenderOption: 'FORMATTED_VALUE' }),
+  ]);
+  const piByNo = new Map();
+  for (const r of pis.data.values || []) {
+    let form = null;
+    try { form = r[9] ? JSON.parse(r[9]) : null; } catch { form = null; }
+    piByNo.set(String(r[0] || '').trim(), { total: Number(String(r[3] || '').replace(/[^0-9.\-]/g, '')) || 0, currency: (form && form.currency) || 'USD' });
+  }
+  const fy = (() => { const [y, m] = today.split('-').map(Number); return `${m >= 4 ? y : y - 1}-04-01`; })();
+  const month = today.slice(0, 7);
+  const out = { month: {}, fy: {}, count: { month: 0, fy: 0 }, byStatus: {}, open: {} };
+  const add = (o, cur, v) => { o[cur] = Math.round(((o[cur] || 0) + v) * 100) / 100; };
+  for (const r of orders.data.values || []) {
+    const status = r[9] || 'Open';
+    if (/cancel/i.test(status)) continue;
+    const date = _sheetDateToIso(r[1]) || '';
+    const pi = piByNo.get(String(r[2] || '').trim()) || { total: 0, currency: 'USD' };
+    out.byStatus[status] = (out.byStatus[status] || 0) + 1;
+    if (!/^packed$/i.test(status)) add(out.open, pi.currency, pi.total);
+    if (date >= fy && date <= today) { add(out.fy, pi.currency, pi.total); out.count.fy++; }
+    if (date.slice(0, 7) === month) { add(out.month, pi.currency, pi.total); out.count.month++; }
+  }
+  return out;
+}
+
 app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res) => {
   try {
-    if (_companyOverviewCache && (Date.now() - _companyOverviewCache.at) < COMPANY_OVERVIEW_TTL_MS) {
+    if (_companyOverviewCache && (Date.now() - _companyOverviewCache.at) < COMPANY_OVERVIEW_TTL_MS && !req.query.fresh) {
       return res.json(_companyOverviewCache.data);
     }
     const today = todayIST();
-    const monthStart = today.slice(0, 8) + '01';
     const weekEnd = _checklistPlusDays(today, 6);
     const data = {
       generatedAt: new Date().toISOString(), today,
-      tasks: { totals: { total: 0, pending: 0, overdue: 0, done: 0, revise: 0 }, byAssignee: [], weekly: [] },
+      finance: { retail: [], export: null, divisions: [], errors: {} },
+      stock: { ims: [] },
       meetings: { today: 0, next7Days: 0, upcoming: [] },
-      payments: { pendingCount: 0, pendingAmount: 0, approvedMonthCount: 0, approvedMonthAmount: 0, rejectedMonthCount: 0, recent: [], monthly: [] },
       leave: { onLeaveToday: [], upcoming: [], pendingRequests: 0 },
     };
-    // Last 8 week buckets (Monday-start, oldest first) and last 6 months.
-    const dow = new Date(today + 'T00:00:00Z').getUTCDay();
-    const thisMonday = _checklistPlusDays(today, -((dow + 6) % 7));
-    data.tasks.weekly = Array.from({ length: 8 }, (_, i) => ({ weekStart: _checklistPlusDays(thisMonday, -7 * (7 - i)), assigned: 0, completed: 0 }));
-    const weekOf = (d) => { if (!d) return null; for (let i = 7; i >= 0; i--) if (d >= data.tasks.weekly[i].weekStart) return i; return null; };
-    const [ty, tm] = today.split('-').map(Number);
-    data.payments.monthly = Array.from({ length: 6 }, (_, i) => {
-      const d = new Date(Date.UTC(ty, tm - 1 - (5 - i), 1));
-      return { month: d.toISOString().slice(0, 7), approvedAmount: 0, approvedCount: 0 };
-    });
     if (!USE_DB) return res.json(data); // local dev (JSON mode) has none of these tables
 
-    // 1) Tasks handed out by an Admin — delegations whose delegated_by is a
-    // user holding the Admin role (or the owner's login). Grouped by assignee.
-    try {
-      const admins = await q(`SELECT id, email, roles FROM users`);
-      const adminIds = admins.filter(u => rolesOf(u).includes('Admin') || isSuperAdminEmail(u.email)).map(u => u.id);
-      if (adminIds.length) {
-        const ph = adminIds.map((_, i) => '$' + (i + 1)).join(',');
-        const rows = await q(`SELECT d.doer, d.status, d.due_date AS "dueDate", d.created_at AS "createdAt", d.completed_at AS "completedAt", u.name AS "delegatedByName"
-                                FROM delegations d LEFT JOIN users u ON u.id = d.delegated_by
-                               WHERE d.delegated_by IN (${ph})`, adminIds);
-        const byDoer = new Map();
-        for (const r of rows) {
-          const name = String(r.doer || '').trim() || 'Unassigned';
-          const e = byDoer.get(name) || { name, total: 0, pending: 0, overdue: 0, done: 0, revise: 0, givenBy: new Set() };
-          const due = toDateStr(r.dueDate);
-          e.total++;
-          if (r.status === 'done') e.done++;
-          else {
-            if (r.status === 'revise' || r.status === 'revise_requested') e.revise++;
-            e.pending++;
-            if (due && due < today) e.overdue++;
-          }
-          if (r.delegatedByName) e.givenBy.add(r.delegatedByName);
-          byDoer.set(name, e);
-          const wa = weekOf(toDateStr(r.createdAt));
-          if (wa !== null) data.tasks.weekly[wa].assigned++;
-          const wc = r.status === 'done' ? weekOf(toDateStr(r.completedAt)) : null;
-          if (wc !== null) data.tasks.weekly[wc].completed++;
-        }
-        data.tasks.byAssignee = [...byDoer.values()]
-          .map(e => ({ ...e, givenBy: [...e.givenBy] }))
-          .sort((a, b) => b.overdue - a.overdue || b.pending - a.pending || b.total - a.total);
-        for (const e of data.tasks.byAssignee) {
-          for (const k of ['total', 'pending', 'overdue', 'done', 'revise']) data.tasks.totals[k] += e[k];
-        }
-      }
-    } catch (e) { console.error('[company-overview] tasks failed:', e.message); }
+    // Money first — what the CEO dashboard is for ("mujhe financials dekhna hai").
+    const safe = async (key, fn) => { try { return await fn(); } catch (e) { console.error('[company-overview]', key, 'failed:', e.message); data.finance.errors[key] = e.message; return null; } };
+    const [retail, exp, divs] = await Promise.all([
+      safe('retail', () => retailSales.summary()),
+      safe('export', () => _exportOrderTotals(today)),
+      safe('mis', () => misFinance.summary()),
+    ]);
+    data.finance.retail = retail || [];
+    data.finance.export = exp;
+    data.finance.divisions = divs || [];
 
-    // 2) Meetings — every scheduled one company-wide, today through +6 days.
+    // Stock: each IMS book's items and quantity on hand (no rates are kept,
+    // so it is a count, not a value).
+    try {
+      const rows = await q(`SELECT category, uom, COUNT(*) AS items, SUM(current_stock) AS qty, SUM(CASE WHEN current_stock <= moq AND moq > 0 THEN 1 ELSE 0 END) AS low
+                              FROM ims_items GROUP BY category, uom`);
+      const books = new Map();
+      for (const r of rows) {
+        const cat = r.category || 'Stores';
+        const b = books.get(cat) || { category: cat, items: 0, low: 0, byUom: {} };
+        b.items += Number(r.items) || 0; b.low += Number(r.low) || 0;
+        const u = String(r.uom || '').trim() || 'units';
+        b.byUom[u] = Math.round(((b.byUom[u] || 0) + (Number(r.qty) || 0)) * 100) / 100;
+        books.set(cat, b);
+      }
+      data.stock.ims = [...books.values()];
+    } catch (e) { console.error('[company-overview] stock failed:', e.message); }
+
+    // Meetings — every scheduled one company-wide, today through +6 days.
     try {
       const rows = await q(`SELECT id, title, date, start_time AS "startTime", end_time AS "endTime", attendees, location, created_by AS "createdBy", created_by_name AS "organizer"
                               FROM scheduler_meetings WHERE date BETWEEN $1 AND $2 ORDER BY date ASC, start_time ASC`, [today, weekEnd]);
@@ -16496,26 +16555,7 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
       data.meetings.upcoming = list.slice(0, 8);
     } catch (e) { console.error('[company-overview] meetings failed:', e.message); }
 
-    // 3) Urgent payment requests — what's waiting, what was decided this month.
-    try {
-      const rows = await q(`SELECT id, payee, amount, status, requested_by AS "requestedBy", department, required_by AS "requiredBy", created_at AS "createdAt", decided_at AS "decidedAt"
-                              FROM urgent_payments ORDER BY created_at DESC`);
-      for (const r of rows) {
-        const amt = Number(r.amount) || 0;
-        const decided = toDateStr(r.decidedAt) || '';
-        if (r.status === 'pending') { data.payments.pendingCount++; data.payments.pendingAmount += amt; }
-        else if (r.status === 'Approved' && decided >= monthStart) { data.payments.approvedMonthCount++; data.payments.approvedMonthAmount += amt; }
-        else if (r.status === 'Rejected' && decided >= monthStart) data.payments.rejectedMonthCount++;
-        if (r.status === 'Approved') {
-          const m = data.payments.monthly.find(x => x.month === decided.slice(0, 7));
-          if (m) { m.approvedAmount += amt; m.approvedCount++; }
-        }
-      }
-      data.payments.recent = rows.slice(0, 6).map(r => ({ ...r, amount: Number(r.amount) || 0, requiredBy: toDateStr(r.requiredBy), createdAt: toDateStr(r.createdAt) }));
-    } catch (e) { console.error('[company-overview] payments failed:', e.message); }
-
-    // 4) Leave — approved leave covering today (half days included, labelled),
-    // plus how many requests are still waiting on a decision.
+    // Leave — approved leave covering today (half days included, labelled).
     try {
       const rows = await q(`SELECT l.user_name AS "userName", e.name AS "empName", l.leave_type AS "leaveType", l.type, l.half_day AS "halfDay", l.from_date AS "fromDate", l.to_date AS "toDate"
                               FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
@@ -16529,11 +16569,6 @@ app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res)
       }));
       data.leave.onLeaveToday = all.filter(x => x.from <= today);
       data.leave.upcoming = all.filter(x => x.from > today);
-      // Company-wide count for the KPI tile only — WHO has to act on each one
-      // is a per-request approver match (see GET /api/hr/leaves's own
-      // forApprover=me), which the "Leave requests" card fetches straight
-      // from that same endpoint client-side instead of duplicating the
-      // approver-matching logic here.
       const pend = await q(`SELECT COUNT(*) AS c FROM leaves WHERE LOWER(status) LIKE 'pending%'`);
       data.leave.pendingRequests = Number(pend[0]?.c) || 0;
     } catch (e) { console.error('[company-overview] leave failed:', e.message); }

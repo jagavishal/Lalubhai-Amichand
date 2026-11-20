@@ -503,7 +503,7 @@ window.Pages.login = {
               window.Router.navigate('profile');
               window.Utils?.showToast?.('Please set your own password to finish signing in.', 'info');
             } else {
-              window.Router.navigate('dashboard');
+              window.Router.navigate(window.Router.home());
             }
           }
         }

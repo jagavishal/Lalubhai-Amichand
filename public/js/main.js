@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.Sidebar?.render(user);
     window.Topbar?.render(user);
     window.Router.init();
-    if (!window.location.hash || window.location.hash==='#') window.Router.navigate('dashboard');
+    if (!window.location.hash || window.location.hash==='#') window.Router.navigate(window.Router.home());
   } else {
     document.getElementById('app-shell').style.display='none';
     document.getElementById('login-page').style.display='flex';

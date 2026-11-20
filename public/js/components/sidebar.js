@@ -165,6 +165,12 @@ window.Sidebar = {
   // user only ever sees the departments they actually work in.
   // route = hash fragment used by Router (href without leading slash)
   _sections: [
+    // CEO Dashboard first, above Basic, for the Admin role only (Saloni,
+    // 20 Nov 2026: "basic ke bhi upar" — and it is where an Admin lands
+    // after login, see Router.home). `flat`: no section head of its own.
+    { title: 'CEO', flat: true, items: [
+      { route: 'company-overview', label: 'CEO Dashboard', icon: 'companyoverview', adminOnly: true, trueAdminOnly: true },
+    ]},
     { title: 'Basic', items: [
       { route: 'dashboard',     label: 'Dashboard',      icon: 'dashboard',     alwaysShow: true },
       { route: 'all-tasks',     label: 'All Tasks',      icon: 'tasks' },
@@ -175,7 +181,9 @@ window.Sidebar = {
       // types and the holiday calendar), so keeping both meant two menu entries
       // for one job. The old route still resolves and redirects there, so
       // bookmarks keep working — see hr-leave.js.
-      { route: 'announcements', label: 'Announcements',  icon: 'announcements' },
+      // No entry for 'announcements' (Saloni, 20 Nov 2026): they show on
+      // everyone's Dashboard instead. The route still opens — the Dashboard
+      // card links to it for the full list.
       { route: 'help-ticket',   label: 'Help Ticket',    icon: 'helpticket' },
       // Service Management System (route 'amc' — it was AMC Management).
       // alwaysShow: anyone may raise a service request and follow it, and the
@@ -258,7 +266,6 @@ window.Sidebar = {
       // CEO Dashboard — Admin role only ("this page only show while admin
       // login"): trueAdminOnly hides it from HOD too, unlike adminOnly, and it
       // is not grantable from Users → Access. The API gate is requireTrueAdmin.
-      { route: 'company-overview', label: 'CEO Dashboard', icon: 'companyoverview', adminOnly: true, trueAdminOnly: true },
       // Managed from Users → Access: the Admin role always has it, anyone else
       // (HOD included) only with an explicit 'users' tick — no saved record is
       // not a grant here. Mirrors canManageUsers in server.js.
@@ -554,6 +561,7 @@ window.Sidebar = {
         })
         .join('');
       if (!itemsHTML.trim()) return '';
+      if (sec.flat) return `<div style="padding:6px 6px 2px;display:flex;flex-direction:column;gap:2px;">${itemsHTML}</div>`;
       const open = this._openSections.has(sec.title);
       // Section head: a readable label on the navy rail (it used to be a
       // near-invisible #3d5878), a hairline above every section but the
