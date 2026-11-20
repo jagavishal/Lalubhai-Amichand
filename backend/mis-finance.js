@@ -649,6 +649,16 @@ function profitability(t, names, stock) {
   ];
 }
 
+// The stock on the period's first day (signed as a debit): a Stock-in-Hand
+// opening (from the file, typed, or the previous upload's closing), else the
+// TB's "Opening Stock" line.
+function openingStockOf(t) {
+  const sv = (h, which) => { const x = (t[which][h] || 0); return HEAD[h].side === 'cr' ? -x : x; };
+  const hasOpenLine = t.close.opening_stock != null;
+  return t.open.stock != null && (t.open.stock !== 0 || !hasOpenLine || t.openStockTyped)
+    ? sv('stock', 'open') : (hasOpenLine ? sv('opening_stock', 'close') : 0);
+}
+
 // t = { close:{head:net}, open:{head:net}, detail, hasOpening, unmapped, diff… }
 // names = detailNames([...]) to list ledgers under the P&L heads.
 function statements(t, from, to, names = {}) {
@@ -666,8 +676,7 @@ function statements(t, from, to, names = {}) {
   // Stock-in-Hand opening (from the file, or the previous upload's closing
   // stock), else that Opening Stock line.
   const hasOpenLine = t.close.opening_stock != null;
-  const openingStock = t.open.stock != null && (t.open.stock !== 0 || !hasOpenLine || t.openStockTyped)
-    ? v('stock', 'open') : (hasOpenLine ? v('opening_stock') : 0);
+  const openingStock = openingStockOf(t);
   const closingStock = bal('stock');
   const stockMissing = t.close.stock == null && hasOpenLine;
   const cogs = openingStock + pl('purchases') + pl('direct_exp') + pl('direct_wages') - closingStock;
@@ -1040,6 +1049,14 @@ function mountMisFinance(app, ctx) {
       sum.diffClose = round2(sum.diffClose + t.diffClose);
       sum.diffOpen = round2(sum.diffOpen + t.diffOpen);
     }
+    // Opening stock: each division's own, as its column shows it (statements()
+    // picks the Stock-in-Hand opening or else the TB "Opening Stock" line, per
+    // division). Summed raw, a division whose stock came from the TB line was
+    // dropped as soon as another one had a Stock-in-Hand opening — the
+    // consolidated Gross Profit / Net Profit came out far above the sum of the
+    // divisions (2026-11-20, Apr–Sep: ₹6.13 Cr against ₹22 lakh).
+    sum.open.stock = round2(list.reduce((a, t) => a + openingStockOf(t), 0));
+    sum.openStockTyped = true;
     return sum;
   }
 
