@@ -146,8 +146,21 @@ window.Pages.trivia = (() => {
       ? H.table(['#', { label: 'Department', m: 'title' }, { label: 'Avg / play', align: 'right' }, { label: 'Players', align: 'right' }, { label: 'Total', align: 'right' }],
         B.departments.map((d, i) => [medal(i), `<b>${esc(d.department)}</b>`, `<b>${d.avg}</b>`, d.players, d.points]), { cards: true })
       : H.empty('No departments yet');
-    return sec(`This month · ${month}`) + rankTable(B.month, { month: true })
+    const tables = sec(`This month · ${month}`) + rankTable(B.month, { month: true })
       + `<div style="height:14px;"></div>` + sec('Departments (average points per play, so big teams don\'t win just by size)') + depts;
+    // The Leaderboard is the big-screen board itself (20 Nov 2026: "leader
+    // board pe ye screen aana chahiye"); the tables stay below for phones
+    // and for Admin/HOD's delete buttons.
+    return `<div style="border-radius:18px;overflow:hidden;box-shadow:0 12px 30px rgba(30,27,75,.25);background:#1e1b4b;margin-bottom:14px;">
+        <iframe src="/trivia-screen" title="Daily Trivia leaderboard" allow="fullscreen" style="display:block;width:100%;aspect-ratio:16/9;min-height:420px;border:0;"></iframe>
+      </div>
+      <details${window.innerWidth < 768 ? ' open' : ''} style="margin-top:6px;"><summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--color-primary);margin-bottom:10px;">Table view${T.manage ? ' · manage scores' : ''}</summary>${tables}</details>`;
+  }
+
+  // Open straight on the Leaderboard (the Dashboard's "Leaderboard" button).
+  function openBoard() {
+    _tab = 'board';
+    if ((window.location.hash || '') === '#trivia') render(); else window.Router.navigate('trivia');
   }
 
   /* ── Questions (Admin/HOD) ────────────────────────────────────── */
@@ -477,5 +490,5 @@ window.Pages.trivia = (() => {
     play(onClose);
   }
 
-  return { render, play, autoPopup };
+  return { render, play, autoPopup, openBoard };
 })();

@@ -349,7 +349,7 @@ window.Pages.dashboard = (function () {
     const play = document.getElementById('db-tv-play');
     if (play) play.onclick = () => window.Pages.trivia.play(_paintTrivia);
     const board = document.getElementById('db-tv-board');
-    if (board) board.onclick = () => Router.navigate('trivia');
+    if (board) board.onclick = () => (window.Pages.trivia.openBoard ? window.Pages.trivia.openBoard() : Router.navigate('trivia'));
     // Not played yet today: open the game by itself, once a day.
     if (!done && !_paintTrivia._popped) {
       _paintTrivia._popped = true;
