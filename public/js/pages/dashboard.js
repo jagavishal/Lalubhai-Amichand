@@ -186,12 +186,10 @@ window.Pages.dashboard = (function () {
     const wrap = document.getElementById('db-strips');
     if (!wrap) return;
     const shown = (id) => { const b = document.getElementById(id); return !!b && b.style.display !== 'none'; };
-    const side = ['db-trivia', 'db-onleave'].filter(shown).length;
-    const any = side || shown('db-shiptarget') || shown('db-announce');
-    wrap.style.display = any ? '' : 'none';
-    const two = shown('db-shiptarget') && side > 0;
-    wrap.classList.toggle('two', two);
-    wrap.style.setProperty('--side-rows', String(side || 1));
+    const n = ['db-shiptarget', 'db-trivia', 'db-onleave'].filter(shown).length;
+    wrap.style.display = (n || shown('db-announce')) ? '' : 'none';
+    wrap.classList.toggle('c2', n === 2);
+    wrap.classList.toggle('c3', n === 3);
   }
   function _watchStrips() {
     const wrap = document.getElementById('db-strips');
@@ -212,34 +210,42 @@ window.Pages.dashboard = (function () {
     if (!leave.length && !absent.length) return;
     const esc = Utils.esc;
     box.style.display = '';
+    const chip = (bg, bd, inner) => `<span style="display:inline-flex;align-items:baseline;gap:6px;background:${bg};border:1px solid ${bd};border-radius:99px;padding:3px 10px;font-size:12px;">${inner}</span>`;
     box.innerHTML = `
-      <div class="card" style="padding:12px 16px;border-left:3px solid #7c3aed;display:flex;flex-direction:column;gap:8px;">
-        ${leave.length ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#7c3aed;white-space:nowrap;">
-            On Leave Today · ${leave.length}
+      <div class="card db-hero" style="background:linear-gradient(135deg,rgba(16,185,129,.11),rgba(16,185,129,.03));border:1px solid rgba(16,185,129,.2);">
+        <div aria-hidden="true" style="position:absolute;right:14px;bottom:10px;color:rgba(16,185,129,.28);pointer-events:none;">
+          <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></svg>
+        </div>
+        <div style="display:flex;gap:12px;align-items:flex-start;position:relative;">
+          <span class="db-ic" style="width:42px;height:42px;border-radius:13px;background:rgba(16,185,129,.16);color:#059669;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
           </span>
-          ${leave.map((r) => `
-            <span style="display:inline-flex;align-items:baseline;gap:6px;background:#f5f3ff;border:1px solid #ede9fe;
-                  border-radius:99px;padding:4px 12px;font-size:12.5px;">
-              <b style="color:#0f172a;">${esc(r.name)}</b>
-              <span style="color:#7c3aed;font-size:11px;font-weight:600;">${esc(r.type)}${r.half ? ' · half day' : ''}</span>
-              ${r.backup
-                ? `<span style="color:#475569;font-size:11.5px;">→ covered by <b>${esc(r.backup)}</b></span>`
-                : ''}
-            </span>`).join('')}
-        </div>` : ''}
-        ${absent.length ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-          <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#dc2626;white-space:nowrap;">
-            Absent Today · ${absent.length}
-          </span>
-          ${absent.map((n) => `
-            <span style="display:inline-flex;align-items:baseline;gap:6px;background:#fef2f2;border:1px solid #fee2e2;
-                  border-radius:99px;padding:4px 12px;font-size:12.5px;">
-              <b style="color:#0f172a;">${esc(n)}</b>
-              <span style="color:#dc2626;font-size:11px;font-weight:600;">no leave</span>
-            </span>`).join('')}
-        </div>` : ''}
+          <div style="flex:1;min-width:0;">
+            <div class="db-hero-label" style="color:#059669;">On Leave Today</div>
+            <div style="font-size:1.35rem;font-weight:800;color:var(--text-primary);margin-top:2px;line-height:1.2;">
+              ${leave.length} Employee${leave.length === 1 ? '' : 's'}
+              ${absent.length ? `<span style="font-size:12px;font-weight:700;color:#dc2626;margin-left:4px;">+ ${absent.length} absent</span>` : ''}
+            </div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+              ${esc(leave.map((r) => r.name).concat(absent).slice(0, 3).join(', '))}${leave.length + absent.length > 3 ? '…' : ''}
+            </div>
+            <button type="button" id="db-ol-toggle" style="margin-top:8px;border:none;background:none;padding:0;font-size:12.5px;font-weight:700;color:#059669;cursor:pointer;">View details →</button>
+            <div id="db-ol-list" style="display:none;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:150px;overflow-y:auto;">
+              ${leave.map((r) => chip('rgba(16,185,129,.08)', 'rgba(16,185,129,.25)',
+                `<b style="color:var(--text-primary);">${esc(r.name)}</b><span style="color:#059669;font-size:11px;font-weight:600;">${esc(r.type)}${r.half ? ' · half day' : ''}</span>${r.backup ? `<span style="color:var(--text-secondary);font-size:11px;">→ ${esc(r.backup)}</span>` : ''}`)).join('')}
+              ${absent.map((n) => chip('rgba(239,68,68,.07)', 'rgba(239,68,68,.25)',
+                `<b style="color:var(--text-primary);">${esc(n)}</b><span style="color:#dc2626;font-size:11px;font-weight:600;">no leave</span>`)).join('')}
+            </div>
+          </div>
+        </div>
       </div>`;
+    const tg = document.getElementById('db-ol-toggle');
+    if (tg) tg.onclick = () => {
+      const list = document.getElementById('db-ol-list');
+      const open = list.style.display === 'none';
+      list.style.display = open ? 'flex' : 'none';
+      tg.textContent = open ? 'Hide details ↑' : 'View details →';
+    };
   }
 
   /* Announcements on everyone's Dashboard (Saloni, 20 Nov 2026: "employees
@@ -285,7 +291,7 @@ window.Pages.dashboard = (function () {
     if (!list.length) { row.innerHTML = ''; return; }
     const esc = Utils.esc;
     row.innerHTML = list.map((x) => `<button type="button" data-st-rx="${esc(x.emoji)}" title="${esc(x.names.length ? x.names.slice(0, 15).join(', ') : 'React')}"
-        style="display:inline-flex;align-items:center;gap:5px;border:1px solid ${x.mine ? 'var(--color-primary)' : 'var(--border-light,#e2e8f0)'};background:${x.mine ? 'rgba(1,80,170,.08)' : 'var(--surface,#fff)'};border-radius:99px;padding:3px 10px;font-size:15px;cursor:pointer;">
+        style="display:inline-flex;align-items:center;gap:5px;border:1px solid ${x.mine ? 'var(--color-primary)' : 'var(--border-light,#e2e8f0)'};background:${x.mine ? 'rgba(1,80,170,.08)' : 'var(--surface,#fff)'};border-radius:99px;padding:2px 9px;font-size:13.5px;cursor:pointer;">
         ${x.emoji}${x.count ? `<b style="font-size:12px;color:var(--text-secondary);">${x.count}</b>` : ''}</button>`).join('')
       + '<span style="font-size:11px;color:var(--text-muted);">Cheer the export team</span>';
     row.querySelectorAll('[data-st-rx]').forEach((b) => b.addEventListener('click', async () => {
@@ -319,24 +325,31 @@ window.Pages.dashboard = (function () {
     const color = hit ? '#16a34a' : daysLeft < 0 ? '#dc2626' : 'var(--color-primary)';
     box.style.display = '';
     box.innerHTML = `
-      <div class="card" style="padding:14px 18px;border-left:3px solid ${color};display:flex;align-items:center;gap:18px;flex-wrap:wrap;">
-        <div style="font-size:2.2rem;font-weight:800;line-height:1;color:${color};min-width:52px;text-align:center;">${hit ? '✓' : t.left}</div>
-        <div style="flex:1;min-width:220px;">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-secondary);">
-            🚢 ${esc(t.title || 'Shipment target')} · ${t.target} by ${esc(fmt(t.by))}
+      <div class="card db-hero" style="border-left:4px solid ${color};background:linear-gradient(115deg,rgba(37,99,235,.08),rgba(14,165,233,.03) 55%,transparent);"
+           title="${t.shipments.length ? 'Done: ' + esc(t.shipments.map((s) => s.invoiceNo).join(', ')) : ''}">
+        <div aria-hidden="true" style="position:absolute;right:18px;bottom:6px;font-size:64px;line-height:1;opacity:.95;pointer-events:none;filter:drop-shadow(0 4px 6px rgba(15,23,42,.12));">${hit ? '🎉' : '🚢'}</div>
+        ${t.canEdit ? `<button type="button" id="db-st-set" class="btn-secondary btn-sm" style="position:absolute;top:12px;right:14px;">Edit target</button>` : ''}
+        <div style="display:flex;gap:14px;align-items:flex-start;position:relative;padding-right:90px;">
+          <span class="db-ic" style="width:46px;height:46px;border-radius:14px;background:rgba(37,99,235,.12);color:${color};">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+          </span>
+          <div style="flex:1;min-width:0;">
+            <div class="db-hero-label" style="color:var(--color-primary);">${esc(t.title || 'Shipment target')} · by ${esc(fmt(t.by))}</div>
+            <div style="font-size:1.9rem;font-weight:800;color:var(--text-primary);line-height:1.15;margin-top:2px;">
+              ${t.done}<span style="font-size:1.25rem;color:var(--text-muted);font-weight:700;"> / ${t.target}</span>
+              <span style="font-size:12.5px;font-weight:600;color:var(--text-secondary);margin-left:4px;">shipped</span>
+            </div>
+            <div style="height:8px;border-radius:99px;background:rgba(148,163,184,.25);overflow:hidden;margin-top:8px;max-width:440px;">
+              <div style="height:100%;width:${pct}%;background:${color};border-radius:99px;transition:width .6s ease;"></div>
+            </div>
+            <div style="font-size:12.5px;color:var(--text-secondary);margin-top:7px;display:flex;align-items:center;gap:6px;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1z"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+              ${hit ? `Target done 🎉` : `<b style="color:var(--text-primary);">${t.left}</b>&nbsp;to go`}
+              · ${daysLeft >= 0 ? `${daysLeft} day${daysLeft === 1 ? '' : 's'} left` : 'date passed'}
+            </div>
+            <div id="db-st-rx" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px;"></div>
           </div>
-          <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin:3px 0 8px;">
-            ${hit ? `Target done — ${t.done} shipped 🎉`
-              : `${t.left} more to go · ${t.done} of ${t.target} shipped`
-                + (daysLeft >= 0 ? ` · ${daysLeft} day${daysLeft === 1 ? '' : 's'} left` : ' · date passed')}
-          </div>
-          <div style="height:8px;border-radius:99px;background:var(--border-light,#e2e8f0);overflow:hidden;">
-            <div style="height:100%;width:${pct}%;background:${color};border-radius:99px;transition:width .6s ease;"></div>
-          </div>
-          ${t.shipments.length ? `<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Done: ${t.shipments.map((s) => esc(s.invoiceNo)).join(', ')}</div>` : ''}
-          <div id="db-st-rx" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px;"></div>
         </div>
-        ${t.canEdit ? `<button type="button" id="db-st-set" class="btn-secondary btn-sm">Edit target</button>` : ''}
       </div>`;
     const btn = document.getElementById('db-st-set');
     if (btn) btn.onclick = () => _openShipTargetModal(t);
@@ -356,19 +369,21 @@ window.Pages.dashboard = (function () {
     const r = t.result;
     box.style.display = '';
     box.innerHTML = `
-      <div class="card" style="padding:12px 18px;border-left:3px solid ${done ? (r.correct ? '#16a34a' : '#94a3b8') : '#7c3aed'};display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-        <div style="font-size:26px;line-height:1;">${done ? (r.correct ? '🏆' : '🧠') : '🧠'}</div>
-        <div style="flex:1;min-width:200px;">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--text-secondary);">
-            Daily Trivia · ${esc(done ? r.category : t.category || 'General')}
-          </div>
-          <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-top:2px;">
-            ${done ? (r.correct ? `${r.points} points today — correct in ${(r.ms_taken / 1000).toFixed(1)}s` : 'Played today — better luck tomorrow!')
-              : t.state === 'playing' ? 'Your 30 seconds are running!' : `Today's question is up — ${t.limitSec} seconds, one try`}
+      <div class="card db-hero" style="background:linear-gradient(135deg,rgba(124,58,237,.11),rgba(124,58,237,.03));border:1px solid rgba(124,58,237,.18);">
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          <span class="db-ic" style="width:42px;height:42px;border-radius:13px;background:rgba(124,58,237,.14);font-size:21px;">${done ? (r.correct ? '🏆' : '🧠') : '🧠'}</span>
+          <div style="flex:1;min-width:0;">
+            <div class="db-hero-label" style="color:#7c3aed;">Daily Trivia · ${esc(done ? r.category : t.category || 'General')}</div>
+            <div style="font-size:15px;font-weight:700;color:var(--text-primary);margin-top:4px;line-height:1.35;">
+              ${done ? (r.correct ? `${r.points} points today — correct in ${(r.ms_taken / 1000).toFixed(1)}s` : 'Played today — better luck tomorrow!')
+                : t.state === 'playing' ? 'Your 30 seconds are running!' : `Today's question is up — ${t.limitSec} seconds, one try`}
+            </div>
+            <div style="margin-top:12px;">
+              ${done ? `<button type="button" id="db-tv-board" class="btn-secondary btn-sm">🏅 Leaderboard</button>`
+                : `<button type="button" id="db-tv-play" class="btn-sm" style="background:#7c3aed;color:#fff;border:none;border-radius:9px;padding:7px 16px;font-weight:700;cursor:pointer;box-shadow:0 3px 8px rgba(124,58,237,.3);">${t.state === 'playing' ? '▶ Resume' : '▶ Play'}</button>`}
+            </div>
           </div>
         </div>
-        ${done ? `<button type="button" id="db-tv-board" class="btn-secondary btn-sm">Leaderboard</button>`
-          : `<button type="button" id="db-tv-play" class="btn-primary btn-sm">${t.state === 'playing' ? '▶ Resume' : '▶ Play'}</button>`}
       </div>`;
     const play = document.getElementById('db-tv-play');
     if (play) play.onclick = () => window.Pages.trivia.play(_paintTrivia);
@@ -646,15 +661,41 @@ window.Pages.dashboard = (function () {
           #db-stat-cards .db-stat-card > div:nth-child(2) { font-size:1.65rem !important; line-height:1.15; }
           #db-stat-cards .db-stat-card > div:first-child { margin-bottom:2px !important; }
         }
-        #db-strips { display:grid; gap:14px; margin-bottom:18px; grid-template-columns:minmax(0,1fr); align-items:stretch; }
+        /* -- Look (23 Nov 2026 mock-up): tinted tiles with icons, three cards up top -- */
+        .db-ic { display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9px;flex-shrink:0; }
+        .db-stat-head { display:flex;align-items:center;gap:8px; }
+        #db-stat-cards .db-stat-card.tone-blue   { background:linear-gradient(135deg,rgba(37,99,235,.08),rgba(37,99,235,.02)); }
+        #db-stat-cards .db-stat-card.tone-red    { background:linear-gradient(135deg,rgba(239,68,68,.09),rgba(239,68,68,.02)); }
+        #db-stat-cards .db-stat-card.tone-green  { background:linear-gradient(135deg,rgba(16,185,129,.10),rgba(16,185,129,.02)); }
+        #db-stat-cards .db-stat-card.tone-amber  { background:linear-gradient(135deg,rgba(245,158,11,.11),rgba(245,158,11,.02)); }
+        #db-stat-cards .db-stat-card.tone-purple { background:linear-gradient(135deg,rgba(124,58,237,.09),rgba(124,58,237,.02)); }
+        #db-stat-cards .db-stat-card.tone-slate  { background:linear-gradient(135deg,rgba(100,116,139,.09),rgba(100,116,139,.02)); }
+        .tone-blue .db-ic   { background:rgba(37,99,235,.14);  color:#2563eb; }
+        .tone-red .db-ic    { background:rgba(239,68,68,.14);  color:#dc2626; }
+        .tone-green .db-ic  { background:rgba(16,185,129,.16); color:#059669; }
+        .tone-amber .db-ic  { background:rgba(245,158,11,.18); color:#d97706; }
+        .tone-purple .db-ic { background:rgba(124,58,237,.14); color:#7c3aed; }
+        .tone-slate .db-ic  { background:rgba(100,116,139,.14);color:#475569; }
+        #db-stat-cards .db-stat-card > div:nth-child(n+2) { padding-left:36px; }
+        #db-strips { display:grid; gap:14px; margin-bottom:16px; grid-template-columns:minmax(0,1fr); align-items:stretch; }
         #db-strips > div > .card { height:100%; box-sizing:border-box; margin:0; }
         #db-strips > #db-announce { grid-column:1 / -1; }
-        #db-strips.two { grid-template-columns:minmax(0,1.7fr) minmax(0,1fr); }
-        #db-strips.two > #db-shiptarget { grid-column:1; grid-row:span var(--side-rows,1); }
-        #db-strips.two > #db-trivia, #db-strips.two > #db-onleave { grid-column:2; }
-        @media (max-width:1100px) {
-          #db-strips.two { grid-template-columns:minmax(0,1fr); }
-          #db-strips.two > #db-shiptarget, #db-strips.two > #db-trivia, #db-strips.two > #db-onleave { grid-column:auto; grid-row:auto; }
+        #db-strips.c2 { grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); }
+        #db-strips.c3 { grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr); }
+        @media (max-width:1100px) { #db-strips.c2, #db-strips.c3 { grid-template-columns:minmax(0,1fr); } }
+        .db-hero { border-radius:16px !important; padding:16px 20px !important; position:relative; overflow:hidden; }
+        .db-hero-label { font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em; }
+        #db-more-menu { display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:210;min-width:200px;padding:6px;
+          background:var(--surface,#fff);border:1px solid var(--border-base,#e2e8f0);border-radius:12px;box-shadow:0 10px 28px rgba(0,0,0,.14);flex-direction:column;gap:2px; }
+        #db-more.open #db-more-menu { display:flex; }
+        #db-more-menu > button { width:100%;justify-content:flex-start;border:none !important;background:transparent !important;box-shadow:none !important; }
+        #db-more-menu > button:hover { background:rgba(148,163,184,.14) !important; }
+        @media (max-width:767px) {
+          #db-more { display:contents; }
+          #db-more-btn { display:none !important; }
+          #db-more-menu { display:contents !important; }
+          #db-more-menu > button { width:auto;justify-content:center;border:1px solid var(--border-base,#e2e8f0) !important;background:var(--surface,#fff) !important; }
+          #db-stat-cards .db-stat-card > div:nth-child(n+2) { padding-left:0; }
         }
       </style>
 
@@ -699,9 +740,11 @@ window.Pages.dashboard = (function () {
               ${admin ? 'Holidays' : 'Holiday List'}
             </button>
             <button id="db-btn-checklist" class="btn-secondary db-qa">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
               Checklist
             </button>
             <button id="db-btn-delegate" class="btn-primary db-qa">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
               Delegate
             </button>
             <button id="db-btn-help-ticket" class="btn-secondary db-qa">
@@ -712,14 +755,22 @@ window.Pages.dashboard = (function () {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 8h12M6 13l6 8M6 13h4a4 4 0 0 0 0-8"/></svg>
               Urgent Payment
             </button>
-            <button id="db-btn-service-request" class="btn-secondary db-qa">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-              Service Request
-            </button>
             ${admin ? `<button id="db-btn-announcement" class="btn-secondary db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
               Announcement
             </button>` : ''}
+            <!-- The less-used actions sit under More (desktop). On a phone the
+                 menu is display:contents, so its buttons join the tile grid. -->
+            <div id="db-more" style="position:relative;">
+              <button type="button" id="db-more-btn" class="btn-secondary db-qa" aria-haspopup="true" aria-expanded="false">
+                More
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+              <div id="db-more-menu">
+            <button id="db-btn-service-request" class="btn-secondary db-qa">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+              Service Request
+            </button>
             <button id="db-btn-leave" class="btn-secondary db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M12 14v4M10 16h4"/></svg>
               Apply Leave
@@ -728,6 +779,8 @@ window.Pages.dashboard = (function () {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
               Transfer
             </button>` : ''}
+              </div>
+            </div>
           </div>
 
           <!-- Mobile title row (hidden on desktop) -->
@@ -750,37 +803,37 @@ window.Pages.dashboard = (function () {
         </div>
 
         <div id="db-stat-cards" style="display:grid;grid-template-columns:repeat(6,1fr);gap:1rem;margin-bottom:20px;">
-          <div class="card db-stat-card" style="padding:18px 20px;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Total Tasks</div>
+          <div class="card db-stat-card tone-blue" style="padding:18px 20px;">
+            <div class="db-stat-head" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;"><span class="db-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>Total Tasks</div>
             <div id="db-stat-total" style="font-size:2.2rem;font-weight:800;color:var(--color-primary);">${admin ? data.total : data.pendingTasks.length}</div>
             <div id="db-stat-total-sub" style="font-size:11px;font-weight:600;color:var(--text-muted);margin-top:4px;">${(() => { const b = taskTypeBreakdown(data.pendingTasks); return `${b.Delegation} del · ${b.Checklist} chk`; })()}</div>
           </div>
-          <div class="card db-stat-card active" data-filter="All" title="Show pending tasks" style="padding:18px 20px;cursor:pointer;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Pending</div>
+          <div class="card db-stat-card tone-red active" data-filter="All" title="Show pending tasks" style="padding:18px 20px;cursor:pointer;">
+            <div class="db-stat-head" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;"><span class="db-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>Pending</div>
             <div id="db-stat-pending" style="font-size:2.2rem;font-weight:800;color:var(--color-danger);">${data.pending}</div>
             <div id="db-stat-revised" style="font-size:11px;font-weight:600;color:var(--color-warning);margin-top:4px;${data.revised > 0 ? '' : 'display:none;'}">+ ${data.revised} shifted</div>
             <div id="db-stat-pending-sub" style="font-size:11px;font-weight:600;color:var(--color-success);margin-top:4px;${data.revised > 0 ? 'display:none;' : ''}">${data.pending > 0 ? 'Awaiting action' : 'On track'}</div>
           </div>
-          <div class="card db-stat-card" data-filter="Completed" title="Show completed tasks" style="padding:18px 20px;cursor:pointer;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Completed</div>
+          <div class="card db-stat-card tone-green" data-filter="Completed" title="Show completed tasks" style="padding:18px 20px;cursor:pointer;">
+            <div class="db-stat-head" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;"><span class="db-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg></span>Completed</div>
             <div id="db-stat-completed" style="font-size:2.2rem;font-weight:800;color:var(--color-success);">${data.completed}</div>
             <div style="height:5px;border-radius:3px;background:var(--border-base);margin-top:8px;overflow:hidden;">
               <div id="db-stat-completed-bar" style="height:100%;border-radius:3px;background:var(--color-success);width:${data.total ? Math.round(data.completed / data.total * 100) : 0}%;"></div>
             </div>
             <div id="db-stat-completed-sub" style="font-size:11px;font-weight:600;color:var(--text-muted);margin-top:4px;">${data.total ? Math.round(data.completed / data.total * 100) : 0}% done</div>
           </div>
-          <div class="card db-stat-card" data-filter="Shifted" title="Show shifted tasks" style="padding:18px 20px;cursor:pointer;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Revised</div>
+          <div class="card db-stat-card tone-amber" data-filter="Shifted" title="Show shifted tasks" style="padding:18px 20px;cursor:pointer;">
+            <div class="db-stat-head" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;"><span class="db-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></span>Revised</div>
             <div id="db-stat-revised-count" style="font-size:2.2rem;font-weight:800;color:var(--color-warning);">${data.revised || 0}</div>
             <div id="db-stat-revised-sub" style="font-size:11px;font-weight:600;color:var(--text-muted);margin-top:4px;">${(data.revised || 0) > 0 ? 'Needs rework' : 'None pending'}</div>
           </div>
-          <div class="card db-stat-card" data-filter="Upcoming" role="button" tabindex="0" title="Show tasks due in the next 15 / 30 days" style="padding:18px 20px;cursor:pointer;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Upcoming</div>
+          <div class="card db-stat-card tone-purple" data-filter="Upcoming" role="button" tabindex="0" title="Show tasks due in the next 15 / 30 days" style="padding:18px 20px;cursor:pointer;">
+            <div class="db-stat-head" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;"><span class="db-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span>Upcoming</div>
             <div id="db-stat-upcoming" style="font-size:2.2rem;font-weight:800;color:var(--color-purple);">–</div>
             <div id="db-stat-upcoming-sub" style="font-size:11px;font-weight:600;color:var(--text-muted);margin-top:4px;">next 15 days</div>
           </div>
-          <a href="#scheduler" class="card db-stat-card" title="Open Scheduler" style="padding:18px 20px;cursor:pointer;display:block;text-decoration:none;color:inherit;">
-            <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;">Meetings</div>
+          <a href="#scheduler" class="card db-stat-card tone-slate" title="Open Scheduler" style="padding:18px 20px;cursor:pointer;display:block;text-decoration:none;color:inherit;">
+            <div class="db-stat-head" style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text-secondary);margin-bottom:4px;"><span class="db-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg></span>Meetings</div>
             <div id="db-stat-meetings" style="font-size:2.2rem;font-weight:800;color:var(--color-purple);">–</div>
             <div id="db-stat-meetings-sub" style="font-size:11px;font-weight:600;color:var(--text-muted);margin-top:4px;">next 7 days</div>
           </a>
@@ -791,12 +844,12 @@ window.Pages.dashboard = (function () {
         <div class="card" style="overflow:hidden;margin-bottom:1rem;">
           <div class="db-act-head" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:12px 20px;border-bottom:1px solid #f1f5f9;">
             <div>
-              <h2 class="db-card-title">Recent Activity</h2>
+              <h2 class="db-card-title" style="display:flex;align-items:center;gap:8px;"><span class="db-ic" style="background:rgba(1,80,170,.1);color:var(--color-primary);"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></span>Recent Activity</h2>
               <p id="db-tasks-count" class="db-card-sub"></p>
             </div>
-            <div class="db-act-tabs" style="display:flex;align-items:center;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px;">
+            <div class="db-act-tabs" style="display:flex;align-items:center;gap:4px;background:rgba(148,163,184,.14);border-radius:99px;padding:3px;">
               ${['All','Delegation','Checklist', ...(window.currentUser?.featureFlags?.fms ? ['FMS'] : []), 'Upcoming'].map(t =>
-                `<button class="db-tab-btn" data-tab="${t}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">${t}</button>`
+                `<button class="db-tab-btn" data-tab="${t}" style="padding:5px 13px;border-radius:99px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">${t}</button>`
               ).join('')}
             </div>
             <!-- Upcoming window — only shown on the Upcoming tab -->
@@ -1092,9 +1145,9 @@ window.Pages.dashboard = (function () {
     /* update tab button styles */
     document.querySelectorAll('.db-tab-btn').forEach(btn => {
       const active = btn.dataset.tab === _state.subTab;
-      btn.style.background = active ? '#fff' : 'transparent';
-      btn.style.color       = active ? '#0f172a' : '#64748b';
-      btn.style.boxShadow   = active ? '0 1px 4px rgba(0,0,0,.08)' : 'none';
+      btn.style.background = active ? 'var(--color-primary)' : 'transparent';
+      btn.style.color       = active ? '#fff' : '#475569';
+      btn.style.boxShadow   = active ? '0 2px 6px rgba(1,80,170,.25)' : 'none';
     });
 
     /* update stat card active state */
@@ -1696,6 +1749,22 @@ window.Pages.dashboard = (function () {
   }
 
   function _attachEvents(el, admin) {
+
+    /* ── More menu (Service Request / Apply Leave / Transfer) ── */
+    const more = el.querySelector('#db-more');
+    const moreBtn = el.querySelector('#db-more-btn');
+    if (more && moreBtn) {
+      const setOpen = (o) => { more.classList.toggle('open', o); moreBtn.setAttribute('aria-expanded', o ? 'true' : 'false'); };
+      moreBtn.addEventListener('click', (e) => { e.stopPropagation(); setOpen(!more.classList.contains('open')); });
+      more.querySelectorAll('#db-more-menu > button').forEach((b) => b.addEventListener('click', () => setOpen(false)));
+      // Bound once for the life of the page; each render's menu is looked up fresh.
+      if (!_attachEvents._moreDocBound) {
+        _attachEvents._moreDocBound = true;
+        const close = () => { const m = document.getElementById('db-more'); if (m) { m.classList.remove('open'); m.querySelector('#db-more-btn')?.setAttribute('aria-expanded', 'false'); } };
+        document.addEventListener('click', (e) => { const m = document.getElementById('db-more'); if (m && !m.contains(e.target)) close(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+      }
+    }
 
     /* ── tab buttons ── */
     el.querySelectorAll('.db-tab-btn').forEach(btn => {
