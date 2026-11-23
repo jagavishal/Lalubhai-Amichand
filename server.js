@@ -3735,7 +3735,17 @@ app.patch('/api/help-tickets', requireAuth, async (req, res) => {
     // visibility above.
     const user = req.session.user;
     const isAdmin = (user.roles||[]).includes('Admin') || (user.roles||[]).includes('HOD');
-    if (!isAdmin) return res.status(403).json({ error: 'Only Admin/HOD can decide or transfer a ticket' });
+    if (!isAdmin) {
+      /* The person a ticket is for (Name) or was transferred to works it, so
+         they may move its status — Archana resolves the tickets raised for
+         her. Transferring stays Admin/HOD only. */
+      const t = (await q('SELECT name, transferred_to FROM help_tickets WHERE id=$1', [id]))[0];
+      const me = String(user.name || '').trim().toLowerCase();
+      const mine = t && me && [t.name, t.transferred_to].some((n) => String(n || '').trim().toLowerCase() === me);
+      if (!mine || transferred_to !== undefined) {
+        return res.status(403).json({ error: 'Only Admin/HOD, or the person this ticket is for, can update it' });
+      }
+    }
     if (transferred_to !== undefined) {
       /* transferred_to holds a name, not an id — it predates this change and the
          Transfer dropdown posts the name it shows. Left as it is rather than

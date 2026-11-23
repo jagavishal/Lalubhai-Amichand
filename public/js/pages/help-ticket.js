@@ -24,6 +24,11 @@ window.Pages['help-ticket'] = (() => {
     return (Array.isArray(r) ? r : String(r).split(',')).some(x => x.trim() === 'Admin' || x.trim() === 'HOD');
   };
 
+  /* The person a ticket is for (Name) or was transferred to works it, so they
+     can move its status too — not only Admin/HOD. Mirrors the PATCH check. */
+  const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase() && String(a || '').trim() !== '';
+  const canWork = (t) => isAdmin() || same(t.name, window.currentUser?.name) || same(t.transferred_to, window.currentUser?.name);
+
   const esc = Utils.esc;
 
   function fmt(iso) {
@@ -495,7 +500,7 @@ window.Pages['help-ticket'] = (() => {
             money(t.amount) ? `<div style="font-size:13px;font-weight:700;color:#0f172a;margin-top:2px;">${money(t.amount)}</div>` : ''}`
         : '<span style="font-size:11.5px;color:#cbd5e1;">—</span>';
 
-      const statusCell = (admin && t.status !== 'resolved')
+      const statusCell = (canWork(t) && t.status !== 'resolved')
         ? `<select class="ht-status-sel" data-id="${esc(t.id)}" style="font-size:11px;font-weight:600;border:1.5px solid ${ss.color}33;border-radius:7px;padding:3px 8px;cursor:pointer;background:${ss.bg};color:${ss.color};">
             ${['open','in-progress','resolved'].map(s => `<option value="${s}" ${t.status===s?'selected':''}>${STATUS_STYLE[s]?.label||s}</option>`).join('')}
            </select>`
