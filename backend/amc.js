@@ -494,6 +494,8 @@ function mountAmc(app, ctx) {
         lead = `<b>${escHtml(s.approver_name)}</b> has commented on your service request <b>${escHtml(s.id)}</b>. Please update it in the ERP and send it back for approval.`;
         subject = `Comment on ${s.id} ${s.service_type} — please update`;
       } else if (stage === 'approved') {
+        // Only an old request raised before the vendor moved onto the form
+        // stops here; a new one goes straight to Accounts (stage 'accounts').
         to = doer; cc = approver; colour = '#16a34a';
         heading = 'Service Request Approved';
         lead = `<b>${escHtml(s.approver_name)}</b> has approved your service request <b>${escHtml(s.id)}</b>. Next: choose the vendor (add the vendor's details if it is a new one) and send it to Accounts from the ERP.`;
@@ -504,9 +506,20 @@ function mountAmc(app, ctx) {
         lead = `<b>${escHtml(s.approver_name)}</b> has rejected your service request <b>${escHtml(s.id)}</b>.`;
         subject = `Rejected: ${s.id} ${s.service_type}`;
       } else if (stage === 'accounts') {
-        to = uniqMail([...(await addressesOf(cfg.accounts)), ...cfg.accountsEmails]); cc = [...approver, ...doer];
+        // The quotation + bank details go to Accounts and the approver only
+        // (23 Nov 2026: "bas account and approver ko jana chahiye"). The
+        // requester gets a plain status note below, no quotation.
+        to = uniqMail([...(await addressesOf(cfg.accounts)), ...cfg.accountsEmails]); cc = [...approver];
         heading = 'Service Request — Payment Required';
-        lead = `Service request <b>${escHtml(s.id)}</b>, approved by <b>${escHtml(s.approver_name)}</b>, has been sent to Accounts for payment. The quotation is attached. Please record the payment in the ERP once it is made.`;
+        lead = `Service request <b>${escHtml(s.id)}</b> has been approved by <b>${escHtml(s.approver_name)}</b> and is with Accounts for payment. The quotation is attached. Please record the payment in the ERP once it is made.`;
+        const skip = [...to, ...cc].map((e) => e.toLowerCase());
+        copy = {
+          to: doer.filter((e) => !skip.includes(e.toLowerCase())),
+          heading: 'Service Request Approved — With Accounts',
+          lead: `<b>${escHtml(s.approver_name)}</b> has approved your service request <b>${escHtml(s.id)}</b>. It has gone to Accounts for payment — you will be mailed when it is paid.`,
+          subject: `Approved: ${s.id} ${s.service_type} — with Accounts for payment`,
+          plain: true,
+        };
         subject = `Payment required: ${s.id} ${s.service_type} — ${s.vendor_name}${s.payment_date ? ' by ' + fmtDate(s.payment_date) : ''}`;
         if (vendor) {
           extra = [
@@ -517,7 +530,8 @@ function mountAmc(app, ctx) {
         }
         attachments = await quotationFiles(s.id);
       } else if (stage === 'paid') {
-        to = uniqMail([...approver, ...doer]); colour = '#16a34a';
+        // Accounts done → the person who raised it hears first.
+        to = doer; cc = approver; colour = '#16a34a';
         heading = 'Service Request Paid';
         lead = `Accounts has paid service request <b>${escHtml(s.id)}</b> (${escHtml(s.service_type)} — ${escHtml(s.vendor_name)}).`;
         subject = `Paid: ${s.id} ${s.service_type} — ${s.vendor_name}`;
@@ -549,7 +563,7 @@ function mountAmc(app, ctx) {
           from: `"Service Management" <${process.env.SMTP_USER}>`,
           to: uniqMail(copy.to).join(', '),
           subject: copy.subject,
-          html: mailHtml({ heading: copy.heading, colour: '#64748b', lead: copy.lead, rows, link: pageLink() }),
+          html: mailHtml({ heading: copy.heading, colour: '#64748b', lead: copy.lead, rows: copy.plain ? [...requestRows(s), ...noteRow] : rows, link: pageLink() }),
         });
         console.log('[sms]', stage, s.id, 'copy (no buttons) mailed to', copy.to.join(', '));
       }
@@ -572,6 +586,7 @@ function mountAmc(app, ctx) {
       departments: cfg.departments,
       approvers: cfg.approvers.map((id) => byId.get(id)).filter(Boolean)
         .map((u) => ({ id: u.id, name: u.name, department: u.department || '' })),
+      vendors: [...(await vendorMap()).values()].filter((v) => v.active !== 0 && v.active !== false).map((v) => ({ id: v.id, name: v.name, active: true })),
     };
   }));
 
@@ -645,21 +660,38 @@ function mountAmc(app, ctx) {
     return f;
   }
 
+  /* The vendor is picked on the request form now (23 Nov 2026), so the
+     approval can send it straight to Accounts. Existing vendor id, or the
+     new vendor's details. `required` false = keep what the request has. */
+  async function vendorFromRequest(b, me, { required }) {
+    if (b.new_vendor) {
+      const v = vendorFromBody(b.new_vendor);
+      const id = await createVendor(v, me.by);
+      return { id, name: v.name, isNew: true };
+    }
+    const id = str(b.vendor_id, 16);
+    if (!id) { if (required) bad('Choose the vendor, or add the new vendor’s details'); return null; }
+    const row = (await q('SELECT id, name FROM amc_vendors WHERE id = $1', [id]))[0];
+    if (!row) bad('That vendor no longer exists');
+    return { id: row.id, name: row.name, isNew: false };
+  }
+
   app.post('/api/amc/requests', requireAuth, route(null, async (req) => {
     const me = req.sms;
     const b = req.body || {};
     const f = await fieldsFromBody(b, me);
     const docs = decodeDocs(b.documents, 0, { pdfOnly: true });
     if (!docs.length) bad('Attach the quotation PDF');
+    const vendor = await vendorFromRequest(b, me, { required: true });
     const id = await withSeqId('sms_requests', 'SR', 5, (newId) => q(
       `INSERT INTO sms_requests (id, service_type, frequency, department, priority, payment_date, remarks, status,
-         raised_by_id, raised_by_name, approver_id, approver_name, documents)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'[]')`,
+         raised_by_id, raised_by_name, approver_id, approver_name, documents, vendor_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'[]',$13)`,
       [newId, f.service_type, f.frequency, f.department, f.priority, f.payment_date, f.remarks, S.PENDING,
-        me.user.id, me.by, f.approver_id, f.approver_name]));
+        me.user.id, me.by, f.approver_id, f.approver_name, vendor.id]));
     const stored = await writeDocs(id, docs, me.by, 'quotation');
     await q('UPDATE sms_requests SET documents = $1 WHERE id = $2', [JSON.stringify(stored), id]);
-    await logStep(id, 'Raised', `Sent to ${f.approver_name} for approval`, me);
+    await logStep(id, 'Raised', `Sent to ${f.approver_name} for approval · Vendor: ${vendor.name}${vendor.isNew ? ' (new vendor added)' : ''}`, me);
     notify(await fresh(id), 'raised');
     return { id };
   }));
@@ -676,10 +708,11 @@ function mountAmc(app, ctx) {
     const stored = await writeDocs(s.id, docs, req.sms.by, 'quotation');
     const reply = str(b.reply, 4000);
     if (!reply) bad('Write a reply to the approver’s comment');
+    const vendor = await vendorFromRequest(b, req.sms, { required: false });
     await q(`UPDATE sms_requests SET service_type=$1, frequency=$2, department=$3, priority=$4, payment_date=$5, remarks=$6,
-               approver_id=$7, approver_name=$8, documents=$9, status=$10, updated_at=NOW() WHERE id=$11`,
+               approver_id=$7, approver_name=$8, documents=$9, status=$10, vendor_id=$11, updated_at=NOW() WHERE id=$12`,
       [f.service_type, f.frequency, f.department, f.priority, f.payment_date, f.remarks, f.approver_id, f.approver_name,
-        JSON.stringify([...existing, ...stored]), S.PENDING, s.id]);
+        JSON.stringify([...existing, ...stored]), S.PENDING, vendor ? vendor.id : (s.vendor_id || null), s.id]);
     await logStep(s.id, 'Updated', reply + (stored.length ? `\nAttached: ${stored.map((d) => d.name).join(', ')}` : ''), req.sms);
     notify(await fresh(s.id), 'resubmitted', { note: reply });
     return { ok: true };
@@ -697,13 +730,24 @@ function mountAmc(app, ctx) {
 
   // One decision, from the app or from the mail (actor = { user: { id }, by }).
   async function decide(s, action, note, actor) {
-    const next = { approve: S.APPROVED, reject: S.REJECTED, comment: S.QUERY }[action];
+    let next = { approve: S.APPROVED, reject: S.REJECTED, comment: S.QUERY }[action];
     if (!next) bad('Choose approve, reject or comment');
     if (action !== 'approve' && !note) bad(action === 'reject' ? 'Give the reason for rejecting' : 'Write your comment');
+    // Approving a request that already names its vendor sends it straight to
+    // Accounts — no "send to Accounts" step for the requester (23 Nov 2026).
+    // Only an old request with no vendor still stops at Approved.
+    const direct = action === 'approve' && !!s.vendor_id;
+    if (direct) next = S.ACCOUNTS;
     // Conditional on the status so a double click cannot decide it twice.
-    const r = await pool.query(`UPDATE sms_requests SET status=$1, decided_at=NOW(), updated_at=NOW() WHERE id=$2 AND status=$3`, [next, s.id, S.PENDING]);
+    const r = await pool.query(`UPDATE sms_requests SET status=$1, decided_at=NOW(), ${direct ? 'sent_to_accounts_at=NOW(), ' : ''}updated_at=NOW() WHERE id=$2 AND status=$3`, [next, s.id, S.PENDING]);
     if (!r.rowCount) bad('This request was just decided — reload');
     await logStep(s.id, { approve: 'Approved', reject: 'Rejected', comment: 'Comment' }[action], note, actor);
+    if (direct) {
+      await logStep(s.id, 'Sent to Accounts', `Vendor: ${s.vendor_name || s.vendor_id} · sent automatically on approval`, actor);
+      const v = (await q('SELECT * FROM amc_vendors WHERE id = $1', [s.vendor_id]))[0];
+      notify(await fresh(s.id), 'accounts', { note, vendor: v ? vendorOut(v) : null });
+      return;
+    }
     notify(await fresh(s.id), { approve: 'approved', reject: 'rejected', comment: 'comment' }[action], { note });
   }
 
@@ -797,7 +841,7 @@ function mountAmc(app, ctx) {
       res.send(actionPage({
         title: { approve: 'Approved', reject: 'Rejected', comment: 'Comment sent' }[claim.decision],
         tone: claim.decision === 'reject' ? 'bad' : 'good',
-        lead: `Service request <b>${escHtml(s.id)}</b> is now <b>${escHtml(after.status)}</b>. ${escHtml(s.raised_by_name)} has been emailed.`,
+        lead: `Service request <b>${escHtml(s.id)}</b> is now <b>${escHtml(after.status)}</b>. ${after.status === S.ACCOUNTS ? 'Accounts and ' + escHtml(s.raised_by_name) + ' have' : escHtml(s.raised_by_name) + ' has'} been emailed.`,
         rows: pageRows(after), note: 'You can close this tab.',
       }));
     } catch (e) {

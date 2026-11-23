@@ -33,6 +33,7 @@ window.Pages.amc = (() => {
   const isAdmin = () => !!D?.me?.admin;
   const needsMe = (s) => s.can.decide || s.can.update || s.can.send || s.can.pay;
   const NEW_DEPT = '__new__';
+  const NEW_VENDOR = '__newv__';
 
   /* ── Load ─────────────────────────────────────────────────────────── */
 
@@ -183,10 +184,13 @@ window.Pages.amc = (() => {
       return H.toast('No management team is set up yet — ask the Service Management admin to add approvers in Settings', 'error');
     }
     const deptOpts = [...meta.departments.map((d) => ({ value: d, label: d })), { value: NEW_DEPT, label: '+ Add new department…' }];
+    // The vendor is chosen here now, so the approval sends it straight to Accounts.
+    const vendors = (meta.vendors || []).filter((v) => v.active || v.id === s.vendor_id);
+    const vendorOpts = [...vendors.map((v) => ({ value: v.id, label: v.name })), { value: NEW_VENDOR, label: '+ Add new vendor…' }];
     H.openModal({
       id: 'sms-form', width: 620,
       title: editing ? `Update ${s.id}` : 'Raise Service Request',
-      subtitle: editing ? 'Answer the approver’s comment — it goes back to them for approval' : 'The approver you choose is emailed as soon as you submit',
+      subtitle: editing ? 'Answer the approver’s comment — it goes back to them for approval' : 'The approver is emailed now; once they approve it goes straight to Accounts',
       bodyHTML: H.grid(
         H.select('sf-type', 'Type of Service', s.service_type || '', meta.lists.SERVICE_TYPES, { required: true, placeholder: '— Select —' })
         + H.select('sf-freq', 'Frequency of Service', s.frequency, meta.lists.FREQUENCIES, { required: true })
@@ -196,6 +200,16 @@ window.Pages.amc = (() => {
         + H.field('sf-paydate', 'Payment Date', s.payment_date || '', { type: 'date', required: true })
         + H.select('sf-approver', 'Approver (Management)', s.approver_id || '', meta.approvers.map((u) => ({ value: u.id, label: u.department ? `${u.name} (${u.department})` : u.name })),
           { required: true, placeholder: '— Select approver —' })
+        + H.select('sf-vendor', 'Vendor', s.vendor_id || (vendors.length ? '' : NEW_VENDOR), vendorOpts, { required: true, span: 2, placeholder: '— Select vendor —' })
+        + `<div id="sf-vnew" style="grid-column:1 / -1;display:none;">${H.grid(
+            H.field('nv-name', 'Vendor Name', '', { required: true, span: 2 })
+            + H.field('nv-person', 'Contact Person', '') + H.field('nv-phone', 'Phone', '')
+            + H.field('nv-email', 'Email', '') + H.field('nv-gstin', 'GSTIN', '')
+            + H.field('nv-pan', 'PAN', '') + H.field('nv-holder', 'Account Holder Name', '')
+            + H.field('nv-bank', 'Bank Name', '') + H.field('nv-acno', 'Account No.', '')
+            + H.field('nv-ifsc', 'IFSC', '') + '<div></div>'
+            + H.textarea('nv-address', 'Address', '', { rows: 2 }),
+          )}</div>`
         + H.textarea('sf-remarks', 'Remarks', s.remarks || '', { rows: 2, placeholder: 'Optional — anything the approver should know' })
         + fileInput('sf-docs', editing ? 'Add a newer Quotation PDF (optional)' : 'Quotation PDF', { pdfOnly: true, required: !editing })
         + (editing ? H.textarea('sf-reply', 'Reply to the approver’s comment *', '', { rows: 3, placeholder: 'What you changed / your answer' }) : ''),
@@ -208,6 +222,11 @@ window.Pages.amc = (() => {
           wrap.style.display = sel.value === NEW_DEPT ? 'block' : 'none';
           if (sel.value === NEW_DEPT) document.getElementById('sf-dept-new')?.focus();
         });
+        const vsel = document.getElementById('sf-vendor');
+        const vnew = document.getElementById('sf-vnew');
+        const syncV = () => { vnew.style.display = vsel.value === NEW_VENDOR ? 'block' : 'none'; };
+        vsel?.addEventListener('change', () => { syncV(); if (vsel.value === NEW_VENDOR) document.getElementById('nv-name')?.focus(); });
+        if (vsel && vnew) syncV();
       },
       onConfirm: async () => {
         let department = H.val('sf-dept');
@@ -220,6 +239,16 @@ window.Pages.amc = (() => {
         if (!body.department) throw new Error(H.val('sf-dept') === NEW_DEPT ? 'Write the new department name' : 'Choose the department');
         if (!body.payment_date) throw new Error('Pick the payment date');
         if (!body.approver_id) throw new Error('Choose the approver');
+        const vpick = H.val('sf-vendor');
+        if (vpick === NEW_VENDOR) {
+          body.new_vendor = {
+            name: H.val('nv-name').trim(), contact_person: H.val('nv-person'), phone: H.val('nv-phone'), email: H.val('nv-email').trim(),
+            gstin: H.val('nv-gstin').trim(), pan: H.val('nv-pan').trim(), account_holder: H.val('nv-holder'), bank_name: H.val('nv-bank'),
+            account_no: H.val('nv-acno').trim(), ifsc: H.val('nv-ifsc').trim(), address: H.val('nv-address'),
+          };
+          if (!body.new_vendor.name) throw new Error('Write the new vendor’s name');
+        } else if (vpick) body.vendor_id = vpick;
+        else if (!editing || !s.vendor_id) throw new Error('Choose the vendor (or + Add new vendor)');
         body.documents = await readFiles('sf-docs', { pdfOnly: true });
         if (!editing && !body.documents.length) throw new Error('Attach the quotation PDF');
         if (editing) {
@@ -344,7 +373,7 @@ window.Pages.amc = (() => {
       if (action !== 'approve' && !note) throw new Error(action === 'reject' ? 'Write the reason for rejecting' : 'Write your comment');
       if (action === 'reject' && !(await Utils.showConfirm(`Reject ${s.id}? This is final.`, { title: 'Reject request', confirmText: 'Reject', danger: true }))) { b.disabled = false; return; }
       await H.post(`/api/amc/requests/${encodeURIComponent(s.id)}/decision`, { action, note });
-      await after({ approve: `${s.id} approved — ${s.raised_by_name} has been emailed`, reject: `${s.id} rejected`, comment: `Comment sent to ${s.raised_by_name}` }[action]);
+      await after({ approve: s.vendor_id ? `${s.id} approved — sent to Accounts with the quotation` : `${s.id} approved — ${s.raised_by_name} has been emailed`, reject: `${s.id} rejected`, comment: `Comment sent to ${s.raised_by_name}` }[action]);
     })));
 
     $('sv-update')?.addEventListener('click', () => {
@@ -383,7 +412,7 @@ window.Pages.amc = (() => {
       if (!body.mode) throw new Error('Choose the payment mode');
       body.documents = await readFiles('pv-docs');
       await H.post(`/api/amc/requests/${encodeURIComponent(s.id)}/paid`, body);
-      await after(`${s.id} marked paid — the approver and ${s.raised_by_name} have been emailed`);
+      await after(`${s.id} marked paid — ${s.raised_by_name} has been emailed`);
     }));
 
     $('sv-del')?.addEventListener('click', async () => {
