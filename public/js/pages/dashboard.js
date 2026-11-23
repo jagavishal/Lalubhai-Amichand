@@ -293,7 +293,8 @@ window.Pages.dashboard = (function () {
     row.innerHTML = list.map((x) => `<button type="button" data-st-rx="${esc(x.emoji)}" title="${esc(x.names.length ? x.names.slice(0, 15).join(', ') : 'React')}"
         style="display:inline-flex;align-items:center;gap:5px;border:1px solid ${x.mine ? 'var(--color-primary)' : 'var(--border-light,#e2e8f0)'};background:${x.mine ? 'rgba(1,80,170,.08)' : 'var(--surface,#fff)'};border-radius:99px;padding:2px 9px;font-size:13.5px;cursor:pointer;">
         ${x.emoji}${x.count ? `<b style="font-size:12px;color:var(--text-secondary);">${x.count}</b>` : ''}</button>`).join('')
-      + '<span style="font-size:11px;color:var(--text-muted);">Cheer the export team</span>';
+;
+    row.title = 'Cheer the export team';
     row.querySelectorAll('[data-st-rx]').forEach((b) => b.addEventListener('click', async () => {
       b.disabled = true;
       try { await Utils.apiFetch('/api/shipment-target/react', { method: 'POST', body: JSON.stringify({ emoji: b.dataset.stRx }) }); }
@@ -661,6 +662,22 @@ window.Pages.dashboard = (function () {
           #db-stat-cards .db-stat-card > div:nth-child(2) { font-size:1.65rem !important; line-height:1.15; }
           #db-stat-cards .db-stat-card > div:first-child { margin-bottom:2px !important; }
         }
+        /* -- Page frame: one soft panel, every card the same radius / border / shadow -- */
+        #db-wrap { background:linear-gradient(180deg,#eaf0ff 0%,#f3f6fd 38%,#f6f8fc 100%); border-radius:22px; padding:22px 22px 10px; }
+        html[data-theme="dark"] #db-wrap { background:linear-gradient(180deg,rgba(99,102,241,.10) 0%,rgba(99,102,241,.03) 40%,transparent 100%); }
+        #db-hello { margin-bottom:16px; }
+        #db-wrap .card { border-radius:16px; border:1px solid rgba(148,163,184,.2); box-shadow:0 6px 20px rgba(15,23,42,.05); }
+        @media (min-width:768px) {
+          #db-btn-row .db-qa { border-radius:10px !important; min-height:36px; padding:0 14px !important; font-weight:600; box-shadow:0 1px 3px rgba(15,23,42,.08); display:inline-flex; align-items:center; gap:6px; }
+          #db-btn-row .btn-secondary.db-qa { background:var(--surface,#fff); border:1px solid rgba(148,163,184,.32); color:var(--text-primary); }
+          #db-btn-row .btn-secondary.db-qa:hover { border-color:var(--color-primary); color:var(--color-primary); }
+          #db-emp-trigger { border-radius:10px !important; min-height:38px; box-shadow:0 1px 3px rgba(15,23,42,.08); border:1px solid rgba(148,163,184,.32) !important; }
+        }
+        @media (max-width:767px) {
+          #db-wrap { padding:12px 10px 4px; border-radius:16px; }
+          #db-hello > div:first-child { font-size:19px !important; }
+        }
+        #db-tasks-table td .db-desc { font-size:13px; }
         /* -- Look (23 Nov 2026 mock-up): tinted tiles with icons, three cards up top -- */
         .db-ic { display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9px;flex-shrink:0; }
         .db-stat-head { display:flex;align-items:center;gap:8px; }
@@ -714,6 +731,11 @@ window.Pages.dashboard = (function () {
       </style>
 
       <div id="db-wrap">
+        <!-- Greeting (23 Nov 2026 look) -->
+        <div id="db-hello">
+          <div style="font-size:23px;font-weight:800;color:var(--text-primary);letter-spacing:-.015em;line-height:1.2;">${(() => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; })()}, ${Utils.esc(String(me?.name || '').split(' ')[0] || 'there')} 👋</div>
+          <div style="font-size:13px;color:var(--text-secondary);margin-top:3px;">${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · here's what needs your attention today</div>
+        </div>
         <!-- Top bar: emp picker LEFT | buttons RIGHT -->
         <div id="db-topbar" style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-bottom:20px;">
 
