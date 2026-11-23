@@ -639,6 +639,13 @@ window.Pages.dashboard = (function () {
         .pill-deny  { background:var(--color-neutral-bg);color:var(--color-neutral-text); } .pill-deny:hover  { background:var(--border-base); }
         .pill-pending-wait { background:var(--color-warning-bg);color:var(--color-warning-text);display:inline-flex;align-items:center;padding:0 12px;min-height:32px;font-size:12px;font-weight:600;border-radius:9999px; }
         @media (max-width:1200px) and (min-width:768px) { #db-stat-cards { grid-template-columns:repeat(3,1fr) !important; } }
+        /* Compact stat tiles so the activity table starts on the first screen. */
+        @media (min-width:768px) {
+          #db-stat-cards { margin-bottom:14px !important; gap:12px !important; }
+          #db-stat-cards .db-stat-card { padding:11px 16px !important; }
+          #db-stat-cards .db-stat-card > div:nth-child(2) { font-size:1.65rem !important; line-height:1.15; }
+          #db-stat-cards .db-stat-card > div:first-child { margin-bottom:2px !important; }
+        }
         #db-strips { display:grid; gap:14px; margin-bottom:18px; grid-template-columns:minmax(0,1fr); align-items:stretch; }
         #db-strips > div > .card { height:100%; box-sizing:border-box; margin:0; }
         #db-strips > #db-announce { grid-column:1 / -1; }
@@ -779,6 +786,31 @@ window.Pages.dashboard = (function () {
           </a>
         </div>
 
+        <!-- Recent Activity — straight under the stat tiles: it is the table people
+             work from, and it was starting below the fold (23 Nov 2026). -->
+        <div class="card" style="overflow:hidden;margin-bottom:1rem;">
+          <div class="db-act-head" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:12px 20px;border-bottom:1px solid #f1f5f9;">
+            <div>
+              <h2 class="db-card-title">Recent Activity</h2>
+              <p id="db-tasks-count" class="db-card-sub"></p>
+            </div>
+            <div class="db-act-tabs" style="display:flex;align-items:center;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px;">
+              ${['All','Delegation','Checklist', ...(window.currentUser?.featureFlags?.fms ? ['FMS'] : []), 'Upcoming'].map(t =>
+                `<button class="db-tab-btn" data-tab="${t}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">${t}</button>`
+              ).join('')}
+            </div>
+            <!-- Upcoming window — only shown on the Upcoming tab -->
+            <div id="db-upcoming-range" style="display:none;align-items:center;gap:4px;background:#f5f3ff;border-radius:8px;padding:3px;">
+              ${[15, 30].map(d =>
+                `<button class="db-upc-btn" data-days="${d}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">Next ${d} days</button>`
+              ).join('')}
+            </div>
+          </div>
+          <div class="db-act-scroll" style="overflow-x:auto;max-height:min(72vh,680px);overflow-y:auto;">
+            <table id="db-tasks-table" class="m-cards" style="width:100%;border-collapse:collapse;font-size:12.5px;"></table>
+          </div>
+        </div>
+
         <!-- Task Status + Meetings -->
         <div id="db-main-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
 
@@ -808,29 +840,6 @@ window.Pages.dashboard = (function () {
           </div>
         </div>
 
-        <!-- Recent Activity -->
-        <div class="card" style="overflow:hidden;margin-bottom:20px;">
-          <div class="db-act-head" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:12px 20px;border-bottom:1px solid #f1f5f9;">
-            <div>
-              <h2 class="db-card-title">Recent Activity</h2>
-              <p id="db-tasks-count" class="db-card-sub"></p>
-            </div>
-            <div class="db-act-tabs" style="display:flex;align-items:center;gap:4px;background:#f1f5f9;border-radius:8px;padding:3px;">
-              ${['All','Delegation','Checklist', ...(window.currentUser?.featureFlags?.fms ? ['FMS'] : []), 'Upcoming'].map(t =>
-                `<button class="db-tab-btn" data-tab="${t}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">${t}</button>`
-              ).join('')}
-            </div>
-            <!-- Upcoming window — only shown on the Upcoming tab -->
-            <div id="db-upcoming-range" style="display:none;align-items:center;gap:4px;background:#f5f3ff;border-radius:8px;padding:3px;">
-              ${[15, 30].map(d =>
-                `<button class="db-upc-btn" data-days="${d}" style="padding:5px 11px;border-radius:6px;font-size:11.5px;font-weight:600;border:none;cursor:pointer;transition:all .12s;">Next ${d} days</button>`
-              ).join('')}
-            </div>
-          </div>
-          <div class="db-act-scroll" style="overflow-x:auto;max-height:min(72vh,680px);overflow-y:auto;">
-            <table id="db-tasks-table" class="m-cards" style="width:100%;border-collapse:collapse;font-size:12.5px;"></table>
-          </div>
-        </div>
 
       </div>
 
