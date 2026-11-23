@@ -3657,8 +3657,11 @@ app.get('/api/help-tickets', requireAuth, async (req, res) => {
     const rows = isAdmin
       ? await q('SELECT * FROM help_tickets ORDER BY created_at DESC', [])
       : await q(
-          'SELECT * FROM help_tickets WHERE submitted_by_id=$1 OR LOWER(transferred_to)=LOWER($2) ORDER BY created_at DESC',
-          [user.id, user.name || ''],
+          // ...and the ones raised in their name (the Name field) by someone
+          // else — Shravan filing one for Archana must show up for Archana.
+          // $N becomes a positional ? on MySQL, so the name is passed twice.
+          'SELECT * FROM help_tickets WHERE submitted_by_id=$1 OR LOWER(transferred_to)=LOWER($2) OR LOWER(TRIM(name))=LOWER(TRIM($3)) ORDER BY created_at DESC',
+          [user.id, user.name || '', user.name || '\u0000'],
         );
     return res.json(rows);
   } catch (e) { return res.status(500).json({ error: e.message }); }
