@@ -107,19 +107,27 @@ window.Pages['company-overview'] = (() => {
     ship: '<path d="M2 20c1.5 1 3 1 4.5 0s3-1 4.5 0 3 1 4.5 0 3-1 4.5 0"/><path d="M4 16l-1-5h18l-1 5"/><path d="M12 11V4M8 7h8"/>',
     trade: '<path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/>',
     stock: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',
+    money: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/>',
+    cal: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+    leave: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+    team: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
   };
+  // Header icon + tone per card title (23 Nov 2026 look).
+  const CARD_IC = { 'Financials': ['money', 'blue'], 'Meetings': ['cal', 'purple'], 'On leave today': ['leave', 'green'],
+    'Team performance (MIS)': ['team', 'amber'], 'Stock': ['stock', 'teal'] };
   const icon = (k) => '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + ICON[k] + '</svg>';
 
   /* ── building blocks ─────────────────────────────────────────────────── */
   const card = (title, sub, right, body, extraCls) => `<section class="ceo-card ${extraCls || ''}">
-      <header class="ceo-card-h"><div><h2>${title}</h2>${sub ? `<p>${sub}</p>` : ''}</div>${right || ''}</header>${body}</section>`;
+      <header class="ceo-card-h"><div class="ceo-card-t">${CARD_IC[title] ? `<span class="ceo-h-ic t-${CARD_IC[title][1]}">${icon(CARD_IC[title][0])}</span>` : ''}<div><h2>${title}</h2>${sub ? `<p>${sub}</p>` : ''}</div></div>${right || ''}</header>${body}</section>`;
   const link = (href, text) => `<a class="ceo-link" href="${href}">${text} →</a>`;
   const empty = (t) => `<div class="ceo-empty">${esc(t)}</div>`;
   const legend = (items) => `<div class="ceo-legend">${items.map(([c, l]) => `<span><i style="background:${c}"></i>${esc(l)}</span>`).join('')}</div>`;
 
   function _tile(key, label, value, sub, tone, href) {
-    return `<a class="ceo-tile" href="${href}">
-      <div class="ceo-tile-ic ceo-tone-${tone}">${icon(key)}</div>
+    return `<a class="ceo-tile t-${tone}" href="${href}">
+      <div class="ceo-tile-ic">${icon(key)}</div>
       <div class="ceo-tile-body"><div class="ceo-tile-l">${esc(label)}</div><div class="ceo-tile-v">${value}</div><div class="ceo-tile-s">${sub}</div></div>
     </a>`;
   }
@@ -431,11 +439,11 @@ window.Pages['company-overview'] = (() => {
     const ex = f.export;
     const trading = (f.divisions || []).find((d) => /trad/i.test(d.division) && !d.missing);
     const tiles = [
-      _tile('shop', 'Retail sales · this month', inrShort(sum('mtd')), shops, 'accent', '#retail-sales'),
-      _tile('shop', 'Retail sales · this year', inrShort(sum('fy')), last ? 'Daily Report, last entry ' + dayMon(last) : 'Daily Report (as per Tally)', 'accent', '#retail-sales'),
-      _tile('ship', 'Export orders · this month', ex ? byCur(ex.month) : '—', ex ? `${ex.count.month} order${ex.count.month === 1 ? '' : 's'} (PI value)` : esc(f.errors?.export || 'Order sheet not reachable'), 'accent', '#order-sheet'),
-      _tile('ship', 'Export orders · this year', ex ? byCur(ex.fy) : '—', ex ? `${ex.count.fy} orders · not yet packed ${byCur(ex.open)}` : '', 'accent', '#order-sheet'),
-      _tile('trade', 'Trading sales', trading ? inrShort(trading.sales) : '—', trading ? 'Tally TB ' + dayMon(trading.from) + ' – ' + dayMon(trading.to) : 'No Trading Trial Balance uploaded', 'accent', '#mis-finance'),
+      _tile('shop', 'Retail sales · this month', inrShort(sum('mtd')), shops, 'blue', '#retail-sales'),
+      _tile('shop', 'Retail sales · this year', inrShort(sum('fy')), last ? 'Daily Report, last entry ' + dayMon(last) : 'Daily Report (as per Tally)', 'indigo', '#retail-sales'),
+      _tile('ship', 'Export orders · this month', ex ? byCur(ex.month) : '—', ex ? `${ex.count.month} order${ex.count.month === 1 ? '' : 's'} (PI value)` : esc(f.errors?.export || 'Order sheet not reachable'), 'teal', '#order-sheet'),
+      _tile('ship', 'Export orders · this year', ex ? byCur(ex.fy) : '—', ex ? `${ex.count.fy} orders · not yet packed ${byCur(ex.open)}` : '', 'green', '#order-sheet'),
+      _tile('trade', 'Trading sales', trading ? inrShort(trading.sales) : '—', trading ? 'Tally TB ' + dayMon(trading.from) + ' – ' + dayMon(trading.to) : 'No Trading Trial Balance uploaded', 'amber', '#mis-finance'),
     ];
     return `<div class="ceo-sech">Sales</div><div class="ceo-tiles">${tiles.join('')}</div>`;
   }
@@ -469,20 +477,22 @@ window.Pages['company-overview'] = (() => {
       const daysLeft = Math.ceil((new Date(t.by + 'T23:59:59') - new Date()) / 86400000);
       const hit = t.left === 0;
       const col = hit ? 'var(--ceo-good)' : daysLeft < 0 ? 'var(--ceo-crit)' : 'var(--ceo-accent)';
-      body = `<div style="display:flex;align-items:center;gap:16px;">
-          <div style="font-size:34px;font-weight:800;color:${col};min-width:44px;text-align:center;line-height:1;">${hit ? '✓' : t.left}</div>
-          <div style="flex:1;min-width:0;"><div style="font-size:13.5px;font-weight:700;">${hit ? `Target done — ${t.done} shipped 🎉` : `${t.left} more to go · ${t.done} of ${t.target} shipped`}</div>
-            <div style="font-size:12px;color:var(--ceo-muted);margin:2px 0 8px;">by ${esc(dayMon(t.by))}${daysLeft >= 0 ? ` · ${daysLeft} day${daysLeft === 1 ? '' : 's'} left` : ' · date passed'}</div>
-            <div style="height:8px;border-radius:99px;background:var(--ceo-grid);overflow:hidden;"><div style="height:100%;width:${pct}%;background:${col};"></div></div></div></div>
-        ${t.shipments?.length ? `<div style="font-size:11.5px;color:var(--ceo-muted);margin-top:8px;">Done: ${t.shipments.map((x) => esc(x.invoiceNo)).join(', ')}</div>` : ''}
+      body = `<div class="ceo-ship-art" aria-hidden="true"><svg width="150" height="92" viewBox="0 0 150 92" fill="none"><path d="M0 74 Q18 68 36 74 T72 74 T108 74 T150 74 V92 H0Z" fill="#bfdbfe"/><rect x="24" y="44" width="13" height="11" rx="1" fill="#f97316"/><rect x="38" y="44" width="13" height="11" rx="1" fill="#0ea5e9"/><rect x="52" y="44" width="13" height="11" rx="1" fill="#22c55e"/><rect x="66" y="44" width="13" height="11" rx="1" fill="#eab308"/><rect x="80" y="44" width="13" height="11" rx="1" fill="#ef4444"/><rect x="31" y="32" width="13" height="11" rx="1" fill="#14b8a6"/><rect x="45" y="32" width="13" height="11" rx="1" fill="#f59e0b"/><rect x="59" y="32" width="13" height="11" rx="1" fill="#3b82f6"/><rect x="73" y="32" width="13" height="11" rx="1" fill="#f43f5e"/><rect x="99" y="26" width="24" height="29" rx="2" fill="#f8fafc" stroke="#cbd5e1"/><rect x="103" y="31" width="4" height="4" fill="#1e40af"/><rect x="109" y="31" width="4" height="4" fill="#1e40af"/><rect x="115" y="31" width="4" height="4" fill="#1e40af"/><rect x="103" y="39" width="4" height="4" fill="#1e40af"/><rect x="109" y="39" width="4" height="4" fill="#1e40af"/><rect x="115" y="39" width="4" height="4" fill="#1e40af"/><rect x="111" y="15" width="7" height="11" fill="#334155"/><rect x="111" y="15" width="7" height="3" fill="#ef4444"/><path d="M12 55 H138 L126 75 H25 Z" fill="#1e3a8a"/><path d="M12 55 H138 L135 60 H15 Z" fill="#dc2626"/><path d="M0 80 Q18 74 36 80 T72 80 T108 80 T150 80 V92 H0Z" fill="#93c5fd" opacity=".75"/></svg></div>
+        <div class="ceo-ship-body">
+          <div style="font-size:2.3rem;font-weight:800;color:${col};line-height:1.1;">${t.done}<span style="font-size:1.35rem;color:var(--ceo-muted);font-weight:700;"> / ${t.target}</span>
+            <span style="font-size:13px;font-weight:600;color:var(--ceo-ink2);margin-left:4px;">shipped</span></div>
+          <div style="height:9px;border-radius:99px;background:rgba(148,163,184,.25);overflow:hidden;margin:10px 0 8px;"><div style="height:100%;width:${pct}%;background:${col};border-radius:99px;"></div></div>
+          <div style="font-size:13px;color:var(--ceo-ink2);">${hit ? 'Target done 🎉' : `<b style="color:var(--ceo-ink);">${t.left}</b> to go`} · ${daysLeft >= 0 ? `${daysLeft} day${daysLeft === 1 ? '' : 's'} left` : 'date passed'}</div>
+          ${t.shipments?.length ? `<div style="font-size:11.5px;color:var(--ceo-muted);margin-top:6px;">Done: ${t.shipments.map((x) => esc(x.invoiceNo)).join(', ')}</div>` : ''}
+        </div>
         ${_reactions()}`;
     }
-    return card('🚢 ' + esc(t?.title || 'Export shipment target'), t?.target ? `${t.target} shipments by ${esc(dayMon(t.by))}` : 'Export Documentation shipments', link('#export-documentation', 'Export Docs'), body);
+    return `<section class="ceo-card ceo-ship"><header class="ceo-card-h"><div class="ceo-card-t"><span class="ceo-h-ic t-blue">${icon('target')}</span><div><h2>${esc(t?.title || 'Export shipment target')}</h2><p>${t?.target ? `${t.target} shipments by ${esc(dayMon(t.by))}` : 'Export Documentation shipments'}</p></div></div>${link('#export-documentation', 'Export Docs')}</header>${body}</section>`;
   }
   function _reactions() {
     if (!_shipRx.length) return '';
-    return `<div class="ceo-rx">${_shipRx.map((r) => `<button type="button" class="ceo-rx-b${r.mine ? ' on' : ''}" data-rx="${esc(r.emoji)}"${r.names.length ? tipAttr([r.emoji + ' ' + r.count, ...r.names.slice(0, 12)]) : ''}>${r.emoji}${r.count ? `<b>${r.count}</b>` : ''}</button>`).join('')}
-      <span class="ceo-rx-l">Cheer the export team</span></div>`;
+    return `<div class="ceo-rx" title="Cheer the export team">${_shipRx.map((r) => `<button type="button" class="ceo-rx-b${r.mine ? ' on' : ''}" data-rx="${esc(r.emoji)}"${r.names.length ? tipAttr([r.emoji + ' ' + r.count, ...r.names.slice(0, 12)]) : ''}>${r.emoji}${r.count ? `<b>${r.count}</b>` : ''}</button>`).join('')}
+</div>`;
   }
 
   // Stock: the closing stock value typed on each division's Trial Balance
@@ -630,9 +640,39 @@ window.Pages['company-overview'] = (() => {
     .ceo-rx-b.on { background:var(--ceo-tone-bg); border-color:var(--ceo-accent); }
     .ceo-rx-b:hover { background:var(--ceo-hover); }
     .ceo-rx-l { font-size:11.5px; color:var(--ceo-muted); }
+    /* -- 23 Nov 2026 look: soft panel, tinted tiles, icon headers, hero shipment card -- */
+    .ceo { background:linear-gradient(180deg,#eaf0ff 0%,#f3f6fd 30%,#f6f8fc 100%); border-radius:22px; padding:20px 22px 24px; }
+    :root[data-theme="dark"] .ceo { background:linear-gradient(180deg,rgba(99,102,241,.10) 0%,rgba(99,102,241,.03) 40%,transparent 100%); }
+    .ceo-top h1 { font-size:24px; font-weight:800; }
+    .ceo-card { border-radius:16px; border:1px solid rgba(148,163,184,.2); box-shadow:0 6px 20px rgba(15,23,42,.05); }
+    .ceo-card-t { display:flex; align-items:flex-start; gap:10px; min-width:0; }
+    .ceo-h-ic { width:34px; height:34px; border-radius:10px; display:grid; place-items:center; flex-shrink:0; }
+    .ceo-h-ic svg { width:17px; height:17px; }
+    .t-blue   { --tc:37,99,235;   --tk:#1d4ed8; } .t-indigo { --tc:79,70,229;  --tk:#4338ca; }
+    .t-teal   { --tc:13,148,136;  --tk:#0f766e; } .t-green  { --tc:16,185,129; --tk:#047857; }
+    .t-amber  { --tc:245,158,11;  --tk:#b45309; } .t-purple { --tc:124,58,237; --tk:#6d28d9; }
+    .ceo-h-ic { background:rgba(var(--tc),.14); color:var(--tk); }
+    :root[data-theme="dark"] .ceo-h-ic, :root[data-theme="dark"] .ceo-tile-ic { color:rgb(var(--tc)); }
+    .ceo-tile { background:linear-gradient(135deg,rgba(var(--tc),.13),rgba(var(--tc),.04)),var(--ceo-surface); border:1px solid rgba(var(--tc),.2);
+      border-radius:16px; box-shadow:0 6px 18px rgba(15,23,42,.05); }
+    .ceo-tile-ic { width:40px; height:40px; border-radius:12px; background:rgba(var(--tc),.16); color:var(--tk); }
+    .ceo-tile-l { color:var(--tk); font-weight:700; font-size:11.5px; text-transform:uppercase; letter-spacing:.05em; }
+    :root[data-theme="dark"] .ceo-tile-l { color:rgb(var(--tc)); }
+    .ceo-tile-v { font-size:26px; font-weight:800; }
+    .ceo-ship { background:linear-gradient(115deg,rgba(37,99,235,.12),rgba(14,165,233,.05) 55%,rgba(14,165,233,.10)),var(--ceo-surface);
+      border-left:4px solid var(--ceo-accent); position:relative; overflow:hidden; }
+    .ceo-ship-art { position:absolute; right:10px; bottom:0; line-height:0; pointer-events:none; }
+    .ceo-ship-body { position:relative; padding-right:8px; }
+    .ceo-ship .ceo-rx { position:relative; max-width:calc(100% - 150px); }
+    .ceo-grid-cols { align-items:start; }
+    .ceo-grid-cols .ceo-col > .ceo-card:last-child { flex:none; }
+    @media (max-width:1100px) { .ceo-grid-cols > .ceo-col:last-child { grid-column:1 / -1; } }
+    @media (max-width:720px) { .ceo-grid-cols > .ceo-col:last-child { grid-column:auto; } }
     /* Phone (<768px): KPI tiles in a 2-up grid, tighter cards, team table as cards */
     @media (max-width:767px) {
-      .ceo { padding-bottom:16px; }
+      .ceo { padding:12px 10px 16px; border-radius:16px; }
+      .ceo-ship .ceo-rx { max-width:100%; }
+      .ceo-ship-art { opacity:.35; }
       .ceo-top { align-items:center; margin-bottom:14px; flex-wrap:nowrap; }
       .ceo-top > div { min-width:0; }
       .ceo-top h1 { font-size:19px; }
@@ -687,11 +727,10 @@ window.Pages['company-overview'] = (() => {
           ${_financials(d.finance)}
           ${_shipCard()}
         </div>
-        <div class="ceo-grid">
-          ${_stockCard(d.stock, d.finance.divisions)}
-          ${_leave(d.leave)}
-          ${_meetings(d.meetings, d.today)}
-          ${_misChart()}
+        <div class="ceo-grid ceo-grid-cols">
+          <div class="ceo-col">${_stockCard(d.stock, d.finance.divisions)}</div>
+          <div class="ceo-col">${_leave(d.leave)}${_misChart()}</div>
+          <div class="ceo-col">${_meetings(d.meetings, d.today)}</div>
         </div>
         <div class="ceo-updated">Updated ${new Date(d.generatedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</div>`;
     }
