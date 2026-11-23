@@ -663,15 +663,13 @@ window.Pages['company-overview'] = (() => {
       border-left:4px solid var(--ceo-accent); position:relative; overflow:hidden; }
     .ceo-ship-art { position:absolute; right:10px; bottom:0; line-height:0; pointer-events:none; }
     .ceo-ship-body { position:relative; padding-right:8px; }
-    .ceo-ship .ceo-rx { position:relative; max-width:calc(100% - 150px); }
-    .ceo-grid-cols { align-items:start; }
-    .ceo-grid-cols .ceo-col > .ceo-card:last-child { flex:none; }
-    @media (max-width:1100px) { .ceo-grid-cols > .ceo-col:last-child { grid-column:1 / -1; } }
-    @media (max-width:720px) { .ceo-grid-cols > .ceo-col:last-child { grid-column:auto; } }
+    .ceo-ship .ceo-rx { position:relative; }
+    .ceo-pair { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; align-items:stretch; }
+    @media (max-width:1100px) { .ceo-grid-cols > .ceo-col:first-child { grid-column:1 / -1; } }
+    @media (max-width:720px) { .ceo-pair { grid-template-columns:minmax(0,1fr); } .ceo-grid-cols > .ceo-col:first-child { grid-column:auto; } }
     /* Phone (<768px): KPI tiles in a 2-up grid, tighter cards, team table as cards */
     @media (max-width:767px) {
       .ceo { padding:12px 10px 16px; border-radius:16px; }
-      .ceo-ship .ceo-rx { max-width:100%; }
       .ceo-ship-art { opacity:.35; }
       .ceo-top { align-items:center; margin-bottom:14px; flex-wrap:nowrap; }
       .ceo-top > div { min-width:0; }
@@ -729,8 +727,7 @@ window.Pages['company-overview'] = (() => {
         </div>
         <div class="ceo-grid ceo-grid-cols">
           <div class="ceo-col">${_stockCard(d.stock, d.finance.divisions)}</div>
-          <div class="ceo-col">${_leave(d.leave)}${_misChart()}</div>
-          <div class="ceo-col">${_meetings(d.meetings, d.today)}</div>
+          <div class="ceo-col ceo-span2"><div class="ceo-pair">${_leave(d.leave)}${_meetings(d.meetings, d.today)}</div>${_misChart()}</div>
         </div>
         <div class="ceo-updated">Updated ${new Date(d.generatedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</div>`;
     }
