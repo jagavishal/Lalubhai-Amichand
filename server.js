@@ -431,6 +431,9 @@ const SCHEMA = [
   `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS ext_provider VARCHAR(16) DEFAULT ''`,
   `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS ext_event_id VARCHAR(255) DEFAULT ''`,
   `ALTER TABLE scheduler_meetings ADD COLUMN IF NOT EXISTS ext_host VARCHAR(255) DEFAULT ''`,
+  // Management (Directors) never apply for leave in HR, so Admin/HOD put their
+  // days away straight on the Scheduler (23 Nov 2026).
+  `CREATE TABLE IF NOT EXISTS management_leaves (id VARCHAR(16) PRIMARY KEY, name VARCHAR(255) NOT NULL, from_date DATE NOT NULL, to_date DATE NOT NULL, half_day VARCHAR(8) DEFAULT 'full', note VARCHAR(500) DEFAULT '', created_by VARCHAR(16) DEFAULT NULL, created_by_name VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
 ];
 
 // ── HRMS ──────────────────────────────────────────────────────────────────────
@@ -6209,7 +6212,12 @@ app.get('/api/scheduler', requireAuth, async (req, res) => {
            FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
           WHERE l.status = 'Approved' AND l.from_date <= $1 AND l.to_date >= $2`,
         [to, from]).catch(() => []);
+      const mgRows = await q(
+        `SELECT id, name, from_date AS "fromDate", to_date AS "toDate", half_day AS "halfDay", note, created_by_name AS "createdByName"
+           FROM management_leaves WHERE from_date <= $1 AND to_date >= $2`,
+        [to, from]).catch(() => []);
       leaves = lvRows.map(l => ({ ...l, fromDate: toDateStr(l.fromDate), toDate: toDateStr(l.toDate) }))
+        .concat(mgRows.map(l => ({ ...l, mgmt: true, leaveType: 'Management', fromDate: toDateStr(l.fromDate), toDate: toDateStr(l.toDate) })))
         .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
       const people = await q(
         `SELECT name, dob FROM hr_employees WHERE status = 'Active' AND dob IS NOT NULL AND COALESCE(emp_type, '') <> 'Director'`).catch(() => []);
@@ -6226,6 +6234,38 @@ app.get('/api/scheduler', requireAuth, async (req, res) => {
 
     return res.json({ weekOffs: [...weekOffs], holidays, tasks, meetings, leaves, birthdays });
   } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
+// ── Management leave (Scheduler) ─────────────────────────────────────────────
+// Directors' days away, entered by Admin/HOD and shown to everyone on the
+// Scheduler as a leave. Not part of HR leave balances or payroll.
+app.post('/api/management-leaves', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await ensureSchema();
+    if (!USE_DB) return res.status(503).json({ error: 'Needs the database' });
+    const b = req.body || {};
+    const name = String(b.name || '').trim().slice(0, 255);
+    const from = normDate(b.fromDate);
+    const to = normDate(b.toDate || b.fromDate);
+    if (!name || !from || !to) return res.status(400).json({ error: 'Name and dates are required' });
+    if (to < from) return res.status(400).json({ error: 'To date is before From date' });
+    const half = ['first', 'second'].includes(b.halfDay) && from === to ? b.halfDay : 'full';
+    const id = 'ML' + Date.now().toString(36).toUpperCase();
+    await pool.query(
+      'INSERT INTO management_leaves (id,name,from_date,to_date,half_day,note,created_by,created_by_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+      [id, name, from, to, half, String(b.note || '').trim().slice(0, 500), req.session.user?.id || null, req.session.user?.name || '']);
+    return res.status(201).json({ success: true, id });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/management-leaves', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await ensureSchema();
+    const id = String(req.query.id || '');
+    if (!id) return res.status(400).json({ error: 'id required' });
+    await pool.query('DELETE FROM management_leaves WHERE id=$1', [id]);
+    return res.json({ success: true });
+  } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
 // Scheduling a meeting is not admin-gated — anyone can put one on their own

@@ -147,6 +147,7 @@ window.Pages.scheduler = (() => {
   }
 
   function _leaveLabel(l) {
+    if (l.mgmt) return `${l.name || 'Management'} [Mgmt leave${l.halfDay && l.halfDay !== 'full' ? ' ½' : ''}]`;
     return `${l.name || 'Leave'} [${l.leaveType || 'Leave'}${l.halfDay && l.halfDay !== 'full' ? ' ½' : ''}]`;
   }
 
@@ -344,8 +345,11 @@ window.Pages.scheduler = (() => {
       const l = item;
       title = `${l.name || 'Employee'} — on leave`;
       when = l.fromDate === l.toDate ? _fmtLongDate(l.fromDate) : `${_fmtLongDate(l.fromDate)} – ${_fmtLongDate(l.toDate)}`;
-      body = _row('flag', esc([l.leaveType, l.halfDay && l.halfDay !== 'full' ? l.halfDay + ' half' : ''].filter(Boolean).join(' · ')))
-        + _row('note', 'Approved leave — from HR → Leave Management.');
+      body = _row('flag', esc([l.mgmt ? 'Management leave' : l.leaveType, l.halfDay && l.halfDay !== 'full' ? l.halfDay + ' half' : ''].filter(Boolean).join(' · ')))
+        + (l.mgmt
+          ? _row('note', esc(l.note || '')) + _row('user', l.createdByName ? `Added by ${esc(l.createdByName)}` : '')
+          : _row('note', 'Approved leave — from HR → Leave Management.'));
+      if (l.mgmt && _isAdmin()) actions += `<button type="button" class="btn-secondary sch-act" data-act="rm-mleave" data-id="${esc(l.id)}" style="color:var(--color-danger-text);">Remove</button>`;
     } else if (kind === 'birthday') {
       title = `🎂 ${item.name}'s birthday`;
       body = _row('note', 'From the Employee Master.');
@@ -515,6 +519,10 @@ window.Pages.scheduler = (() => {
           <div class="sch-toolbar-right" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
             <div class="sch-legend" id="sch-legend">${KINDS.map(k =>
               `<button type="button" data-kind="${k}" class="${_hidden.has(k) ? 'off' : ''}" title="Show / hide ${KIND_LABEL[k]}"><i style="background:${KIND_COLOUR[k]};"></i>${KIND_LABEL[k]}</button>`).join('')}</div>
+            ${_isAdmin() ? `<button id="sch-mleave" class="btn-secondary" title="Put a Director's / management days away on everyone's calendar">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+              Management leave
+            </button>` : ''}
             <button id="sch-create" class="btn-primary">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
               Schedule
@@ -602,6 +610,7 @@ window.Pages.scheduler = (() => {
     document.getElementById('sch-prev')?.addEventListener('click', () => _step(-1));
     document.getElementById('sch-next')?.addEventListener('click', () => _step(1));
     document.getElementById('sch-create')?.addEventListener('click', () => _openMeetingModal(_sel));
+    document.getElementById('sch-mleave')?.addEventListener('click', () => _openMgmtLeaveModal(_sel));
 
     document.getElementById('sch-legend')?.addEventListener('click', (e) => {
       const b = e.target.closest('[data-kind]');
@@ -636,6 +645,7 @@ window.Pages.scheduler = (() => {
         if (act.dataset.act === 'new') return _openMeetingModal(_sel);
         if (act.dataset.act === 'cancel') return _deleteMeeting(act.dataset.id);
         if (act.dataset.act === 'decline') return _declineMeeting(act.dataset.id);
+        if (act.dataset.act === 'rm-mleave') return _deleteMgmtLeave(act.dataset.id);
         if (act.dataset.act === 'copy') {
           const m = _entry(act.dataset.ref).item;
           if (m) Utils.showToast(await _copy(_inviteText(m)) ? 'Invite copied — paste it in WhatsApp or mail' : 'Could not copy', 'success');
@@ -657,7 +667,7 @@ window.Pages.scheduler = (() => {
     document.addEventListener('keydown', (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
-      if (document.getElementById('sch-meeting-modal-overlay') || document.querySelector('.modal-overlay:not(.hidden)')) return;
+      if (document.getElementById('sch-meeting-modal-overlay') || document.getElementById('sch-ml-overlay') || document.querySelector('.modal-overlay:not(.hidden)')) return;
       const k = e.key.toLowerCase();
       if (k === 't') _go(new Date());
       else if (k === 'j' || k === 'n') _step(1);
@@ -915,6 +925,102 @@ window.Pages.scheduler = (() => {
         Utils.showToast(e.message || 'Failed to schedule meeting', 'error');
       }
     });
+  }
+
+  /* ── Management leave ─────────────────────────────────────────────────
+     Directors don't apply for leave in HR, so Admin/HOD enter their days away
+     here; everyone sees them on the calendar under Leaves. */
+  async function _openMgmtLeaveModal(dateStr) {
+    document.getElementById('sch-ml-overlay')?.remove();
+    const users = await _loadUsers();
+    const inputStyle = 'width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid var(--border-base);border-radius:8px;font-size:13px;color:var(--text-primary);background:var(--surface);outline:none;';
+    const labelStyle = 'display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-bottom:5px;';
+    const names = [...new Set((users || []).filter(u => u.active !== false).map(u => u.name).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const bodyHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div style="grid-column:1/-1;">
+          <label style="${labelStyle}">Name <span style="color:var(--color-danger)">*</span></label>
+          <input id="sch-ml-name" list="sch-ml-names" autocomplete="off" style="${inputStyle}" placeholder="Type or pick a name" />
+          <datalist id="sch-ml-names">${names.map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>
+        </div>
+        <div>
+          <label style="${labelStyle}">From <span style="color:var(--color-danger)">*</span></label>
+          <input id="sch-ml-from" type="date" value="${esc(dateStr)}" style="${inputStyle}" />
+        </div>
+        <div>
+          <label style="${labelStyle}">To <span style="color:var(--color-danger)">*</span></label>
+          <input id="sch-ml-to" type="date" value="${esc(dateStr)}" style="${inputStyle}" />
+        </div>
+        <div style="grid-column:1/-1;">
+          <label style="${labelStyle}">Day</label>
+          <select id="sch-ml-half" style="${inputStyle}">
+            <option value="full">Full day</option>
+            <option value="first">First half</option>
+            <option value="second">Second half</option>
+          </select>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Half day works for a single date only.</div>
+        </div>
+        <div style="grid-column:1/-1;">
+          <label style="${labelStyle}">Note</label>
+          <input id="sch-ml-note" style="${inputStyle}" placeholder="Optional — e.g. Travelling to Mumbai" />
+        </div>
+      </div>`;
+    const footerHTML = `
+      <button type="button" id="sch-ml-cancel" class="btn-secondary">Close</button>
+      <button type="button" id="sch-ml-save" class="btn-primary">Save</button>`;
+    document.body.insertAdjacentHTML('beforeend', window.UI.modal({
+      id: 'sch-ml-overlay',
+      title: 'Management Leave',
+      subtitle: "Shows on everyone's Scheduler under Leaves",
+      width: 440,
+      closeButtonId: 'sch-ml-close',
+      hiddenByDefault: false,
+      bodyHTML, footerHTML,
+    }));
+    const overlay = document.getElementById('sch-ml-overlay');
+    const close = () => overlay?.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.getElementById('sch-ml-close').addEventListener('click', close);
+    document.getElementById('sch-ml-cancel').addEventListener('click', close);
+    const fromEl = document.getElementById('sch-ml-from');
+    const toEl = document.getElementById('sch-ml-to');
+    fromEl.addEventListener('change', () => { if (!toEl.value || toEl.value < fromEl.value) toEl.value = fromEl.value; });
+    document.getElementById('sch-ml-name').focus();
+    document.getElementById('sch-ml-save').addEventListener('click', async () => {
+      const name = document.getElementById('sch-ml-name').value.trim();
+      const fromDate = fromEl.value, toDate = toEl.value || fromEl.value;
+      if (!name || !fromDate) { Utils.showToast('Name and From date are required', 'error'); return; }
+      if (toDate < fromDate) { Utils.showToast('To date is before From date', 'error'); return; }
+      const btn = document.getElementById('sch-ml-save');
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        await Utils.apiFetch('/api/management-leaves', {
+          method: 'POST',
+          body: JSON.stringify({ name, fromDate, toDate, halfDay: document.getElementById('sch-ml-half').value, note: document.getElementById('sch-ml-note').value.trim() }),
+        });
+        close();
+        Utils.showToast(`Leave added for ${name}`, 'success');
+        _anchor = _startOfDay(new Date(fromDate + 'T00:00:00'));
+        _sel = fromDate; _selEv = null;
+        if (_hidden.has('leave')) { _hidden.delete('leave'); _store.set('sch-hidden', [..._hidden].join(',')); }
+        await loadData();
+        renderPage();
+      } catch (e) {
+        btn.disabled = false; btn.textContent = 'Save';
+        Utils.showToast(e.message || 'Could not save', 'error');
+      }
+    });
+  }
+
+  async function _deleteMgmtLeave(id) {
+    if (!await Utils.showConfirm('Remove this management leave from the calendar?', { danger: true, title: 'Remove Leave', confirmText: 'Remove' })) return;
+    try {
+      await Utils.apiFetch('/api/management-leaves?id=' + encodeURIComponent(id), { method: 'DELETE' });
+      Utils.showToast('Leave removed', 'success');
+      _selEv = null;
+      await loadData();
+      renderPage();
+    } catch (e) { Utils.showToast(e.message || 'Failed', 'error'); }
   }
 
   async function _deleteMeeting(id) {
