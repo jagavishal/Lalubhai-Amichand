@@ -177,6 +177,30 @@ window.Pages.dashboard = (function () {
   /* Today's absentees, from the leave register. Its own fetch rather than a
      rider on /api/dashboard — the strip is decoration, and a slow or failing
      HR module must never hold up or break the task board. */
+  /* Lays out the strip block from whichever of its boxes are showing: the
+     shipment card on the left and trivia / on-leave stacked beside it when
+     both kinds are present, otherwise one column. Each painter only toggles
+     its own box, so this watches their style attribute instead of every
+     painter having to call it. */
+  function _layoutStrips() {
+    const wrap = document.getElementById('db-strips');
+    if (!wrap) return;
+    const shown = (id) => { const b = document.getElementById(id); return !!b && b.style.display !== 'none'; };
+    const side = ['db-trivia', 'db-onleave'].filter(shown).length;
+    const any = side || shown('db-shiptarget') || shown('db-announce');
+    wrap.style.display = any ? '' : 'none';
+    const two = shown('db-shiptarget') && side > 0;
+    wrap.classList.toggle('two', two);
+    wrap.style.setProperty('--side-rows', String(side || 1));
+  }
+  function _watchStrips() {
+    const wrap = document.getElementById('db-strips');
+    if (!wrap || typeof MutationObserver === 'undefined') return;
+    const mo = new MutationObserver(_layoutStrips);
+    Array.from(wrap.children).forEach((c) => mo.observe(c, { attributes: true, attributeFilter: ['style'] }));
+    _layoutStrips();
+  }
+
   async function _paintOnLeave() {
     const box = document.getElementById('db-onleave');
     if (!box) return;
@@ -521,6 +545,7 @@ window.Pages.dashboard = (function () {
 
     _renderShell(el, admin, hod);
     window.Festival?.mount(document.getElementById('db-wrap'));
+    _watchStrips();
     _paintAnnouncements();
     _paintShipTarget();
     _paintTrivia();
@@ -614,6 +639,16 @@ window.Pages.dashboard = (function () {
         .pill-deny  { background:var(--color-neutral-bg);color:var(--color-neutral-text); } .pill-deny:hover  { background:var(--border-base); }
         .pill-pending-wait { background:var(--color-warning-bg);color:var(--color-warning-text);display:inline-flex;align-items:center;padding:0 12px;min-height:32px;font-size:12px;font-weight:600;border-radius:9999px; }
         @media (max-width:1200px) and (min-width:768px) { #db-stat-cards { grid-template-columns:repeat(3,1fr) !important; } }
+        #db-strips { display:grid; gap:14px; margin-bottom:18px; grid-template-columns:minmax(0,1fr); align-items:stretch; }
+        #db-strips > div > .card { height:100%; box-sizing:border-box; margin:0; }
+        #db-strips > #db-announce { grid-column:1 / -1; }
+        #db-strips.two { grid-template-columns:minmax(0,1.7fr) minmax(0,1fr); }
+        #db-strips.two > #db-shiptarget { grid-column:1; grid-row:span var(--side-rows,1); }
+        #db-strips.two > #db-trivia, #db-strips.two > #db-onleave { grid-column:2; }
+        @media (max-width:1100px) {
+          #db-strips.two { grid-template-columns:minmax(0,1fr); }
+          #db-strips.two > #db-shiptarget, #db-strips.two > #db-trivia, #db-strips.two > #db-onleave { grid-column:auto; grid-row:auto; }
+        }
       </style>
 
       <div id="db-wrap">
@@ -698,10 +733,14 @@ window.Pages.dashboard = (function () {
         <!-- Stat cards -->
         <!-- Who is away today, and who covers for them. Filled by _paintOnLeave()
              after the shell renders; stays empty (and invisible) when nobody is out. -->
-        <div id="db-announce" style="display:none;margin-bottom:16px;"></div>
-        <div id="db-shiptarget" style="display:none;margin-bottom:16px;"></div>
-        <div id="db-trivia" style="display:none;margin-bottom:16px;"></div>
-        <div id="db-onleave" style="display:none;margin-bottom:16px;"></div>
+        <!-- One block instead of four stacked full-width strips: shipment
+             target on the left, trivia + on-leave beside it (_layoutStrips). -->
+        <div id="db-strips" style="display:none;">
+          <div id="db-announce" style="display:none;"></div>
+          <div id="db-shiptarget" style="display:none;"></div>
+          <div id="db-trivia" style="display:none;"></div>
+          <div id="db-onleave" style="display:none;"></div>
+        </div>
 
         <div id="db-stat-cards" style="display:grid;grid-template-columns:repeat(6,1fr);gap:1rem;margin-bottom:20px;">
           <div class="card db-stat-card" style="padding:18px 20px;">
@@ -788,7 +827,7 @@ window.Pages.dashboard = (function () {
               ).join('')}
             </div>
           </div>
-          <div class="db-act-scroll" style="overflow-x:auto;max-height:420px;overflow-y:auto;">
+          <div class="db-act-scroll" style="overflow-x:auto;max-height:min(72vh,680px);overflow-y:auto;">
             <table id="db-tasks-table" class="m-cards" style="width:100%;border-collapse:collapse;font-size:12.5px;"></table>
           </div>
         </div>
@@ -1056,7 +1095,7 @@ window.Pages.dashboard = (function () {
 
     if (filtered.length === 0) {
       table.innerHTML = `
-        <tbody><tr><td colspan="7" style="padding:3rem;text-align:center;">
+        <tbody><tr><td colspan="6" style="padding:3rem;text-align:center;">
           <div style="width:44px;height:44px;border-radius:14px;background:#ecfdf5;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
           </div>
@@ -1068,6 +1107,18 @@ window.Pages.dashboard = (function () {
 
     const thStyle = 'text-align:left;padding:10px 12px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;background:rgba(248,250,252,.97);position:sticky;top:0;';
     const tdStyle = 'padding:10px 12px;font-size:12.5px;color:#475569;border-top:1px solid #f1f5f9;';
+
+    // FMS/PI detail chips: only the fields that have a value, three at most —
+    // a row of "Due date: —" chips made every FMS line four lines tall.
+    const detailChips = (details) => {
+      const filled = (Array.isArray(details) ? details : []).filter(d => String(d.value ?? '').trim() && String(d.value).trim() !== '—');
+      if (!filled.length) return '';
+      const chip = (d) => `<span style="font-size:11px;background:var(--surface-alt);border:1px solid var(--border-base);color:var(--color-neutral-text);border-radius:var(--radius-sm);padding:1px 6px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;"><b>${esc(d.header)}:</b> ${esc(d.value)}</span>`;
+      const more = filled.length - 3;
+      return `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${filled.slice(0, 3).map(chip).join('')}`
+        + (more > 0 ? `<span title="${esc(filled.slice(3).map(d => d.header + ': ' + d.value).join(' · '))}" style="font-size:11px;color:var(--text-muted);padding:1px 4px;cursor:help;">+${more} more</span>` : '')
+        + `</div>`;
+    };
 
     const rows = sortDashTasks(filtered).map(t => {
       const dateStyle = t.overdue ? 'color:#dc2626;font-weight:700;' : 'color:#475569;';
@@ -1098,14 +1149,14 @@ window.Pages.dashboard = (function () {
       }
 
       return `<tr style="transition:background .1s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
-        <td class="db-c-type" data-label="" style="${tdStyle}">${typePillHTML(t.type)}</td>
+        <td class="db-c-type" data-label="" style="${tdStyle}">${typePillHTML(t.type)}${t.frequency ? `<div style="font-size:11px;color:#94a3b8;margin-top:4px;">${esc(t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1))}</div>` : ''}</td>
         <td class="m-card-title" style="${tdStyle}min-width:240px;max-width:380px;">
           <div style="display:flex;align-items:flex-start;gap:4px;">
             <span class="db-desc" title="${esc(t.description)}">${esc(t.description)}</span>
             ${urlLink}
           </div>
           ${t.type === 'Checklist' && t.department ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${esc(t.department)}</div>` : ''}
-          ${(t.type === 'FMS' || t.type === 'PI') && Array.isArray(t.details) && t.details.length ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">${t.details.map(d => `<span style="font-size:11px;background:var(--surface-alt);border:1px solid var(--border-base);color:var(--color-neutral-text);border-radius:var(--radius-sm);padding:1px 6px;white-space:nowrap;"><b>${esc(d.header)}:</b> ${esc(d.value) || '—'}</span>`).join('')}</div>` : ''}
+          ${(t.type === 'FMS' || t.type === 'PI') ? detailChips(t.details) : ''}
           ${transferred}
         </td>
         <td data-label="Doer" style="${tdStyle}">
@@ -1114,7 +1165,6 @@ window.Pages.dashboard = (function () {
             <span style="color:#334155;">${esc(t.doer) || '—'}</span>
           </div>
         </td>
-        <td data-label="Frequency" style="${tdStyle}">${t.frequency ? t.frequency.charAt(0).toUpperCase() + t.frequency.slice(1) : '—'}</td>
         <td data-label="Priority" style="${tdStyle}">${priorityHTML(t.type, t.priority)}</td>
         <td data-label="Date" style="${tdStyle}white-space:nowrap;font-size:12px;${dateStyle}">${fmt(t.date)}</td>
         <td class="m-card-actions" style="${tdStyle}">
@@ -1134,7 +1184,6 @@ window.Pages.dashboard = (function () {
           ${sortTh('type', 'Type')}
           ${sortTh('description', 'Description')}
           ${sortTh('doer', 'Doer')}
-          ${sortTh('frequency', 'Frequency')}
           ${sortTh('priority', 'Priority')}
           ${sortTh('date', 'Date')}
           <th style="${thStyle}">Action</th>
