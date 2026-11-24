@@ -5278,6 +5278,52 @@ async function shiftNonWorkingTasksOnce() {
   } catch (e) { console.error('[shift-nonworking]', e.message); }
 }
 
+// One-off: "Management Leave dalne ka access do Archana ko" (24 Nov 2026).
+// Grants the Scheduler's 'management_leave' feature on her own login — the
+// same thing Users -> Access -> Scheduler -> Management Leave would tick by
+// hand — rather than editing her role, which would hand her every other
+// Admin/HOD-only thing along with it.
+//
+// Merged into whatever permissions row she already has, never replaced: a
+// record with no saved pages/grants/other-feature list keeps meaning
+// "unrestricted there" exactly as before (see userCanUseFeature's own
+// !perms.features check) — this only ever ADDS the one entry. Matched by
+// first name the same guarded way hrms.js's org-update matches people:
+// exactly one active login starting "Archana", or logged and left alone.
+const ARCHANA_MGMT_LEAVE_FLAG = 'archana_scheduler_mgmt_leave_grant_v1';
+async function grantArchanaManagementLeaveOnce() {
+  if (!USE_DB) return;
+  try {
+    await ensureSchema();
+    const done = await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [ARCHANA_MGMT_LEAVE_FLAG]);
+    if (done.length) return;
+
+    const rows = await q(`SELECT id, name, permissions FROM users WHERE active = 1`);
+    const hits = rows.filter((r) => /^archana\b/i.test(String(r.name || '').trim()));
+    let log = '';
+    if (hits.length !== 1) {
+      log = `found ${hits.length} active login(s) starting "Archana" — expected exactly one, left untouched`;
+    } else {
+      const u = hits[0];
+      let perms = null;
+      try { perms = u.permissions ? JSON.parse(u.permissions) : null; } catch {}
+      perms = perms || {};
+      perms.features = perms.features || {};
+      const already = Array.isArray(perms.features.scheduler) && perms.features.scheduler.includes('management_leave');
+      if (!already) {
+        perms.features.scheduler = [...new Set([...(perms.features.scheduler || []), 'management_leave'])];
+        await pool.query('UPDATE users SET permissions = $1 WHERE id = $2', [JSON.stringify(perms), u.id]);
+      }
+      log = `${already ? 'already had' : 'granted'} Management Leave to ${u.name} (${u.id})`;
+    }
+    await pool.query(
+      `INSERT INTO app_config ("key","value") VALUES ($1,$2) ON CONFLICT ("key") DO UPDATE SET "value"=$3`,
+      [ARCHANA_MGMT_LEAVE_FLAG, JSON.stringify({ at: new Date().toISOString(), log }), JSON.stringify({ at: new Date().toISOString(), log })],
+    );
+    console.log('[archana-mgmt-leave]', log);
+  } catch (e) { console.error('[archana-mgmt-leave]', e.message); }
+}
+
 /* Rolling series. A checklist series is generated one year ahead when it is
    created, and nothing used to add to it afterwards — so a yearly task had a
    single occurrence, and once that was done All Tasks showed "All done" with
@@ -16689,5 +16735,6 @@ app.listen(process.env.PORT || 3000, async () => {
   await seedJsonFallback();
   shiftLeaveDayTasks().catch((e) => console.error('[leave-shift]', e.message));
   await shiftNonWorkingTasksOnce();
+  grantArchanaManagementLeaveOnce().catch((e) => console.error('[archana-mgmt-leave]', e.message));
   extendChecklistSeries().catch((e) => console.error('[checklist-extend]', e.message));
 });
