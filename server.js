@@ -12299,7 +12299,9 @@ app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
       // are the same list the server falls back to rather than a second copy
       // typed into the page script.
       orderDefaults: OS_FMT.DEFAULTS,
-      orderMaxItems: OS_FMT.LAYOUT.itemsLastRow - OS_FMT.LAYOUT.itemsFirstRow + 1,
+      // The template's item block grows to fit (see _withItemRows); the only
+      // real ceiling is what one log row's Form JSON can hold.
+      orderMaxItems: TEMPLATE_MAX_ITEM_LINES,
       // Same again for the Packing List tab's form — its standing shipping
       // marks, and how many lines one packing list can carry across all the
       // orders loaded onto it.
@@ -13461,8 +13463,9 @@ function _orderCleanItems(b) {
       imageUrl: String(it.imageUrl || '').trim(),
     }));
   if (!items.length) return { items, error: 'Add at least one item' };
-  const maxItems = OS_FMT.LAYOUT.itemsLastRow - OS_FMT.LAYOUT.itemsFirstRow + 1;
-  if (items.length > maxItems) return { items, error: `The Order Sheet template holds ${maxItems} item rows — this order has ${items.length}` };
+  // The template's item block grows to fit (see _withItemRows); the only
+  // ceiling left is what one log row's Form JSON can store.
+  if (items.length > TEMPLATE_MAX_ITEM_LINES) return { items, error: `An Order Sheet can hold up to ${TEMPLATE_MAX_ITEM_LINES} item lines and ${items.length} were sent. Split it across more than one order.` };
   return { items, error: null };
 }
 
@@ -13505,14 +13508,27 @@ function _orderFormFromBody(b, pi, user, cleanItems) {
 // Fills the "Order sheet" tab as a FULL rewrite of the current order — same
 // rule as _fillPiTemplate: every mapped cell is written even when blank, or a
 // leftover value from the previous order prints on this one.
+//
+// The template's 30-row item block grows to fit (see _withItemRows) — an
+// order mirrors its PI's own lines, and a PI can run to 100, so a fixed
+// 30-row cap was refusing a perfectly normal order ("Cannot proceed with
+// creating an order sheet", 73 lines). The PDF export happens INSIDE the
+// same _withItemRows call, before the extra rows are removed again, the same
+// way PR/PO/GRN export while their own stretched block is still there —
+// exporting after they are deleted would print only the first 30 lines.
+// Returns the Drive PDF link (or null if the export itself failed; a Drive
+// hiccup must never block the order from being created).
 async function _fillOrderTemplate(sheets, form, templateSheetId) {
   const tab = ORDER_SHEET_TAB;
   const { LAYOUT: L, CELLS: C, ITEMS: IT } = OS_FMT;
   const items = form.items || [];
 
+  return _withItemRows(sheets, PI_CREATION_SHEET_ID, templateSheetId, { firstRow: L.itemsFirstRow, lastRow: L.itemsLastRow }, items.length, async (at, extra) => {
+  const lastItemRow = L.itemsLastRow + extra;
+
   await sheets.spreadsheets.values.batchClear({
     spreadsheetId: PI_CREATION_SHEET_ID,
-    requestBody: { ranges: IT.clearRanges.map(([a, b]) => `'${tab}'!${a}${L.itemsFirstRow}:${b}${L.itemsLastRow}`) },
+    requestBody: { ranges: IT.clearRanges.map(([a, b]) => `'${tab}'!${a}${L.itemsFirstRow}:${b}${lastItemRow}`) },
   });
 
   // Photo merges left by the PREVIOUS order have to go before anything is
@@ -13527,7 +13543,7 @@ async function _fillOrderTemplate(sheets, form, templateSheetId) {
           unmergeCells: {
             range: {
               sheetId: templateSheetId,
-              startRowIndex: L.itemsFirstRow - 1, endRowIndex: L.itemsLastRow,
+              startRowIndex: L.itemsFirstRow - 1, endRowIndex: lastItemRow,
               startColumnIndex: photoColIdx, endColumnIndex: photoColIdx + 1,
             },
           },
@@ -13536,7 +13552,7 @@ async function _fillOrderTemplate(sheets, form, templateSheetId) {
     });
   }
 
-  const capacity = L.itemsLastRow - L.itemsFirstRow + 1;
+  const capacity = lastItemRow - L.itemsFirstRow + 1;
   const photoGroups = _piPhotoGroups(items.slice(0, capacity));
   const photoRows = new Set(canGroupPhotos ? photoGroups.map(g => g.start) : items.map((_, i) => i));
 
@@ -13565,13 +13581,15 @@ async function _fillOrderTemplate(sheets, form, templateSheetId) {
   put(C.shipmentNote, form.shipmentNote);
 
   // Whatever the stored form says, verbatim — _orderFormFromBody has already
-  // settled what an order with no notes of its own falls back to.
+  // settled what an order with no notes of its own falls back to. These rows
+  // sit BELOW the item block, so they move down with it — addressed through
+  // `at` the same way a PR/PO/GRN's totals and signature block are.
   const notes = form.notes || [];
-  for (let r = L.notesFirstRow; r <= L.notesLastRow; r++) put(`A${r}`, notes[r - L.notesFirstRow] || '');
+  for (let r = L.notesFirstRow; r <= L.notesLastRow; r++) put(at(`A${r}`), notes[r - L.notesFirstRow] || '');
 
   items.forEach((it, i) => {
     const row = L.itemsFirstRow + i;
-    if (row > L.itemsLastRow) return;   // beyond capacity — see the cap enforced in POST
+    if (row > lastItemRow) return;   // cannot happen: the block was grown to fit
     put(`${IT.srNoCol}${row}`, i + 1);
     Object.entries(IT.fields).forEach(([field, col]) => put(`${col}${row}`, it[field]));
     put(`${IT.remarksCol}${row}`, it.remarks);
@@ -13580,11 +13598,12 @@ async function _fillOrderTemplate(sheets, form, templateSheetId) {
 
   await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data } });
 
-  // Collapse the unused tail of the 30-row table — hidden rows are left out of
-  // the PDF export — and re-show whatever the previous order had hidden.
+  // Collapse the unused tail of the (possibly stretched) table — hidden rows
+  // are left out of the PDF export — and re-show whatever the previous order
+  // had hidden.
   if (templateSheetId != null) {
     const firstIdx = L.itemsFirstRow - 1;
-    const endIdx = L.itemsLastRow;
+    const endIdx = lastItemRow;
     const usedEnd = Math.min(firstIdx + Math.max(items.length, 1), endIdx);
     const rowRange = (startIndex, endIndex, hidden) => ({
       updateDimensionProperties: {
@@ -13636,24 +13655,24 @@ async function _fillOrderTemplate(sheets, form, templateSheetId) {
     });
     await sheets.spreadsheets.batchUpdate({ spreadsheetId: PI_CREATION_SHEET_ID, requestBody: { requests } });
   }
-}
 
-// Exports the filled tab and files the PDF next to the PIs. Shorter than the
-// PI's equivalent because there is no total to read back and no amount in
-// words to stamp — the pause is only to let the =IMAGE() photos render before
-// the page is captured. Never lets a Drive/export hiccup block the data write.
-async function _finishOrderSubmission(orderNo, templateSheetId) {
+  // Export this fill as a PDF and save it to Drive, while the stretched block
+  // still holds every line — _withItemRows deletes the extra rows the moment
+  // this callback returns. The pause is only to let the =IMAGE() photos
+  // render before the page is captured. A Drive/export hiccup must never
+  // block the order itself, already filled and logged by this point.
   await _sleep(2000);
   try {
     const pdfBuffer = await _exportSheetTabPdf(PI_CREATION_SHEET_ID, templateSheetId, {
-      c1: 0, c2: OS_FMT.LAYOUT.colCount, r1: 0, r2: OS_FMT.LAYOUT.lastRow, portrait: true, scale: 4,
+      c1: 0, c2: L.colCount, r1: 0, r2: L.lastRow + extra, portrait: true, scale: 4,
     });
     // "VTV/ORD/001/26-27" has slashes in it — a Drive filename must not.
-    return await safeUploadPdfToDrive(pdfBuffer, `${orderNo.replace(/\//g, '-')} - Order Sheet.pdf`, PI_PDF_DRIVE_FOLDER_ID);
+    return await safeUploadPdfToDrive(pdfBuffer, `${form.orderNo.replace(/\//g, '-')} - Order Sheet.pdf`, PI_PDF_DRIVE_FOLDER_ID);
   } catch (e) {
     console.error('[order-sheet] PDF export failed:', e.message);
     return null;
   }
+  });
 }
 
 // Reads one PI's stored form out of the PI log. The order sheet is built from
@@ -13786,8 +13805,7 @@ app.post('/api/order-sheet', requireAuth, sheetSerialised('order', async (req, r
 
     const form = _orderFormFromBody(b, piForm, req.session.user, cleanItems);
 
-    await _fillOrderTemplate(sheets, { ...form, orderNo }, templateSheetId);
-    const pdfLink = await _finishOrderSubmission(orderNo, templateSheetId);
+    const pdfLink = await _fillOrderTemplate(sheets, { ...form, orderNo }, templateSheetId);
 
     const totalQty = cleanItems.reduce((sum, it) => sum + (parseFloat(it.qty) || 0), 0);
     await ensureLogTab(PI_CREATION_SHEET_ID, ORDER_LOG_TAB, OS_FMT.ORDER_LOG_HEADER);
