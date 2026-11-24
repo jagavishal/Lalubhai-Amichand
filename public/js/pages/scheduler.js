@@ -178,46 +178,145 @@ window.Pages.scheduler = (() => {
   }
 
   // Meetings first (they are what the day is planned around), then the rest.
+  // Leave is NOT a chip here — multi-day leave now draws as one continuous
+  // bar across the days it spans (see _weekBarsHTML), the way the office's
+  // Google Calendar "Employee Leaves" shows it, rather than repeating the
+  // same name in every day cell it covers.
   function _dayChips(dateStr, info) {
     const out = [];
     info.meetings.forEach((m, i) => out.push(_chipHTML('meeting', dateStr, i, m.title, { time: m.startTime ? _fmtTime(m.startTime) : '' })));
     if (info.holiday) out.push(_chipHTML('holiday', dateStr, 0, info.holiday.name));
     info.birthdays.forEach((b, i) => out.push(_chipHTML('birthday', dateStr, i, '🎂 ' + b.name)));
-    info.leaves.forEach((l, i) => out.push(_chipHTML('leave', dateStr, i, _leaveLabel(l))));
     info.tasks.forEach((t, i) => out.push(_chipHTML('task', dateStr, i, t.description, { done: t.status === 'done', muted: t.status === 'done' || t.status === 'leave' })));
     return out;
   }
 
-  /* ── Month grid ───────────────────────────────────────────────────── */
+  /* ── Multi-day leave bars ─────────────────────────────────────────────
+     One continuous bar per leave, spanning every day of it that falls in
+     this week's row — cut flush (no rounded end) on whichever side runs
+     past the row, same as a real calendar's all-day strip. Overlapping
+     leaves stack into their own lane within the row; lanes are worked out
+     fresh per week rather than held consistent across weeks, which keeps
+     this simple and is fine for how short a leave normally runs. */
+  function _leaveSpansForWeek(weekDays) {
+    if (_hidden.has('leave')) return [];
+    const rowStart = _dateStr(weekDays[0]);
+    const rowEnd = _dateStr(weekDays[6]);
+    const spans = (_data.leaves || [])
+      .filter((l) => l.fromDate <= rowEnd && l.toDate >= rowStart)
+      .map((l) => {
+        const contStart = l.fromDate < rowStart;
+        const contEnd = l.toDate > rowEnd;
+        const col0 = contStart ? 0 : weekDays.findIndex((d) => _dateStr(d) === l.fromDate);
+        const col1 = contEnd ? 6 : weekDays.findIndex((d) => _dateStr(d) === l.toDate);
+        return { entry: l, col0: Math.max(col0, 0), col1: Math.max(col1, 0), contStart, contEnd };
+      });
+    // Widest (longest-running) bars claim a lane first, so a short leave
+    // sharing its week with a long one tucks in beside it rather than the
+    // reverse — reads closer to how the reference calendar lays them out.
+    spans.sort((a, b) => a.col0 - b.col0 || (b.col1 - b.col0) - (a.col1 - a.col0));
+    const laneEnd = [];
+    for (const s of spans) {
+      let lane = laneEnd.findIndex((end) => end < s.col0);
+      if (lane < 0) { lane = laneEnd.length; laneEnd.push(-1); }
+      laneEnd[lane] = s.col1;
+      s.lane = lane;
+    }
+    return spans;
+  }
+
+  const SPAN_H = 18, SPAN_GAP = 3, SPAN_PAD = 3;
+
+  function _weekBarsHTML(weekDays) {
+    const spans = _leaveSpansForWeek(weekDays);
+    if (!spans.length) return '';
+    const lanes = Math.max(...spans.map((s) => s.lane)) + 1;
+    const bars = spans.map((s) => {
+      // The leave's ref is resolved through the day it actually starts in
+      // this row (or the row's first day, for one running in from an
+      // earlier week) — _byDate holds the very same object on every date
+      // it covers, so finding it there keeps this bar wired into the exact
+      // same detail popover / Remove action a day-panel leave chip already
+      // has, with no second code path to keep in sync.
+      const ds = _dateStr(weekDays[s.col0]);
+      const dayLeaves = (_byDate.get(ds) || {}).leaves || [];
+      const idx = dayLeaves.indexOf(s.entry);
+      const ref = `leave:${ds}:${idx}`;
+      const on = _selEv === ref ? ' sch-on' : '';
+      const leftPx = s.contStart ? 0 : 2, rightPx = s.contEnd ? 0 : 2;
+      const leftPct = (s.col0 / 7) * 100, spanPct = ((s.col1 - s.col0 + 1) / 7) * 100;
+      return `<button type="button" class="sch-span${on}${s.contStart ? ' sch-span-cs' : ''}${s.contEnd ? ' sch-span-ce' : ''}"
+          data-ev="${esc(ref)}" title="${esc(_leaveLabel(s.entry))}"
+          style="left:calc(${leftPct}% + ${leftPx}px);width:calc(${spanPct}% - ${leftPx + rightPx}px);top:${SPAN_PAD + s.lane * (SPAN_H + SPAN_GAP)}px;height:${SPAN_H}px;">${esc(_leaveLabel(s.entry))}</button>`;
+    }).join('');
+    return `<div class="sch-wbars" style="height:${lanes * (SPAN_H + SPAN_GAP) + SPAN_PAD}px;">${bars}</div>`;
+  }
+
+  /* ── Month grid ───────────────────────────────────────────────────────
+     Each week is three stacked pieces, not one 42-cell grid: a thin row of
+     day numbers, a leave-bars strip that only takes space when the week
+     actually has one, then a row of each day's own box for its other
+     chips. Normal document flow handles the variable bar-strip height on
+     its own — no row needs to know ahead of time how tall its neighbours
+     are. Both the number piece and the box piece carry the day's state
+     classes and `data-date`, so the whole column highlights together and
+     either half answers a click the same as the old single-piece cell. */
   function _monthHTML() {
     const days = _gridDays(_anchor);
     const today = _todayStr();
     const header = DOW.map(d => `<div class="sch-dow">${d}</div>`).join('');
-    const cells = days.map(d => {
-      const ds = _dateStr(d);
-      const info = _infoFor(ds);
-      const raw = _byDate.get(ds);
-      const off = !raw?.holiday && _isWeekOff(d);
-      const chips = _dayChips(ds, info);
-      const shown = chips.slice(0, 3);
-      const more = chips.length - shown.length;
-      const moreTasks = info.tasks.length && shown.length < chips.length
-        ? chips.slice(3).filter(c => c.includes('data-ev="task:')).length : 0;
-      const moreLabel = moreTasks === more ? `+ ${more} task${more > 1 ? 's' : ''}` : `+ ${more} more`;
-      return `
-        <div class="sch-mcell${d.getMonth() !== _anchor.getMonth() ? ' sch-out' : ''}${off ? ' sch-off' : ''}${ds === _sel ? ' sch-sel' : ''}" data-date="${ds}">
-          <div class="sch-mhead">
-            <span class="sch-daynum${ds === today ? ' sch-today' : ''}">${d.getDate() === 1 ? MON[d.getMonth()] + ' ' : ''}${d.getDate()}</span>
-            ${off ? '<span class="sch-offtag">Off</span>' : raw?.holiday && !_hidden.has('holiday') ? '<span class="sch-offtag">Holiday</span>' : ''}
-          </div>
-          <div class="sch-mitems">${shown.join('')}${more > 0 ? `<span class="sch-more">${moreLabel}</span>` : ''}</div>
-          <div class="sch-mdots">${chips.length ? chips.slice(0, 4).map(c => `<i class="${/data-ev="(\w+)/.exec(c)[1]}"></i>`).join('') : ''}</div>
+
+    const weeks = [];
+    for (let w = 0; w < days.length; w += 7) weeks.push(days.slice(w, w + 7));
+
+    const html = weeks.map((weekDays) => {
+      const nums = weekDays.map((d) => {
+        const ds = _dateStr(d);
+        const raw = _byDate.get(ds);
+        const off = !raw?.holiday && _isWeekOff(d);
+        const state = `${d.getMonth() !== _anchor.getMonth() ? ' sch-out' : ''}${off ? ' sch-off' : ''}${ds === _sel ? ' sch-sel' : ''}`;
+        return `<div class="sch-wnum-cell${state}" data-date="${ds}">
+            <div class="sch-mhead">
+              <span class="sch-daynum${ds === today ? ' sch-today' : ''}">${d.getDate() === 1 ? MON[d.getMonth()] + ' ' : ''}${d.getDate()}</span>
+              ${off ? '<span class="sch-offtag">Off</span>' : raw?.holiday && !_hidden.has('holiday') ? '<span class="sch-offtag">Holiday</span>' : ''}
+            </div>
+          </div>`;
+      }).join('');
+
+      const bars = _weekBarsHTML(weekDays);
+
+      const boxes = weekDays.map((d) => {
+        const ds = _dateStr(d);
+        const info = _infoFor(ds);
+        const raw = _byDate.get(ds);
+        const off = !raw?.holiday && _isWeekOff(d);
+        const state = `${d.getMonth() !== _anchor.getMonth() ? ' sch-out' : ''}${off ? ' sch-off' : ''}${ds === _sel ? ' sch-sel' : ''}`;
+        const chips = _dayChips(ds, info);
+        const shown = chips.slice(0, 3);
+        const more = chips.length - shown.length;
+        const moreTasks = info.tasks.length && shown.length < chips.length
+          ? chips.slice(3).filter(c => c.includes('data-ev="task:')).length : 0;
+        const moreLabel = moreTasks === more ? `+ ${more} task${more > 1 ? 's' : ''}` : `+ ${more} more`;
+        // A leave covering the day still earns it a dot on narrow screens,
+        // even though it is no longer one of the chips above.
+        const dotKinds = chips.map(c => /data-ev="(\w+)/.exec(c)[1]).concat(info.leaves.length ? ['leave'] : []);
+        return `<div class="sch-wbody-cell${state}" data-date="${ds}">
+            <div class="sch-mitems">${shown.join('')}${more > 0 ? `<span class="sch-more">${moreLabel}</span>` : ''}</div>
+            <div class="sch-mdots">${dotKinds.slice(0, 4).map(k => `<i class="${k}"></i>`).join('')}</div>
+          </div>`;
+      }).join('');
+
+      return `<div class="sch-mweek">
+          <div class="sch-wnums">${nums}</div>
+          ${bars}
+          <div class="sch-wbody">${boxes}</div>
         </div>`;
     }).join('');
+
     return `
       <div class="sch-month">
         <div class="sch-mgrid-head">${header}</div>
-        <div class="sch-mgrid">${cells}</div>
+        <div class="sch-mgrid">${html}</div>
       </div>`;
   }
 
@@ -442,20 +541,44 @@ window.Pages.scheduler = (() => {
     .sch-more { font-size:11px; font-weight:600; color:var(--text-muted); padding:0 4px; }
     .sch-offtag { font-size:10.5px; font-weight:700; color:var(--color-danger-text); }
 
-    .sch-mgrid-head, .sch-mgrid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); }
+    .sch-mgrid-head { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); }
     .sch-dow { font-size:10.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--text-muted); text-align:center; padding:9px 0 7px; border-bottom:1px solid var(--border-light); background:var(--surface-alt); }
-    .sch-mcell { min-height:118px; min-width:0; padding:5px 6px 6px; border-right:1px solid var(--border-light); border-bottom:1px solid var(--border-light);
+
+    /* One week = three stacked pieces (day numbers / leave bars / the rest
+       of each day), not one 42-cell grid — see _monthHTML's own comment. */
+    .sch-mweek { position:relative; }
+    .sch-wnums, .sch-wbody { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); }
+    .sch-wnum-cell { min-width:0; padding:5px 6px 3px; cursor:pointer; box-sizing:border-box; border-right:1px solid var(--border-light); }
+    .sch-wnum-cell:nth-child(7n) { border-right:none; }
+    .sch-wnum-cell:hover { background:var(--surface-alt); }
+    .sch-wnum-cell.sch-off { background:color-mix(in srgb, var(--surface-alt) 55%, transparent); }
+    .sch-wnum-cell.sch-sel { background:var(--color-primary-light); }
+    .sch-wnum-cell.sch-out .sch-daynum { opacity:.45; }
+    .sch-wbody-cell { min-height:94px; min-width:0; padding:2px 6px 6px; border-right:1px solid var(--border-light); border-bottom:1px solid var(--border-light);
       display:flex; flex-direction:column; gap:3px; cursor:pointer; box-sizing:border-box; overflow:hidden; }
-    .sch-mcell:nth-child(7n) { border-right:none; }
-    .sch-mcell:hover { background:var(--surface-alt); }
-    .sch-mcell.sch-off { background:color-mix(in srgb, var(--surface-alt) 55%, transparent); }
-    .sch-mcell.sch-sel { background:var(--color-primary-light); box-shadow:inset 0 0 0 2px var(--color-primary); }
-    .sch-mcell.sch-out .sch-daynum, .sch-mcell.sch-out .sch-mitems { opacity:.45; }
+    .sch-wbody-cell:nth-child(7n) { border-right:none; }
+    .sch-wbody-cell:hover { background:var(--surface-alt); }
+    .sch-wbody-cell.sch-off { background:color-mix(in srgb, var(--surface-alt) 55%, transparent); }
+    .sch-wbody-cell.sch-sel { background:var(--color-primary-light); box-shadow:inset 0 0 0 2px var(--color-primary); }
+    .sch-wbody-cell.sch-out .sch-mitems { opacity:.45; }
     .sch-mhead { display:flex; align-items:center; justify-content:space-between; gap:4px; }
     .sch-daynum { font-size:12px; font-weight:700; color:var(--text-primary); min-width:22px; height:22px; line-height:22px; text-align:center; padding:0 5px; border-radius:11px; }
     .sch-daynum.sch-today { background:var(--color-primary); color:var(--color-primary-text); }
     .sch-mitems { display:flex; flex-direction:column; gap:2px; min-width:0; }
     .sch-mdots { display:none; }
+
+    /* The leave strip itself: full week width, only as tall as the busiest
+       lane that week needs. Bars are positioned by column fraction of this
+       same width, so they line up with the day boxes above and below
+       without the three pieces needing to agree on anything but width. */
+    .sch-wbars { position:relative; }
+    .sch-span { position:absolute; box-sizing:border-box; border:none; border-radius:4px; padding:1px 7px; font:inherit; font-size:11px; font-weight:600;
+      line-height:${SPAN_H - 2}px; text-align:left; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      background:var(--color-success-bg); color:var(--color-success-text); }
+    .sch-span:hover { filter:brightness(.96); }
+    .sch-span.sch-on { outline:2px solid var(--color-primary); outline-offset:-1px; }
+    .sch-span.sch-span-cs { border-top-left-radius:0; border-bottom-left-radius:0; }
+    .sch-span.sch-span-ce { border-top-right-radius:0; border-bottom-right-radius:0; }
 
     .sch-side-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:11px 14px; border-bottom:1px solid var(--border-light); }
     .sch-side-head b { font-size:15px; color:var(--text-primary); }
@@ -511,7 +634,8 @@ window.Pages.scheduler = (() => {
       .sch-brand { display:none; }
       #sch-title-label { font-size:15px; flex:1; }
       #sch-create { min-height:38px; }
-      .sch-mcell { min-height:58px; padding:3px 2px; }
+      .sch-wnum-cell { padding:3px 2px 1px; }
+      .sch-wbody-cell { min-height:36px; padding:3px 2px; }
       .sch-mitems { display:none; }
       .sch-mdots { display:flex; flex-wrap:wrap; gap:3px; padding-left:4px; }
       .sch-mdots i { width:6px; height:6px; border-radius:50%; }
@@ -648,17 +772,19 @@ window.Pages.scheduler = (() => {
       _renderBody({ keepScroll: true });
     });
 
-    // Month grid: a chip picks its day and shows it in the panel; a click on
-    // the cell picks the day; a double click schedules on it.
+    // Month grid: a chip (or a leave bar — same [data-ev]) picks its day and
+    // shows it in the panel; a click on the day-number piece or its box
+    // (either half of the day's column, see _monthHTML) picks the day; a
+    // double click schedules on it.
     const main = document.getElementById('sch-main');
     main?.addEventListener('click', (e) => {
       const ev = e.target.closest('[data-ev]');
       if (ev) { _pick(ev.dataset.ev.split(':')[1], ev.dataset.ev); return; }
-      const cell = e.target.closest('.sch-mcell');
+      const cell = e.target.closest('[data-date]');
       if (cell) _pick(cell.dataset.date);
     });
     main?.addEventListener('dblclick', (e) => {
-      const cell = e.target.closest('.sch-mcell');
+      const cell = e.target.closest('[data-date]');
       if (cell && !e.target.closest('[data-ev]')) _openMeetingModal(cell.dataset.date);
     });
 
