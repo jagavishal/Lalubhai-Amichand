@@ -6237,9 +6237,11 @@ app.get('/api/scheduler', requireAuth, async (req, res) => {
 });
 
 // ── Management leave (Scheduler) ─────────────────────────────────────────────
-// Directors' days away, entered by Admin/HOD and shown to everyone on the
-// Scheduler as a leave. Not part of HR leave balances or payroll.
-app.post('/api/management-leaves', requireAuth, requireAdmin, async (req, res) => {
+// Directors' days away, entered by Admin/HOD — or anyone Users → Access has
+// handed the 'management_leave' feature on the Scheduler page, e.g. Archana,
+// who keeps the office calendar — and shown to everyone on the Scheduler as a
+// leave. Not part of HR leave balances or payroll.
+app.post('/api/management-leaves', requireAuth, requireFeature('scheduler', 'management_leave'), async (req, res) => {
   try {
     await ensureSchema();
     if (!USE_DB) return res.status(503).json({ error: 'Needs the database' });
@@ -6258,7 +6260,7 @@ app.post('/api/management-leaves', requireAuth, requireAdmin, async (req, res) =
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
 
-app.delete('/api/management-leaves', requireAuth, requireAdmin, async (req, res) => {
+app.delete('/api/management-leaves', requireAuth, requireFeature('scheduler', 'management_leave'), async (req, res) => {
   try {
     await ensureSchema();
     const id = String(req.query.id || '');

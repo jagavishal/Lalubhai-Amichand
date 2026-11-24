@@ -72,7 +72,33 @@ window.Pages.scheduler = (() => {
     const arr = Array.isArray(r) ? r : String(r).split(',');
     return arr.some(x => x.trim() === 'Admin' || x.trim() === 'HOD');
   }
+  // Same hasFeature() shape as client-master.js / consignee-master.js: Admin/
+  // HOD always pass; anyone else needs the page+feature grant from Users →
+  // Access. Used for Management Leave, which Archana (who keeps the office
+  // calendar) holds without being Admin/HOD.
+  function _hasFeature(feat) {
+    if (_isAdmin()) return true;
+    const perms = window.currentUser?.permissions;
+    if (!perms || !perms.features) return true;
+    const pageFeats = perms.features['scheduler'];
+    if (!pageFeats) return false;
+    return pageFeats.includes(feat);
+  }
   const _canManage = (m) => { const me = window.currentUser; return !!me && (_isAdmin() || m.createdBy === me.id); };
+
+  // Archana keeps the office calendar, so her Scheduler opens on just Leaves
+  // rather than everything at once. A one-time default: it only takes effect
+  // before she has ever touched the Show/hide row herself (same localStorage
+  // key everyone's own toggle choice is remembered under), and the moment it
+  // applies it is saved as her own preference — a later toggle of hers is
+  // never overridden back to this on a later visit.
+  function _applyPersonalDefaults() {
+    if (_store.get('sch-hidden') !== null) return;
+    const me = String(window.currentUser?.name || '').trim().toUpperCase();
+    if (me !== 'ARCHANA SACHIN YERLA') return;
+    _hidden = new Set(KINDS.filter(k => k !== 'leave'));
+    _store.set('sch-hidden', [..._hidden].join(','));
+  }
   const _isAttendee = (m) => {
     const me = String(window.currentUser?.name || '').trim().toLowerCase();
     return !!me && String(m.attendees || '').split(',').some(n => n.trim().toLowerCase() === me);
@@ -349,7 +375,7 @@ window.Pages.scheduler = (() => {
         + (l.mgmt
           ? _row('note', esc(l.note || '')) + _row('user', l.createdByName ? `Added by ${esc(l.createdByName)}` : '')
           : _row('note', 'Approved leave — from HR → Leave Management.'));
-      if (l.mgmt && _isAdmin()) actions += `<button type="button" class="btn-secondary sch-act" data-act="rm-mleave" data-id="${esc(l.id)}" style="color:var(--color-danger-text);">Remove</button>`;
+      if (l.mgmt && _hasFeature('management_leave')) actions += `<button type="button" class="btn-secondary sch-act" data-act="rm-mleave" data-id="${esc(l.id)}" style="color:var(--color-danger-text);">Remove</button>`;
     } else if (kind === 'birthday') {
       title = `🎂 ${item.name}'s birthday`;
       body = _row('note', 'From the Employee Master.');
@@ -519,7 +545,7 @@ window.Pages.scheduler = (() => {
           <div class="sch-toolbar-right" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
             <div class="sch-legend" id="sch-legend">${KINDS.map(k =>
               `<button type="button" data-kind="${k}" class="${_hidden.has(k) ? 'off' : ''}" title="Show / hide ${KIND_LABEL[k]}"><i style="background:${KIND_COLOUR[k]};"></i>${KIND_LABEL[k]}</button>`).join('')}</div>
-            ${_isAdmin() ? `<button id="sch-mleave" class="btn-secondary" title="Put a Director's / management days away on everyone's calendar">
+            ${_hasFeature('management_leave') ? `<button id="sch-mleave" class="btn-secondary" title="Put a Director's / management days away on everyone's calendar">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
               Management leave
             </button>` : ''}
@@ -1036,6 +1062,7 @@ window.Pages.scheduler = (() => {
 
   return {
     async render() {
+      _applyPersonalDefaults();
       await loadData();
       renderPage();
     },

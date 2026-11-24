@@ -182,6 +182,9 @@ window.Pages.users = (() => {
       { key: 'set_price', label: 'Add/Edit Price' },
       { key: 'add_product', label: 'Create New Product' },
     ],
+    'scheduler': [
+      { key: 'management_leave', label: 'Management Leave' },
+    ],
   };
 
   // set-password modal
