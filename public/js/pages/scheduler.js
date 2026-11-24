@@ -572,11 +572,11 @@ window.Pages.scheduler = (() => {
        same width, so they line up with the day boxes above and below
        without the three pieces needing to agree on anything but width. */
     .sch-wbars { position:relative; }
-    .sch-span { position:absolute; box-sizing:border-box; border:none; border-radius:4px; padding:1px 7px; font:inherit; font-size:11px; font-weight:600;
+    .sch-span { position:absolute; box-sizing:border-box; border:none; border-radius:4px; padding:1px 7px; font:inherit; font-size:11px; font-weight:700;
       line-height:${SPAN_H - 2}px; text-align:left; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-      background:var(--color-success-bg); color:var(--color-success-text); }
-    .sch-span:hover { filter:brightness(.96); }
-    .sch-span.sch-on { outline:2px solid var(--color-primary); outline-offset:-1px; }
+      background:var(--color-success); color:#fff; box-shadow:0 1px 2px rgba(0,0,0,.15); }
+    .sch-span:hover { filter:brightness(1.08); }
+    .sch-span.sch-on { outline:2px solid var(--color-primary); outline-offset:1px; }
     .sch-span.sch-span-cs { border-top-left-radius:0; border-bottom-left-radius:0; }
     .sch-span.sch-span-ce { border-top-right-radius:0; border-bottom-right-radius:0; }
 
