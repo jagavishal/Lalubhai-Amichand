@@ -86,18 +86,12 @@ window.Pages.scheduler = (() => {
   }
   const _canManage = (m) => { const me = window.currentUser; return !!me && (_isAdmin() || m.createdBy === me.id); };
 
-  // Archana keeps the office calendar, so her Scheduler opens on just Leaves
-  // rather than everything at once. A one-time default: it only takes effect
-  // before she has ever touched the Show/hide row herself (same localStorage
-  // key everyone's own toggle choice is remembered under), and the moment it
-  // applies it is saved as her own preference — a later toggle of hers is
-  // never overridden back to this on a later visit.
+  // Every opening of the Scheduler starts on Leaves alone (25 Nov 2026:
+  // "jab bhi koi scheduler page open kre to by default leave wala open ho").
+  // The Show/hide row still works during the visit; the next time the page
+  // is opened it is back on Leaves. (Was Archana-only, once, since 24 Nov.)
   function _applyPersonalDefaults() {
-    if (_store.get('sch-hidden') !== null) return;
-    const me = String(window.currentUser?.name || '').trim().toUpperCase();
-    if (me !== 'ARCHANA SACHIN YERLA') return;
     _hidden = new Set(KINDS.filter(k => k !== 'leave'));
-    _store.set('sch-hidden', [..._hidden].join(','));
   }
   const _isAttendee = (m) => {
     const me = String(window.currentUser?.name || '').trim().toLowerCase();
@@ -1070,6 +1064,8 @@ window.Pages.scheduler = (() => {
         _anchor = _startOfDay(new Date(date + 'T00:00:00'));
         _sel = date;
         _selEv = null;
+        // The page opens on Leaves alone — show Meetings so the new one is seen.
+        _hidden.delete('meeting');
         await loadData();
         renderPage();
       } catch (e) {
