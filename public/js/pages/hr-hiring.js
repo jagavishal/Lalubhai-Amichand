@@ -315,6 +315,12 @@ window.Pages['hr-hiring'] = (() => {
   const userChecks = (id, selected, list = D.users) => `<div class="hh-chk" id="${id}">${list.map((u) =>
     `<label><input type="checkbox" value="${esc(u.id)}"${selected.includes(u.id) ? ' checked' : ''}/> ${esc(u.name)}</label>`).join('')}</div>`;
   const picked = (id) => [...document.querySelectorAll(`#${id} input:checked`)].map((i) => i.value);
+  // Interviewer ticks: only the Settings list (plus anyone already ticked on
+  // this record, so an older choice is never silently dropped).
+  const ivList = (selected = []) => {
+    const ok = new Set([...(D.interviewerIds || D.users.map((u) => u.id)), ...selected]);
+    return D.users.filter((u) => ok.has(u.id));
+  };
   const userOptions = (sel = '', list = D.users) => list.map((u) => ({ value: u.id, label: `${u.name}${u.department ? ' · ' + u.department : ''}` }));
   function timeOptions(sel = '10:00') {
     const out = [];
@@ -360,7 +366,7 @@ window.Pages['hr-hiring'] = (() => {
         + H.field('rf-exp', 'Experience', r?.experience || '', { placeholder: 'e.g. 2–5 years' })
         + `<div style="grid-column:span 2;"><label style="${H.LABEL}">Interviewer(s) <span style="color:#ef4444">*</span></label>
             <input id="rf-iv-q" placeholder="Filter people…" style="${H.CONTROL}margin-bottom:6px;" />
-            ${userChecks('rf-iv', r?.interviewers || [D.me.id])}</div>`
+            ${userChecks('rf-iv', r?.interviewers || [], ivList(r?.interviewers || []))}</div>`
         + H.textarea('rf-desc', 'Job description / details', r?.description || '', { rows: 4, placeholder: 'Role, responsibilities, skills — or upload the JD below' })
         + fileInput('rf-jd', edit ? 'Add / replace job description' : 'Upload the job description', ACCEPT_ANY, { multiple: true, hint: 'PDF / Word · up to 5 files, 4 MB each' }),
       ),
@@ -620,7 +626,7 @@ window.Pages['hr-hiring'] = (() => {
           + H.select('ci-dur', 'Duration', '30', [{ value: '30', label: '30 min' }, { value: '45', label: '45 min' }, { value: '60', label: '1 hour' }, { value: '90', label: '1.5 hours' }])
           + H.select('ci-mode', 'Mode', 'online', [{ value: 'online', label: 'Online (Meet link)' }, { value: 'in-person', label: 'In person' }])
           + H.field('ci-venue', 'Venue (in person)', '', { span: 2, placeholder: 'e.g. Andheri office, conference room' })
-          + `<div style="grid-column:span 2;"><label style="${H.LABEL}">Interviewer(s)</label>${userChecks('ci-iv', lastIv)}</div>`
+          + `<div style="grid-column:span 2;"><label style="${H.LABEL}">Interviewer(s)</label>${userChecks('ci-iv', lastIv, ivList(lastIv))}</div>`
           + H.textarea('ci-note', 'Note (optional)', '', { rows: 2 }))}
         <label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-top:8px;"><input type="checkbox" id="ci-inv"${c.email ? ' checked' : ' disabled'}/> Invite the candidate too${c.email ? ` (${esc(c.email)})` : ' (no email on file)'}</label>
         <div style="font-size:11.5px;color:#64748b;margin-top:6px;">Creates the meeting on the Scheduler. The interviewers get the CV with Select / Next Round / Reject buttons.</div>
@@ -1113,6 +1119,7 @@ window.Pages['hr-hiring'] = (() => {
         ${picker('hs-hr', 'HR', s.hr, 'Gets every job request, sends JDs to agencies, prepares and sends appointment letters, runs onboarding and exits.')}
         ${picker('hs-mgmt', 'Approving management', s.mgmt, 'Approve the appointment letter (from the mail or here) and get the candidate\'s answer.')}
         ${picker('hs-dues', 'Final dues (exit)', s.dues, 'Clarify an exiting employee\'s final dues, along with their concerned manager.')}
+        ${picker('hs-iv', 'Interviewers', s.interviewers || [], 'Only these people are offered as interviewers on a job request or interview.')}
         <div class="hh-card">
           <h3>Inquiry mailbox</h3>
           <input id="hs-inq" value="${esc(s.inquiry)}" style="${H.CONTROL}" />
@@ -1157,12 +1164,12 @@ window.Pages['hr-hiring'] = (() => {
     $('ag-new')?.addEventListener('click', () => agencyForm());
     document.querySelectorAll('[data-ag]').forEach((b) => b.addEventListener('click', () => agencyForm(D.agencies.find((a) => a.id === b.getAttribute('data-ag')))));
 
-    ['hs-hr', 'hs-mgmt', 'hs-dues'].forEach((id) => $(`${id}-q`)?.addEventListener('input', (e) => {
+    ['hs-hr', 'hs-mgmt', 'hs-dues', 'hs-iv'].forEach((id) => $(`${id}-q`)?.addEventListener('input', (e) => {
       const n = e.target.value.trim().toLowerCase();
       document.querySelectorAll(`#${id} [data-row]`).forEach((row) => { row.style.display = !n || row.getAttribute('data-row').includes(n) ? 'flex' : 'none'; });
     }));
     $('hs-save')?.addEventListener('click', (e) => busy(e.target, async () => {
-      await H.post('/api/hiring/settings', { hr: picked('hs-hr'), mgmt: picked('hs-mgmt'), dues: picked('hs-dues'), inquiry: H.val('hs-inq').trim() });
+      await H.post('/api/hiring/settings', { hr: picked('hs-hr'), mgmt: picked('hs-mgmt'), dues: picked('hs-dues'), interviewers: picked('hs-iv'), inquiry: H.val('hs-inq').trim() });
       H.toast('Settings saved');
       await refresh();
     }));

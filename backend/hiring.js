@@ -198,7 +198,15 @@ const CHECKLIST = [
 ];
 
 const TOKEN = { cv: 'hcv:', offer: 'hof:', result: 'hir:', approve: 'hap:' };
-const CFG = { hr: 'hire_hr', mgmt: 'hire_mgmt', dues: 'hire_dues', inquiry: 'hire_inquiry', cc: 'hire_cc' };
+const CFG = { hr: 'hire_hr', mgmt: 'hire_mgmt', dues: 'hire_dues', inquiry: 'hire_inquiry', cc: 'hire_cc', interviewers: 'hire_interviewers' };
+// Who can be picked as an interviewer (Archana, 25 Nov 2026: "Management ka hi
+// rakho … Jayesh Udani, Khurshid Alam aur mera naam, baaki sab hata do").
+// Default until Settings saves a list: the Director / Business Manager / Management
+// departments plus these three by name.
+const DEFAULT_IV_DEPTS = /director|business manager|management/i;
+const DEFAULT_IV_NAMES = [['jayesh', 'udani'], ['khurshid', 'alam'], ['archana']];
+// Always offered for Location, beside the branches on the Employee Master.
+const BASE_LOCATIONS = ['Ahmedabad', 'Mumbai', 'Retail Shop'];
 const DEFAULTS = {
   hr: [['archana']],
   mgmt: [['saloni', 'anchan'], ['sajil', 'shah']],
@@ -469,8 +477,8 @@ function mountHiring(app, ctx) {
   }
 
   async function settings() {
-    const [hr, mgmt, dues, inquiry, cc, users] = await Promise.all([
-      readCfg('hr'), readCfg('mgmt'), readCfg('dues'), readCfg('inquiry'), readCfg('cc'), activeUsers()]);
+    const [hr, mgmt, dues, inquiry, cc, iv, users] = await Promise.all([
+      readCfg('hr'), readCfg('mgmt'), readCfg('dues'), readCfg('inquiry'), readCfg('cc'), readCfg('interviewers'), activeUsers()]);
     const live = new Set(users.map((u) => u.id));
     const ids = (list, key) => (Array.isArray(list)
       ? list.map(String).filter((id) => live.has(id))
@@ -480,6 +488,10 @@ function mountHiring(app, ctx) {
       inquiry: typeof inquiry === 'string' && EMAIL_RE.test(inquiry) ? inquiry : DEFAULTS.inquiry,
       cc: Array.isArray(cc) ? cc.filter((e) => EMAIL_RE.test(e)) : [],
       set: { hr: Array.isArray(hr), mgmt: Array.isArray(mgmt), dues: Array.isArray(dues) },
+      interviewers: Array.isArray(iv)
+        ? iv.map(String).filter((id) => live.has(id))
+        : [...new Set([...users.filter((u) => DEFAULT_IV_DEPTS.test(u.department || '')).map((u) => u.id),
+          ...DEFAULT_IV_NAMES.map((w) => byWords(users, w)).filter(Boolean)])],
       users,
     };
   }
@@ -754,9 +766,11 @@ function mountHiring(app, ctx) {
         inquiry: me.cfg.inquiry,
       },
       today: istToday(),
+      interviewerIds: me.cfg.interviewers,
     };
     out.divisions = await departments().catch(() => []);
-    out.locations = (await q(`SELECT DISTINCT branch FROM hr_employees WHERE branch <> '' ORDER BY branch`).catch(() => [])).map((r) => r.branch);
+    const branches = (await q(`SELECT DISTINCT branch FROM hr_employees WHERE branch <> '' ORDER BY branch`).catch(() => [])).map((r) => r.branch);
+    out.locations = [...new Set([...BASE_LOCATIONS, ...branches])];
     // The person's own employee row, so "Submit my notice" can prefill.
     const self = (await q(`SELECT id, name, designation, department FROM hr_employees WHERE user_id = $1 AND status = 'Active'`, [me.user.id]).catch(() => []))[0];
     out.self = self || null;
@@ -765,7 +779,7 @@ function mountHiring(app, ctx) {
         .map((e) => ({ id: e.id, user_id: e.user_id || null, name: e.name, email: e.email || '', designation: e.designation || '', department: e.department || '', branch: e.branch || '', reporting_to: e.reporting_to || '' }));
     }
     if (me.manager) {
-      out.settings = { hr: me.cfg.hr, mgmt: me.cfg.mgmt, dues: me.cfg.dues, inquiry: me.cfg.inquiry, cc: me.cfg.cc, set: me.cfg.set };
+      out.settings = { hr: me.cfg.hr, mgmt: me.cfg.mgmt, dues: me.cfg.dues, inquiry: me.cfg.inquiry, cc: me.cfg.cc, set: me.cfg.set, interviewers: me.cfg.interviewers };
     }
     return out;
   }));
@@ -1648,6 +1662,7 @@ function mountHiring(app, ctx) {
     if (b.hr !== undefined) await writeCfg('hr', ids(b.hr, 'HR'));
     if (b.mgmt !== undefined) await writeCfg('mgmt', ids(b.mgmt, 'Approving management'));
     if (b.dues !== undefined) await writeCfg('dues', ids(b.dues, 'Final dues'));
+    if (b.interviewers !== undefined) await writeCfg('interviewers', ids(b.interviewers, 'Interviewers'));
     if (b.inquiry !== undefined) {
       const e = str(b.inquiry).toLowerCase();
       if (!EMAIL_RE.test(e)) bad('The inquiry mailbox is not a valid email');
