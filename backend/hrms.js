@@ -3284,12 +3284,11 @@ function mountHrms(app, ctx) {
           backup: r.backup_name || '',
           till: isoDate(r.to_date) || '',
         }));
-        for (const r of mgmt) {
-          leave.push({ name: r.name || '—', type: 'Management', mgmt: true, half: String(r.half_day || 'full') !== 'full', backup: '', till: isoDate(r.to_date) || '' });
-        }
+        const notAvailable = mgmt.map((r) => ({ name: r.name || '—', half: String(r.half_day || 'full') !== 'full', till: isoDate(r.to_date) || '' }));
         const leaveNames = new Set(leave.map((x) => x.name.toLowerCase()));
         res.json({
           leave,
+          mgmt: notAvailable,     // its own "Not Available" card on the Dashboard
           absent: absent.map((r) => r.name).filter((n) => n && !leaveNames.has(String(n).toLowerCase())),
         });
       } catch (e) { res.status(500).json({ error: e.message }); }

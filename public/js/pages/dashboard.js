@@ -186,10 +186,11 @@ window.Pages.dashboard = (function () {
     const wrap = document.getElementById('db-strips');
     if (!wrap) return;
     const shown = (id) => { const b = document.getElementById(id); return !!b && b.style.display !== 'none'; };
-    const n = ['db-shiptarget', 'db-trivia', 'db-onleave'].filter(shown).length;
+    const n = ['db-shiptarget', 'db-trivia', 'db-onleave', 'db-notavail'].filter(shown).length;
     wrap.style.display = (n || shown('db-announce')) ? '' : 'none';
     wrap.classList.toggle('c2', n === 2);
     wrap.classList.toggle('c3', n === 3);
+    wrap.classList.toggle('c4', n === 4);
   }
   function _watchStrips() {
     const wrap = document.getElementById('db-strips');
@@ -199,14 +200,44 @@ window.Pages.dashboard = (function () {
     _layoutStrips();
   }
 
+  /* Management not available today (Scheduler → Management leave) — its own
+     card beside On Leave Today, 25 Nov 2026: "separate banao and not available
+     karke dikhao". Filled from the same fetch as On Leave Today. */
+  function _paintNotAvailable(list) {
+    const box = document.getElementById('db-notavail');
+    if (!box) return;
+    if (!list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    const esc = Utils.esc;
+    const dm = (iso) => { const d = new Date(iso + 'T00:00:00'); return isNaN(d) ? '' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }); };
+    const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+    box.style.display = '';
+    box.innerHTML = `
+      <div class="card db-hero" style="background:linear-gradient(135deg,rgba(100,116,139,.16),rgba(100,116,139,.05)),var(--surface,#fff);border:1px solid rgba(100,116,139,.28);">
+        <div style="display:flex;gap:12px;align-items:flex-start;position:relative;">
+          <span class="db-ic" style="width:48px;height:48px;border-radius:14px;background:rgba(100,116,139,.18);color:#475569;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 12 0v1"/><path d="m17 3 4 4M21 3l-4 4"/></svg>
+          </span>
+          <div style="flex:1;min-width:0;">
+            <div class="db-hero-label" style="color:#475569;">Not Available Today</div>
+            <div style="font-size:1.6rem;font-weight:800;color:var(--text-primary);margin-top:2px;line-height:1.2;">${list.length} from Management</div>
+            <div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">
+              ${list.map((r) => `<div style="font-size:13px;"><b style="color:var(--text-primary);">${esc(r.name)}</b>
+                <span style="color:#475569;font-size:11.5px;font-weight:600;">· not available${r.half ? ' (half day)' : ''}${r.till && r.till > today ? ' till ' + esc(dm(r.till)) : ''}</span></div>`).join('')}
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
   async function _paintOnLeave() {
     const box = document.getElementById('db-onleave');
     if (!box) return;
     const data = await Utils.apiFetch('/api/hr/on-leave-today').catch(() => null);
     // The endpoint used to return a bare array; accept both shapes so a
     // half-deployed pair of files never blanks the strip.
-    const leave = Array.isArray(data) ? data : (data?.leave || []);
+    const leave = (Array.isArray(data) ? data : (data?.leave || [])).filter((r) => !r.mgmt);
     const absent = Array.isArray(data) ? [] : (data?.absent || []);
+    _paintNotAvailable(Array.isArray(data) ? [] : (data?.mgmt || []));
     if (!leave.length && !absent.length) return;
     const esc = Utils.esc;
     box.style.display = '';
@@ -223,8 +254,7 @@ window.Pages.dashboard = (function () {
           <div style="flex:1;min-width:0;">
             <div class="db-hero-label" style="color:#059669;">On Leave Today</div>
             <div style="font-size:1.6rem;font-weight:800;color:var(--text-primary);margin-top:2px;line-height:1.2;">
-              ${(() => { const m = leave.filter((r) => r.mgmt).length, e = leave.length - m;
-                return [e ? `${e} Employee${e === 1 ? '' : 's'}` : '', m ? `${e ? '+ ' : ''}${m} Management` : ''].filter(Boolean).join(' '); })()}
+              ${leave.length} Employee${leave.length === 1 ? '' : 's'}
               ${absent.length ? `<span style="font-size:12px;font-weight:700;color:#dc2626;margin-left:4px;">+ ${absent.length} absent</span>` : ''}
             </div>
             <div style="font-size:12px;color:var(--text-secondary);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
@@ -232,8 +262,8 @@ window.Pages.dashboard = (function () {
             </div>
             <button type="button" id="db-ol-toggle" style="margin-top:8px;border:none;background:none;padding:0;font-size:12.5px;font-weight:700;color:#059669;cursor:pointer;">View details →</button>
             <div id="db-ol-list" style="display:none;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:150px;overflow-y:auto;">
-              ${leave.map((r) => chip(r.mgmt ? 'rgba(1,80,170,.08)' : 'rgba(16,185,129,.08)', r.mgmt ? 'rgba(1,80,170,.25)' : 'rgba(16,185,129,.25)',
-                `<b style="color:var(--text-primary);">${esc(r.name)}</b><span style="color:${r.mgmt ? '#0150AA' : '#059669'};font-size:11px;font-weight:600;">${esc(r.mgmt ? 'Management · not available' : r.type)}${r.half ? ' · half day' : ''}</span>${r.backup ? `<span style="color:var(--text-secondary);font-size:11px;">→ ${esc(r.backup)}</span>` : ''}`)).join('')}
+              ${leave.map((r) => chip('rgba(16,185,129,.08)', 'rgba(16,185,129,.25)',
+                `<b style="color:var(--text-primary);">${esc(r.name)}</b><span style="color:#059669;font-size:11px;font-weight:600;">${esc(r.type)}${r.half ? ' · half day' : ''}</span>${r.backup ? `<span style="color:var(--text-secondary);font-size:11px;">→ ${esc(r.backup)}</span>` : ''}`)).join('')}
               ${absent.map((n) => chip('rgba(239,68,68,.07)', 'rgba(239,68,68,.25)',
                 `<b style="color:var(--text-primary);">${esc(n)}</b><span style="color:#dc2626;font-size:11px;font-weight:600;">no leave</span>`)).join('')}
             </div>
@@ -716,7 +746,9 @@ window.Pages.dashboard = (function () {
         #db-strips > #db-announce { grid-column:1 / -1; }
         #db-strips.c2 { grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); }
         #db-strips.c3 { grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr); }
-        @media (max-width:1100px) { #db-strips.c2, #db-strips.c3 { grid-template-columns:minmax(0,1fr); } }
+        #db-strips.c4 { grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr); }
+        @media (max-width:1300px) { #db-strips.c4 { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } }
+        @media (max-width:1100px) { #db-strips.c2, #db-strips.c3, #db-strips.c4 { grid-template-columns:minmax(0,1fr); } }
         .db-hero { border-radius:16px !important; padding:16px 20px !important; position:relative; overflow:hidden; box-shadow:0 8px 22px rgba(15,23,42,.07) !important; }
         .db-hero-label { font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em; }
         #db-more-menu { display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:210;min-width:200px;padding:6px;
@@ -838,6 +870,7 @@ window.Pages.dashboard = (function () {
           <div id="db-shiptarget" style="display:none;"></div>
           <div id="db-trivia" style="display:none;"></div>
           <div id="db-onleave" style="display:none;"></div>
+          <div id="db-notavail" style="display:none;"></div>
         </div>
 
         <div id="db-stat-cards" style="display:grid;grid-template-columns:repeat(6,1fr);gap:1rem;margin-bottom:20px;">
