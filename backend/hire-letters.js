@@ -203,4 +203,36 @@ function buildLetter(type, fields) {
   return { buffer: zip.toBuffer(), fileName: `${type === 'offer' ? 'Offer Letter' : 'Appointment Letter'} - ${who}.docx`, fields: f };
 }
 
-module.exports = { buildLetter, inWords, longDate, DEFAULT_HOURS };
+/* Print copy (Archana, 25 Nov 2026: "print bhi option rakho"). The same filled
+   letter, turned into a plain HTML page the browser prints — Word's numbered
+   headings come out of the converter as separate one-item lists, so they are
+   re-numbered here in order. */
+async function letterHtml(type, fields) {
+  const { buffer, fileName } = buildLetter(type, fields);
+  const mammoth = require('mammoth');
+  let html = (await mammoth.convertToHtml({ buffer })).value;
+  let n = 0;
+  // A heading line: short, and ends with ":" ("Position:", "Leave:").
+  const isHead = (li) => { const t = li.replace(/<[^>]+>/g, '').trim(); return t.endsWith(':') && t.length < 40; };
+  html = html.replace(/<ol>([\s\S]*?)<\/ol>/g, (all, inner) => {
+    const items = inner.match(/<li>[\s\S]*?<\/li>/g) || [];
+    let out = '', sub = [];
+    const flush = () => { if (sub.length) { out += '<ul class="sub">' + sub.join('') + '</ul>'; sub = []; } };
+    for (const it of items) {
+      const body = it.slice(4, -5);
+      if (isHead(body)) { flush(); n += 1; out += '<p class="h"><b>' + n + '. ' + body.replace(/<\/?strong>/g, '') + '</b></p>'; }
+      else sub.push('<li>' + body + '</li>');
+    }
+    flush();
+    return out;
+  });
+  const title = fileName.replace(/\.docx$/, '');
+  return '<!doctype html><html><head><meta charset="utf-8"><title>' + title + '</title><style>'
+    + '@page { size: A4; margin: 45mm 22mm 20mm 25mm; }'
+    + 'body { font-family: "Times New Roman", Times, serif; font-size: 12pt; line-height: 1.45; color: #000; }'
+    + 'p { margin: 0 0 8pt; text-align: justify; } p.h { margin: 12pt 0 4pt; } ul.sub { margin: 0 0 8pt 18pt; }'
+    + 'table { border-collapse: collapse; margin: 6pt 0 10pt 18pt; } td { border: 1px solid #000; padding: 2pt 8pt; min-width: 120pt; }'
+    + '</style></head><body>' + html + '<script>window.onload = () => { window.print(); };<\/script></body></html>';
+}
+
+module.exports = { buildLetter, letterHtml, inWords, longDate, DEFAULT_HOURS };

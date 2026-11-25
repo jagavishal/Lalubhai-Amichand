@@ -579,10 +579,11 @@ window.Pages['hr-hiring'] = (() => {
           + `<div></div>`
           + fileInput('co-file', 'Appointment letter', ACCEPT_DOC, { required: true, hint: 'PDF / Word — mailed to management with Approve / Send Back' })
           + H.textarea('co-note', 'Note for management (optional)', '', { rows: 2 }))}
-        <div class="hh-btns"><button class="btn-secondary btn-sm" data-letter="offer">📝 Generate Offer Letter</button>
-          <button class="btn-secondary btn-sm" data-letter="appointment">📝 Generate Appointment Letter</button>
-          <button class="btn-primary btn-sm" id="co-send">Send for Approval</button></div>
-        <div style="font-size:11.5px;color:#64748b;margin-top:4px;">Generate fills HR's Word format, downloads it and puts it in the box above — edit in Word if needed and attach again.</div>
+        <div class="hh-btns"><button class="btn-secondary btn-sm" data-letter="offer">📝 Offer Letter</button>
+          <button class="btn-secondary btn-sm" data-letter="appointment">📝 Appointment Letter</button>
+          <button class="btn-primary btn-sm" id="co-direct">✓ Offer Given & Accepted</button>
+          <button class="btn-secondary btn-sm" id="co-send">Send for Approval</button></div>
+        <div style="font-size:11.5px;color:#64748b;margin-top:4px;">Make the letter (Download or Print), get it signed and hand it over, then press <b>Offer Given &amp; Accepted</b> — onboarding starts. Attaching the signed copy above is optional. <i>Send for Approval</i> is only if management should approve first.</div>
         <div style="font-size:11.5px;color:#64748b;margin-top:6px;">Goes to: ${esc(D.people.mgmt.join(', ') || '—')}</div></div>`;
     }
     if (k.offerDecide) {
@@ -748,6 +749,12 @@ window.Pages['hr-hiring'] = (() => {
       await done({ select: `${c.name} selected — HR will prepare the offer`, next: 'Sent back for another round', reject: 'Recorded as not selected' }[decision]);
     })));
     root.querySelectorAll('[data-letter]').forEach((b) => b.addEventListener('click', () => letterForm(b.getAttribute('data-letter'), c, r)));
+    $('co-direct')?.addEventListener('click', (e) => busy(e.target, async () => {
+      const documents = await readFiles($('co-file'), 'Signed letter', 1);
+      if (!(await Utils.showConfirm(`Record that ${c.name} has been given the offer and accepted it? Onboarding starts.`, { title: 'Offer given & accepted', confirmText: 'Yes, accepted' }))) { e.target.disabled = false; return; }
+      await H.post(`${base}/offer-direct`, { designation: H.val('co-desig').trim(), ctc: H.val('co-ctc').trim(), doj: H.val('co-doj'), note: H.val('co-note').trim(), documents });
+      await done(`${c.name} — offer accepted, onboarding started`);
+    }));
     $('co-send')?.addEventListener('click', (e) => busy(e.target, async () => {
       const documents = await readFiles($('co-file'), 'Appointment letter', 1);
       if (!documents.length) throw new Error('Attach the appointment letter');
@@ -1186,6 +1193,14 @@ window.Pages['hr-hiring'] = (() => {
     const firstName = String(c.name || '').trim().split(/\s+/)[0] || '';
     const money = (id, label, val) => H.field(id, label, val ?? '', { type: 'number', step: '1' });
     const appt = type === 'appointment';
+    const g = (id) => (document.getElementById(id) ? H.val(id) : '');
+    const collect = () => ({
+          date: g('lt-date'), ref: g('lt-ref'), name: g('lt-name').trim(), salutation: g('lt-sal').trim(), address: g('lt-addr').trim(),
+          position: g('lt-pos').trim(), start: g('lt-start'), department: g('lt-dept').trim(), manager: g('lt-mgr').trim(), location: g('lt-loc').trim(),
+          hours: g('lt-hours').trim(), focus: g('lt-focus').trim(),
+          basic: g('lt-basic'), hra: g('lt-hra'), conveyance: g('lt-conv'), medical: g('lt-med'), telephone: g('lt-tel'),
+          probation: g('lt-prob'), pf: !!document.getElementById('lt-pf')?.checked,
+    });
     H.openModal({
       id: 'hh-letter', width: 760, title: appt ? 'Appointment Letter' : 'Offer Letter',
       subtitle: `${c.name} — filled into HR's Word format`,
@@ -1212,6 +1227,21 @@ window.Pages['hr-hiring'] = (() => {
       )}`,
       confirmText: 'Generate & Download',
       onOpen: () => {
+        const okBtn = document.getElementById('hh-letter-ok'); const foot = okBtn?.parentElement;
+        if (foot && !document.getElementById('lt-print')) {
+          const pb = document.createElement('button');
+          pb.type = 'button'; pb.id = 'lt-print'; pb.className = 'btn-secondary'; pb.textContent = '🖨 Print';
+          pb.onclick = async () => {
+            try {
+              pb.disabled = true;
+              const out = await H.post(`/api/hiring/candidates/${c.id}/letter`, { type, fields: collect(), format: 'html' });
+              const w = window.open('', '_blank');
+              if (!w) throw new Error('Allow pop-ups for this site to print');
+              w.document.open(); w.document.write(out.html); w.document.close();
+            } catch (err) { H.fail(err); } finally { pb.disabled = false; }
+          };
+          foot.insertBefore(pb, okBtn);
+        }
         const ids = ['lt-basic', 'lt-hra', 'lt-conv', 'lt-med', 'lt-tel'];
         const sum = () => {
           const g = ids.reduce((a, id) => a + (Number(document.getElementById(id)?.value) || 0), 0);
@@ -1222,14 +1252,7 @@ window.Pages['hr-hiring'] = (() => {
         sum();
       },
       onConfirm: async () => {
-        const g = (id) => (document.getElementById(id) ? H.val(id) : '');
-        const fields = {
-          date: g('lt-date'), ref: g('lt-ref'), name: g('lt-name').trim(), salutation: g('lt-sal').trim(), address: g('lt-addr').trim(),
-          position: g('lt-pos').trim(), start: g('lt-start'), department: g('lt-dept').trim(), manager: g('lt-mgr').trim(), location: g('lt-loc').trim(),
-          hours: g('lt-hours').trim(), focus: g('lt-focus').trim(),
-          basic: g('lt-basic'), hra: g('lt-hra'), conveyance: g('lt-conv'), medical: g('lt-med'), telephone: g('lt-tel'),
-          probation: g('lt-prob'), pf: !!document.getElementById('lt-pf')?.checked,
-        };
+        const fields = collect();
         const out = await H.post(`/api/hiring/candidates/${c.id}/letter`, { type, fields });
         const blob = await (await fetch(out.dataUrl)).blob();
         const a = document.createElement('a');

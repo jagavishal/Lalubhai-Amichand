@@ -1154,6 +1154,11 @@ function mountHiring(app, ctx) {
   app.post('/api/hiring/candidates/:id/letter', requireAuth, route('hr', async (req) => {
     const { c } = await loadCand(req.params.id, req.hire);
     const b = req.body || {};
+    // Print copy: the same letter as an HTML page (see hire-letters.js).
+    if (b.format === 'html') {
+      try { return { html: await require('./hire-letters').letterHtml(String(b.type || ''), b.fields || {}) }; }
+      catch (e) { if (e.userError) bad(e.message); throw e; }
+    }
     let out;
     try { out = require('./hire-letters').buildLetter(String(b.type || ''), b.fields || {}); }
     catch (e) { if (e.userError) bad(e.message); throw e; }
@@ -1162,6 +1167,28 @@ function mountHiring(app, ctx) {
     await q('UPDATE hire_candidates SET letter_fields = $1 WHERE id = $2', [JSON.stringify(keep), c.id]);
     await logStep(c.id, `${b.type === 'offer' ? 'Offer' : 'Appointment'} Letter Generated`, out.fileName, actor(req.hire));
     return { fileName: out.fileName, dataUrl: 'data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,' + out.buffer.toString('base64') };
+  }));
+
+  /* No approval round (Archana, 25 Nov 2026: "approval wali cheez hata do —
+     hiring roz nahi hoti, director physically sign karte hain"). HR prints the
+     letter, it is signed and handed over, and the candidate's acceptance is
+     recorded here in one step: Selected → Offer Accepted. The signed copy is
+     optional. The approval route below stays for whoever wants it. */
+  app.post('/api/hiring/candidates/:id/offer-direct', requireAuth, route(null, async (req) => {
+    const me = req.hire;
+    const { c, r } = await loadCand(req.params.id, me);
+    if (!candRights(c, r, me).offer) bad(`It is ${c.status} — the offer is given once the candidate is selected`);
+    const b = req.body || {};
+    const designation = str(b.designation, 128) || bad('Write the designation');
+    const ctc = str(b.ctc, 64) || bad('Write the CTC offered');
+    const doj = optDate(b.doj, 'Date of joining') || bad('Pick the date of joining');
+    const files = decodeFiles(b.documents, 'Signed letter', { only: ['pdf', 'doc', 'docx', 'jpg', 'png'] });
+    const note = str(b.note, 2000);
+    await move('hire_candidates', c.id, [C.SELECTED, C.OFFER_REVISION], C.ACCEPTED,
+      ", designation=$2, ctc=$3, doj=$4, response='accept', response_note=$5, response_at=NOW()", [designation, ctc, doj, note]);
+    const ns = files.length ? await saveDocs(c.id, files, { kind: 'signed', v: c.offer_version, by: me.by }) : [];
+    await logStep(c.id, 'Offer Given & Accepted', [`${designation} · ${ctc} · joining ${fmtDate(doj)}`, 'no approval round', note].filter(Boolean).join(' — '), actor(me), ns);
+    return { ok: true };
   }));
 
   // Step 1: HR uploads the appointment letter → approving management.
