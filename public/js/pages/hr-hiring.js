@@ -573,7 +573,10 @@ window.Pages['hr-hiring'] = (() => {
           + `<div></div>`
           + fileInput('co-file', 'Appointment letter', ACCEPT_DOC, { required: true, hint: 'PDF / Word — mailed to management with Approve / Send Back' })
           + H.textarea('co-note', 'Note for management (optional)', '', { rows: 2 }))}
-        <div class="hh-btns"><button class="btn-primary btn-sm" id="co-send">Send for Approval</button></div>
+        <div class="hh-btns"><button class="btn-secondary btn-sm" data-letter="offer">📝 Generate Offer Letter</button>
+          <button class="btn-secondary btn-sm" data-letter="appointment">📝 Generate Appointment Letter</button>
+          <button class="btn-primary btn-sm" id="co-send">Send for Approval</button></div>
+        <div style="font-size:11.5px;color:#64748b;margin-top:4px;">Generate fills HR's Word format, downloads it and puts it in the box above — edit in Word if needed and attach again.</div>
         <div style="font-size:11.5px;color:#64748b;margin-top:6px;">Goes to: ${esc(D.people.mgmt.join(', ') || '—')}</div></div>`;
     }
     if (k.offerDecide) {
@@ -738,6 +741,7 @@ window.Pages['hr-hiring'] = (() => {
       await H.post(`${base}/result`, { decision, remarks });
       await done({ select: `${c.name} selected — HR will prepare the offer`, next: 'Sent back for another round', reject: 'Recorded as not selected' }[decision]);
     })));
+    root.querySelectorAll('[data-letter]').forEach((b) => b.addEventListener('click', () => letterForm(b.getAttribute('data-letter'), c, r)));
     $('co-send')?.addEventListener('click', (e) => busy(e.target, async () => {
       const documents = await readFiles($('co-file'), 'Appointment letter', 1);
       if (!documents.length) throw new Error('Attach the appointment letter');
@@ -1164,6 +1168,78 @@ window.Pages['hr-hiring'] = (() => {
     }));
   }
 
+
+  /* Offer / Appointment letter in HR's Word format (25 Nov 2026). The form
+     starts from what was typed last time for this candidate, else from the
+     candidate and the job request. */
+  function letterForm(type, c, r) {
+    const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+    const last = c.letter_fields || {};
+    const v = (k, d) => (last[k] != null && last[k] !== '' ? last[k] : d);
+    const firstName = String(c.name || '').trim().split(/\s+/)[0] || '';
+    const money = (id, label, val) => H.field(id, label, val ?? '', { type: 'number', step: '1' });
+    const appt = type === 'appointment';
+    H.openModal({
+      id: 'hh-letter', width: 760, title: appt ? 'Appointment Letter' : 'Offer Letter',
+      subtitle: `${c.name} — filled into HR's Word format`,
+      bodyHTML: `${H.grid(
+        H.field('lt-date', 'Letter date', v('date', today), { type: 'date', required: true })
+        + (appt ? H.field('lt-ref', 'Ref No. (after LA/PRS/)', v('ref', ''), { placeholder: 'e.g. 25-26/014' }) : '<div></div>')
+        + H.field('lt-name', 'Candidate name', v('name', c.name), { required: true })
+        + H.field('lt-sal', 'Salutation (Dear …)', v('salutation', firstName))
+        + H.textarea('lt-addr', 'Address', v('address', ''), { rows: 3, span: 2, placeholder: 'One line per row' })
+        + H.field('lt-pos', 'Position', v('position', c.designation || r?.position || ''), { required: true })
+        + H.field('lt-start', 'Joining date', v('start', c.doj || ''), { type: 'date', required: appt })
+        + (appt ? '' : H.field('lt-dept', 'Department', v('department', r?.division || '')) + H.field('lt-mgr', 'Reporting Manager', v('manager', r?.requested_by_name || '')))
+        + (appt ? '' : H.field('lt-loc', 'Location', v('location', r?.location || '')))
+        + H.field('lt-hours', 'Work hours', v('hours', ''), { span: appt ? 2 : 1, placeholder: '9:30 am to 6:00 pm, Monday to Friday and 1st, 3rd and 5th Saturday of the month' })
+        + (appt ? H.field('lt-focus', 'Work area (…excel in ___ / responsible for ___)', v('focus', ''), { span: 2, placeholder: 'e.g. accounting and documentation' }) : ''),
+      )}
+      <div style="font-weight:700;font-size:13px;margin:14px 0 4px;">Salary per month</div>
+      ${H.grid(
+        money('lt-basic', 'Basic', v('basic', '')) + money('lt-hra', 'HRA', v('hra', ''))
+        + money('lt-conv', 'Conveyance', v('conveyance', '')) + money('lt-med', 'Medical', v('medical', ''))
+        + money('lt-tel', 'Telephone', v('telephone', '')) + `<div><label style="${H.LABEL}">Gross</label><div id="lt-gross" style="${H.CONTROL}background:#f8fafc;font-weight:700;">—</div></div>`
+        + (appt ? H.field('lt-prob', 'Probation (months)', v('probation', 3), { type: 'number', step: '1' })
+          + `<div><label style="${H.LABEL}">Provident Fund & ESIC</label><label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:8px;"><input type="checkbox" id="lt-pf"${last.pf ? ' checked' : ''}/> Eligible for PF & ESIC</label></div>` : ''),
+      )}`,
+      confirmText: 'Generate & Download',
+      onOpen: () => {
+        const ids = ['lt-basic', 'lt-hra', 'lt-conv', 'lt-med', 'lt-tel'];
+        const sum = () => {
+          const g = ids.reduce((a, id) => a + (Number(document.getElementById(id)?.value) || 0), 0);
+          const el = document.getElementById('lt-gross');
+          if (el) el.textContent = g ? '₹ ' + g.toLocaleString('en-IN') : '—';
+        };
+        ids.forEach((id) => document.getElementById(id)?.addEventListener('input', sum));
+        sum();
+      },
+      onConfirm: async () => {
+        const g = (id) => (document.getElementById(id) ? H.val(id) : '');
+        const fields = {
+          date: g('lt-date'), ref: g('lt-ref'), name: g('lt-name').trim(), salutation: g('lt-sal').trim(), address: g('lt-addr').trim(),
+          position: g('lt-pos').trim(), start: g('lt-start'), department: g('lt-dept').trim(), manager: g('lt-mgr').trim(), location: g('lt-loc').trim(),
+          hours: g('lt-hours').trim(), focus: g('lt-focus').trim(),
+          basic: g('lt-basic'), hra: g('lt-hra'), conveyance: g('lt-conv'), medical: g('lt-med'), telephone: g('lt-tel'),
+          probation: g('lt-prob'), pf: !!document.getElementById('lt-pf')?.checked,
+        };
+        const out = await H.post(`/api/hiring/candidates/${c.id}/letter`, { type, fields });
+        const blob = await (await fetch(out.dataUrl)).blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = out.fileName;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+        // The appointment letter goes straight into the "send for approval" box.
+        const input = document.getElementById('co-file');
+        if (appt && input && window.DataTransfer) {
+          try { const dt = new DataTransfer(); dt.items.add(new File([blob], out.fileName, { type: blob.type })); input.files = dt.files; input.dispatchEvent(new Event('change')); } catch { /* the download is enough */ }
+        }
+        c.letter_fields = fields;
+        H.closeModal('hh-letter');
+        H.toast(appt ? 'Appointment letter downloaded and attached below — check it, then Send for Approval' : 'Offer letter downloaded');
+      },
+    });
+  }
   return {
     async render() {
       const el = document.getElementById('main-content');

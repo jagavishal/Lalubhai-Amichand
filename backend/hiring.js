@@ -129,6 +129,9 @@ const HIRE_SCHEMA = [
      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   `CREATE INDEX idx_hirecand_req ON hire_candidates (request_id)`,
+  // What HR last typed into the Offer / Appointment letter form, so the
+  // next letter (or a revision) starts from it.
+  `ALTER TABLE hire_candidates ADD COLUMN IF NOT EXISTS letter_fields TEXT`,
   `CREATE TABLE IF NOT EXISTS hire_exits (
      id VARCHAR(16) PRIMARY KEY,
      employee_id VARCHAR(16) DEFAULT NULL,
@@ -543,6 +546,7 @@ function mountHiring(app, ctx) {
       response: r.response || '', response_note: r.response_note || '', response_at: tsOut(r.response_at),
       checklist: parseJson(r.checklist, {}), employee_id: r.employee_id || null, user_id: r.user_id || null,
       buddy_id: r.buddy_id || null, buddy_name: r.buddy_name || '', joined_on: dstr(r.joined_on),
+      letter_fields: parseJson(r.letter_fields, null),
       created_by: r.created_by || '', created_at: tsOut(r.created_at), updated_at: tsOut(r.updated_at),
     };
   }
@@ -1129,6 +1133,22 @@ function mountHiring(app, ctx) {
   function approveUrl(c, decision, email) {
     return `${appOrigin}/hire-action?t=${encodeURIComponent(tokenFor(TOKEN.approve + c.id + ':' + c.offer_version, decision, email))}`;
   }
+
+  // HR's own Word formats, filled in (25 Nov 2026) — see hire-letters.js.
+  // Returns the .docx; the page downloads it and can put it straight into
+  // the "Appointment letter" box of the step below.
+  app.post('/api/hiring/candidates/:id/letter', requireAuth, route('hr', async (req) => {
+    const { c } = await loadCand(req.params.id, req.hire);
+    const b = req.body || {};
+    let out;
+    try { out = require('./hire-letters').buildLetter(String(b.type || ''), b.fields || {}); }
+    catch (e) { if (e.userError) bad(e.message); throw e; }
+    const keep = { ...out.fields };
+    delete keep.gross;
+    await q('UPDATE hire_candidates SET letter_fields = $1 WHERE id = $2', [JSON.stringify(keep), c.id]);
+    await logStep(c.id, `${b.type === 'offer' ? 'Offer' : 'Appointment'} Letter Generated`, out.fileName, actor(req.hire));
+    return { fileName: out.fileName, dataUrl: 'data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,' + out.buffer.toString('base64') };
+  }));
 
   // Step 1: HR uploads the appointment letter → approving management.
   app.post('/api/hiring/candidates/:id/offer', requireAuth, route(null, async (req) => {
