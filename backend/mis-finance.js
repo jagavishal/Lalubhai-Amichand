@@ -51,6 +51,22 @@ const MF_SCHEMA = [
   // bhi daalega" (Jayesh, 24 Nov 2026), the old sheet's Stock Summary.
   `ALTER TABLE mis_tb_uploads ADD COLUMN IF NOT EXISTS opening_qty DECIMAL(16,3) DEFAULT NULL`,
   `ALTER TABLE mis_tb_uploads ADD COLUMN IF NOT EXISTS closing_qty DECIMAL(16,3) DEFAULT NULL`,
+  // The monthly salary sheet (Months · Employee Name · Category · BASIC …
+  // TOTAL), one row per employee per month — category-wise salary for the
+  // MIS (Jayesh, 24 Nov 2026). Uploading a month again replaces it.
+  `CREATE TABLE IF NOT EXISTS mis_salary (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     month CHAR(7) NOT NULL,
+     seq INT NOT NULL DEFAULT 0,
+     name VARCHAR(255) NOT NULL,
+     category VARCHAR(64) NOT NULL DEFAULT '',
+     parts_json TEXT,
+     total DECIMAL(14,2) NOT NULL DEFAULT 0,
+     file_name VARCHAR(255) DEFAULT '',
+     uploaded_by VARCHAR(255) DEFAULT '',
+     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     KEY idx_mis_salary_month (month)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ];
 
 const CFG = { divisions: 'misfin_divisions', map: 'misfin_map', heads: 'misfin_heads' };
@@ -1272,6 +1288,82 @@ function mountMisFinance(app, ctx) {
       if (old[i] !== list[i] && !list.includes(old[i])) await q('UPDATE mis_tb_uploads SET division = $1 WHERE division = $2', [list[i], old[i]]);
     }
     await writeCfg(CFG.divisions, list.slice(0, 12));
+    return { ok: true };
+  }));
+
+  /* ── Salary sheet ───────────────────────────────────────────────── */
+
+  // "Apr-26", "April 2026", "2026-04", a date → "2026-04".
+  const MONTH_NO = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  function monthOf(v) {
+    const s = String(v ?? '').trim();
+    let m = /^(\d{4})-(\d{1,2})/.exec(s);
+    if (m) return `${m[1]}-${m[2].padStart(2, '0')}`;
+    m = /^([a-z]{3})[a-z]*[\s\-'/.]*(\d{2,4})$/i.exec(s);
+    if (m && MONTH_NO[m[1].toLowerCase()]) { let y = Number(m[2]); if (y < 100) y += 2000; return `${y}-${String(MONTH_NO[m[1].toLowerCase()]).padStart(2, '0')}`; }
+    m = /^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/.exec(s);   // a date cell: dd/mm/yyyy
+    if (m) { let y = Number(m[3]); if (y < 100) y += 2000; return `${y}-${String(Number(m[2])).padStart(2, '0')}`; }
+    return null;
+  }
+  const DEDUCTIONS = /^(pf|p\.f\.?|pt|p\.t\.?|tds|esic?|lwf|advance|deduction)/i;
+  /* Header row = the one with "Employee Name". Every other numeric column
+     is a salary head; PF / PT / TDS are kept but are deductions; TOTAL is
+     the sheet's own total (else the earnings added up). */
+  function parseSalary(sheet) {
+    const rows = (Array.isArray(sheet) ? sheet : []).slice(0, 2000).map((r) => (Array.isArray(r) ? r : []));
+    const txt = (v) => String(v ?? '').trim();
+    const hr = rows.findIndex((r) => r.some((c) => /employee\s*name|^name$/i.test(txt(c))));
+    if (hr < 0) bad('Could not find the “Employee Name” column — upload the salary sheet as it is');
+    const head = rows[hr].map(txt);
+    const col = (re) => head.findIndex((h) => re.test(h));
+    const cName = col(/employee\s*name|^name$/i), cCat = col(/^category$/i), cMonth = col(/^months?$/i), cTotal = col(/^total$/i);
+    const parts = head.map((h, i) => ({ h, i })).filter((x) => x.h && ![cName, cCat, cMonth, cTotal].includes(x.i) && !/^(sr|emp\s*id|s\.?\s*no)/i.test(x.h));
+    const money = (v) => { const n = Number(String(v ?? '').replace(/[,₹\s]/g, '').replace(/^-$/, '')); return Number.isFinite(n) ? n : 0; };
+    const out = [];
+    for (let i = hr + 1; i < rows.length; i++) {
+      const r = rows[i];
+      const name = txt(r[cName]).replace(/\s+/g, ' ');
+      if (!name || /^total$/i.test(name)) continue;
+      const p = {};
+      for (const x of parts) { const n = money(r[x.i]); if (n) p[x.h] = n; }
+      const earnings = Object.entries(p).filter(([h]) => !DEDUCTIONS.test(h)).reduce((a, [, n]) => a + n, 0);
+      const total = cTotal >= 0 && txt(r[cTotal]) !== '' ? money(r[cTotal]) : earnings;
+      out.push({ name: name.slice(0, 255), category: cCat >= 0 ? txt(r[cCat]).slice(0, 64) : '', month: cMonth >= 0 ? monthOf(r[cMonth]) : null, parts: p, total: round2(total) });
+    }
+    if (!out.length) bad('No employee rows found under “Employee Name”');
+    return { rows: out, heads: parts.map((x) => x.h) };
+  }
+
+  app.post('/api/mis-finance/salary/preview', requireAuth, route(async (req) => {
+    const s = parseSalary(req.body?.sheet);
+    const months = [...new Set(s.rows.map((r) => r.month).filter(Boolean))];
+    return { months, count: s.rows.length, total: round2(s.rows.reduce((a, r) => a + r.total, 0)), heads: s.heads,
+      byCategory: s.rows.reduce((a, r) => { const k = r.category || ''; a[k] = round2((a[k] || 0) + r.total); return a; }, {}) };
+  }));
+
+  app.post('/api/mis-finance/salary', requireAuth, route(async (req) => {
+    const b = req.body || {};
+    const s = parseSalary(b.sheet);
+    const month = /^\d{4}-\d{2}$/.test(b.month || '') ? b.month : (s.rows.find((r) => r.month)?.month || bad('Choose the month'));
+    const by = req.session.user.name || req.session.user.email || '';
+    const fileName = String(b.file_name || '').slice(0, 255);
+    await q('DELETE FROM mis_salary WHERE month = $1', [month]);
+    let seq = 0;
+    for (const r of s.rows) {
+      await q('INSERT INTO mis_salary (month, seq, name, category, parts_json, total, file_name, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+        [month, seq++, r.name, r.category, JSON.stringify(r.parts), r.total, fileName, by]);
+    }
+    return { ok: true, month, count: s.rows.length };
+  }));
+
+  app.get('/api/mis-finance/salary', requireAuth, route(async () => {
+    const rows = await q('SELECT month, seq, name, category, parts_json, total, file_name, uploaded_by, created_at FROM mis_salary ORDER BY month, seq');
+    return { rows: rows.map((r) => ({ month: r.month, name: r.name, category: r.category || '', parts: JSON.parse(r.parts_json || '{}'), total: Number(r.total),
+      file_name: r.file_name || '', uploaded_by: r.uploaded_by || '', at: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at })) };
+  }));
+
+  app.delete('/api/mis-finance/salary/:month', requireAuth, route(async (req) => {
+    await q('DELETE FROM mis_salary WHERE month = $1', [String(req.params.month || '')]);
     return { ok: true };
   }));
 

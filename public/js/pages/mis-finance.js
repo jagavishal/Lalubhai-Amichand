@@ -60,6 +60,7 @@ window.Pages['mis-finance'] = (() => {
     if (_tab === 'reports') body = await reportsTab();
     else if (_tab === 'uploads') body = uploadsTab();
     else if (_tab === 'mapping') body = await mappingTab();
+    else if (_tab === 'salary') body = await salaryTab();
     else body = divisionsTab();
     el.innerHTML = `<div class="animate-fade-in">
       <style>
@@ -104,6 +105,7 @@ window.Pages['mis-finance'] = (() => {
         { key: 'reports', label: 'Reports' },
         { key: 'uploads', label: 'Uploads', count: D.uploads.length },
         { key: 'mapping', label: 'Ledger Mapping' },
+        { key: 'salary', label: 'Salary' },
         { key: 'divisions', label: 'Divisions' },
       ], _tab)}
       ${body}
@@ -599,6 +601,132 @@ window.Pages['mis-finance'] = (() => {
 
   /* ── Divisions ────────────────────────────────────────────────────── */
 
+  /* ── Salary ───────────────────────────────────────────────────────
+     The monthly salary sheet (Months · Employee Name · Category · BASIC …
+     TOTAL) → salary by category (Management, Export, …) per month and for
+     a range of months (Jayesh, 24 Nov 2026). Blank category = not allocated. */
+  let SAL = null;           // /api/mis-finance/salary rows
+  let _salFrom = '', _salTo = '';
+  const monName = (m) => { const [y, mm] = m.split('-').map(Number); return `${MON3[mm - 1]}'${String(y).slice(2)}`; };
+  const catName = (c) => c || 'Not allocated';
+
+  async function salaryTab() {
+    if (!SAL) SAL = (await H.api('/api/mis-finance/salary')).rows;
+    const months = [...new Set(SAL.map((r) => r.month))].sort();
+    const top = `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+      ${months.length ? `<label style="font-size:12.5px;color:#64748b;">From</label>
+        <select id="sal-from" style="${H.CONTROL}max-width:140px;">${months.map((m) => `<option value="${m}"${m === _salFrom ? ' selected' : ''}>${monName(m)}</option>`).join('')}</select>
+        <label style="font-size:12.5px;color:#64748b;">To</label>
+        <select id="sal-to" style="${H.CONTROL}max-width:140px;">${months.map((m) => `<option value="${m}"${m === _salTo ? ' selected' : ''}>${monName(m)}</option>`).join('')}</select>` : ''}
+      <button class="btn-primary btn-sm" id="sal-up" style="margin-left:auto;">+ Upload Salary Sheet</button>
+      ${months.length ? '<button class="btn-secondary btn-sm" id="sal-xlsx">Download Excel</button>' : ''}</div>`;
+    if (!months.length) {
+      return top + `<div class="mf-note"><b>No salary sheet uploaded yet.</b> Upload the month's salary sheet as it is (Months · Employee Name · Category · BASIC · H.R.A. … · TOTAL).
+        The salary is added up by <b>Category</b> — Management, Export … — and a blank category shows as “Not allocated”.</div>`;
+    }
+    if (!months.includes(_salFrom)) _salFrom = months[0];
+    if (!months.includes(_salTo)) _salTo = months[months.length - 1];
+    if (_salTo < _salFrom) [_salFrom, _salTo] = [_salTo, _salFrom];
+    const inRange = months.filter((m) => m >= _salFrom && m <= _salTo);
+    const rows = SAL.filter((r) => r.month >= _salFrom && r.month <= _salTo);
+    const cats = [...new Set(SAL.map((r) => r.category))].sort((a, b) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)));
+    const sum = (list) => list.reduce((a, r) => a + r.total, 0);
+    const total = sum(rows);
+    const cell = (v) => `<td>${v ? H.inr0(Math.round(v)) : '-'}</td>`;
+    const cards = cats.map((c) => {
+      const v = sum(rows.filter((r) => r.category === c));
+      const heads = new Set(rows.filter((r) => r.category === c && r.total).map((r) => r.name)).size;
+      return `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px 16px;min-width:180px;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:${c ? 'var(--color-primary)' : '#b45309'};">${esc(catName(c))}</div>
+        <div style="font-size:20px;font-weight:800;margin-top:2px;">₹ ${H.inr0(Math.round(v))}</div>
+        <div style="font-size:11.5px;color:#64748b;">${heads} employee${heads === 1 ? '' : 's'} · ${total ? Math.round((v * 100) / total) : 0}%</div></div>`;
+    }).join('');
+    const grid = `<table class="mf-tbl"><thead><tr><th>Category</th>${inRange.map((m) => `<th>${monName(m)}</th>`).join('')}<th>Total</th></tr></thead><tbody>
+      ${cats.map((c) => `<tr><td>${esc(catName(c))}</td>${inRange.map((m) => cell(sum(SAL.filter((r) => r.month === m && r.category === c)))).join('')}<td><b>${H.inr0(Math.round(sum(rows.filter((r) => r.category === c))))}</b></td></tr>`).join('')}
+      <tr class="T"><td>Total</td>${inRange.map((m) => cell(sum(SAL.filter((r) => r.month === m)))).join('')}<td>${H.inr0(Math.round(total))}</td></tr></tbody></table>`;
+    const people = new Map();
+    for (const r of rows) {
+      const k = r.name.toLowerCase();
+      const x = people.get(k) || { name: r.name, category: r.category, total: 0, months: 0 };
+      x.total += r.total; if (r.total) x.months += 1; x.category = r.category || x.category;
+      people.set(k, x);
+    }
+    const plist = [...people.values()].sort((a, b) => (a.category === b.category ? b.total - a.total : a.category === '' ? 1 : b.category === '' ? -1 : a.category.localeCompare(b.category)));
+    const emp = `<table class="mf-tbl"><thead><tr><th>Employee</th><th style="text-align:left;">Category</th><th>Months</th><th>Total</th><th>Per month</th></tr></thead><tbody>
+      ${plist.map((p) => `<tr><td>${esc(p.name)}</td><td style="text-align:left;color:${p.category ? '#334155' : '#b45309'};">${esc(catName(p.category))}</td><td>${p.months}</td><td>${H.inr0(Math.round(p.total))}</td><td>${p.months ? H.inr0(Math.round(p.total / p.months)) : '-'}</td></tr>`).join('')}
+      </tbody></table>`;
+    const upl = months.map((m) => { const r = SAL.find((x) => x.month === m); return `<span style="display:inline-flex;gap:6px;align-items:center;border:1px solid #e2e8f0;border-radius:8px;padding:4px 8px;font-size:12px;background:#fff;">
+      <b>${monName(m)}</b> <span style="color:#94a3b8;">${esc(r.file_name || '')}${r.uploaded_by ? ' · ' + esc(r.uploaded_by) : ''}</span>
+      <button class="btn-secondary btn-sm" data-saldel="${m}" style="padding:1px 7px;font-size:11px;color:#dc2626;">✕</button></span>`; }).join(' ');
+    return `${top}
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">${cards}
+        <div style="background:#0f172a;color:#fff;border-radius:12px;padding:12px 16px;min-width:180px;"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.7;">Total salary</div>
+        <div style="font-size:20px;font-weight:800;margin-top:2px;">₹ ${H.inr0(Math.round(total))}</div><div style="font-size:11.5px;opacity:.7;">${monName(_salFrom)}${_salFrom !== _salTo ? ' – ' + monName(_salTo) : ''}</div></div></div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;margin-bottom:12px;">${grid}</div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;max-height:60vh;">${emp}</div>
+      <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><span style="font-size:11.5px;color:#94a3b8;">Uploaded:</span> ${upl}</div>`;
+  }
+
+  function salaryUpload() {
+    let sheet = null;
+    H.openModal({
+      id: 'mf-sal', width: 640, title: 'Upload Salary Sheet', subtitle: 'The month\'s salary sheet as it is — uploading a month again replaces it',
+      bodyHTML: `${H.grid(
+        `<div><label style="${H.LABEL}">Salary sheet (.xlsx / .xls) <span style="color:#ef4444">*</span></label><input id="sal-file" type="file" accept=".xlsx,.xls,.csv" style="${H.CONTROL}padding:6px;" /></div>`
+        + H.field('sal-month', 'Month', '', { type: 'month', required: true, hint: 'Filled from the sheet\'s Months column' }))}
+        <div id="sal-prev" style="margin-top:12px;"></div>`,
+      confirmText: 'Save',
+      onOpen: () => {
+        document.getElementById('sal-file').addEventListener('change', async (e) => {
+          const f = e.target.files[0];
+          const box = document.getElementById('sal-prev');
+          if (!f) return;
+          box.innerHTML = H.spinner('Reading…');
+          try {
+            const XLSX = await Utils.loadXlsx();
+            if (!XLSX) throw new Error('Could not load the Excel library — check the internet connection');
+            const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+            const ws = wb.SheetNames.map((n) => XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false, defval: '' }))
+              .find((rows) => rows.slice(0, 15).some((r) => r.some((c) => /employee\s*name/i.test(String(c)))));
+            if (!ws) throw new Error('No sheet in this file has an “Employee Name” column');
+            sheet = ws;
+            const p = await H.post('/api/mis-finance/salary/preview', { sheet });
+            if (p.months[0] && !H.val('sal-month')) document.getElementById('sal-month').value = p.months[0];
+            box.innerHTML = `<div class="mf-note"><b>${p.count}</b> employees · total <b>₹ ${H.inr0(Math.round(p.total))}</b>${p.months.length > 1 ? ` · <span style="color:#b45309;">the sheet has ${p.months.length} months — it is saved as the month above</span>` : ''}<br>
+              ${Object.entries(p.byCategory).map(([c, v]) => `${esc(catName(c))}: <b>₹ ${H.inr0(Math.round(v))}</b>`).join(' · ')}</div>`;
+          } catch (err) { sheet = null; box.innerHTML = `<div class="mf-warn">${esc(err.message)}</div>`; }
+        });
+      },
+      onConfirm: async () => {
+        if (!sheet) throw new Error('Choose the salary sheet');
+        if (!H.val('sal-month')) throw new Error('Choose the month');
+        const r = await H.post('/api/mis-finance/salary', { sheet, month: H.val('sal-month'), file_name: document.getElementById('sal-file').files[0]?.name || '' });
+        H.closeModal('mf-sal');
+        H.toast(`${monName(r.month)} salary saved — ${r.count} employees`);
+        SAL = null; _salFrom = ''; _salTo = r.month;
+        await render();
+      },
+    });
+  }
+
+  async function salaryXlsx() {
+    const XLSX = await Utils.loadXlsx();
+    if (!XLSX) return H.fail(new Error('Could not load the Excel library'));
+    const months = [...new Set(SAL.map((r) => r.month))].sort().filter((m) => m >= _salFrom && m <= _salTo);
+    const rows = SAL.filter((r) => months.includes(r.month));
+    const cats = [...new Set(SAL.map((r) => r.category))];
+    const sum = (list) => Math.round(list.reduce((a, r) => a + r.total, 0));
+    const wb = XLSX.utils.book_new();
+    const a = [['Salary by Category'], [], ['Category', ...months.map(monName), 'Total']];
+    for (const c of cats) a.push([catName(c), ...months.map((m) => sum(rows.filter((r) => r.month === m && r.category === c))), sum(rows.filter((r) => r.category === c))]);
+    a.push(['Total', ...months.map((m) => sum(rows.filter((r) => r.month === m))), sum(rows)]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(a), 'By Category');
+    const b = [['Month', 'Employee Name', 'Category', 'Total']];
+    for (const r of rows) b.push([monName(r.month), r.name, catName(r.category), r.total]);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(b), 'Employees');
+    XLSX.writeFile(wb, `Salary by Category ${_salFrom} to ${_salTo}.xlsx`);
+  }
+
   function divisionsTab() {
     return `<div class="br-card" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;max-width:560px;">
       <div style="font-size:12px;color:#64748b;margin-bottom:8px;">One per line. Renaming a line keeps its uploads (same position).</div>
@@ -614,6 +742,15 @@ window.Pages['mis-finance'] = (() => {
     bindNewHead();
     document.querySelectorAll('[data-mf-tab]').forEach((b) => b.addEventListener('click', () => { _tab = b.getAttribute('data-mf-tab'); render(); }));
     $('mf-up')?.addEventListener('click', uploadForm);
+    $('sal-up')?.addEventListener('click', salaryUpload);
+    $('sal-xlsx')?.addEventListener('click', () => salaryXlsx().catch(H.fail));
+    $('sal-from')?.addEventListener('change', (e) => { _salFrom = e.target.value; render(); });
+    $('sal-to')?.addEventListener('change', (e) => { _salTo = e.target.value; render(); });
+    document.querySelectorAll('[data-saldel]').forEach((b) => b.addEventListener('click', async () => {
+      const m = b.getAttribute('data-saldel');
+      if (!(await Utils.showConfirm(`Delete the ${monName(m)} salary sheet?`, { title: 'Delete salary month', confirmText: 'Delete', danger: true }))) return;
+      try { await H.del(`/api/mis-finance/salary/${m}`); H.toast('Deleted'); SAL = null; await render(); } catch (e) { H.fail(e); }
+    }));
     $('mf-period')?.addEventListener('change', (e) => { _period = e.target.value; render(); });
     $('mf-div')?.addEventListener('change', (e) => { _div = e.target.value; render(); });
     document.querySelectorAll('[data-stmt]').forEach((b) => b.addEventListener('click', () => { _stmt = b.getAttribute('data-stmt'); render(); }));
