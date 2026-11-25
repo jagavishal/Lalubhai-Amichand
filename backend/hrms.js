@@ -3273,6 +3273,10 @@ function mountHrms(app, ctx) {
               WHERE a.att_date = $1 AND a.status = 'Absent' AND e.status = 'Active'
               ORDER BY e.name ASC`, [todayIso]).catch(() => []),
         ]);
+        // Directors away (Scheduler → Management leave) — 25 Nov 2026:
+        // "management se koi available nahi hai to vo bhi dalo".
+        const mgmt = await q(`SELECT name, half_day, to_date FROM management_leaves WHERE from_date <= $1 AND to_date >= $2 ORDER BY name ASC`,
+          [todayIso, todayIso]).catch(() => []);
         const leave = onLeave.map((r) => ({
           name: r.name || '—',
           type: r.leave_type || 'CL',
@@ -3280,6 +3284,9 @@ function mountHrms(app, ctx) {
           backup: r.backup_name || '',
           till: isoDate(r.to_date) || '',
         }));
+        for (const r of mgmt) {
+          leave.push({ name: r.name || '—', type: 'Management', mgmt: true, half: String(r.half_day || 'full') !== 'full', backup: '', till: isoDate(r.to_date) || '' });
+        }
         const leaveNames = new Set(leave.map((x) => x.name.toLowerCase()));
         res.json({
           leave,

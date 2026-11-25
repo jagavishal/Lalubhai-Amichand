@@ -16736,13 +16736,16 @@ app.get('/api/company-overview', requireAuth, requireCeoDashboard, async (req, r
       const rows = await q(`SELECT l.user_name AS "userName", e.name AS "empName", l.leave_type AS "leaveType", l.type, l.half_day AS "halfDay", l.from_date AS "fromDate", l.to_date AS "toDate"
                               FROM leaves l LEFT JOIN hr_employees e ON e.id = l.employee_id
                              WHERE LOWER(l.status) = 'approved' AND l.from_date <= $1 AND l.to_date >= $2
-                             ORDER BY l.from_date ASC`, [weekEnd, today]);
+                             ORDER BY l.from_date ASC`, [weekEnd, today]).catch((e) => { console.error('[company-overview] leaves:', e.message); return []; });
       const all = rows.map(r => ({
         name: r.empName || r.userName || '—',
         type: r.leaveType || r.type || 'Leave',
         halfDay: String(r.halfDay || 'full') !== 'full',
         from: toDateStr(r.fromDate), to: toDateStr(r.toDate),
       }));
+      // Directors away (Scheduler → Management leave), 25 Nov 2026.
+      const mg = await q(`SELECT name, half_day AS "halfDay", from_date AS "fromDate", to_date AS "toDate" FROM management_leaves WHERE from_date <= $1 AND to_date >= $2 ORDER BY from_date ASC`, [weekEnd, today]).catch(() => []);
+      for (const r of mg) all.push({ name: r.name || '—', type: 'Management', mgmt: true, halfDay: String(r.halfDay || 'full') !== 'full', from: toDateStr(r.fromDate), to: toDateStr(r.toDate) });
       data.leave.onLeaveToday = all.filter(x => x.from <= today);
       data.leave.upcoming = all.filter(x => x.from > today);
       const pend = await q(`SELECT COUNT(*) AS c FROM leaves WHERE LOWER(status) LIKE 'pending%'`);

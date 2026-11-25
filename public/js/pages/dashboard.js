@@ -223,7 +223,8 @@ window.Pages.dashboard = (function () {
           <div style="flex:1;min-width:0;">
             <div class="db-hero-label" style="color:#059669;">On Leave Today</div>
             <div style="font-size:1.6rem;font-weight:800;color:var(--text-primary);margin-top:2px;line-height:1.2;">
-              ${leave.length} Employee${leave.length === 1 ? '' : 's'}
+              ${(() => { const m = leave.filter((r) => r.mgmt).length, e = leave.length - m;
+                return [e ? `${e} Employee${e === 1 ? '' : 's'}` : '', m ? `${e ? '+ ' : ''}${m} Management` : ''].filter(Boolean).join(' '); })()}
               ${absent.length ? `<span style="font-size:12px;font-weight:700;color:#dc2626;margin-left:4px;">+ ${absent.length} absent</span>` : ''}
             </div>
             <div style="font-size:12px;color:var(--text-secondary);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
@@ -231,8 +232,8 @@ window.Pages.dashboard = (function () {
             </div>
             <button type="button" id="db-ol-toggle" style="margin-top:8px;border:none;background:none;padding:0;font-size:12.5px;font-weight:700;color:#059669;cursor:pointer;">View details →</button>
             <div id="db-ol-list" style="display:none;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:150px;overflow-y:auto;">
-              ${leave.map((r) => chip('rgba(16,185,129,.08)', 'rgba(16,185,129,.25)',
-                `<b style="color:var(--text-primary);">${esc(r.name)}</b><span style="color:#059669;font-size:11px;font-weight:600;">${esc(r.type)}${r.half ? ' · half day' : ''}</span>${r.backup ? `<span style="color:var(--text-secondary);font-size:11px;">→ ${esc(r.backup)}</span>` : ''}`)).join('')}
+              ${leave.map((r) => chip(r.mgmt ? 'rgba(1,80,170,.08)' : 'rgba(16,185,129,.08)', r.mgmt ? 'rgba(1,80,170,.25)' : 'rgba(16,185,129,.25)',
+                `<b style="color:var(--text-primary);">${esc(r.name)}</b><span style="color:${r.mgmt ? '#0150AA' : '#059669'};font-size:11px;font-weight:600;">${esc(r.mgmt ? 'Management · not available' : r.type)}${r.half ? ' · half day' : ''}</span>${r.backup ? `<span style="color:var(--text-secondary);font-size:11px;">→ ${esc(r.backup)}</span>` : ''}`)).join('')}
               ${absent.map((n) => chip('rgba(239,68,68,.07)', 'rgba(239,68,68,.25)',
                 `<b style="color:var(--text-primary);">${esc(n)}</b><span style="color:#dc2626;font-size:11px;font-weight:600;">no leave</span>`)).join('')}
             </div>
