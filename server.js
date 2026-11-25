@@ -11378,7 +11378,7 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
   // currency. The template is painted with the defaults, so a PI that has not
   // been priced yet (and every PI raised before these were selectable) reads
   // exactly as it always did.
-  const money = PI_FMT.priceLabels(form.priceType, form.currency);
+  const money = PI_FMT.priceLabels(form.priceType, form.currency, form.rateBasis);
   put(`${IT.fields.rate}${L.itemHeaderRow}`, money.rateHeader);
   put(`${IT.amountCol}${L.itemHeaderRow}`, money.amountHeader);
   put(`${L.totalCapFirst}${L.wordsRow}`, money.totalCaption);
@@ -11450,12 +11450,14 @@ async function _fillPiTemplate(sheets, form, templateSheetId) {
     // Working columns the buyer's copy leaves out (Total Weight). Re-applied
     // on every fill rather than baked into the template, so re-running
     // scripts/rebuild-pi-sheet.js cannot quietly put them back on the PDF.
+    // A PI priced per Kg prints Total Weight — the rate is read against it.
+    const perKg = PI_FMT.rateBasisOf(form) === 'kg';
     (IT.printHiddenCols || []).forEach(col => {
       const idx = _piColIndex(col);
       requests.push({
         updateDimensionProperties: {
           range: { sheetId: templateSheetId, dimension: 'COLUMNS', startIndex: idx, endIndex: idx + 1 },
-          properties: { hiddenByUser: true }, fields: 'hiddenByUser',
+          properties: { hiddenByUser: !(perKg && col === IT.fields.weight) }, fields: 'hiddenByUser',
         },
       });
     });
@@ -12374,6 +12376,7 @@ app.get('/api/proforma-invoice/masters', requireAuth, async (req, res) => {
       rateSheetUrl: PI_FMT.RATE_SOURCE.url,
       // For the Add Price screen's two dropdowns.
       priceTypes: PI_FMT.PRICE_TYPES,
+      rateBases: PI_FMT.RATE_BASES,
       currencies: Object.keys(PI_FMT.CURRENCIES),
       priceDefault: PI_FMT.PRICE_DEFAULT,
       // For the Order Sheet tab's form, so its standing packing instructions
@@ -12681,7 +12684,7 @@ app.post('/api/proforma-invoice', requireAuth, sheetSerialised('pi', async (req,
     const form = _piFormFromBody(b, req.session.user, cleanItems);
 
     await _fillPiTemplate(sheets, { ...form, piNo: piNoFormatted }, templateSheetId);
-    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNoFormatted, templateSheetId, PI_FMT.priceLabels(form.priceType, form.currency), cleanItems.length);
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNoFormatted, templateSheetId, PI_FMT.priceLabels(form.priceType, form.currency, form.rateBasis), cleanItems.length);
 
     await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, PI_LOG_HEADER);
     await appendLogRow(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, [
@@ -12854,7 +12857,7 @@ app.post('/api/proforma-invoice/revise', requireAuth, sheetSerialised('pi', asyn
     await _ensurePiTemplate(sheets, meta);
     const { templateSheetId } = meta;
     await _fillPiTemplate(sheets, { ...form, piNo: newPiNo }, templateSheetId);
-    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, newPiNo, templateSheetId, PI_FMT.priceLabels(form.priceType, form.currency), cleanItems.length);
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, newPiNo, templateSheetId, PI_FMT.priceLabels(form.priceType, form.currency, form.rateBasis), cleanItems.length);
 
     await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, PI_LOG_HEADER);
     await appendLogRow(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, [
@@ -13356,6 +13359,9 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi', async 
     // buyer's price basis. Re-pricing without sending them keeps what the PI
     // already had.
     const wantType = String(req.body?.priceType || '').trim();
+    // Rate per Pc (default) or per Kg — see PI_FMT.RATE_BASES.
+    const wantBasis = String(req.body?.rateBasis || '').trim().toLowerCase();
+    if (wantBasis && !PI_FMT.RATE_BASES[wantBasis]) return res.status(400).json({ error: 'Rate must be per Pc or per Kg' });
     const wantCurrency = String(req.body?.currency || '').trim().toUpperCase();
     if (wantType && !PI_FMT.PRICE_TYPES.includes(wantType)) {
       return res.status(400).json({ error: `Price type must be one of ${PI_FMT.PRICE_TYPES.join(', ')}` });
@@ -13390,6 +13396,7 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi', async 
       items: mergedItems,
       priceType: wantType || existingForm.priceType || PI_FMT.PRICE_DEFAULT.priceType,
       currency: wantCurrency || existingForm.currency || PI_FMT.PRICE_DEFAULT.currency,
+      rateBasis: wantBasis || existingForm.rateBasis || 'pc',
       ratePerKg: ratePerKg > 0 ? ratePerKg : (existingForm.ratePerKg || ''),
       extraCharges: extraChargeLines,
       specialDiscounts: discountLines,
@@ -13412,7 +13419,7 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi', async 
       await _ensurePiTemplate(sheets, meta);
       const { templateSheetId } = meta;
       await _fillPiTemplate(sheets, { ...pricedForm, piNo: newPiNo }, templateSheetId);
-      const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, newPiNo, templateSheetId, PI_FMT.priceLabels(pricedForm.priceType, pricedForm.currency), mergedItems.length);
+      const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, newPiNo, templateSheetId, PI_FMT.priceLabels(pricedForm.priceType, pricedForm.currency, pricedForm.rateBasis), mergedItems.length);
 
       await ensureLogTab(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, PI_LOG_HEADER);
       await appendLogRow(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, [
@@ -13433,7 +13440,7 @@ app.put('/api/proforma-invoice/price', requireAuth, sheetSerialised('pi', async 
     await _ensurePiTemplate(sheets, meta);
     const { templateSheetId } = meta;
     await _fillPiTemplate(sheets, { ...pricedForm, piNo }, templateSheetId);
-    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNo, templateSheetId, PI_FMT.priceLabels(pricedForm.priceType, pricedForm.currency), mergedItems.length);
+    const { totalAmount, pdfLink } = await _finishPiSubmission(sheets, piNo, templateSheetId, PI_FMT.priceLabels(pricedForm.priceType, pricedForm.currency, pricedForm.rateBasis), mergedItems.length);
 
     await _updateLogRowCells(PI_CREATION_SHEET_ID, PI_CREATION_LOG_TAB, piNo, {
       D: totalAmount ?? '', E: pdfLink || rowVals[4] || '', H: req.session.user.name || '', I: _timestampForSheet(),

@@ -24,7 +24,7 @@
 // stamps the version it painted onto the tab as developer metadata and
 // repaints the tab before the next fill when the two differ — so a layout
 // change ships with an ordinary deploy, no script run needed.
-const TEMPLATE_VERSION = 3;
+const TEMPLATE_VERSION = 4;   // 4: amount = weight × rate when the rate is per Kg
 const TEMPLATE_VERSION_KEY = 'lal_pi_template_version';
 
 const LETTERHEAD = {
@@ -285,15 +285,24 @@ const CURRENCIES = {
 // printed before the two were selectable ("C&F US$", spelled CNF here).
 const PRICE_DEFAULT = { priceType: 'CNF', currency: 'USD' };
 
+// What the rate is per (Shival, 25 Nov 2026: "for few customers the rate is
+// shared per kg instead of per pc — the weight of the item needs to show in
+// the PI and the rate will be per kg"). 'kg': the rate header reads "Per Kg",
+// Total Weight (Kgs) is printed, and each line's amount is weight × rate —
+// the amount formula reads the rate header (RATE_HEADER_CELL), so the switch
+// needs no per-PI formula writes.
+const RATE_BASES = { pc: 'Pc', kg: 'Kg' };
+const rateBasisOf = (form) => (String(form?.rateBasis || '').toLowerCase() === 'kg' ? 'kg' : 'pc');
+
 // The four money labels for one PI, from its stored priceType/currency. Falls
 // back to the default for a PI raised before these existed, so an old draft
 // re-prints exactly as it always did.
-function priceLabels(priceType, currency) {
+function priceLabels(priceType, currency, rateBasis) {
   const c = CURRENCIES[String(currency || '').toUpperCase()] || CURRENCIES[PRICE_DEFAULT.currency];
   const type = String(priceType || '').trim() || PRICE_DEFAULT.priceType;
   return {
     type,
-    rateHeader: `${type} ${c.label} Per Pc`,
+    rateHeader: `${type} ${c.label} Per ${String(rateBasis || '').toLowerCase() === 'kg' ? 'Kg' : 'Pc'}`,
     amountHeader: `Amount (${c.label})`,
     totalCaption: `Total ${type} ${c.label}`,
     words: c.words,
@@ -483,7 +492,7 @@ function validityNote(validity) {
 
 module.exports = {
   TEMPLATE_VERSION, TEMPLATE_VERSION_KEY,
-  LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, GRAND_TOTAL_CELL,
+  LETTERHEAD, LAYOUT, PARTY_LABELS, CELLS, ITEMS, TOTAL_CELL, GRAND_TOTAL_CELL, RATE_BASES, rateBasisOf,
   PRODUCT_SOURCE, RATE_SOURCE, CONTAINERS, CONSIGNEE_SOURCE, FMS_TRACKER, DEFAULTS, SHIPMENT_DAYS_RE,
   PRICE_TYPES, CURRENCIES, PRICE_DEFAULT, priceLabels, validityNote,
 };

@@ -1641,23 +1641,26 @@ window.Pages['proforma-invoice'] = (() => {
     let itemsTotal = 0;
     const kgEl = document.getElementById('pipm-rate-kg');
     const rateKg = kgEl ? _num(kgEl.value) : 0;
+    const perKgBasis = (document.getElementById('pipm-basis') || {}).value === 'kg';
     modal.querySelectorAll('.pipm-item-row').forEach(row => {
       const qty = _num(row.dataset.qty);
       const weightPc = _num(row.dataset.weightPc);
       const rate = _num(row.querySelector('.pipm-rate').value);
-      const amt = Math.round(qty * rate * 100) / 100;
+      // Per Kg: the line's Total Weight × the rate, as the printed PI does.
+      const amt = Math.round((perKgBasis ? _num(row.dataset.weight) : qty) * rate * 100) / 100;
       row.querySelector('.pipm-amount').textContent = _fmtUsd(amt);
       itemsTotal += amt;
       // The typed rate read back as a rate per kg — the check the pricer
       // does in their head, done for them.
       const perKg = row.querySelector('.pipm-perkg');
-      if (perKg) perKg.textContent = (rate > 0 && weightPc > 0) ? '= ' + _fmtRate(rate / weightPc) + ' /kg' : '';
+      if (perKg) perKg.textContent = perKgBasis ? ((rate > 0 && weightPc > 0) ? '= ' + _fmtRate(rate * weightPc) + ' /pc' : '')
+        : ((rate > 0 && weightPc > 0) ? '= ' + _fmtRate(rate / weightPc) + ' /kg' : '');
       // And the other way round: the rate per kg typed at the top, times
       // this line's weight, offered as the rate to use.
       const kg = row.querySelector('.pipm-kg');
       if (kg) {
-        if (rateKg > 0 && weightPc > 0) {
-          const suggested = Math.round(rateKg * weightPc * 1000) / 1000;
+        if (rateKg > 0 && (perKgBasis || weightPc > 0)) {
+          const suggested = perKgBasis ? rateKg : Math.round(rateKg * weightPc * 1000) / 1000;
           kg.innerHTML = 'At ' + esc(_fmtRate(rateKg)) + '/kg: <a href="#" class="pipm-rate-use" data-rate="' + esc(suggested) + '" style="color:#b45309;font-weight:700;text-decoration:none;">' + esc(_fmtRate(suggested)) + '</a>';
         } else {
           kg.innerHTML = '';
@@ -1788,6 +1791,8 @@ window.Pages['proforma-invoice'] = (() => {
     // the house default.
     const priceType = form.priceType || _priceDefault.priceType;
     const currency = form.currency || _priceDefault.currency;
+    const basis = String(form.rateBasis || '').toLowerCase() === 'kg' ? 'kg' : 'pc';
+    const per = basis === 'kg' ? ' Per Kg' : ' Per Pc';
 
     modal.innerHTML = '<div class="pi-sheet-ov" style="position:fixed;inset:0;background:rgba(15,23,42,.5);display:grid;place-items:center;z-index:50;padding:16px;overflow-y:auto;" id="pipm-backdrop">'
       + '<div class="pi-sheet" style="background:#fff;border-radius:18px;width:100%;max-width:1040px;box-shadow:0 24px 64px rgba(0,0,0,.18);overflow:hidden;">'
@@ -1809,8 +1814,13 @@ window.Pages['proforma-invoice'] = (() => {
           + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">'
             + _priceSelectHtml('pipm-price-type', 'Price Type', _priceTypes, priceType)
             + _priceSelectHtml('pipm-currency', 'Currency', _currencies, currency)
+            + '<div><div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Rate per</div>'
+              + '<select id="pipm-basis" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e293b;background:#fff;cursor:pointer;outline:none;">'
+                + '<option value="pc"' + (basis === 'pc' ? ' selected' : '') + '>Per Pc</option>'
+                + '<option value="kg"' + (basis === 'kg' ? ' selected' : '') + '>Per Kg (weight printed on the PI)</option>'
+              + '</select></div>'
           + '</div>'
-          + '<div id="pipm-price-note" style="font-size:11.5px;color:#94a3b8;margin:-8px 2px 0;">The PI prints these: “' + esc(priceType + ' ' + _currencyLabel(currency)) + ' Per Pc” on the rate column, and the total and amount in words to match.</div>'
+          + '<div id="pipm-price-note" style="font-size:11.5px;color:#94a3b8;margin:-8px 2px 0;">The PI prints these: “' + esc(priceType + ' ' + _currencyLabel(currency) + per) + '” on the rate column, and the total and amount in words to match.' + (basis === 'kg' ? ' Total Weight (Kgs) is printed and each amount is weight × rate.' : '') + '</div>'
           // The rate-per-kg working. Aluminium is priced by weight: the
           // pricer settles a rate per kg, and each line's per-piece rate is
           // that times the piece's weight. Typed once here, it is offered on
@@ -1834,14 +1844,14 @@ window.Pages['proforma-invoice'] = (() => {
                 // The last two follow the dropdowns above, so this screen
                 // reads the same way the printed PI will.
                 + ['Photo', 'Model No.', 'Client Code', 'Item Name', 'Size', 'Total Qty', 'Wt / Pc (Kgs)', 'Total Weight (Kgs)'].map(h => '<th style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(h) + '</th>').join('')
-                + '<th id="pipm-rate-head" style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(priceType + ' ' + _currencyLabel(currency) + ' Per Pc') + '</th>'
+                + '<th id="pipm-rate-head" style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc(priceType + ' ' + _currencyLabel(currency) + per) + '</th>'
                 + '<th id="pipm-amount-head" style="padding:7px 8px;text-align:left;font-size:10.5px;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;">' + esc('Amount (' + _currencyLabel(currency) + ')') + '</th>'
               + '</tr></thead>'
               + '<tbody>' + items.map((it, i) => {
                   const qty = _num(it.qty), weight = _num(it.weight);
                   const weightPc = _num(it.weightPerPc) || (qty > 0 && weight > 0 ? Math.round((weight / qty) * 1000) / 1000 : 0);
                   return ''
-                + '<tr class="pipm-item-row" data-index="' + i + '" data-qty="' + esc(it.qty || 0) + '" data-weight-pc="' + esc(weightPc || '') + '" style="border-bottom:1px solid #f1f5f9;">'
+                + '<tr class="pipm-item-row" data-index="' + i + '" data-qty="' + esc(it.qty || 0) + '" data-weight="' + esc(it.weight || 0) + '" data-weight-pc="' + esc(weightPc || '') + '" style="border-bottom:1px solid #f1f5f9;">'
                   + '<td class="m-card-hide" style="padding:6px 8px;">' + (it.imageUrl
                       ? '<img src="' + esc(it.imageUrl) + '" alt="" onerror="this.remove()" style="width:34px;height:34px;object-fit:contain;" />'
                       : '<span style="color:#cbd5e1;font-size:11px;">—</span>') + '</td>'
@@ -1911,13 +1921,16 @@ window.Pages['proforma-invoice'] = (() => {
     const relabel = () => {
       const t = document.getElementById('pipm-price-type').value;
       const c = _currencyLabel(document.getElementById('pipm-currency').value);
+      const kgB = (document.getElementById('pipm-basis') || {}).value === 'kg';
+      const p = kgB ? ' Per Kg' : ' Per Pc';
       const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
-      set('pipm-rate-head', t + ' ' + c + ' Per Pc');
+      set('pipm-rate-head', t + ' ' + c + p);
       set('pipm-amount-head', 'Amount (' + c + ')');
       set('pipm-total-cap', 'Grand Total ' + t + ' ' + c + ' ');
-      set('pipm-price-note', 'The PI prints these: “' + t + ' ' + c + ' Per Pc” on the rate column, and the total and amount in words to match.');
+      set('pipm-price-note', 'The PI prints these: “' + t + ' ' + c + p + '” on the rate column, and the total and amount in words to match.' + (kgB ? ' Total Weight (Kgs) is printed and each amount is weight × rate.' : ''));
+      _priceRecompute();
     };
-    ['pipm-price-type', 'pipm-currency'].forEach(id => {
+    ['pipm-price-type', 'pipm-currency', 'pipm-basis'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('change', relabel);
     });
@@ -1929,11 +1942,13 @@ window.Pages['proforma-invoice'] = (() => {
       const rateKg = _num(kgEl && kgEl.value);
       if (!(rateKg > 0)) { Utils.showToast('Type the rate per kg first', 'warning'); kgEl && kgEl.focus(); return; }
       let filled = 0;
+      const kgBasis = (document.getElementById('pipm-basis') || {}).value === 'kg';
       modal.querySelectorAll('.pipm-item-row').forEach(rowEl => {
         const input = rowEl.querySelector('.pipm-rate');
         const weightPc = _num(rowEl.dataset.weightPc);
-        if (!input || input.value.trim() || !(weightPc > 0)) return;
-        input.value = String(Math.round(rateKg * weightPc * 1000) / 1000);
+        if (!input || input.value.trim() || (!kgBasis && !(weightPc > 0))) return;
+        // Per Kg: the rate itself; per Pc: the rate per kg × the piece's weight.
+        input.value = String(kgBasis ? rateKg : Math.round(rateKg * weightPc * 1000) / 1000);
         filled++;
       });
       _priceRecompute();
@@ -2019,6 +2034,7 @@ window.Pages['proforma-invoice'] = (() => {
           items,
           priceType: document.getElementById('pipm-price-type').value,
           currency: document.getElementById('pipm-currency').value,
+          rateBasis: (document.getElementById('pipm-basis') || {}).value || 'pc',
           ratePerKg: (document.getElementById('pipm-rate-kg') || {}).value || '',
           extraCharges: chargeLines('extra'),
           specialDiscounts: chargeLines('discount'),

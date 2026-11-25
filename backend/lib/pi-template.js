@@ -174,7 +174,11 @@ async function paintPiTemplate(sheets, spreadsheetId, sheetId, tabTitle, log) {
         this painter only; server.js clears around them but never over them. */
   const QTY = ITEMS.qtyCol, RATE = ITEMS.fields.rate;
   for (let r = L.itemsFirstRow; r <= L.itemsLastRow; r++) {
-    values.push({ range: `'${TAB}'!${ITEMS.amountCol}${r}`, values: [[`=IF(${QTY}${r}="","",ROUND(${QTY}${r}*${RATE}${r},2))`]] });
+    // Qty × rate — or Total Weight × rate when the rate header (written per
+    // PI from its rate basis) says "Per Kg".
+    const W = ITEMS.fields.weight;
+    const HDR = `$${RATE}$${L.itemHeaderRow}`;
+    values.push({ range: `'${TAB}'!${ITEMS.amountCol}${r}`, values: [[`=IF(${QTY}${r}="","",ROUND(IF(ISNUMBER(SEARCH("PER KG",${HDR})),N(${W}${r}),${QTY}${r})*${RATE}${r},2))`]] });
   }
   const sumRange = (col) => `=IF(SUM(${col}${L.itemsFirstRow}:${col}${L.itemsLastRow})=0,"",SUM(${col}${L.itemsFirstRow}:${col}${L.itemsLastRow}))`;
   values.push(put(`A${L.totalRow}`, 'TOTAL'));
