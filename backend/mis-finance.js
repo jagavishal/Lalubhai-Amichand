@@ -43,6 +43,10 @@ const MF_SCHEMA = [
   // Typed on the upload when the books' opening stock differs from Tally's
   // (Export keeps its own stock summary — Jayesh, 19 Nov 2026).
   `ALTER TABLE mis_tb_uploads ADD COLUMN IF NOT EXISTS opening_stock DECIMAL(16,2) DEFAULT NULL`,
+  // Interest paid in the period, typed on the upload like the closing stock
+  // (Jayesh, 24 Nov 2026: "interest paid ka box dena hai … same amount idhar
+  // aa jayega") — the Profitability memo and the Cash Flow's interest lines.
+  `ALTER TABLE mis_tb_uploads ADD COLUMN IF NOT EXISTS interest_paid DECIMAL(16,2) DEFAULT NULL`,
 ];
 
 const CFG = { divisions: 'misfin_divisions', map: 'misfin_map', heads: 'misfin_heads' };
@@ -619,8 +623,9 @@ function profitability(t, names, stock) {
   // column gets the same lines and the Variance lines up).
   const hasBtp = (F.btp || []).length > 0, hasFx = (F.fx || []).length > 0;
   const dexpLines = F.dexp || [];
-  const interestOnLoan = round2(Object.values(g('iexp').ledgers).filter((d) => /interest\s*on\s*loan|loan\s*interest/i.test(d.name))
-    .reduce((a, d) => a + (d.close - (t.hasOpening ? d.open : 0)), 0));
+  const interestOnLoan = t.interestPaid != null ? round2(t.interestPaid)
+    : round2(Object.values(g('iexp').ledgers).filter((d) => /interest\s*on\s*loan|loan\s*interest/i.test(d.name))
+      .reduce((a, d) => a + (d.close - (t.hasOpening ? d.open : 0)), 0));
   return [
     ['H', 'Sales', sales, 1], ...ledgers('sales', 'l', 1), ['sp'],
     ['H', 'Direct Income', dinc, 1], ...ledgers('dinc', 'l', 1), ['sp'],
@@ -723,6 +728,7 @@ function statements(t, from, to, names = {}) {
     ['pct', 'EBITDA %', div0(ebitda * 100, revenue)],
     ...withDetail('depreciation', 'Depreciation', dep),
     ...withDetail('finance_cost', 'Interest & Finance Cost', fin),
+    ...(t.interestPaid != null ? [['d', 'of which Interest on Loan (typed on the upload)', r2(t.interestPaid)]] : []),
     ['T', 'Profit Before Tax', r2(pbt)],
     ...withDetail('tax', 'Income Tax', tax),
     ['T', 'Net Profit', r2(pat)],
@@ -743,7 +749,12 @@ function statements(t, from, to, names = {}) {
       ['other_cl', 'Increase / (Decrease) in Other Current Liabilities', chg('other_cl')],
     ];
     const intInc = pl('interest_income');
-    const beforeWc = pbt + dep + fin - intInc;
+    // Interest typed on the upload: only that is added back in operating
+    // and shown as paid under financing (the rest of the finance cost —
+    // bank charges etc. — stays an operating expense), as in the old sheet.
+    const intPaid = t.interestPaid != null ? t.interestPaid : fin;
+    const intTyped = t.interestPaid != null;
+    const beforeWc = pbt + dep + intPaid - intInc;
     const cfo = beforeWc + wc.reduce((a, x) => a + x[2], 0) - tax;
     const capex = -(chg('fixed_assets') + dep);
     const inv = -chg('investments');
@@ -751,7 +762,7 @@ function statements(t, from, to, names = {}) {
     const loans = chg('secured_loans') + chg('unsecured_loans');
     const od = chg('bank_od');
     const cap = chg('capital') + chg('pl_account');
-    const cff = cap + loans + od - fin;
+    const cff = cap + loans + od - intPaid;
     // Inter-division (Branch / Divisions) transfers sit between the period's
     // cash flow and the closing balance, as in the old sheet; suspense and
     // unmapped ledgers likewise.
@@ -765,7 +776,7 @@ function statements(t, from, to, names = {}) {
       ['h', 'A. Cash Flow from Operating Activities'],
       ['', 'Net Profit Before Tax', r2(pbt)],
       ['depreciation', 'Add: Depreciation', r2(dep)],
-      ['finance_cost', 'Add: Interest & Finance Cost', r2(fin)],
+      ['finance_cost', intTyped ? 'Add: Interest on Loan' : 'Add: Interest & Finance Cost', r2(intPaid)],
       ['interest_income', 'Less: Interest Income', r2(-intInc)],
       ['t', 'Operating Profit before Working Capital Changes', r2(beforeWc)],
       ...wc.map(([k, l, x]) => [k, l, r2(x)]),
@@ -780,7 +791,7 @@ function statements(t, from, to, names = {}) {
       ['capital', 'Capital Introduced / (Withdrawn)', r2(cap)],
       ['secured_loans', 'Loans Taken / (Repaid)', r2(loans)],
       ['bank_od', 'Increase / (Decrease) in Bank OD / CC', r2(od)],
-      ['finance_cost', 'Interest Paid', r2(-fin)],
+      ['finance_cost', intTyped ? 'Less: Interest Paid' : 'Interest Paid', r2(-intPaid)],
       ['T', 'Net Cash from Financing Activities (C)', r2(cff)],
       ['T', 'Net Cash Inflow / (Outflow) during the Period (A+B+C)', r2(net)],
       ['', 'Opening Cash & Bank', r2(openCash)],
@@ -883,13 +894,13 @@ function mountMisFinance(app, ctx) {
   const depth = (rows, i) => { let d = 0; let p = rows[i].parent; while (p >= 0 && d < 20) { d++; p = rows[p].parent; } return d; };
 
   app.get('/api/mis-finance/data', requireAuth, route(async () => {
-    const ups = await q('SELECT id, division, period_from, period_to, file_name, company, has_opening, closing_stock, opening_stock, uploaded_by, created_at FROM mis_tb_uploads ORDER BY period_to DESC, division');
+    const ups = await q('SELECT id, division, period_from, period_to, file_name, company, has_opening, closing_stock, opening_stock, interest_paid, uploaded_by, created_at FROM mis_tb_uploads ORDER BY period_to DESC, division');
     return {
       divisions: await divisions(),
       heads: [...HEADS.map(({ key, label, pl }) => ({ key, label, pl: !!pl })),
         ...Object.values(headBook(await customHeads())).filter((h) => h.custom).map(({ key, label, pl, base }) => ({ key, label, pl: !!pl, base, custom: true }))],
       uploads: ups.map((u) => ({ id: u.id, division: u.division, from: dOut(u.period_from), to: dOut(u.period_to), file_name: u.file_name, company: u.company,
-        has_opening: !!Number(u.has_opening), closing_stock: u.closing_stock == null ? null : Number(u.closing_stock), opening_stock: u.opening_stock == null ? null : Number(u.opening_stock), uploaded_by: u.uploaded_by, at: u.created_at instanceof Date ? u.created_at.toISOString() : u.created_at })),
+        has_opening: !!Number(u.has_opening), closing_stock: u.closing_stock == null ? null : Number(u.closing_stock), opening_stock: u.opening_stock == null ? null : Number(u.opening_stock), interest_paid: u.interest_paid == null ? null : Number(u.interest_paid), uploaded_by: u.uploaded_by, at: u.created_at instanceof Date ? u.created_at.toISOString() : u.created_at })),
     };
   }));
 
@@ -932,16 +943,17 @@ function mountMisFinance(app, ctx) {
     const tb = parse(b.sheet);
     const closingStock = stockIn(b.closing_stock, 'Closing stock');
     const openingStock = stockIn(b.opening_stock, 'Opening stock');
+    const interestPaid = stockIn(b.interest_paid, 'Interest paid');
     const extra = cleanMap(b.mappings, await customHeads());
     if (Object.keys(extra).length) await writeCfg(CFG.map, { ...(await mapping()), ...extra });
     const rowsJson = JSON.stringify(tb.rows.map(({ name, close, open, parent, leaf }) => ({ name, close, open, parent, leaf })));
     const by = req.session.user.name || req.session.user.email || '';
     const fileName = String(b.file_name || '').slice(0, 255);
-    await q(`INSERT INTO mis_tb_uploads (division, period_from, period_to, file_name, company, has_opening, closing_stock, opening_stock, rows_json, uploaded_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-             ON CONFLICT (division, period_from, period_to) DO UPDATE SET file_name=$11, company=$12, has_opening=$13, closing_stock=$14, opening_stock=$15, rows_json=$16, uploaded_by=$17, created_at=NOW()`,
-      [division, from, to, fileName, tb.company, tb.hasOpening ? 1 : 0, closingStock, openingStock, rowsJson, by,
-        fileName, tb.company, tb.hasOpening ? 1 : 0, closingStock, openingStock, rowsJson, by]);
+    await q(`INSERT INTO mis_tb_uploads (division, period_from, period_to, file_name, company, has_opening, closing_stock, opening_stock, interest_paid, rows_json, uploaded_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+             ON CONFLICT (division, period_from, period_to) DO UPDATE SET file_name=$12, company=$13, has_opening=$14, closing_stock=$15, opening_stock=$16, interest_paid=$17, rows_json=$18, uploaded_by=$19, created_at=NOW()`,
+      [division, from, to, fileName, tb.company, tb.hasOpening ? 1 : 0, closingStock, openingStock, interestPaid, rowsJson, by,
+        fileName, tb.company, tb.hasOpening ? 1 : 0, closingStock, openingStock, interestPaid, rowsJson, by]);
 
     // The comparative period Tally exported alongside (usually the same
     // months last year) is saved too — but never over an upload of its own.
@@ -950,18 +962,20 @@ function mountMisFinance(app, ctx) {
     if (c && c.period && !(c.period.from === from && c.period.to === to)) {
       const prevStock = stockIn(b.closing_stock_prev, 'Closing stock of the comparative period');
       const prevOpen = stockIn(b.opening_stock_prev, 'Opening stock of the comparative period');
+      const prevInt = stockIn(b.interest_paid_prev, 'Interest paid in the comparative period');
       const exists = (await q('SELECT id, closing_stock, opening_stock FROM mis_tb_uploads WHERE division = $1 AND period_from = $2 AND period_to = $3',
         [division, c.period.from, c.period.to]))[0];
       if (!exists) {
-        await q(`INSERT INTO mis_tb_uploads (division, period_from, period_to, file_name, company, has_opening, closing_stock, opening_stock, rows_json, uploaded_by)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-          [division, c.period.from, c.period.to, (fileName + ' (comparative)').slice(0, 255), tb.company, c.hasOpening ? 1 : 0, prevStock, prevOpen,
+        await q(`INSERT INTO mis_tb_uploads (division, period_from, period_to, file_name, company, has_opening, closing_stock, opening_stock, interest_paid, rows_json, uploaded_by)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [division, c.period.from, c.period.to, (fileName + ' (comparative)').slice(0, 255), tb.company, c.hasOpening ? 1 : 0, prevStock, prevOpen, prevInt,
             JSON.stringify(c.rows.map(({ name, close, open, parent, leaf }) => ({ name, close, open, parent, leaf }))), by]);
         comparative = 'saved';
       } else {
         // Stock typed now for the comparative fills it in (or corrects it).
         if (prevStock != null) await q('UPDATE mis_tb_uploads SET closing_stock = $1 WHERE id = $2', [prevStock, exists.id]);
         if (prevOpen != null) await q('UPDATE mis_tb_uploads SET opening_stock = $1 WHERE id = $2', [prevOpen, exists.id]);
+        if (prevInt != null) await q('UPDATE mis_tb_uploads SET interest_paid = $1 WHERE id = $2', [prevInt, exists.id]);
         comparative = 'exists';
       }
     }
@@ -976,6 +990,7 @@ function mountMisFinance(app, ctx) {
     if (!u) bad('That upload is not there any more');
     await q('UPDATE mis_tb_uploads SET opening_stock = $1, closing_stock = $2 WHERE id = $3',
       [stockIn(b.opening_stock, 'Opening stock'), stockIn(b.closing_stock, 'Closing stock'), id]);
+    if (b.interest_paid !== undefined) await q('UPDATE mis_tb_uploads SET interest_paid = $1 WHERE id = $2', [stockIn(b.interest_paid, 'Interest paid'), id]);
     return { ok: true };
   }));
 
@@ -1024,10 +1039,12 @@ function mountMisFinance(app, ctx) {
     }
     // Typed on the upload: the books' own opening stock, over everything else.
     if (u.opening_stock != null) { t.open.stock = round2(Number(u.opening_stock)); t.openStockTyped = true; }
+    t.interestPaid = u.interest_paid == null ? null : round2(Number(u.interest_paid));
     return t;
   }
   function addTotals(list) {
-    const sum = { close: {}, open: {}, detail: {}, groups: {}, unmapped: [], hasOpening: list.every((t) => t.hasOpening), openStockTyped: list.some((t) => t.openStockTyped), diffClose: 0, diffOpen: 0 };
+    const sum = { close: {}, open: {}, detail: {}, groups: {}, unmapped: [], hasOpening: list.every((t) => t.hasOpening), openStockTyped: list.some((t) => t.openStockTyped), diffClose: 0, diffOpen: 0,
+      interestPaid: list.some((t) => t.interestPaid != null) ? round2(list.reduce((a, t) => a + (t.interestPaid || 0), 0)) : null };
     for (const t of list) {
       for (const [gk, gv] of Object.entries(t.groups || {})) {
         const x = (sum.groups[gk] = sum.groups[gk] || { rowClose: 0, rowOpen: 0, ledgers: {} });
