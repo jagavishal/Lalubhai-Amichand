@@ -118,6 +118,8 @@ window.Pages['mis-finance'] = (() => {
     if (kind === 'pct') return v.toFixed(1) + '%';
     if (kind === 'x') return v.toFixed(2);
     if (kind === 'days') return Math.round(v) + ' d';
+    if (kind === 'qty') return v.toLocaleString('en-IN', { maximumFractionDigits: 3 }) + ' kg';
+    if (kind === 'rate') return '₹ ' + v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return H.inr0(v);
   };
 
@@ -214,7 +216,7 @@ window.Pages['mis-finance'] = (() => {
         const cells = cols.map((c) => {
           const row = c[key]?.[i];
           const v = row ? row[2] : null;
-          const f = key === 'R' ? kind : kind === 'pct' ? 'pct' : '';
+          const f = key === 'R' ? kind : ['pct', 'qty', 'rate'].includes(kind) ? kind : '';
           if (kind === 'warn' && v == null) return '<td></td>';
           const txt = c.change && v != null && v > 0 ? '+' + fmtVal(f, v) : fmtVal(f, v);
           return `<td class="${v != null && v < 0 && f !== 'pct' ? 'neg' : ''}">${txt}</td>`;
@@ -277,7 +279,7 @@ window.Pages['mis-finance'] = (() => {
         `<b>${esc(u.division)}</b>`, esc(periodLabel(u.from, u.to)), esc(u.file_name || '—'), esc(u.company || '—'),
         u.has_opening ? H.pill('In file', 'success') : H.pill('No', 'neutral'),
         u.opening_stock == null ? '<span style="color:#94a3b8;">from Tally</span>' : '₹ ' + H.inr0(u.opening_stock),
-        u.closing_stock == null ? '—' : '₹ ' + H.inr0(u.closing_stock),
+        (u.closing_stock == null ? '—' : '₹ ' + H.inr0(u.closing_stock)) + (u.closing_qty != null ? `<div style="font-size:11px;color:#64748b;">${u.closing_qty.toLocaleString('en-IN')} kg</div>` : ''),
         u.interest_paid == null ? '—' : '₹ ' + H.inr0(u.interest_paid),
         `${esc(u.uploaded_by)}<div style="font-size:11px;color:#94a3b8;">${H.fmtDate(u.at)}</div>`,
         `<button class="btn-secondary btn-sm" data-stock="${u.id}">Edit Stock / Interest</button> <button class="btn-secondary btn-sm" data-del="${u.id}" style="color:#dc2626;">Delete</button>`,
@@ -304,11 +306,15 @@ window.Pages['mis-finance'] = (() => {
         + H.field('mu-to', 'Period To', '', { type: 'date', required: true })
         + H.field('mu-ostock', 'Opening Stock (₹) — for this period', '', { type: 'number', step: '0.01', hint: 'Leave blank to take it from Tally. Type it when your own stock summary differs (Export).' })
         + H.field('mu-stock', 'Closing Stock (₹) — for this period', '', { type: 'number', step: '0.01', hint: 'Tally\'s Trial Balance shows only the Opening Stock — type the closing stock (as in the old “Closing Stock (INPUT)”)' })
+        + H.field('mu-oqty', 'Opening Stock (Kgs) — for this period', '', { type: 'number', step: '0.001', hint: 'Blank = last period\'s closing Kgs' })
+        + H.field('mu-cqty', 'Closing Stock (Kgs) — for this period', '', { type: 'number', step: '0.001' })
         + H.field('mu-int', 'Interest Paid (₹) — for this period', '', { type: 'number', step: '0.01', hint: 'Interest on loans paid in the period — shown as “Interest on Loan” in the reports and the Cash Flow' })
         + `<div id="mu-stock2-wrap" style="display:none;grid-column:span 2;"><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;" class="m-grid-1">
             ${H.field('mu-ostock2', 'Opening Stock (₹) — comparative period', '', { type: 'number', step: '0.01', hint: 'Last-year columns in the same file · blank = from Tally' })}
             ${H.field('mu-stock2', 'Closing Stock (₹) — comparative period', '', { type: 'number', step: '0.01', hint: 'For the last-year columns in the same file' })}
-            ${H.field('mu-int2', 'Interest Paid (₹) — comparative period', '', { type: 'number', step: '0.01' })}</div></div>`,
+            ${H.field('mu-int2', 'Interest Paid (₹) — comparative period', '', { type: 'number', step: '0.01' })}
+            ${H.field('mu-oqty2', 'Opening Stock (Kgs) — comparative period', '', { type: 'number', step: '0.001' })}
+            ${H.field('mu-cqty2', 'Closing Stock (Kgs) — comparative period', '', { type: 'number', step: '0.001' })}</div></div>`,
       )}
       <div id="mu-preview" style="margin-top:14px;"></div>`,
       confirmText: 'Save Upload',
@@ -342,6 +348,7 @@ window.Pages['mis-finance'] = (() => {
         const body = {
           division: H.val('mu-div'), from: H.val('mu-from'), to: H.val('mu-to'), closing_stock: H.val('mu-stock'), closing_stock_prev: H.val('mu-stock2'),
           opening_stock: H.val('mu-ostock'), opening_stock_prev: H.val('mu-ostock2'), interest_paid: H.val('mu-int'), interest_paid_prev: H.val('mu-int2'),
+          opening_qty: H.val('mu-oqty'), closing_qty: H.val('mu-cqty'), opening_qty_prev: H.val('mu-oqty2'), closing_qty_prev: H.val('mu-cqty2'),
           file_name: document.getElementById('mu-file').files[0]?.name || '', sheet: _sheet, mappings: pickedMappings(),
         };
         if (!body.from || !body.to) throw new Error('Enter the period');
@@ -618,10 +625,12 @@ window.Pages['mis-finance'] = (() => {
         bodyHTML: H.grid(
           H.field('ms-open', 'Opening Stock (₹)', u.opening_stock ?? '', { type: 'number', step: '0.01', hint: 'Blank = from Tally' })
           + H.field('ms-close', 'Closing Stock (₹)', u.closing_stock ?? '', { type: 'number', step: '0.01' })
+          + H.field('ms-oqty', 'Opening Stock (Kgs)', u.opening_qty ?? '', { type: 'number', step: '0.001', hint: 'Blank = last period\'s closing Kgs' })
+          + H.field('ms-cqty', 'Closing Stock (Kgs)', u.closing_qty ?? '', { type: 'number', step: '0.001' })
           + H.field('ms-int', 'Interest Paid (₹)', u.interest_paid ?? '', { type: 'number', step: '0.01', hint: 'Interest on loans in this period' })),
         confirmText: 'Save',
         onConfirm: async () => {
-          await H.patch(`/api/mis-finance/uploads/${u.id}`, { opening_stock: H.val('ms-open'), closing_stock: H.val('ms-close'), interest_paid: H.val('ms-int') });
+          await H.patch(`/api/mis-finance/uploads/${u.id}`, { opening_stock: H.val('ms-open'), closing_stock: H.val('ms-close'), interest_paid: H.val('ms-int'), opening_qty: H.val('ms-oqty'), closing_qty: H.val('ms-cqty') });
           H.closeModal('mf-stock'); H.toast('Saved'); await refresh();
         },
       });

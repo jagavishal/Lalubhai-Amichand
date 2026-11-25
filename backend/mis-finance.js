@@ -47,6 +47,10 @@ const MF_SCHEMA = [
   // (Jayesh, 24 Nov 2026: "interest paid ka box dena hai … same amount idhar
   // aa jayega") — the Profitability memo and the Cash Flow's interest lines.
   `ALTER TABLE mis_tb_uploads ADD COLUMN IF NOT EXISTS interest_paid DECIMAL(16,2) DEFAULT NULL`,
+  // Stock quantity (Kgs) beside the amounts — "quantity bhi daalega, amount
+  // bhi daalega" (Jayesh, 24 Nov 2026), the old sheet's Stock Summary.
+  `ALTER TABLE mis_tb_uploads ADD COLUMN IF NOT EXISTS opening_qty DECIMAL(16,3) DEFAULT NULL`,
+  `ALTER TABLE mis_tb_uploads ADD COLUMN IF NOT EXISTS closing_qty DECIMAL(16,3) DEFAULT NULL`,
 ];
 
 const CFG = { divisions: 'misfin_divisions', map: 'misfin_map', heads: 'misfin_heads' };
@@ -733,6 +737,16 @@ function statements(t, from, to, names = {}) {
     ...withDetail('tax', 'Income Tax', tax),
     ['T', 'Net Profit', r2(pat)],
     ['pct', 'Net Profit %', div0(pat * 100, revenue)],
+    // Stock Summary (Kgs, ₹, ₹ per kg) when the quantities are typed.
+    ...(t.stockQty && (t.stockQty.open != null || t.stockQty.close != null) ? [
+      ['h', 'Stock Summary'],
+      ['qty', 'Opening Stock (Kgs)', t.stockQty.open],
+      ['', 'Opening Stock (₹)', r2(openingStock)],
+      ['rate', 'Opening Stock — ₹ per Kg', t.stockQty.open ? Math.round((openingStock / t.stockQty.open) * 100) / 100 : null],
+      ['qty', 'Closing Stock (Kgs)', t.stockQty.close],
+      ['', 'Closing Stock (₹)', r2(closingStock)],
+      ['rate', 'Closing Stock — ₹ per Kg', t.stockQty.close ? Math.round((closingStock / t.stockQty.close) * 100) / 100 : null],
+    ] : []),
   ];
 
   // Cash flow — indirect method. Needs opening balances.
@@ -894,13 +908,13 @@ function mountMisFinance(app, ctx) {
   const depth = (rows, i) => { let d = 0; let p = rows[i].parent; while (p >= 0 && d < 20) { d++; p = rows[p].parent; } return d; };
 
   app.get('/api/mis-finance/data', requireAuth, route(async () => {
-    const ups = await q('SELECT id, division, period_from, period_to, file_name, company, has_opening, closing_stock, opening_stock, interest_paid, uploaded_by, created_at FROM mis_tb_uploads ORDER BY period_to DESC, division');
+    const ups = await q('SELECT id, division, period_from, period_to, file_name, company, has_opening, closing_stock, opening_stock, interest_paid, opening_qty, closing_qty, uploaded_by, created_at FROM mis_tb_uploads ORDER BY period_to DESC, division');
     return {
       divisions: await divisions(),
       heads: [...HEADS.map(({ key, label, pl }) => ({ key, label, pl: !!pl })),
         ...Object.values(headBook(await customHeads())).filter((h) => h.custom).map(({ key, label, pl, base }) => ({ key, label, pl: !!pl, base, custom: true }))],
       uploads: ups.map((u) => ({ id: u.id, division: u.division, from: dOut(u.period_from), to: dOut(u.period_to), file_name: u.file_name, company: u.company,
-        has_opening: !!Number(u.has_opening), closing_stock: u.closing_stock == null ? null : Number(u.closing_stock), opening_stock: u.opening_stock == null ? null : Number(u.opening_stock), interest_paid: u.interest_paid == null ? null : Number(u.interest_paid), uploaded_by: u.uploaded_by, at: u.created_at instanceof Date ? u.created_at.toISOString() : u.created_at })),
+        has_opening: !!Number(u.has_opening), closing_stock: u.closing_stock == null ? null : Number(u.closing_stock), opening_stock: u.opening_stock == null ? null : Number(u.opening_stock), interest_paid: u.interest_paid == null ? null : Number(u.interest_paid), opening_qty: u.opening_qty == null ? null : Number(u.opening_qty), closing_qty: u.closing_qty == null ? null : Number(u.closing_qty), uploaded_by: u.uploaded_by, at: u.created_at instanceof Date ? u.created_at.toISOString() : u.created_at })),
     };
   }));
 
@@ -944,6 +958,7 @@ function mountMisFinance(app, ctx) {
     const closingStock = stockIn(b.closing_stock, 'Closing stock');
     const openingStock = stockIn(b.opening_stock, 'Opening stock');
     const interestPaid = stockIn(b.interest_paid, 'Interest paid');
+    const openQty = qtyIn(b.opening_qty, 'Opening stock (Kgs)'), closeQty = qtyIn(b.closing_qty, 'Closing stock (Kgs)');
     const extra = cleanMap(b.mappings, await customHeads());
     if (Object.keys(extra).length) await writeCfg(CFG.map, { ...(await mapping()), ...extra });
     const rowsJson = JSON.stringify(tb.rows.map(({ name, close, open, parent, leaf }) => ({ name, close, open, parent, leaf })));
@@ -979,6 +994,13 @@ function mountMisFinance(app, ctx) {
         comparative = 'exists';
       }
     }
+    // Quantities: this period, and the comparative one when typed.
+    await q('UPDATE mis_tb_uploads SET opening_qty = $1, closing_qty = $2 WHERE division = $3 AND period_from = $4 AND period_to = $5', [openQty, closeQty, division, from, to]);
+    if (c && c.period && !(c.period.from === from && c.period.to === to)) {
+      const po = qtyIn(b.opening_qty_prev, 'Opening stock (Kgs), comparative'), pc = qtyIn(b.closing_qty_prev, 'Closing stock (Kgs), comparative');
+      if (po != null) await q('UPDATE mis_tb_uploads SET opening_qty = $1 WHERE division = $2 AND period_from = $3 AND period_to = $4', [po, division, c.period.from, c.period.to]);
+      if (pc != null) await q('UPDATE mis_tb_uploads SET closing_qty = $1 WHERE division = $2 AND period_from = $3 AND period_to = $4', [pc, division, c.period.from, c.period.to]);
+    }
     return { ok: true, comparative, comparativePeriod: c?.period || null };
   }));
 
@@ -991,6 +1013,8 @@ function mountMisFinance(app, ctx) {
     await q('UPDATE mis_tb_uploads SET opening_stock = $1, closing_stock = $2 WHERE id = $3',
       [stockIn(b.opening_stock, 'Opening stock'), stockIn(b.closing_stock, 'Closing stock'), id]);
     if (b.interest_paid !== undefined) await q('UPDATE mis_tb_uploads SET interest_paid = $1 WHERE id = $2', [stockIn(b.interest_paid, 'Interest paid'), id]);
+    if (b.opening_qty !== undefined) await q('UPDATE mis_tb_uploads SET opening_qty = $1 WHERE id = $2', [qtyIn(b.opening_qty, 'Opening stock (Kgs)'), id]);
+    if (b.closing_qty !== undefined) await q('UPDATE mis_tb_uploads SET closing_qty = $1 WHERE id = $2', [qtyIn(b.closing_qty, 'Closing stock (Kgs)'), id]);
     return { ok: true };
   }));
 
@@ -998,6 +1022,13 @@ function mountMisFinance(app, ctx) {
     await q('DELETE FROM mis_tb_uploads WHERE id = $1', [Number(req.params.id)]);
     return { ok: true };
   }));
+
+  function qtyIn(v, label) {
+    if (v === '' || v == null) return null;
+    const n = Number(String(v).replace(/[,\s]/g, ''));
+    if (!Number.isFinite(n) || n < 0) bad(`${label} must be a positive number`);
+    return Math.round(n * 1000) / 1000;
+  }
 
   function stockIn(v, label) {
     if (v === '' || v == null) return null;
@@ -1040,11 +1071,19 @@ function mountMisFinance(app, ctx) {
     // Typed on the upload: the books' own opening stock, over everything else.
     if (u.opening_stock != null) { t.open.stock = round2(Number(u.opening_stock)); t.openStockTyped = true; }
     t.interestPaid = u.interest_paid == null ? null : round2(Number(u.interest_paid));
+    // Opening Kgs: typed, else the previous period's closing Kgs.
+    const prevQ = all.find((x) => x.division === u.division && dOut(x.period_to) === prevDay(dOut(u.period_from)) && x.closing_qty != null);
+    const oq = u.opening_qty != null ? Number(u.opening_qty) : prevQ ? Number(prevQ.closing_qty) : null;
+    t.stockQty = { open: oq, close: u.closing_qty == null ? null : Number(u.closing_qty) };
     return t;
   }
   function addTotals(list) {
     const sum = { close: {}, open: {}, detail: {}, groups: {}, unmapped: [], hasOpening: list.every((t) => t.hasOpening), openStockTyped: list.some((t) => t.openStockTyped), diffClose: 0, diffOpen: 0,
-      interestPaid: list.some((t) => t.interestPaid != null) ? round2(list.reduce((a, t) => a + (t.interestPaid || 0), 0)) : null };
+      interestPaid: list.some((t) => t.interestPaid != null) ? round2(list.reduce((a, t) => a + (t.interestPaid || 0), 0)) : null,
+      stockQty: {
+        open: list.some((t) => t.stockQty?.open != null) ? list.reduce((a, t) => a + (t.stockQty?.open || 0), 0) : null,
+        close: list.some((t) => t.stockQty?.close != null) ? list.reduce((a, t) => a + (t.stockQty?.close || 0), 0) : null,
+      } };
     for (const t of list) {
       for (const [gk, gv] of Object.entries(t.groups || {})) {
         const x = (sum.groups[gk] = sum.groups[gk] || { rowClose: 0, rowOpen: 0, ledgers: {} });
