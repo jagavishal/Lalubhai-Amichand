@@ -168,7 +168,7 @@ window.Pages.amc = (() => {
   const docList = (id, docs) => docs.length ? docs.map((d, i) => `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dotted #e2e8f0;font-size:12.5px;">
       <a href="/api/amc/requests/${encodeURIComponent(id)}/documents/${i}" target="_blank" rel="noopener" style="color:var(--color-primary);font-weight:600;word-break:break-all;">📎 ${esc(d.name)}</a>
-      <span style="font-size:11px;color:#94a3b8;white-space:nowrap;">${d.kind === 'payment' ? 'Payment proof' : 'Quotation'} · ${Math.max(1, Math.round(d.size / 1024))} KB</span>
+      <span style="font-size:11px;color:#94a3b8;white-space:nowrap;">${d.kind === 'payment' ? 'Payment proof' : d.kind === 'approved' ? '<b style="color:#15803d;">✓ Approved (signed)</b>' : 'Quotation'} · ${Math.max(1, Math.round(d.size / 1024))} KB</span>
     </div>`).join('') : '<div style="font-size:12.5px;color:#94a3b8;">No documents</div>';
 
   const sub = (t) => `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--color-primary);margin:16px 0 8px;">${esc(t)}</div>`;
@@ -494,11 +494,11 @@ window.Pages.amc = (() => {
         Not saved yet — showing the defaults (${!s.approversSet ? 'management team = Admins' : ''}${!s.approversSet && !s.accountsSet ? ', ' : ''}${!s.accountsSet ? 'Accounts = Accounts department' : ''}). Tick the right people and press Save.</div>` : ''}
       <div class="sms-two" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         ${userPicker('st-appr', 'Management team (approvers)', s.approvers, 'The people a requester can choose as approver.')}
-        ${userPicker('st-acc', 'Accounts team', s.accounts, 'Get the “payment required” mail with the quotation and can mark requests paid.')}
+        ${userPicker('st-acc', 'Accounts team', s.accounts, 'Can see the requests sent to Accounts and mark them paid.')}
         <div class="sms-card">
-          <h3>Extra Accounts email IDs</h3>
+          <h3>Payment mail goes to</h3>
           <textarea id="st-accmail" rows="3" placeholder="accounts@laltd.in" style="${H.CONTROL}resize:vertical;">${esc(s.accountsEmails.join('\n'))}</textarea>
-          <div style="font-size:11.5px;color:#94a3b8;margin-top:4px;">One per line — also get the “payment required” mail.</div>
+          <div style="font-size:11.5px;color:#94a3b8;margin-top:4px;">One email ID per line. Only these get the “payment required” mail with the signed quotation; the approver is in CC.</div>
         </div>
         <div class="sms-card">
           <h3>Departments</h3>

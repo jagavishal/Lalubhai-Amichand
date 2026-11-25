@@ -130,6 +130,9 @@ const CFG = {
   departments: 'sms_departments',      // DEFAULT_DEPARTMENTS + any added
 };
 
+// Who the payment mail goes to until Settings says otherwise (25 Nov 2026).
+const DEFAULT_ACCOUNTS_EMAILS = ['accounts@laltd.in', 'sushilkaloya@laltd.in'];
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DOC_TYPES = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
@@ -227,6 +230,54 @@ async function writeDocs(id, docs, by, kind) {
 
 const docsOut = (raw) => parseDocs(raw).map(({ name, size, type, kind, by, at }) => ({ name, size, type, kind: kind || 'quotation', by: by || '', at: at || null }));
 
+/* The approver's digital approval on the quotation (25 Nov 2026: "service
+   quotation approver hone pe digital signature hoke aana chahiye"). Every
+   page of each quotation PDF gets a stamp in its bottom-right corner —
+   APPROVED, the approver's name, the date and time (IST), the request ID
+   and a verification code — and the stamped copy is saved beside the
+   original as kind 'approved'. Accounts is mailed the stamped copies. */
+function istStamp(d) {
+  const t = new Date(d.getTime() + 330 * 60000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(t.getUTCDate())}/${p(t.getUTCMonth() + 1)}/${t.getUTCFullYear()} ${p(t.getUTCHours())}:${p(t.getUTCMinutes())} IST`;
+}
+async function stampPdf(buffer, { approver, id, when, code }) {
+  const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+  const doc = await PDFDocument.load(buffer, { ignoreEncryption: true, updateMetadata: false });
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  // The standard fonts are WinAnsi only: anything else in a name prints as '?'.
+  const ascii = (s) => String(s || '').replace(/[^\x20-\x7E]/g, '?');
+  const green = rgb(0.086, 0.502, 0.239);
+  const lines = [
+    [bold, 10, 'APPROVED'],
+    [font, 7.5, `Digitally approved by ${ascii(approver)}`],
+    [font, 7.5, istStamp(when)],
+    [font, 7, `Service Request ${ascii(id)} · LALTD ERP`.replace('·', '-')],
+    [font, 6.5, `Verification code: ${code}`],
+  ];
+  for (const page of doc.getPages()) {
+    const { width, height } = page.getSize();
+    const rot = ((page.getRotation().angle % 360) + 360) % 360;
+    if (rot) continue;   // a rotated page would get a sideways stamp — leave it
+    const w = Math.min(190, width * 0.45);
+    const h = 62;
+    const x = width - w - 18;
+    const y = 18;
+    if (x < 0 || height < h + 36) continue;
+    page.drawRectangle({ x, y, width: w, height: h, color: rgb(1, 1, 1), opacity: 0.88, borderColor: green, borderWidth: 1.4 });
+    let ty = y + h - 14;
+    for (const [f, size, text] of lines) {
+      let t = text;
+      while (t.length > 4 && f.widthOfTextAtSize(t, size) > w - 14) t = t.slice(0, -2);
+      page.drawText(t, { x: x + 7, y: ty, size, font: f, color: f === bold ? green : rgb(0.12, 0.16, 0.22) });
+      ty -= size + 3.6;
+    }
+  }
+  doc.setSubject(`Approved by ${ascii(approver)} on ${istStamp(when)} - ${ascii(id)} - code ${code}`);
+  return Buffer.from(await doc.save());
+}
+
 /* ── Mail ──────────────────────────────────────────────────────────── */
 
 function mailHtml({ heading, colour = '#0150AA', lead, rows, footer, link, actions }) {
@@ -310,7 +361,7 @@ function mountAmc(app, ctx) {
     return {
       approvers: ids(approvers) ?? users.filter((u) => rolesOf(u).includes('Admin')).map((u) => u.id),
       accounts: ids(accounts) ?? users.filter((u) => /account/i.test(u.department || '')).map((u) => u.id),
-      accountsEmails: Array.isArray(accountsEmails) ? accountsEmails.filter((e) => EMAIL_RE.test(e)) : [],
+      accountsEmails: Array.isArray(accountsEmails) ? accountsEmails.filter((e) => EMAIL_RE.test(e)) : DEFAULT_ACCOUNTS_EMAILS,
       departments: Array.isArray(departments) && departments.length ? departments : DEFAULT_DEPARTMENTS,
       approversSet: Array.isArray(approvers),
       accountsSet: Array.isArray(accounts),
@@ -448,11 +499,44 @@ function mountAmc(app, ctx) {
     ];
   }
 
+  // The quotations to attach: the approver-stamped copies once there are
+  // any (see signQuotations), else the originals.
   async function quotationFiles(id) {
     const row = (await q('SELECT documents FROM sms_requests WHERE id = $1', [id]))[0];
-    return parseDocs(row?.documents).filter((d) => (d.kind || 'quotation') === 'quotation')
+    const docs = parseDocs(row?.documents);
+    const signed = docs.filter((d) => d.kind === 'approved');
+    return (signed.length ? signed : docs.filter((d) => (d.kind || 'quotation') === 'quotation'))
       .map((d) => ({ filename: d.name, path: path.join(UPLOAD_ROOT, id, path.basename(d.file)) }))
       .filter((a) => fs.existsSync(a.path));
+  }
+
+  // Stamp the approver's digital approval on every quotation PDF of the
+  // request and keep the stamped copies (kind 'approved'). A PDF that
+  // cannot be stamped keeps going unstamped — approval never fails on it.
+  async function signQuotations(id, approverName) {
+    const row = (await q('SELECT documents FROM sms_requests WHERE id = $1', [id]))[0];
+    const docs = parseDocs(row?.documents).filter((d) => d.kind !== 'approved');
+    const when = new Date();
+    const secret = process.env.SESSION_SECRET || process.env.NEXTAUTH_SECRET || 'sms';
+    const code = require('crypto').createHmac('sha256', secret).update(`${id}|${approverName}|${when.toISOString()}`).digest('hex').slice(0, 10).toUpperCase();
+    const made = [];
+    const stamp = Date.now().toString(36);
+    let n = 0;
+    for (const d of docs) {
+      if ((d.kind || 'quotation') !== 'quotation' || !/pdf/i.test(d.type || d.file || '')) continue;
+      const src = path.join(UPLOAD_ROOT, id, path.basename(d.file));
+      try {
+        const out = await stampPdf(await fs.promises.readFile(src), { approver: approverName, id, when, code });
+        const file = `${stamp}-a${++n}-${path.basename(d.file).replace(/\.pdf$/i, '')}-approved.pdf`;
+        await fs.promises.writeFile(path.join(UPLOAD_ROOT, id, file), out);
+        made.push({ name: d.name.replace(/\.pdf$/i, '') + ' (Approved).pdf', file, size: out.length, type: 'application/pdf', kind: 'approved', by: approverName, at: when.toISOString() });
+      } catch (e) { console.error('[sms] could not stamp', id, d.name, '—', e.message); }
+    }
+    if (made.length) {
+      await q('UPDATE sms_requests SET documents = $1 WHERE id = $2', [JSON.stringify([...docs, ...made]), id]);
+      await logStep(id, 'Quotation Signed', `Digitally approved by ${approverName} · code ${code}`, { user: { id: null }, by: approverName });
+    }
+    return made.length;
   }
 
   // Fire-and-forget: a mail problem must never fail the step that caused it.
@@ -509,7 +593,9 @@ function mountAmc(app, ctx) {
         // The quotation + bank details go to Accounts and the approver only
         // (23 Nov 2026: "bas account and approver ko jana chahiye"). The
         // requester gets a plain status note below, no quotation.
-        to = uniqMail([...(await addressesOf(cfg.accounts)), ...cfg.accountsEmails]); cc = [...approver];
+        // 25 Nov 2026: only accounts@laltd.in and Sushil ji (the Settings
+        // "Accounts email IDs"), the approver in CC — not every Accounts user.
+        to = uniqMail(cfg.accountsEmails.length ? cfg.accountsEmails : await addressesOf(cfg.accounts)); cc = [...approver];
         heading = 'Service Request — Payment Required';
         lead = `Service request <b>${escHtml(s.id)}</b> has been approved by <b>${escHtml(s.approver_name)}</b> and is with Accounts for payment. The quotation is attached. Please record the payment in the ERP once it is made.`;
         const skip = [...to, ...cc].map((e) => e.toLowerCase());
@@ -742,6 +828,7 @@ function mountAmc(app, ctx) {
     const r = await pool.query(`UPDATE sms_requests SET status=$1, decided_at=NOW(), ${direct ? 'sent_to_accounts_at=NOW(), ' : ''}updated_at=NOW() WHERE id=$2 AND status=$3`, [next, s.id, S.PENDING]);
     if (!r.rowCount) bad('This request was just decided — reload');
     await logStep(s.id, { approve: 'Approved', reject: 'Rejected', comment: 'Comment' }[action], note, actor);
+    if (action === 'approve') await signQuotations(s.id, s.approver_name || actor.by || '');
     if (direct) {
       await logStep(s.id, 'Sent to Accounts', `Vendor: ${s.vendor_name || s.vendor_id} · sent automatically on approval`, actor);
       const v = (await q('SELECT * FROM amc_vendors WHERE id = $1', [s.vendor_id]))[0];
@@ -1005,4 +1092,4 @@ function mountAmc(app, ctx) {
   return {};
 }
 
-module.exports = { AMC_SCHEMA, mountAmc };
+module.exports = { AMC_SCHEMA, mountAmc, stampPdf };

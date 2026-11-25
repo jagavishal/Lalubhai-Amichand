@@ -17,6 +17,7 @@
     "mssql": "^11.0.2",
     "mysql2": "^3.22.5",
     "nodemailer": "^10.0.15",
+    "pdf-lib": "^1.17.1",
     "pg": "^8.21.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
