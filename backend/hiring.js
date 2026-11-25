@@ -1641,7 +1641,15 @@ function mountHiring(app, ctx) {
       const { r, agency } = k;
       const jd = r.docs.filter((d) => d.kind === 'jd');
       const mine = await q('SELECT name, status, created_at FROM hire_candidates WHERE request_id = $1 AND agency_id = $2 ORDER BY created_at', [r.id, agency.id]);
+      // A long job description is cut to a few lines with "View more", so
+      // the CV form still fits on one screen (25 Nov 2026).
       const body = `
+        <style>
+          .jd { max-height:7.5em; overflow:hidden; position:relative; }
+          .jd.cut::after { content:''; position:absolute; left:0; right:0; bottom:0; height:2.2em; background:linear-gradient(rgba(255,255,255,0), #fff); }
+          .jd.open { max-height:none; }
+          .jdmore { margin-top:6px; padding:4px 10px; font-size:12.5px; font-weight:600; color:#0150AA; background:#eff6ff; border:1px solid #bfdbfe; border-radius:7px; cursor:pointer; width:auto; }
+        </style>
         <h1>Share CVs: ${escHtml(r.position)}</h1>
         <p>For <b>${escHtml(agency.name)}</b>. Fill this form once per candidate — you can come back to this link any time while the position is open.</p>
         <table class="info">
@@ -1649,7 +1657,7 @@ function mountHiring(app, ctx) {
           <tr><th>Location</th><td>${escHtml(r.location)}</td></tr>
           <tr><th>Openings</th><td>${r.openings}</td></tr>
           ${r.experience ? `<tr><th>Experience</th><td>${escHtml(r.experience)}</td></tr>` : ''}
-          ${r.description ? `<tr><th>Details</th><td>${escHtml(r.description)}</td></tr>` : ''}
+          ${r.description ? `<tr><th>Details</th><td><div class="jd" id="jd">${escHtml(r.description)}</div><button type="button" class="jdmore" id="jdmore" hidden>View more ▾</button></td></tr>` : ''}
           ${jd.length ? `<tr><th>Job Description</th><td>${jd.map((d) => `<a href="/hire-cv/jd?t=${encodeURIComponent(t)}&n=${d.n}">${escHtml(d.name)}</a>`).join('<br>')}</td></tr>` : ''}
         </table>
         <form id="f">
@@ -1670,6 +1678,15 @@ function mountHiring(app, ctx) {
         ${mine.length ? `<p style="margin-top:20px;font-size:13px;"><b>Already shared by you (${mine.length}):</b> ${mine.map((m) => escHtml(m.name)).join(', ')}</p>` : ''}
         <p class="note">Questions? Write to <a href="mailto:${escHtml(cfg.inquiry)}">${escHtml(cfg.inquiry)}</a>.</p>`;
       const script = `
+        const jd = document.getElementById('jd'), more = document.getElementById('jdmore');
+        if (jd && more && jd.scrollHeight > jd.clientHeight + 4) {
+          jd.classList.add('cut'); more.hidden = false;
+          more.addEventListener('click', () => {
+            const open = jd.classList.toggle('open');
+            jd.classList.toggle('cut', !open);
+            more.textContent = open ? 'View less ▴' : 'View more ▾';
+          });
+        }
         const f = document.getElementById('f'), msg = document.getElementById('msg'), go = document.getElementById('go');
         const show = (t, ok) => { msg.textContent = t; msg.className = 'msg ' + (ok ? 'ok' : 'err'); };
         f.addEventListener('submit', async (e) => {
