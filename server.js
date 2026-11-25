@@ -481,6 +481,10 @@ SCHEMA.push(...MF_SCHEMA);
 // (was two Google Sheets). See backend/retail-sales.js.
 const { RS_SCHEMA, mountRetailSales } = require('./backend/retail-sales.js');
 SCHEMA.push(...RS_SCHEMA);
+// Retail Creditor List — shop bills by party, overdue past 60 days, cheque
+// settlement (Sachin, 25 Nov 2026). See backend/retail-creditors.js.
+const { RC_SCHEMA, mountRetailCreditors } = require('./backend/retail-creditors.js');
+SCHEMA.push(...RC_SCHEMA);
 // Retail Shop Daily Report: the shop's own monthly sheet (sales, purchases,
 // cash) — a separate system with its own users. See backend/retail-shop-report.js.
 const { RSR_SCHEMA, mountRetailShopReport } = require('./backend/retail-shop-report.js');
@@ -6955,6 +6959,12 @@ const retailSales = mountRetailSales(app, {
   branches: () => _rdBranches(),
   isAdmin: async (user) => isSuperAdmin(user) || isAdminUser(user),
   canOpen: _canOpenPageKey('retail-sales'),
+});
+mountRetailCreditors(app, {
+  q, ensureSchema, requireAuth, useDb: USE_DB,
+  branches: () => _rdBranches(),
+  isAdmin: async (user) => isSuperAdmin(user) || isAdminUser(user),
+  canOpen: _canOpenPageKey('retail-creditors'),
 });
 mountRetailShopReport(app, {
   q, ensureSchema, requireAuth, useDb: USE_DB, getGoogleAuth,

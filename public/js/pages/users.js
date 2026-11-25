@@ -103,6 +103,7 @@ window.Pages.users = (() => {
     // The two daily reports — separate systems, separate people.
     { cat: 'Retail', key: 'retail-shop-report', label: 'Shop Daily Report' },
     { cat: 'Retail', key: 'retail-sales', label: 'Daily Report (Tally)' },
+    { cat: 'Retail', key: 'retail-creditors', label: 'Creditor List' },
 
     { cat: 'Admin Section', key: 'company-overview', label: 'CEO Dashboard', explicit: true },
     // Admin always; anyone else (HOD included) only with this tick — see

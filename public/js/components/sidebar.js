@@ -262,6 +262,8 @@ window.Sidebar = {
       // shop's own sheet, and the one kept as per Tally.
       { route: 'retail-shop-report', label: 'Shop Daily Report', icon: 'retailsales' },
       { route: 'retail-sales', label: 'Daily Report (Tally)', icon: 'retailtally' },
+      // Shop bills by party → overdue past 60 days → cheque settlement (25 Nov 2026).
+      { route: 'retail-creditors', label: 'Creditor List', icon: 'retailtally' },
     ]},
     { title: 'Admin Section', items: [
       // CEO Dashboard — Admin role only ("this page only show while admin
