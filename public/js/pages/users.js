@@ -104,7 +104,7 @@ window.Pages.users = (() => {
     { cat: 'Retail', key: 'retail-shop-report', label: 'Shop Daily Report' },
     { cat: 'Retail', key: 'retail-sales', label: 'Daily Report (Tally)' },
 
-    { cat: 'Admin Section', key: 'company-overview', label: 'CEO Dashboard', fixed: 'trueAdmin' },
+    { cat: 'Admin Section', key: 'company-overview', label: 'CEO Dashboard', explicit: true },
     // Admin always; anyone else (HOD included) only with this tick — see
     // canManageUsers in server.js. A non-Admin holding it still cannot give
     // the Admin role or touch an Admin's account.

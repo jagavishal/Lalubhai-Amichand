@@ -169,7 +169,8 @@ window.Sidebar = {
     // 20 Nov 2026: "basic ke bhi upar" — and it is where an Admin lands
     // after login, see Router.home). `flat`: no section head of its own.
     { title: 'CEO', flat: true, items: [
-      { route: 'company-overview', label: 'CEO Dashboard', icon: 'companyoverview', adminOnly: true, trueAdminOnly: true },
+      // Admin role, or an explicit "CEO Dashboard" tick in Users → Access (25 Nov 2026).
+      { route: 'company-overview', label: 'CEO Dashboard', icon: 'companyoverview', grantedOnly: true, grantsToo: true },
     ]},
     { title: 'Basic', items: [
       { route: 'dashboard',     label: 'Dashboard',      icon: 'dashboard',     alwaysShow: true },
@@ -412,7 +413,8 @@ window.Sidebar = {
     if (!item) return true;
     if (item.trueAdminOnly && !this._isTrueAdmin(u)) return false;
     if (item.grantOnly) return !!(u.permissions && Array.isArray(u.permissions.grants) && u.permissions.grants.includes(route));
-    if (item.grantedOnly) return this._isTrueAdmin(u) || !!(u.permissions && Array.isArray(u.permissions.pages) && u.permissions.pages.includes(route));
+    if (item.grantedOnly) return this._isTrueAdmin(u) || !!(u.permissions && Array.isArray(u.permissions.pages) && u.permissions.pages.includes(route))
+      || !!(item.grantsToo && u.permissions && Array.isArray(u.permissions.grants) && u.permissions.grants.includes(route));
 
     const permissions = u.permissions || null;
     // An explicit page grant from Users → Access outranks adminOnly: HR staff

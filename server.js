@@ -5291,6 +5291,39 @@ async function shiftNonWorkingTasksOnce() {
 // first name the same guarded way hrms.js's org-update matches people:
 // exactly one active login starting "Archana", or logged and left alone.
 const ARCHANA_MGMT_LEAVE_FLAG = 'archana_scheduler_mgmt_leave_grant_v1';
+/* One-off (25 Nov 2026): Saloni asked for Shival to see the CEO Dashboard.
+   Same safety rules as the Archana grant below: once only (app_config flag),
+   exactly one active login starting "Shival", and it only ever adds. A login
+   with a saved page list gets the page there (so the Access grid shows the
+   tick); one with no page list (= every ordinary page) gets it in grants,
+   because writing a page list would take every other page away from him. */
+const SHIVAL_CEO_FLAG = 'once_grant_shival_ceo_dashboard';
+async function grantShivalCeoDashboardOnce() {
+  if (!USE_DB) return;
+  try {
+    await ensureSchema();
+    if ((await q(`SELECT "value" FROM app_config WHERE "key" = $1`, [SHIVAL_CEO_FLAG])).length) return;
+    const rows = await q(`SELECT id, name, permissions FROM users WHERE active = 1`);
+    const hits = rows.filter((r) => /^shival\b/i.test(String(r.name || '').trim()));
+    let log;
+    if (hits.length !== 1) {
+      log = `found ${hits.length} active login(s) starting "Shival" — expected exactly one, left untouched`;
+    } else {
+      const u = hits[0];
+      let perms = null;
+      try { perms = u.permissions ? JSON.parse(u.permissions) : null; } catch {}
+      perms = perms || {};
+      if (Array.isArray(perms.pages)) perms.pages = [...new Set([...perms.pages, 'company-overview'])];
+      else perms.grants = [...new Set([...(Array.isArray(perms.grants) ? perms.grants : []), 'company-overview'])];
+      await pool.query('UPDATE users SET permissions = $1 WHERE id = $2', [JSON.stringify(perms), u.id]);
+      log = `granted the CEO Dashboard to ${u.name} (${u.id}) via ${Array.isArray(perms.pages) ? 'pages' : 'grants'}`;
+    }
+    const v = JSON.stringify({ at: new Date().toISOString(), log });
+    await pool.query(`INSERT INTO app_config ("key","value") VALUES ($1,$2) ON CONFLICT ("key") DO UPDATE SET "value"=$3`, [SHIVAL_CEO_FLAG, v, v]);
+    console.log('[shival-ceo]', log);
+  } catch (e) { console.error('[shival-ceo]', e.message); }
+}
+
 async function grantArchanaManagementLeaveOnce() {
   if (!USE_DB) return;
   try {
@@ -16620,7 +16653,24 @@ async function _exportOrderTotals(today) {
   return out;
 }
 
-app.get('/api/company-overview', requireAuth, requireTrueAdmin, async (req, res) => {
+/* CEO Dashboard: the Admin role (or the owner), or an explicit "CEO
+   Dashboard" tick in Users → Access (25 Nov 2026 — Saloni: "Shival doesn't
+   have access to CEO Dashboard? It's not even in the access sheet"). The tick
+   is a page grant; a one-off grant may also sit in permissions.grants for a
+   login whose page list is unrestricted (see grantShivalCeoDashboardOnce). */
+async function canOpenCeoDashboard(user) {
+  if (!user) return false;
+  if (isTrueAdminUser(user) || isSuperAdmin(user)) return true;
+  const perms = await getUserPermissions(user.id);
+  return !!(perms && ((Array.isArray(perms.pages) && perms.pages.includes('company-overview'))
+    || (Array.isArray(perms.grants) && perms.grants.includes('company-overview'))));
+}
+async function requireCeoDashboard(req, res, next) {
+  try { if (await canOpenCeoDashboard(req.session?.user)) return next(); } catch (e) { console.error('[company-overview] access', e.message); }
+  return res.status(403).json({ error: 'You do not have access to the CEO Dashboard — ask an Admin to tick it in Users → Access' });
+}
+
+app.get('/api/company-overview', requireAuth, requireCeoDashboard, async (req, res) => {
   try {
     if (_companyOverviewCache && (Date.now() - _companyOverviewCache.at) < COMPANY_OVERVIEW_TTL_MS && !req.query.fresh) {
       return res.json(_companyOverviewCache.data);
@@ -16736,5 +16786,6 @@ app.listen(process.env.PORT || 3000, async () => {
   shiftLeaveDayTasks().catch((e) => console.error('[leave-shift]', e.message));
   await shiftNonWorkingTasksOnce();
   grantArchanaManagementLeaveOnce().catch((e) => console.error('[archana-mgmt-leave]', e.message));
+  grantShivalCeoDashboardOnce().catch((e) => console.error('[shival-ceo]', e.message));
   extendChecklistSeries().catch((e) => console.error('[checklist-extend]', e.message));
 });
