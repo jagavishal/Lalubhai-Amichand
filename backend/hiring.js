@@ -341,7 +341,44 @@ function mailButtons(list) {
 
 /* Public page shell for the agency / candidate links — wider than the
    approval confirm page, and can carry its own script. */
-function publicPage({ title, body, script = '' }) {
+/* A job description typed in the ERP often comes pasted as Markdown
+   ("# **Title**", "**Role:** …", "- point"). Shown as plain text it reads
+   as symbols, so the few marks people use are turned into HTML — escaped
+   first, so nothing typed can inject markup. */
+function jdHtml(text) {
+  const inline = (t) => escHtml(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/__(.+?)__/g, '<b>$1</b>');
+  const out = [];
+  let list = null;
+  const close = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    let m;
+    if (!line) { close(); continue; }
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(line)) { close(); out.push('<hr>'); continue; }
+    if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
+      close();
+      const lvl = Math.min(m[1].length + 1, 4);
+      out.push(`<h${lvl}>${inline(m[2].replace(/^\*\*(.*)\*\*$/, '$1'))}</h${lvl}>`);
+      continue;
+    }
+    if ((m = /^[-*•]\s+(.*)$/.exec(line))) {
+      if (list !== 'ul') { close(); out.push('<ul>'); list = 'ul'; }
+      out.push(`<li>${inline(m[1])}</li>`);
+      continue;
+    }
+    if ((m = /^\d+[.)]\s+(.*)$/.exec(line))) {
+      if (list !== 'ol') { close(); out.push('<ol>'); list = 'ol'; }
+      out.push(`<li>${inline(m[1])}</li>`);
+      continue;
+    }
+    close();
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  close();
+  return out.join('');
+}
+
+function publicPage({ title, body, script = '', wide = false }) {
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex">
@@ -350,7 +387,13 @@ function publicPage({ title, body, script = '' }) {
   * { box-sizing:border-box; }
   body { margin:0; background:#f1f5f9; font-family:system-ui,-apple-system,'Segoe UI',Arial,sans-serif; color:#0f172a; padding:24px 16px; }
   .card { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:26px 28px; max-width:620px; margin:0 auto; box-shadow:0 1px 3px rgba(15,23,42,.06); }
-  .brand { font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#0150AA; margin-bottom:6px; }
+  .top { max-width:620px; margin:0 auto 16px; display:flex; align-items:center; gap:14px; }
+  .wide .top, .wide .card { max-width:1180px; }
+  .top img { width:58px; height:58px; object-fit:contain; background:#fff; border-radius:12px; padding:4px; box-shadow:0 1px 3px rgba(15,23,42,.08); }
+  .top .nm { font-size:18px; font-weight:800; color:#0150AA; letter-spacing:.02em; line-height:1.15; }
+  .top .sub { font-size:12px; font-weight:600; color:#E0061F; letter-spacing:.06em; text-transform:uppercase; margin-top:3px; }
+  .bar { height:4px; border-radius:4px; background:linear-gradient(90deg,#E0061F 0 30%,#0150AA 30% 100%); max-width:620px; margin:0 auto 18px; }
+  .wide .bar { max-width:1180px; }
   h1 { font-size:20px; margin:0 0 10px; }
   p { font-size:14px; line-height:1.55; color:#475569; margin:0 0 14px; }
   table.info { width:100%; border-collapse:collapse; margin:14px 0 18px; font-size:13.5px; }
@@ -370,8 +413,10 @@ function publicPage({ title, body, script = '' }) {
   .err { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; display:block; }
   a { color:#0150AA; }
   .note { font-size:12px; color:#94a3b8; margin-top:20px; }
-</style></head><body><div class="card">
-  <div class="brand">Lallubhai Amichand Ltd.</div>
+</style></head><body class="${wide ? 'wide' : ''}">
+<div class="top"><img src="/logo.png" alt="Lallubhai Amichand Ltd."><div><div class="nm">Lallubhai Amichand Ltd.</div><div class="sub">Since 1911 · Careers</div></div></div>
+<div class="bar"></div>
+<div class="card">
   ${body}
 </div>${script ? `<script>${script}</script>` : ''}</body></html>`;
 }
@@ -1641,46 +1686,78 @@ function mountHiring(app, ctx) {
       const { r, agency } = k;
       const jd = r.docs.filter((d) => d.kind === 'jd');
       const mine = await q('SELECT name, status, created_at FROM hire_candidates WHERE request_id = $1 AND agency_id = $2 ORDER BY created_at', [r.id, agency.id]);
-      // A long job description is cut to a few lines with "View more", so
-      // the CV form still fits on one screen (25 Nov 2026).
+      // Two columns (25 Nov 2026): the role and its job description on the
+      // left, the CV form on the right, so both fit one screen. The JD scrolls
+      // inside its own panel; on a phone they stack and a long JD folds
+      // behind "View more".
+      const chip = (k, v) => (v ? `<div class="chip"><span>${k}</span><b>${escHtml(v)}</b></div>` : '');
       const body = `
         <style>
-          .jd { max-height:7.5em; overflow:hidden; position:relative; }
-          .jd.cut::after { content:''; position:absolute; left:0; right:0; bottom:0; height:2.2em; background:linear-gradient(rgba(255,255,255,0), #fff); }
-          .jd.open { max-height:none; }
-          .jdmore { margin-top:6px; padding:4px 10px; font-size:12.5px; font-weight:600; color:#0150AA; background:#eff6ff; border:1px solid #bfdbfe; border-radius:7px; cursor:pointer; width:auto; }
+          .split { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); gap:28px; align-items:start; }
+          .role { background:linear-gradient(180deg,#f8fafc,#fff); border:1px solid #e2e8f0; border-radius:12px; padding:20px 22px; position:sticky; top:16px; }
+          .kicker { font-size:11.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#E0061F; margin-bottom:4px; }
+          .chips { display:flex; flex-wrap:wrap; gap:8px; margin:14px 0 16px; }
+          .chip { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:7px 12px; font-size:13px; }
+          .chip span { display:block; font-size:10.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#94a3b8; }
+          .chip b { color:#0f172a; }
+          .jdh { font-size:12px; font-weight:800; letter-spacing:.06em; text-transform:uppercase; color:#0150AA; margin:4px 0 8px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+          .jd { font-size:13.5px; line-height:1.6; color:#334155; max-height:calc(100vh - 440px); min-height:160px; overflow:auto; padding-right:6px; }
+          .jd h2, .jd h3, .jd h4 { color:#0f172a; margin:14px 0 6px; font-size:15px; }
+          .jd h2:first-child, .jd h3:first-child { margin-top:0; }
+          .jd p { margin:0 0 8px; font-size:13.5px; color:#334155; }
+          .jd ul, .jd ol { margin:0 0 10px; padding-left:20px; }
+          .jd li { margin:3px 0; }
+          .jd hr { border:0; border-top:1px solid #e2e8f0; margin:12px 0; }
+          .jd b { color:#0f172a; }
+          .files a { display:inline-flex; gap:6px; align-items:center; font-size:13px; font-weight:600; text-decoration:none; background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; padding:6px 10px; margin:10px 6px 0 0; }
+          .jdmore { display:none; margin-top:8px; padding:5px 12px; font-size:12.5px; font-weight:700; color:#0150AA; background:#eff6ff; border:1px solid #bfdbfe; border-radius:7px; }
+          .formh { font-size:17px; font-weight:800; margin:0 0 4px; }
+          .shared { margin-top:18px; background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; border-radius:10px; padding:10px 12px; font-size:13px; }
+          button[type=submit] { width:100%; padding:13px; font-size:15px; }
+          @media (max-width:900px) {
+            .split { grid-template-columns:1fr; gap:18px; }
+            .role { position:static; }
+            .jd { max-height:9em; min-height:0; overflow:hidden; position:relative; }
+            .jd.cut::after { content:''; position:absolute; left:0; right:0; bottom:0; height:2.4em; background:linear-gradient(rgba(255,255,255,0),#fff); }
+            .jd.open { max-height:none; }
+            .jdmore.on { display:inline-block; }
+          }
         </style>
-        <h1>Share CVs: ${escHtml(r.position)}</h1>
-        <p>For <b>${escHtml(agency.name)}</b>. Fill this form once per candidate — you can come back to this link any time while the position is open.</p>
-        <table class="info">
-          <tr><th>Position</th><td>${escHtml(r.position)}</td></tr>
-          <tr><th>Location</th><td>${escHtml(r.location)}</td></tr>
-          <tr><th>Openings</th><td>${r.openings}</td></tr>
-          ${r.experience ? `<tr><th>Experience</th><td>${escHtml(r.experience)}</td></tr>` : ''}
-          ${r.description ? `<tr><th>Details</th><td><div class="jd" id="jd">${escHtml(r.description)}</div><button type="button" class="jdmore" id="jdmore" hidden>View more ▾</button></td></tr>` : ''}
-          ${jd.length ? `<tr><th>Job Description</th><td>${jd.map((d) => `<a href="/hire-cv/jd?t=${encodeURIComponent(t)}&n=${d.n}">${escHtml(d.name)}</a>`).join('<br>')}</td></tr>` : ''}
-        </table>
-        <form id="f">
-          <div class="row">
-            <div><label>Candidate name *</label><input name="name" required maxlength="255"></div>
-            <div><label>Phone *</label><input name="phone" required maxlength="64"></div>
-            <div><label>Email</label><input name="email" type="email" maxlength="255"></div>
-            <div><label>Total experience</label><input name="experience" maxlength="128" placeholder="e.g. 4 years"></div>
-            <div><label>Current CTC</label><input name="current_ctc" maxlength="64"></div>
-            <div><label>Expected CTC</label><input name="expected_ctc" maxlength="64"></div>
-            <div><label>Notice period</label><input name="notice_period" maxlength="64" placeholder="e.g. 30 days"></div>
+        <div class="split">
+          <div class="role">
+            <div class="kicker">We are hiring</div>
+            <h1>${escHtml(r.position)}</h1>
+            <div class="chips">${chip('Location', r.location)}${chip('Openings', String(r.openings || ''))}${chip('Experience', r.experience)}</div>
+            ${r.description ? `<div class="jdh">Job Description</div><div class="jd" id="jd">${jdHtml(r.description)}</div><button type="button" class="jdmore" id="jdmore">View more ▾</button>` : ''}
+            ${jd.length ? `<div class="files">${jd.map((d) => `<a href="/hire-cv/jd?t=${encodeURIComponent(t)}&n=${d.n}">📄 ${escHtml(d.name)}</a>`).join('')}</div>` : ''}
           </div>
-          <label>Remarks</label><textarea name="notes" rows="2" maxlength="2000"></textarea>
-          <label>CV (PDF or Word, up to 4 MB) *</label><input name="cv" type="file" required accept=".pdf,.doc,.docx,application/pdf">
-          <button type="submit" id="go">Submit CV</button>
-          <div id="msg" class="msg"></div>
-        </form>
-        ${mine.length ? `<p style="margin-top:20px;font-size:13px;"><b>Already shared by you (${mine.length}):</b> ${mine.map((m) => escHtml(m.name)).join(', ')}</p>` : ''}
-        <p class="note">Questions? Write to <a href="mailto:${escHtml(cfg.inquiry)}">${escHtml(cfg.inquiry)}</a>.</p>`;
+          <div>
+            <div class="formh">Share a candidate's CV</div>
+            <p>For <b>${escHtml(agency.name)}</b>. Fill this form once per candidate — you can come back to this link any time while the position is open.</p>
+            <form id="f">
+              <div class="row">
+                <div><label>Candidate name *</label><input name="name" required maxlength="255"></div>
+                <div><label>Phone *</label><input name="phone" required maxlength="64"></div>
+                <div><label>Email</label><input name="email" type="email" maxlength="255"></div>
+                <div><label>Total experience</label><input name="experience" maxlength="128" placeholder="e.g. 4 years"></div>
+                <div><label>Current CTC</label><input name="current_ctc" maxlength="64"></div>
+                <div><label>Expected CTC</label><input name="expected_ctc" maxlength="64"></div>
+                <div><label>Notice period</label><input name="notice_period" maxlength="64" placeholder="e.g. 30 days"></div>
+                <div><label>CV (PDF or Word, up to 4 MB) *</label><input name="cv" type="file" required accept=".pdf,.doc,.docx,application/pdf"></div>
+              </div>
+              <label>Remarks</label><textarea name="notes" rows="2" maxlength="2000"></textarea>
+              <button type="submit" id="go">Submit CV</button>
+              <div id="msg" class="msg"></div>
+            </form>
+            ${mine.length ? `<div class="shared"><b>Already shared by you (${mine.length}):</b> ${mine.map((m) => escHtml(m.name)).join(', ')}</div>` : ''}
+            <p class="note">Questions? Write to <a href="mailto:${escHtml(cfg.inquiry)}">${escHtml(cfg.inquiry)}</a>.</p>
+          </div>
+        </div>`;
       const script = `
         const jd = document.getElementById('jd'), more = document.getElementById('jdmore');
-        if (jd && more && jd.scrollHeight > jd.clientHeight + 4) {
-          jd.classList.add('cut'); more.hidden = false;
+        // Phone only: the stacked layout folds a long JD (desktop scrolls it in its panel).
+        if (jd && more && window.matchMedia('(max-width:900px)').matches && jd.scrollHeight > jd.clientHeight + 4) {
+          jd.classList.add('cut'); more.classList.add('on');
           more.addEventListener('click', () => {
             const open = jd.classList.toggle('open');
             jd.classList.toggle('cut', !open);
@@ -1707,7 +1784,7 @@ function mountHiring(app, ctx) {
           } catch (err) { show(err.message, false); }
           go.disabled = false; go.textContent = 'Submit CV';
         });`;
-      res.send(publicPage({ title: `CVs for ${r.position}`, body, script }));
+      res.send(publicPage({ title: `CVs for ${r.position}`, body, script, wide: true }));
     } catch (e) {
       res.status(500).send(actionPage({ title: 'Something went wrong', tone: 'bad', lead: escHtml(e.message) }));
     }
