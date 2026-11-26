@@ -783,7 +783,6 @@ function statements(t, from, to, names = {}) {
     // and shown as paid under financing (the rest of the finance cost —
     // bank charges etc. — stays an operating expense), as in the old sheet.
     const intPaid = t.interestPaid != null ? t.interestPaid : fin;
-    const intTyped = t.interestPaid != null;
     const beforeWc = pbt + dep + intPaid - intInc;
     const cfo = beforeWc + wc.reduce((a, x) => a + x[2], 0) - tax;
     const capex = -(chg('fixed_assets') + dep);
@@ -806,7 +805,7 @@ function statements(t, from, to, names = {}) {
       ['h', 'A. Cash Flow from Operating Activities'],
       ['', 'Net Profit Before Tax', r2(pbt)],
       ['depreciation', 'Add: Depreciation', r2(dep)],
-      ['finance_cost', intTyped ? 'Add: Interest on Loan' : 'Add: Interest & Finance Cost', r2(intPaid)],
+      ['finance_cost', 'Add: Interest Paid', r2(intPaid)],
       ['interest_income', 'Less: Interest Income', r2(-intInc)],
       ['t', 'Operating Profit before Working Capital Changes', r2(beforeWc)],
       ...wc.map(([k, l, x]) => [k, l, r2(x)]),
@@ -821,7 +820,7 @@ function statements(t, from, to, names = {}) {
       ['capital', 'Capital Introduced / (Withdrawn)', r2(cap)],
       ['secured_loans', 'Loans Taken / (Repaid)', r2(loans)],
       ['bank_od', 'Increase / (Decrease) in Bank OD / CC', r2(od)],
-      ['finance_cost', intTyped ? 'Less: Interest Paid' : 'Interest Paid', r2(-intPaid)],
+      ['finance_cost', 'Less: Interest Paid', r2(-intPaid)],
       ['T', 'Net Cash from Financing Activities (C)', r2(cff)],
       ['T', 'Net Cash Inflow / (Outflow) during the Period (A+B+C)', r2(net)],
       ['', 'Opening Cash & Bank', r2(openCash)],
