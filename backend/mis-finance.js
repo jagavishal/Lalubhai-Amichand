@@ -51,6 +51,20 @@ const MF_SCHEMA = [
   // bhi daalega" (Jayesh, 24 Nov 2026), the old sheet's Stock Summary.
   `ALTER TABLE mis_tb_uploads ADD COLUMN IF NOT EXISTS opening_qty DECIMAL(16,3) DEFAULT NULL`,
   `ALTER TABLE mis_tb_uploads ADD COLUMN IF NOT EXISTS closing_qty DECIMAL(16,3) DEFAULT NULL`,
+  // Annexure (the Export division's "Ann" sheet, Jayesh 26 Nov 2026): month-wise
+  // Sales and Purchase, Qty (kg) and Amount, per division. Cumulative from
+  // April gives the Stock Summary's purchases / sales and so the closing stock.
+  `CREATE TABLE IF NOT EXISTS mis_annex (
+     division VARCHAR(64) NOT NULL,
+     month CHAR(7) NOT NULL,
+     sales_qty DECIMAL(16,3) DEFAULT NULL,
+     sales_amt DECIMAL(16,2) DEFAULT NULL,
+     purch_qty DECIMAL(16,3) DEFAULT NULL,
+     purch_amt DECIMAL(16,2) DEFAULT NULL,
+     updated_by VARCHAR(255) NOT NULL DEFAULT '',
+     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     PRIMARY KEY (division, month)
+   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   // The monthly salary sheet (Months · Employee Name · Category · BASIC …
   // TOTAL), one row per employee per month — category-wise salary for the
   // MIS (Jayesh, 24 Nov 2026). Uploading a month again replaces it.
@@ -1452,6 +1466,104 @@ function mountMisFinance(app, ctx) {
     all[`${b.from}|${b.to}`] = { alloc: obj(b.alloc), mgmt: obj(b.mgmt), unallocSalary: num(b.unallocSalary), legal: num(b.legal) };
     await writeCfg(CFG.conso, all);
     return { ok: true };
+  }));
+
+  /* ── Annexure ──────────────────────────────────────────────────── */
+
+  const FY_MONTHS = (fy) => { const y = Number(String(fy).slice(0, 4)); return [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3].map((m) => `${m >= 4 ? y : y + 1}-${String(m).padStart(2, '0')}`); };
+  const fyOf = (iso) => { const [y, m] = iso.split('-').map(Number); const s = m >= 4 ? y : y - 1; return `${s}-${String(s + 1).slice(2)}`; };
+  const annNum = (v, dp) => { if (v === '' || v == null) return null; const n = Number(String(v).replace(/[,₹\s]/g, '').replace(/^\((.*)\)$/, '-$1')); return Number.isFinite(n) ? Math.round(n * 10 ** dp) / 10 ** dp : null; };
+
+  app.get('/api/mis-finance/annex', requireAuth, route(async (req) => {
+    const division = String(req.query.division || '');
+    const fy = /^\d{4}-\d{2}$/.test(req.query.fy || '') ? req.query.fy : fyOf(new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10));
+    const prevFy = `${Number(fy.slice(0, 4)) - 1}-${fy.slice(2, 4)}`;
+    const months = [...FY_MONTHS(prevFy), ...FY_MONTHS(fy)];
+    const rows = await q(`SELECT * FROM mis_annex WHERE division = $1 AND month >= $2 AND month <= $3`, [division, months[0], months[months.length - 1]]);
+    const by = Object.fromEntries(rows.map((r) => [r.month, { sales_qty: r.sales_qty == null ? null : Number(r.sales_qty), sales_amt: r.sales_amt == null ? null : Number(r.sales_amt),
+      purch_qty: r.purch_qty == null ? null : Number(r.purch_qty), purch_amt: r.purch_amt == null ? null : Number(r.purch_amt) }]));
+    const fys = (await q('SELECT DISTINCT month FROM mis_annex WHERE division = $1', [division])).map((r) => fyOf(r.month + '-01'));
+    return { division, fy, prevFy, blocks: [prevFy, fy].map((f) => ({ fy: f, months: FY_MONTHS(f).map((m) => ({ month: m, ...(by[m] || {}) })) })), fys: [...new Set(fys)].sort() };
+  }));
+
+  // Save a grid: { division, months: [{ month, sales_qty, sales_amt, purch_qty, purch_amt }] }
+  app.post('/api/mis-finance/annex', requireAuth, route(async (req) => {
+    const b = req.body || {};
+    const divs = await divisions();
+    if (!divs.includes(b.division)) bad('Choose the division');
+    const list = Array.isArray(b.months) ? b.months : [];
+    const by = req.session.user.name || req.session.user.email || '';
+    let n = 0;
+    for (const m of list) {
+      if (!/^\d{4}-\d{2}$/.test(m.month || '')) continue;
+      const vals = [annNum(m.sales_qty, 3), annNum(m.sales_amt, 2), annNum(m.purch_qty, 3), annNum(m.purch_amt, 2)];
+      if (vals.every((x) => x == null)) { await q('DELETE FROM mis_annex WHERE division = $1 AND month = $2', [b.division, m.month]); continue; }
+      await q(`INSERT INTO mis_annex (division, month, sales_qty, sales_amt, purch_qty, purch_amt, updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7)
+               ON CONFLICT (division, month) DO UPDATE SET sales_qty=$8, sales_amt=$9, purch_qty=$10, purch_amt=$11, updated_by=$12, updated_at=NOW()`,
+        [b.division, m.month, ...vals, by, ...vals, by]);
+      n++;
+    }
+    return { ok: true, saved: n };
+  }));
+
+  /* Their "Ann" sheet, as it is: a year line ("2025-26"), then a "Sales" and a
+     "Purchase" block, each with a Months row (Apr … Mar) and Qty / Amount rows
+     (Cumulative rows are ignored — worked out here). */
+  function parseAnnSheet(rows) {
+    rows = (Array.isArray(rows) ? rows : []).map((r) => (Array.isArray(r) ? r : []));
+    const txt = (v) => String(v ?? '').trim();
+    const MON = { apr: 0, may: 1, jun: 2, jul: 3, aug: 4, sep: 5, oct: 6, nov: 7, dec: 8, jan: 9, feb: 10, mar: 11 };
+    const out = {};
+    let fy = null, block = null, cols = null;
+    for (const r of rows) {
+      const a = txt(r[0]);
+      const y = /^(\d{4})\s*[-–]\s*(\d{2,4})$/.exec(a);
+      if (y) { fy = `${y[1]}-${y[2].slice(-2)}`; block = null; cols = null; continue; }
+      if (/^sales?$/i.test(a)) { block = 'sales'; cols = null; continue; }
+      if (/^purchases?$/i.test(a)) { block = 'purch'; cols = null; continue; }
+      if (/^months?$/i.test(a)) {
+        cols = {};
+        r.forEach((c, i) => { const k = txt(c).slice(0, 3).toLowerCase(); if (i > 0 && k in MON) cols[i] = MON[k]; });
+        continue;
+      }
+      if (!fy || !block || !cols) continue;
+      const kind = /^qty$/i.test(a) ? 'qty' : /^amount$/i.test(a) ? 'amt' : null;
+      if (!kind) continue;
+      const months = FY_MONTHS(fy);
+      for (const [i, mi] of Object.entries(cols)) {
+        const v = annNum(r[i], kind === 'qty' ? 3 : 2);
+        if (v == null) continue;
+        const m = months[mi];
+        out[m] = out[m] || { month: m };
+        out[m][`${block}_${kind}`] = v;
+      }
+    }
+    return Object.values(out).sort((x, y) => x.month.localeCompare(y.month));
+  }
+  app.post('/api/mis-finance/annex/import', requireAuth, route(async (req) => {
+    const months = parseAnnSheet(req.body?.sheet);
+    if (!months.length) bad('No Sales / Purchase months found — upload the sheet laid out like the "Ann" sheet (year, Sales / Purchase, Months, Qty, Amount)');
+    return { months };
+  }));
+
+  /* Stock from the Annexure for an upload's period (Export's Stock Summary):
+     closing Kgs = opening Kgs + purchased − sold (April to the period's last
+     month); closing ₹ = those Kgs at the average cost of opening + purchases. */
+  app.get('/api/mis-finance/annex/stock', requireAuth, route(async (req) => {
+    const u = (await q('SELECT * FROM mis_tb_uploads WHERE id = $1', [Number(req.query.upload)]))[0];
+    if (!u) bad('That upload is not there any more');
+    const from = dOut(u.period_from), to = dOut(u.period_to);
+    const openQty = req.query.opening_qty !== undefined && req.query.opening_qty !== '' ? Number(req.query.opening_qty) : (u.opening_qty == null ? null : Number(u.opening_qty));
+    const openAmt = req.query.opening_stock !== undefined && req.query.opening_stock !== '' ? Number(req.query.opening_stock) : (u.opening_stock == null ? null : Number(u.opening_stock));
+    if (openQty == null || openAmt == null) bad('Type the Opening Stock (₹) and Opening Stock (Kgs) first');
+    const rows = await q('SELECT * FROM mis_annex WHERE division = $1 AND month >= $2 AND month <= $3', [u.division, from.slice(0, 7), to.slice(0, 7)]);
+    if (!rows.length) bad(`No Annexure months for ${u.division} in this period — fill the Annexure tab first`);
+    const sum = (k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+    const pq = sum('purch_qty'), pa = sum('purch_amt'), sq = sum('sales_qty'), sa = sum('sales_amt');
+    const closeQty = Math.round((openQty + pq - sq) * 1000) / 1000;
+    const rate = openQty + pq ? (openAmt + pa) / (openQty + pq) : 0;
+    return { division: u.division, months: rows.length, opening: { qty: openQty, amt: openAmt }, purchases: { qty: round2(pq), amt: round2(pa) }, sales: { qty: round2(sq), amt: round2(sa) },
+      closing: { qty: closeQty, rate: Math.round(rate * 100) / 100, amt: Math.round(closeQty * rate) } };
   }));
 
   /* ── Salary sheet ───────────────────────────────────────────────── */

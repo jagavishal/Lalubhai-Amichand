@@ -61,6 +61,7 @@ window.Pages['mis-finance'] = (() => {
     else if (_tab === 'uploads') body = uploadsTab();
     else if (_tab === 'mapping') body = await mappingTab();
     else if (_tab === 'salary') body = await salaryTab();
+    else if (_tab === 'annex') body = await annexTab();
     else body = divisionsTab();
     el.innerHTML = `<div class="animate-fade-in">
       <style>
@@ -106,6 +107,7 @@ window.Pages['mis-finance'] = (() => {
         { key: 'uploads', label: 'Uploads', count: D.uploads.length },
         { key: 'mapping', label: 'Ledger Mapping' },
         { key: 'salary', label: 'Salary' },
+        { key: 'annex', label: 'Annexure' },
         { key: 'divisions', label: 'Divisions' },
       ], _tab)}
       ${body}
@@ -787,6 +789,52 @@ window.Pages['mis-finance'] = (() => {
     XLSX.writeFile(wb, `Salary by Category ${_salFrom} to ${_salTo}.xlsx`);
   }
 
+  /* ── Annexure (the Export "Ann" sheet) ──────────────────────────────
+     Month-wise Sales / Purchase Qty (kg) and Amount per division, this FY and
+     the one before, with running totals; typed here or imported from the Ann
+     sheet. Edit Stock works the closing stock out of it. */
+  let ANN = null, _annDiv = '', _annFy = '';
+  const ANN_MON = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
+  async function annexTab() {
+    if (!_annDiv) _annDiv = D.divisions.find((d) => /export/i.test(d)) || D.divisions[0];
+    if (!ANN || ANN.division !== _annDiv || (_annFy && ANN.fy !== _annFy)) ANN = await H.api(`/api/mis-finance/annex?division=${encodeURIComponent(_annDiv)}${_annFy ? '&fy=' + _annFy : ''}`);
+    _annFy = ANN.fy;
+    const y0 = Number(ANN.fy.slice(0, 4));
+    const fyList = [...new Set([...ANN.fys, ANN.fy, `${y0 + 1}-${String(y0 + 2).slice(2)}`])].sort().reverse();
+    const nf = (v, dp) => (v == null || v === '' ? '' : Number(v).toLocaleString('en-IN', { maximumFractionDigits: dp }));
+    const block = (b) => {
+      const line = (label, key, dp) => `<tr><td>${label}</td>${b.months.map((m) => `<td><input data-ann="${m.month}|${key}" value="${m[key] == null ? '' : m[key]}" inputmode="decimal" style="width:84px;padding:4px 6px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;text-align:right;" /></td>`).join('')}<td><b>${nf(b.months.reduce((a, m) => a + (Number(m[key]) || 0), 0), dp)}</b></td></tr>`;
+      const cum = (label, key, dp) => { let run = 0; return `<tr class="memo"><td>${label}</td>${b.months.map((m) => { run += Number(m[key]) || 0; return `<td>${m[key] == null ? '' : nf(run, dp)}</td>`; }).join('')}<td></td></tr>`; };
+      return `<div style="padding:12px 16px 4px;font-size:15px;font-weight:800;">${esc(b.fy)}</div>
+        <table class="mf-tbl mf-pf"><thead><tr><th>Sales</th>${ANN_MON.map((m) => `<th>${m}</th>`).join('')}<th>Total</th></tr></thead><tbody>
+        ${line('Qty (kg)', 'sales_qty', 2)}${line('Amount', 'sales_amt', 0)}${cum('Cumulative Qty', 'sales_qty', 0)}${cum('Cumulative Amt', 'sales_amt', 0)}
+        <tr class="sec"><td colspan="14">Purchase</td></tr>
+        ${line('Qty (kg)', 'purch_qty', 2)}${line('Amount', 'purch_amt', 0)}${cum('Cumulative Qty', 'purch_qty', 0)}${cum('Cumulative Amt', 'purch_amt', 0)}
+        </tbody></table>`;
+    };
+    return `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+        <select id="ann-div" style="${H.CONTROL}max-width:220px;">${D.divisions.map((d) => `<option${d === _annDiv ? ' selected' : ''}>${esc(d)}</option>`).join('')}</select>
+        <select id="ann-fy" style="${H.CONTROL}max-width:150px;">${fyList.map((f) => `<option${f === ANN.fy ? ' selected' : ''}>${f}</option>`).join('')}</select>
+        <span style="font-size:12px;color:#64748b;">shows ${esc(ANN.prevFy)} and ${esc(ANN.fy)}</span>
+        <label class="btn-secondary btn-sm" style="margin-left:auto;cursor:pointer;">Import “Ann” sheet<input type="file" id="ann-file" accept=".xlsx,.xls" style="display:none;" /></label>
+        <button class="btn-primary btn-sm" id="ann-save">Save</button>
+      </div>
+      <div class="mf-note">Month-wise Sales and Purchase of <b>${esc(_annDiv)}</b>. These feed the Stock Summary: in Uploads → <b>Edit Stock / Interest</b>, “Work out from Annexure” gives the closing stock (opening Kgs + purchased − sold, valued at the average cost).</div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;">${ANN.blocks.map(block).join('')}</div>`;
+  }
+  async function annexImport(file) {
+    const XLSX = await Utils.loadXlsx();
+    if (!XLSX) throw new Error('Could not load the Excel library');
+    const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+    const name = wb.SheetNames.find((n) => /^ann/i.test(n)) || wb.SheetNames[0];
+    const sheet = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '' });
+    const r = await H.post('/api/mis-finance/annex/import', { sheet });
+    if (!(await Utils.showConfirm(`Import ${r.months.length} months (${r.months[0].month} to ${r.months[r.months.length - 1].month}) from sheet “${name}” into ${_annDiv}? Months already there are replaced.`, { title: 'Import Annexure', confirmText: 'Import' }))) return;
+    await H.post('/api/mis-finance/annex', { division: _annDiv, months: r.months });
+    H.toast(`${r.months.length} months imported`);
+    ANN = null; await render();
+  }
+
   function divisionsTab() {
     return `<div class="br-card" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;max-width:560px;">
       <div style="font-size:12px;color:#64748b;margin-bottom:8px;">One per line. Renaming a line keeps its uploads (same position).</div>
@@ -815,6 +863,16 @@ window.Pages['mis-finance'] = (() => {
     $('mf-div')?.addEventListener('change', (e) => { _div = e.target.value; render(); });
     document.querySelectorAll('[data-stmt]').forEach((b) => b.addEventListener('click', () => { _stmt = b.getAttribute('data-stmt'); render(); }));
     $('mf-xlsx')?.addEventListener('click', () => downloadXlsx().catch(H.fail));
+    $('ann-div')?.addEventListener('change', (e) => { _annDiv = e.target.value; ANN = null; render(); });
+    $('ann-fy')?.addEventListener('change', (e) => { _annFy = e.target.value; ANN = null; render(); });
+    $('ann-file')?.addEventListener('change', (e) => { const f = e.target.files[0]; if (f) annexImport(f).catch(H.fail); e.target.value = ''; });
+    $('ann-save')?.addEventListener('click', async (e) => {
+      const by = {};
+      document.querySelectorAll('[data-ann]').forEach((i) => { const [m, k] = i.getAttribute('data-ann').split('|'); (by[m] = by[m] || { month: m })[k] = i.value.trim(); });
+      e.target.disabled = true;
+      try { const r = await H.post('/api/mis-finance/annex', { division: _annDiv, months: Object.values(by) }); H.toast(`Saved — ${r.saved} months`); ANN = null; await render(); }
+      catch (err) { e.target.disabled = false; H.fail(err); }
+    });
     $('mf-ci-save')?.addEventListener('click', async (e) => {
       const body = { from: R.from, to: R.to, alloc: {}, mgmt: {}, unallocSalary: '', legal: '' };
       document.querySelectorAll('[data-ci]').forEach((i) => {
@@ -834,7 +892,19 @@ window.Pages['mis-finance'] = (() => {
           + H.field('ms-close', 'Closing Stock (₹)', u.closing_stock ?? '', { type: 'number', step: '0.01' })
           + H.field('ms-oqty', 'Opening Stock (Kgs)', u.opening_qty ?? '', { type: 'number', step: '0.001', hint: 'Blank = last period\'s closing Kgs' })
           + H.field('ms-cqty', 'Closing Stock (Kgs)', u.closing_qty ?? '', { type: 'number', step: '0.001' })
-          + H.field('ms-int', 'Interest Paid (₹)', u.interest_paid ?? '', { type: 'number', step: '0.01', hint: 'Interest on loans in this period' })),
+          + H.field('ms-int', 'Interest Paid (₹)', u.interest_paid ?? '', { type: 'number', step: '0.01', hint: 'Interest on loans in this period' }))
+          + `<div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><button type="button" class="btn-secondary btn-sm" id="ms-ann">Work out closing stock from Annexure</button><span id="ms-ann-out" style="font-size:12px;color:#475569;"></span></div>`,
+        onOpen: () => {
+          document.getElementById('ms-ann').onclick = async () => {
+            const out = document.getElementById('ms-ann-out');
+            try {
+              const r = await H.api(`/api/mis-finance/annex/stock?upload=${u.id}&opening_qty=${encodeURIComponent(H.val('ms-oqty'))}&opening_stock=${encodeURIComponent(H.val('ms-open'))}`);
+              document.getElementById('ms-cqty').value = r.closing.qty;
+              document.getElementById('ms-close').value = r.closing.amt;
+              out.innerHTML = `${H.inr0(r.opening.qty)} kg + ${H.inr0(r.purchases.qty)} bought − ${H.inr0(r.sales.qty)} sold = <b>${H.inr0(r.closing.qty)} kg</b> × ₹ ${r.closing.rate} = <b>₹ ${H.inr0(r.closing.amt)}</b> — filled in, press Save`;
+            } catch (e) { out.textContent = e.message; out.style.color = '#dc2626'; }
+          };
+        },
         confirmText: 'Save',
         onConfirm: async () => {
           await H.patch(`/api/mis-finance/uploads/${u.id}`, { opening_stock: H.val('ms-open'), closing_stock: H.val('ms-close'), interest_paid: H.val('ms-int'), opening_qty: H.val('ms-oqty'), closing_qty: H.val('ms-cqty') });
