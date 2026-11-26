@@ -1313,6 +1313,180 @@ window.Pages['export-documentation'] = (() => {
 
   const _EXCEL_DOCS = { invoice: ['Custom Invoice', _invoiceExcelAOA], custInvoice: ['Customer Invoice', _custInvoiceExcelAOA] };
 
+  /* ── Custom Invoice Excel in the export team's own workbook ──────────────
+     26 Nov 2026 (Saloni's team: "this is the format we want the excel sheets
+     to be in"): their "custom inv. PL" workbook — a "Custom Inv" sheet and a
+     "Pack list" sheet with their letterhead, borders and print setup — is
+     public/templates/custom-invoice-packing-list.xlsx, cleaned of its stale
+     external link. Each shipment's figures are written into its cells; the
+     styles are never touched. More items than the template's rows (20 on the
+     invoice, 12 on the packing list) push the totals down with copies of a
+     styled empty row. Formulas stay live (Excel recalculates on open) and
+     carry the figures too, for viewers that don't calculate. */
+  const _xmlEsc = (v) => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const _colNo = (c) => c.split('').reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0);
+  const _numOrText = (v) => (/^-?\d+(\.\d+)?$/.test(String(v ?? '').trim()) ? Number(v) : String(v ?? ''));
+  function _sheetEditor(xml) {
+    let s = xml;
+    const cellRe = (ref) => new RegExp('<c r="' + ref + '"((?:\\s+[\\w:]+="[^"]*")*)\\s*(?:/>|>([\\s\\S]*?)</c>)');
+    const rowRe = (r) => new RegExp('<row r="' + r + '"[^>]*?(?:/>|>[\\s\\S]*?</row>)');
+    const styleOf = (attrs) => { const m = / s="(\d+)"/.exec(attrs || ''); return m ? ' s="' + m[1] + '"' : ''; };
+    function put(ref, inner, type) {
+      const [, col, rowS] = /^([A-Z]+)(\d+)$/.exec(ref);
+      const row = Number(rowS);
+      const m = cellRe(ref).exec(s);
+      const st = m ? styleOf(m[1]) : '';
+      const cell = inner == null ? '<c r="' + ref + '"' + st + '/>' : '<c r="' + ref + '"' + st + (type ? ' t="' + type + '"' : '') + '>' + inner + '</c>';
+      if (m) { s = s.slice(0, m.index) + cell + s.slice(m.index + m[0].length); return; }
+      let rm = rowRe(row).exec(s);
+      if (!rm) {   // a row the template never had: put it in order
+        const next = [...s.matchAll(/<row r="(\d+)"/g)].find((x) => Number(x[1]) > row);
+        const at = next ? next.index : s.indexOf('</sheetData>');
+        s = s.slice(0, at) + '<row r="' + row + '"></row>' + s.slice(at);
+        rm = rowRe(row).exec(s);
+      }
+      let rowXml = rm[0].endsWith('/>') ? rm[0].replace(/\/>$/, '></row>') : rm[0];
+      const after = [...rowXml.matchAll(/<c r="([A-Z]+)\d+"/g)].find((x) => _colNo(x[1]) > _colNo(col));
+      rowXml = after ? rowXml.slice(0, after.index) + cell + rowXml.slice(after.index) : rowXml.replace(/<\/row>$/, cell + '</row>');
+      s = s.slice(0, rm.index) + rowXml + s.slice(rm.index + rm[0].length);
+    }
+    const ed = {
+      // A number, a string (blank clears the cell), or { f, v } for a formula with its figure.
+      set(ref, v) {
+        if (v && typeof v === 'object') { put(ref, '<f>' + _xmlEsc(v.f) + '</f>' + (Number.isFinite(v.v) ? '<v>' + v.v + '</v>' : '')); return ed; }
+        if (typeof v === 'number') { put(ref, Number.isFinite(v) ? '<v>' + v + '</v>' : null); return ed; }
+        const t = String(v ?? '');
+        put(ref, t ? '<is><t xml:space="preserve">' + _xmlEsc(t) + '</t></is>' : null, t ? 'inlineStr' : '');
+        return ed;
+      },
+      // n empty rows styled like row `like`, from row `at` down (everything below moves).
+      insertRows(at, n, like) {
+        if (!(n > 0)) return ed;
+        const bump = (r) => (r >= at ? r + n : r);
+        const refs = (txt) => txt.replace(/(\$?)([A-Z]{1,3})(\$?)(\d+)/g, (m0, a, c, b, r) => a + c + b + bump(Number(r)));
+        const model = rowRe(like).exec(s)[0];
+        s = s.replace(/<row r="(\d+)"/g, (m0, r) => '<row r="' + bump(Number(r)) + '"')
+          .replace(/<c r="([A-Z]+)(\d+)"/g, (m0, c, r) => '<c r="' + c + bump(Number(r)) + '"')
+          .replace(/<f>([^<]*)<\/f>/g, (m0, f) => '<f>' + refs(f) + '</f>')
+          .replace(/<mergeCell ref="([^"]+)"/g, (m0, r) => '<mergeCell ref="' + refs(r) + '"')
+          .replace(/<dimension ref="([^"]+)"/, (m0, r) => '<dimension ref="' + refs(r) + '"')
+          .replace(/<brk id="(\d+)"/g, (m0, r) => '<brk id="' + bump(Number(r)) + '"');
+        const blank = (r) => model.replace(/<row r="\d+"/, '<row r="' + r + '"')
+          .replace(/<c r="([A-Z]+)\d+"((?:\s+[\w:]+="[^"]*")*)\s*(?:\/>|>[\s\S]*?<\/c>)/g, (m0, c, attrs) => '<c r="' + c + r + '"' + styleOf(attrs) + '/>');
+        const rows = Array.from({ length: n }, (_, i) => blank(at + i)).join('');
+        const pos = s.search(new RegExp('<row r="' + (at + n) + '"'));
+        s = s.slice(0, pos) + rows + s.slice(pos);
+        return ed;
+      },
+      xml: () => s,
+    };
+    return ed;
+  }
+
+  async function _customInvoiceTemplateBytes(d) {
+    if (!window.JSZip) await _loadScript(window.location.origin + '/vendor/jszip.min.js');
+    const res = await fetch(window.location.origin + '/templates/custom-invoice-packing-list.xlsx?v=1');
+    if (!res.ok) throw new Error('Could not load the Custom Invoice Excel format');
+    const zip = await window.JSZip.loadAsync(await res.arrayBuffer());
+    const c = _calcFrom(d);
+    const items = c.items.filter((it) => it.productCode || it.qty || it.rate || it.itemName);
+    const terms = d.deliveryTerms || 'C&F';
+    const marks = _lines(d.shippingMarks);
+    const exch = num(d.exchRate);
+
+    // ── Custom Inv: items from row 21, TOTAL on row 41. The CEPA / LUT lines
+    // sit in the item area (rows 30-34 in their sheet) — they follow the last
+    // item, and a long invoice gets extra rows so nothing overlaps. ──
+    const inv = _sheetEditor(await zip.file('xl/worksheets/sheet1.xml').async('string'));
+    const block = Math.max(30, 21 + items.length + 1);          // CEPA line; LUT lines at +2..+4
+    const extra1 = Math.max(0, block + 4 - 40);
+    inv.insertRows(41, extra1, 25);
+    const tot1 = 41 + extra1, last1 = tot1 - 1;
+    const R1 = (r) => (r >= 41 ? r + extra1 : r);
+    inv.set('G3', 'Invoice No. ' + (d.invoiceNo || '')).set('J4', d.exportersRef || '')
+      .set('G4', 'DATE: ' + (d.invoiceDate || '')).set('G5', "Buyer's Order No.: " + (d.buyersOrderNo || ''))
+      .set('G6', 'Other Reference(s)' + (d.otherRef ? ' ' + d.otherRef : ''))
+      .set('B8', d.consignee || '').set('G8', d.buyer || '').set('G9', '')
+      .set('G10', 'Terms of delivery & payment ' + terms)
+      .set('J11', num(d.totalGrossWt)).set('J12', Number(wt(c.totalNetWt)))
+      .set('I13', d.vehicleNo || '').set('I14', d.containerNo || '').set('J15', _numOrText(d.hsnCode))
+      .set('G16', 'LR NO ' + (d.lrNo || '') + '  DT. ' + (d.lrDate || ''))
+      .set('J17', c.totalCartons).set('K18', exch)
+      .set('B16', d.vessel || '').set('C16', d.portOfLoading || '').set('D16', d.countryOrigin || '')
+      .set('B18', d.portOfDischarge || '').set('C18', d.placeOfDelivery || '').set('D18', d.countryFinal || '')
+      .set('B19', 'ITEM DESCRIPTION:- ' + (d.itemDescription || ''))
+      .set('I20', terms + ' US$')
+      .set('C33', '').set('C34', '');
+    // Column B down the item area: the marks, then the CEPA / LUT lines.
+    for (let r = 21; r <= last1; r++) inv.set('B' + r, '');
+    marks.slice(0, Math.max(3, block - 22)).forEach((m, i) => inv.set('B' + (21 + i), m));
+    inv.set('B' + block, /emirates|\buae\b|u\.a\.e/i.test(d.countryFinal || '') ? 'SHIPMENT UNDER CEPA AE INDIA -UAE CEPA AGREEMENT' : '')
+      .set('B' + (block + 2), 'SHIPMENT UNDER LUT')
+      .set('B' + (block + 3), 'ARN NO.').set('C' + (block + 3), d.lutArnNo || '')
+      .set('B' + (block + 4), 'ARN DATE').set('C' + (block + 4), d.lutArnDate || '');
+    for (let i = 0; i < 20 + extra1; i++) {
+      const r = 21 + i, it = items[i];
+      if (!it) { (r >= block && r <= block + 4 ? ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'K'] : ['C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K']).forEach((k) => inv.set(k + r, '')); continue; }
+      inv.set('C' + r, it.invItem || '').set('D' + r, it.scheme || '').set('E' + r, it.productCode || '')
+        .set('F' + r, _numOrText(it.size)).set('G' + r, num(it.qty)).set('H' + r, num(it.rate))
+        .set('I' + r, { f: '+G' + r + '*H' + r, v: it.amount }).set('J' + r, { f: '+I' + r + '*K18', v: it.taxable }).set('K' + r, 'LUT');
+    }
+    inv.set('I' + tot1, { f: 'SUM(I21:I' + last1 + ')', v: c.totalCf })
+      .set('J' + tot1, { f: 'SUM(J21:J' + last1 + ')', v: c.totalTaxable })
+      .set('K' + tot1, '')
+      .set('D' + R1(42), terms + ' VALUE USD').set('F' + R1(42), { f: 'I' + tot1, v: c.totalCf })
+      .set('F' + R1(43), c.freight).set('F' + R1(44), { f: 'F' + R1(42) + '-F' + R1(43), v: c.fob })
+      .set('F' + R1(45), { f: 'F' + R1(44) + '*K18', v: c.fobInr })
+      .set('G' + R1(43), 'REMARKS :  ' + (d.remarks || ''))
+      .set('B' + R1(48), _usdWords(c.totalCf, terms));
+    zip.file('xl/worksheets/sheet1.xml', inv.xml());
+
+    // ── Pack list: items from row 24, room for 12, totals on row 36 ──
+    const pl = _sheetEditor(await zip.file('xl/worksheets/sheet2.xml').async('string'));
+    const extra2 = Math.max(0, items.length - 12);
+    pl.insertRows(36, extra2, 25);
+    const tot2 = 36 + extra2, last2 = tot2 - 1;
+    const R2 = (r) => (r >= 36 ? r + extra2 : r);
+    const addr = _lines(d.consigneeAddress).concat(d.consigneeTel ? ['TEL ' + d.consigneeTel] : [], d.consigneeCr ? ['CR NUMBER ' + d.consigneeCr] : []);
+    const addr3 = addr.length > 3 ? [addr[0], addr[1], addr.slice(2).join(', ')] : addr;
+    pl.set('H5', d.invoiceNo || '').set('L5', d.invoiceDate || '').set('H7', 'Customer order No. ' + (d.buyersOrderNo || ''))
+      .set('J11', num(d.totalGrossWt)).set('J13', Number(wt(c.totalNetWt)))
+      .set('H15', d.swg ? 'SWG :' : '').set('I15', d.swg || '')
+      .set('B13', d.consigneeName || '').set('B14', addr3[0] || '').set('B15', addr3[1] || '').set('B16', addr3[2] || '')
+      .set('J17', _numOrText(d.hsnCode)).set('K19', c.totalCartons)
+      .set('B18', String(d.portOfLoading || '').replace(/\s*\/\s*INDIA\s*$/i, '')).set('E18', d.portOfDischarge || '')
+      .set('B20', d.countryOrigin || '').set('E20', d.placeOfDelivery || '')
+      .set('H20', 'COUNTRY OF FINAL DESTINATION: ' + (d.countryFinal || ''))
+      .set('B21', 'DESCRIPTION:- ' + (d.itemDescription || ''));
+    for (let i = 0; i < Math.max(items.length, 12); i++) {
+      const r = 24 + i, it = items[i];
+      if (!it) { ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'].forEach((k) => pl.set(k + r, '')); continue; }
+      const sch = String(it.scheme || '');
+      const [s1, s2] = /RDT|RODTEP/i.test(sch) ? [sch.split('/')[0] || 'DBK', 'RODTEP'] : [sch, ''];
+      pl.set('B' + r, num(it.cartonFrom)).set('C' + r, num(it.cartonTo)).set('D' + r, { f: 'C' + r + '-B' + r + '+1', v: it.cartons })
+        .set('E' + r, it.itemName || it.invItem || '').set('F' + r, _numOrText(it.size)).set('G' + r, it.productCode || '')
+        .set('H' + r, num(it.pcsPerCarton)).set('I' + r, num(it.ntWtPerCarton)).set('J' + r, num(it.qty))
+        .set('K' + r, s1).set('L' + r, s2).set('M' + r, { f: 'I' + r + '*D' + r, v: it.netWt });
+    }
+    pl.set('D' + tot2, { f: 'SUM(D24:D' + last2 + ')', v: c.totalCartons })
+      .set('J' + tot2, { f: 'SUM(J24:J' + last2 + ')', v: c.totalQty })
+      .set('M' + tot2, { f: 'SUM(M24:M' + last2 + ')', v: c.totalNetWt });
+    for (let i = 0; i < 3; i++) pl.set('B' + R2(38 + i), i < 2 ? (marks[i] || '') : marks.slice(2).join(' '));
+    zip.file('xl/worksheets/sheet2.xml', pl.xml());
+
+    return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+  }
+
+  // The bytes of one Excel document — the Custom Invoice in the team's own
+  // workbook, the Customer Invoice as before (SheetJS).
+  async function _excelFile(kind, d, safeInv) {
+    const [name] = _EXCEL_DOCS[kind];
+    if (kind === 'invoice') return { name: name + ' & Packing List ' + safeInv + '.xlsx', bytes: await _customInvoiceTemplateBytes(d) };
+    await _ensureXlsxLib();
+    const { wb } = _excelWorkbook(kind, d);
+    return { name: name + ' ' + safeInv + '.xlsx', bytes: window.XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) };
+  }
+
   // A workbook for one document, kept in memory as SheetJS's own object — the
   // caller either writes it straight to a browser download (_downloadExcel)
   // or pulls out the raw bytes to drop into the "All Documents" ZIP.
@@ -1330,12 +1504,11 @@ window.Pages['export-documentation'] = (() => {
     const label = btn ? btn.textContent : '';
     try {
       if (btn) btn.textContent = 'Preparing…';
-      await _ensureXlsxLib();
       let d = {};
       try { d = JSON.parse(rec.data || '{}'); } catch {}
       const safeInv = _safeInvName(d.invoiceNo || rec.invoice_no);
-      const { name, wb } = _excelWorkbook(kind, d);
-      window.XLSX.writeFile(wb, name + ' ' + safeInv + '.xlsx');
+      const f = await _excelFile(kind, d, safeInv);
+      _downloadBlob(new Blob([f.bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), f.name);
     } catch (e) {
       Utils.showToast(e.message || 'Failed to build the Excel file', 'error');
     } finally {
@@ -1470,10 +1643,8 @@ window.Pages['export-documentation'] = (() => {
       setBtn('Excel…');
       // Both invoices as .xlsx too, in the same folder as their PDFs — see
       // _excelWorkbook.
-      const xlsxFiles = Object.keys(_EXCEL_DOCS).map((kind) => {
-        const { name, wb } = _excelWorkbook(kind, d);
-        return { name: name + ' ' + safeInv + '.xlsx', bytes: window.XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) };
-      });
+      const xlsxFiles = [];
+      for (const kind of Object.keys(_EXCEL_DOCS)) xlsxFiles.push(await _excelFile(kind, d, safeInv));
       setBtn('LUT PDFs…');
       const lut = [];
       for (const [href, name] of [['/export-lut-rfd11.pdf', 'LUT RFD-11.pdf'], ['/export-lut-ack.pdf', 'LUT Acknowledgement.pdf']]) {
