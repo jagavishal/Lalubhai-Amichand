@@ -756,6 +756,10 @@ window.Pages['proforma-invoice'] = (() => {
         + '<div class="pic-item-thumb" style="width:46px;height:42px;display:grid;place-items:center;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">'
           + '<span style="font-size:10px;color:#cbd5e1;">—</span>'
         + '</div>'
+        + (_hasFeature('add_product')
+          ? '<button type="button" class="pic-photo-set" title="Add / change this product\'s photo in the product master" style="margin-top:3px;border:none;background:none;padding:0;font-size:10.5px;font-weight:700;color:var(--color-primary);cursor:pointer;white-space:nowrap;">📷 Photo</button>'
+            + '<input type="file" class="pic-photo-file" accept="image/*" style="display:none;" />'
+          : '')
         + '<input type="hidden" data-field="imageUrl" />'
       + '</td>'
       + _ITEM_COLS.map(c => '<td class="pic-c-' + c.field + '" data-l="' + esc(c.label) + '" style="padding:6px;min-width:' + c.width + 'px;' + (c.typeahead ? 'position:relative;' : '') + '">'
@@ -803,6 +807,7 @@ window.Pages['proforma-invoice'] = (() => {
 
   function _bindItemRow(rowEl) {
     rowEl.querySelectorAll('.pic-item-code').forEach(_bindItemCodeInput);
+    _bindPhotoSet(rowEl);
 
     // Qty (or a corrected packing, CBM per box or weight per piece)
     // re-derives the three computed columns…
@@ -823,6 +828,45 @@ window.Pages['proforma-invoice'] = (() => {
       if (tbody.querySelectorAll('.pic-item-row').length <= 1) { Utils.showToast('At least one item row is required', 'warning'); return; }
       rowEl.remove();
       _recomputeTotals(tbody);
+    });
+  }
+
+  /* A product already in the master but with no photo (or a wrong one):
+     pick a picture on the line and it is saved to the master — this model,
+     plus the same item's other sizes that have none yet — and shows here. */
+  function _bindPhotoSet(rowEl) {
+    const btn = rowEl.querySelector('.pic-photo-set');
+    const file = rowEl.querySelector('.pic-photo-file');
+    if (!btn || !file) return;
+    btn.addEventListener('click', () => {
+      if (!rowEl.querySelector('[data-field="modelNo"]').value.trim()) { Utils.showToast('Pick the product (Model No.) on this line first', 'warning'); return; }
+      file.value = '';
+      file.click();
+    });
+    file.addEventListener('change', async () => {
+      const f = file.files && file.files[0];
+      if (!f) return;
+      const modelNo = rowEl.querySelector('[data-field="modelNo"]').value.trim();
+      btn.disabled = true; btn.textContent = 'Saving…';
+      try {
+        const photo = await Utils.readOriginalImage(f, 512 * 1024, 900);
+        const r = await Utils.apiFetch('/api/proforma-invoice/products/photo', { method: 'POST', body: JSON.stringify({ modelNo, photo }) });
+        // Every line on this PI with one of the updated models picks it up.
+        const set = new Set((r.models || [modelNo]).map(m => m.toLowerCase()));
+        document.querySelectorAll('#pic-items-tbody .pic-item-row').forEach(row => {
+          const m = row.querySelector('[data-field="modelNo"]').value.trim().toLowerCase();
+          if (row !== rowEl && !set.has(m)) return;
+          row.querySelector('[data-field="imageUrl"]').value = r.imageUrl;
+          const thumb = row.querySelector('.pic-item-thumb');
+          if (thumb) thumb.innerHTML = '<img src="' + esc(r.imageUrl) + '" alt="" onerror="this.remove()" style="max-width:44px;max-height:40px;object-fit:contain;border-radius:4px;" />';
+        });
+        const others = (r.models || []).filter(m => m.toLowerCase() !== modelNo.toLowerCase());
+        Utils.showToast('Photo saved for ' + modelNo + (others.length ? ' and ' + others.length + ' other size' + (others.length === 1 ? '' : 's') + ' (' + others.join(', ') + ')' : ''), 'success');
+      } catch (err) {
+        Utils.showToast(err.message || 'Could not save the photo', 'error');
+      } finally {
+        btn.disabled = false; btn.textContent = '📷 Photo';
+      }
     });
   }
 
@@ -963,6 +1007,21 @@ window.Pages['proforma-invoice'] = (() => {
     _loadBuyerCodes((row.form || {}).buyerName);
     _loadBuyerSpecs((row.form || {}).buyerName);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  /* A recurring order: a fresh PI (new number, today's date) started from an
+     old one's consignee, terms and items. Order No. and Target Date are left
+     blank — they are what changes each time. Prices are set again as usual. */
+  function _startDuplicate(row) {
+    _reviseOf = null;
+    _view = 'create';
+    renderPage();
+    const form = Object.assign({}, row.form || {}, { date: _today(), orderNo: '', targetDate: '' });
+    _prefillForm(form);
+    _loadBuyerCodes(form.buyerName);
+    _loadBuyerSpecs(form.buyerName);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    Utils.showToast('Copied from ' + row.piNo + ' — enter the new Order No. / PO and check the items, then Save', 'success');
   }
 
   function _cancelRevise() {
@@ -1457,6 +1516,7 @@ window.Pages['proforma-invoice'] = (() => {
     const editPrice = (canPrice && r.status === 'Priced')
       ? '<button type="button" class="pic-price-btn btn-secondary btn-sm" data-pi="' + pi + '">Edit Price</button>' : '';
     const menu = [
+      r.form ? '<button type="button" role="menuitem" class="pil-mi pic-dup-btn" data-pi="' + pi + '">Duplicate as new PI</button>' : '',
       live ? '<button type="button" role="menuitem" class="pil-mi pic-cancel-btn" data-pi="' + pi + '">Cancel PI</button>' : '',
       Utils.ownerDeleteBtn('pic-delete-btn pil-mi pil-mi-danger', 'pi', r.piNo).replace('<button ', '<button role="menuitem" '),
     ].join('');
@@ -1551,6 +1611,13 @@ window.Pages['proforma-invoice'] = (() => {
         } catch (err) {
           Utils.showToast(err.message || 'Failed to delete', 'error');
         }
+        return;
+      }
+      const dupBtn = e.target.closest('.pic-dup-btn');
+      if (dupBtn) {
+        const row = _pilRows.find(r => String(r.piNo) === dupBtn.dataset.pi);
+        if (!row || !row.form) { Utils.showToast('This PI has no saved detail to copy from', 'error'); return; }
+        _startDuplicate(row);
         return;
       }
       const reviseBtn = e.target.closest('.pic-revise-btn');

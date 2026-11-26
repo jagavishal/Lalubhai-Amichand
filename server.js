@@ -12601,6 +12601,53 @@ app.post('/api/proforma-invoice/products', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/proforma-invoice/products/photo — a photo for a product that is
+// already in the master (Shival, 26 Nov 2026: some products had none). Writes
+// column I of that Model No.'s row in fetch_product, and fills the same Item
+// Name's other sizes that have no photo yet (one photo per item, as the sheet
+// already does). Never overwrites another row's existing photo. Same
+// permission as adding a product; no approval — it is only a picture.
+app.post('/api/proforma-invoice/products/photo', requireAuth, async (req, res) => {
+  try {
+    const user = req.session.user;
+    if (!(await userCanUseFeature(user, 'proforma-invoice', 'add_product'))) {
+      return res.status(403).json({ error: 'You do not have permission to change product photos' });
+    }
+    const modelNo = String(req.body?.modelNo || '').trim();
+    if (!modelNo) return res.status(400).json({ error: 'Pick the product (Model No.) first' });
+    if (!_parseImageDataUrl(req.body?.photo)) return res.status(400).json({ error: 'Choose an image file' });
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+    const src = PI_FMT.PRODUCT_SOURCE;
+    const c = src.cols;
+    const firstRow = Number(/\d+/.exec(src.range)[0]);
+    const got = await sheets.spreadsheets.values.get({ spreadsheetId: src.spreadsheetId, range: `'${src.tab}'!${src.range}` });
+    const rows = got.data.values || [];
+    const key = (v) => String(v || '').trim().toLowerCase();
+    const at = rows.findIndex(r => key(r[c.modelNo]) === key(modelNo));
+    if (at < 0) return res.status(404).json({ error: `Model No. "${modelNo}" is not in the product master` });
+    const imageUrl = await _uploadPiProductPhoto(req.body.photo, rows[at][c.modelNo]);
+    if (!imageUrl) return res.status(500).json({ error: 'The photo could not be uploaded to Drive' });
+    const name = key(rows[at][c.itemName]);
+    const targets = rows.map((r, i) => i).filter(i => i === at
+      || (name && key(rows[i][c.itemName]) === name && !String(rows[i][c.imageUrl] || '').trim()));
+    const col = String.fromCharCode(65 + c.imageUrl);
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: src.spreadsheetId,
+      requestBody: { valueInputOption: 'RAW', data: targets.map(i => ({ range: `'${src.tab}'!${col}${firstRow + i}`, values: [[imageUrl]] })) },
+    });
+    _piProductCache = null;
+    const models = targets.map(i => String(rows[i][c.modelNo] || '').trim());
+    console.log('[pi-product] photo set by', user.name, 'for', models.join(', '));
+    return res.json({ success: true, imageUrl, models });
+  } catch (e) {
+    console.error('[pi-product] photo update failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // Shared by create and revise, so a revision is validated and shaped exactly
 // like a first issue rather than by a second, drifting copy of this logic.
 //
