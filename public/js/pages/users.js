@@ -184,7 +184,7 @@ window.Pages.users = (() => {
       { key: 'add_product', label: 'Create New Product' },
     ],
     'scheduler': [
-      { key: 'management_leave', label: 'Management Leave' },
+      { key: 'management_leave', label: 'Management (not available days)' },
     ],
   };
 

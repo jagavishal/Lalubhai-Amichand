@@ -219,8 +219,8 @@ window.Pages.dashboard = (function () {
           </span>
           <div style="flex:1;min-width:0;">
             <div class="db-hero-label" style="color:#475569;">Not Available Today</div>
-            <div style="font-size:1.6rem;font-weight:800;color:var(--text-primary);margin-top:2px;line-height:1.2;">${list.length} from Management</div>
-            <div style="display:flex;flex-direction:column;gap:4px;margin-top:8px;">
+            <div class="db-big" style="font-size:1.6rem;font-weight:800;color:var(--text-primary);margin-top:2px;line-height:1.2;">${list.length} from Management</div>
+            <div class="db-sub" style="display:flex;flex-direction:column;gap:2px;margin-top:8px;">
               ${list.map((r) => `<div style="font-size:13px;"><b style="color:var(--text-primary);">${esc(r.name)}</b>
                 <span style="color:#475569;font-size:11.5px;font-weight:600;">· not available${r.half ? ' (half day)' : ''}${r.till && r.till > today ? ' till ' + esc(dm(r.till)) : ''}</span></div>`).join('')}
             </div>
@@ -253,14 +253,14 @@ window.Pages.dashboard = (function () {
           </span>
           <div style="flex:1;min-width:0;">
             <div class="db-hero-label" style="color:#059669;">On Leave Today</div>
-            <div style="font-size:1.6rem;font-weight:800;color:var(--text-primary);margin-top:2px;line-height:1.2;">
+            <div class="db-big" style="font-size:1.6rem;font-weight:800;color:var(--text-primary);margin-top:2px;line-height:1.2;">
               ${leave.length} Employee${leave.length === 1 ? '' : 's'}
               ${absent.length ? `<span style="font-size:12px;font-weight:700;color:#dc2626;margin-left:4px;">+ ${absent.length} absent</span>` : ''}
             </div>
             <div style="font-size:12px;color:var(--text-secondary);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
               ${esc(leave.map((r) => r.name).concat(absent).slice(0, 3).join(', '))}${leave.length + absent.length > 3 ? '…' : ''}
             </div>
-            <button type="button" id="db-ol-toggle" style="margin-top:8px;border:none;background:none;padding:0;font-size:12.5px;font-weight:700;color:#059669;cursor:pointer;">View details →</button>
+            <button type="button" id="db-ol-toggle" class="db-act" style="margin-top:8px;border:none;background:none;padding:0;font-size:12.5px;font-weight:700;color:#059669;cursor:pointer;">View details →</button>
             <div id="db-ol-list" style="display:none;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:150px;overflow-y:auto;">
               ${leave.map((r) => chip('rgba(16,185,129,.08)', 'rgba(16,185,129,.25)',
                 `<b style="color:var(--text-primary);">${esc(r.name)}</b><span style="color:#059669;font-size:11px;font-weight:600;">${esc(r.type)}${r.half ? ' · half day' : ''}</span>${r.backup ? `<span style="color:var(--text-secondary);font-size:11px;">→ ${esc(r.backup)}</span>` : ''}`)).join('')}
@@ -359,22 +359,22 @@ window.Pages.dashboard = (function () {
     box.innerHTML = `
       <div class="card db-hero" style="border-left:4px solid ${color};background:linear-gradient(115deg,rgba(37,99,235,.12),rgba(14,165,233,.05) 55%,rgba(14,165,233,.10)),var(--surface,#fff);border-top:1px solid rgba(37,99,235,.15);border-right:1px solid rgba(37,99,235,.15);border-bottom:1px solid rgba(37,99,235,.15);"
            title="${t.shipments.length ? 'Done: ' + esc(t.shipments.map((s) => s.invoiceNo).join(', ')) : ''}">
-        <div aria-hidden="true" style="position:absolute;right:10px;bottom:0;line-height:0;pointer-events:none;"><svg width="150" height="92" viewBox="0 0 150 92" fill="none"><path d="M0 74 Q18 68 36 74 T72 74 T108 74 T150 74 V92 H0Z" fill="#bfdbfe"/><rect x="24" y="44" width="13" height="11" rx="1" fill="#f97316"/><rect x="38" y="44" width="13" height="11" rx="1" fill="#0ea5e9"/><rect x="52" y="44" width="13" height="11" rx="1" fill="#22c55e"/><rect x="66" y="44" width="13" height="11" rx="1" fill="#eab308"/><rect x="80" y="44" width="13" height="11" rx="1" fill="#ef4444"/><rect x="31" y="32" width="13" height="11" rx="1" fill="#14b8a6"/><rect x="45" y="32" width="13" height="11" rx="1" fill="#f59e0b"/><rect x="59" y="32" width="13" height="11" rx="1" fill="#3b82f6"/><rect x="73" y="32" width="13" height="11" rx="1" fill="#f43f5e"/><rect x="99" y="26" width="24" height="29" rx="2" fill="#f8fafc" stroke="#cbd5e1"/><rect x="103" y="31" width="4" height="4" fill="#1e40af"/><rect x="109" y="31" width="4" height="4" fill="#1e40af"/><rect x="115" y="31" width="4" height="4" fill="#1e40af"/><rect x="103" y="39" width="4" height="4" fill="#1e40af"/><rect x="109" y="39" width="4" height="4" fill="#1e40af"/><rect x="115" y="39" width="4" height="4" fill="#1e40af"/><rect x="111" y="15" width="7" height="11" fill="#334155"/><rect x="111" y="15" width="7" height="3" fill="#ef4444"/><path d="M12 55 H138 L126 75 H25 Z" fill="#1e3a8a"/><path d="M12 55 H138 L135 60 H15 Z" fill="#dc2626"/><path d="M0 80 Q18 74 36 80 T72 80 T108 80 T150 80 V92 H0Z" fill="#93c5fd" opacity=".75"/></svg></div>
+        <div aria-hidden="true" class="db-ship" style="position:absolute;right:10px;bottom:0;line-height:0;pointer-events:none;"><svg width="150" height="92" viewBox="0 0 150 92" fill="none"><path d="M0 74 Q18 68 36 74 T72 74 T108 74 T150 74 V92 H0Z" fill="#bfdbfe"/><rect x="24" y="44" width="13" height="11" rx="1" fill="#f97316"/><rect x="38" y="44" width="13" height="11" rx="1" fill="#0ea5e9"/><rect x="52" y="44" width="13" height="11" rx="1" fill="#22c55e"/><rect x="66" y="44" width="13" height="11" rx="1" fill="#eab308"/><rect x="80" y="44" width="13" height="11" rx="1" fill="#ef4444"/><rect x="31" y="32" width="13" height="11" rx="1" fill="#14b8a6"/><rect x="45" y="32" width="13" height="11" rx="1" fill="#f59e0b"/><rect x="59" y="32" width="13" height="11" rx="1" fill="#3b82f6"/><rect x="73" y="32" width="13" height="11" rx="1" fill="#f43f5e"/><rect x="99" y="26" width="24" height="29" rx="2" fill="#f8fafc" stroke="#cbd5e1"/><rect x="103" y="31" width="4" height="4" fill="#1e40af"/><rect x="109" y="31" width="4" height="4" fill="#1e40af"/><rect x="115" y="31" width="4" height="4" fill="#1e40af"/><rect x="103" y="39" width="4" height="4" fill="#1e40af"/><rect x="109" y="39" width="4" height="4" fill="#1e40af"/><rect x="115" y="39" width="4" height="4" fill="#1e40af"/><rect x="111" y="15" width="7" height="11" fill="#334155"/><rect x="111" y="15" width="7" height="3" fill="#ef4444"/><path d="M12 55 H138 L126 75 H25 Z" fill="#1e3a8a"/><path d="M12 55 H138 L135 60 H15 Z" fill="#dc2626"/><path d="M0 80 Q18 74 36 80 T72 80 T108 80 T150 80 V92 H0Z" fill="#93c5fd" opacity=".75"/></svg></div>
         ${t.canEdit ? `<button type="button" id="db-st-set" class="btn-secondary btn-sm" style="position:absolute;top:12px;right:14px;">Edit target</button>` : ''}
-        <div style="display:flex;gap:14px;align-items:flex-start;position:relative;padding-right:150px;">
+        <div class="db-ship-pad" style="display:flex;gap:14px;align-items:flex-start;position:relative;padding-right:150px;">
           <span class="db-ic" style="width:46px;height:46px;border-radius:14px;background:rgba(37,99,235,.12);color:${color};">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
           </span>
           <div style="flex:1;min-width:0;">
             <div class="db-hero-label" style="color:var(--color-primary);">${esc(t.title || 'Shipment target')} · by ${esc(fmt(t.by))}</div>
-            <div style="font-size:2.1rem;font-weight:800;color:var(--color-primary);line-height:1.15;margin-top:2px;">
+            <div class="db-big" style="font-size:2.1rem;font-weight:800;color:var(--color-primary);line-height:1.15;margin-top:2px;">
               ${t.done}<span style="font-size:1.3rem;color:#64748b;font-weight:700;"> / ${t.target}</span>
               <span style="font-size:12.5px;font-weight:600;color:var(--text-secondary);margin-left:4px;">shipped</span>
             </div>
-            <div style="height:8px;border-radius:99px;background:rgba(148,163,184,.25);overflow:hidden;margin-top:8px;max-width:440px;">
+            <div class="db-bar" style="height:8px;border-radius:99px;background:rgba(148,163,184,.25);overflow:hidden;margin-top:8px;max-width:440px;">
               <div style="height:100%;width:${pct}%;background:${color};border-radius:99px;transition:width .6s ease;"></div>
             </div>
-            <div style="font-size:12.5px;color:var(--text-secondary);margin-top:7px;display:flex;align-items:center;gap:6px;">
+            <div class="db-sub" style="font-size:12.5px;color:var(--text-secondary);margin-top:7px;display:flex;align-items:center;gap:6px;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1z"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
               ${hit ? `Target done 🎉` : `<b style="color:var(--text-primary);">${t.left}</b>&nbsp;to go`}
               · ${daysLeft >= 0 ? `${daysLeft} day${daysLeft === 1 ? '' : 's'} left` : 'date passed'}
@@ -406,11 +406,11 @@ window.Pages.dashboard = (function () {
           <span class="db-ic" style="width:48px;height:48px;border-radius:14px;background:rgba(124,58,237,.16);font-size:25px;">${done ? (r.correct ? '🏆' : '🧠') : '🧠'}</span>
           <div style="flex:1;min-width:0;">
             <div class="db-hero-label" style="color:#7c3aed;">Daily Trivia · ${esc(done ? r.category : t.category || 'General')}</div>
-            <div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-top:5px;line-height:1.4;">
+            <div class="db-text" style="font-size:16px;font-weight:700;color:var(--text-primary);margin-top:5px;line-height:1.4;">
               ${done ? (r.correct ? `${r.points} points today — correct in ${(r.ms_taken / 1000).toFixed(1)}s` : 'Played today — better luck tomorrow!')
                 : t.state === 'playing' ? 'Your 30 seconds are running!' : `Today's question is up — ${t.limitSec} seconds, one try`}
             </div>
-            <div style="margin-top:12px;display:flex;justify-content:flex-end;">
+            <div class="db-act" style="margin-top:12px;display:flex;justify-content:flex-end;">
               ${done ? `<button type="button" id="db-tv-board" class="btn-secondary btn-sm">🏅 Leaderboard</button>`
                 : `<button type="button" id="db-tv-play" class="btn-sm" style="background:#7c3aed;color:#fff;border:none;border-radius:10px;padding:9px 22px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(124,58,237,.35);">${t.state === 'playing' ? '▶ Resume' : '▶ Play'}</button>`}
             </div>
@@ -751,6 +751,23 @@ window.Pages.dashboard = (function () {
         @media (max-width:1100px) { #db-strips.c2, #db-strips.c3, #db-strips.c4 { grid-template-columns:minmax(0,1fr); } }
         .db-hero { border-radius:16px !important; padding:16px 20px !important; position:relative; overflow:hidden; box-shadow:0 8px 22px rgba(15,23,42,.07) !important; }
         .db-hero-label { font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em; }
+        /* Compact strip row (26 Nov 2026: "dashboard ko chota kr do"). */
+        #db-strips { gap:10px !important; }
+        #db-strips .db-hero { padding:10px 14px !important; border-radius:12px !important; box-shadow:0 3px 10px rgba(15,23,42,.05) !important; }
+        #db-strips .db-hero-label { font-size:10px; }
+        #db-strips .db-ic { width:34px !important; height:34px !important; border-radius:10px !important; font-size:18px !important; flex-shrink:0; }
+        #db-strips .db-ic svg { width:17px; height:17px; }
+        #db-strips .db-big { font-size:1.2rem !important; margin-top:0 !important; }
+        #db-strips .db-big span { font-size:.85rem !important; }
+        #db-strips .db-text { font-size:13.5px !important; margin-top:2px !important; }
+        #db-strips .db-ship svg { width:92px; height:56px; }
+        #db-strips .db-ship-pad { padding-right:92px !important; }
+        #db-strips .db-bar { height:6px !important; margin-top:5px !important; }
+        #db-strips .db-sub { margin-top:4px !important; font-size:12px !important; }
+        #db-st-rx { margin-top:6px !important; gap:4px !important; }
+        #db-st-rx button { padding:1px 7px !important; font-size:12.5px !important; }
+        #db-strips .db-act { margin-top:6px !important; }
+        #db-strips .db-hero > div[aria-hidden] svg[width="54"] { width:34px; height:34px; }
         #db-more-menu { display:none;position:absolute;right:0;top:calc(100% + 6px);z-index:210;min-width:200px;padding:6px;
           background:var(--surface,#fff);border:1px solid var(--border-base,#e2e8f0);border-radius:12px;box-shadow:0 10px 28px rgba(0,0,0,.14);flex-direction:column;gap:2px; }
         #db-more.open #db-more-menu { display:flex; }

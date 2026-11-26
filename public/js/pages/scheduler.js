@@ -167,7 +167,8 @@ window.Pages.scheduler = (() => {
   }
 
   function _leaveLabel(l) {
-    if (l.mgmt) return `${l.name || 'Management'} [Mgmt leave${l.halfDay && l.halfDay !== 'full' ? ' ½' : ''}]`;
+    // "Management", not "leave" (26 Nov 2026) — Directors' days away.
+    if (l.mgmt) return `${l.name || 'Management'} [Management${l.halfDay && l.halfDay !== 'full' ? ' ½' : ''}]`;
     return `${l.name || 'Leave'} [${l.leaveType || 'Leave'}${l.halfDay && l.halfDay !== 'full' ? ' ½' : ''}]`;
   }
 
@@ -464,7 +465,7 @@ window.Pages.scheduler = (() => {
       const l = item;
       title = `${l.name || 'Employee'} — on leave`;
       when = l.fromDate === l.toDate ? _fmtLongDate(l.fromDate) : `${_fmtLongDate(l.fromDate)} – ${_fmtLongDate(l.toDate)}`;
-      body = _row('flag', esc([l.mgmt ? 'Management leave' : l.leaveType, l.halfDay && l.halfDay !== 'full' ? l.halfDay + ' half' : ''].filter(Boolean).join(' · ')))
+      body = _row('flag', esc([l.mgmt ? 'Management · not available' : l.leaveType, l.halfDay && l.halfDay !== 'full' ? l.halfDay + ' half' : ''].filter(Boolean).join(' · ')))
         + (l.mgmt
           ? _row('note', esc(l.note || '')) + _row('user', l.createdByName ? `Added by ${esc(l.createdByName)}` : '')
           : _row('note', 'Approved leave — from HR → Leave Management.'));
@@ -665,7 +666,7 @@ window.Pages.scheduler = (() => {
               `<button type="button" data-kind="${k}" class="${_hidden.has(k) ? 'off' : ''}" title="Show / hide ${KIND_LABEL[k]}"><i style="background:${KIND_COLOUR[k]};"></i>${KIND_LABEL[k]}</button>`).join('')}</div>
             ${_hasFeature('management_leave') ? `<button id="sch-mleave" class="btn-secondary" title="Put a Director's / management days away on everyone's calendar">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-              Management leave
+              Management
             </button>` : ''}
             <button id="sch-create" class="btn-primary">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -1118,8 +1119,8 @@ window.Pages.scheduler = (() => {
       <button type="button" id="sch-ml-save" class="btn-primary">Save</button>`;
     document.body.insertAdjacentHTML('beforeend', window.UI.modal({
       id: 'sch-ml-overlay',
-      title: 'Management Leave',
-      subtitle: "Shows on everyone's Scheduler under Leaves",
+      title: 'Management',
+      subtitle: "Days a Director / management is not available — on everyone's Scheduler and the Dashboard",
       width: 440,
       closeButtonId: 'sch-ml-close',
       hiddenByDefault: false,
@@ -1161,7 +1162,7 @@ window.Pages.scheduler = (() => {
   }
 
   async function _deleteMgmtLeave(id) {
-    if (!await Utils.showConfirm('Remove this management leave from the calendar?', { danger: true, title: 'Remove Leave', confirmText: 'Remove' })) return;
+    if (!await Utils.showConfirm('Remove this from the calendar?', { danger: true, title: 'Remove', confirmText: 'Remove' })) return;
     try {
       await Utils.apiFetch('/api/management-leaves?id=' + encodeURIComponent(id), { method: 'DELETE' });
       Utils.showToast('Leave removed', 'success');
