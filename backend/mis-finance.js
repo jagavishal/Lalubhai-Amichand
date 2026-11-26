@@ -778,16 +778,16 @@ function statements(t, from, to, names = {}) {
       ['provisions', 'Increase / (Decrease) in Provisions', chg('provisions')],
       ['other_cl', 'Increase / (Decrease) in Other Current Liabilities', chg('other_cl')],
     ];
-    const intInc = pl('interest_income');
     // Interest typed on the upload: only that is added back in operating
     // and shown as paid under financing (the rest of the finance cost —
     // bank charges etc. — stays an operating expense), as in the old sheet.
     const intPaid = t.interestPaid != null ? t.interestPaid : fin;
-    const beforeWc = pbt + dep + intPaid - intInc;
+    // Interest income stays inside operating (in the profit) — no separate lines (26 Nov 2026).
+    const beforeWc = pbt + dep + intPaid;
     const cfo = beforeWc + wc.reduce((a, x) => a + x[2], 0) - tax;
     const capex = -(chg('fixed_assets') + dep);
     const inv = -chg('investments');
-    const cfi = capex + inv + intInc;
+    const cfi = capex + inv;
     const loans = chg('secured_loans') + chg('unsecured_loans');
     const od = chg('bank_od');
     const cap = chg('capital') + chg('pl_account');
@@ -806,7 +806,6 @@ function statements(t, from, to, names = {}) {
       ['', 'Net Profit Before Tax', r2(pbt)],
       ['depreciation', 'Add: Depreciation', r2(dep)],
       ['finance_cost', 'Add: Interest Paid', r2(intPaid)],
-      ['interest_income', 'Less: Interest Income', r2(-intInc)],
       ['t', 'Operating Profit before Working Capital Changes', r2(beforeWc)],
       ...wc.map(([k, l, x]) => [k, l, r2(x)]),
       ['tax', 'Less: Income Tax', r2(-tax)],
@@ -814,7 +813,6 @@ function statements(t, from, to, names = {}) {
       ['h', 'B. Cash Flow from Investing Activities'],
       ['fixed_assets', 'Purchase of Fixed Assets (net)', r2(capex)],
       ['investments', '(Increase) / Decrease in Investments', r2(inv)],
-      ['interest_income', 'Interest Received', r2(intInc)],
       ['T', 'Net Cash from Investing Activities (B)', r2(cfi)],
       ['h', 'C. Cash Flow from Financing Activities'],
       ['capital', 'Capital Introduced / (Withdrawn)', r2(cap)],
