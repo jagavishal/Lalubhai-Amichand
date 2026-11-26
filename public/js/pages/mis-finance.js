@@ -803,8 +803,8 @@ window.Pages['mis-finance'] = (() => {
     const fyList = [...new Set([...ANN.fys, ANN.fy, `${y0 + 1}-${String(y0 + 2).slice(2)}`])].sort().reverse();
     const nf = (v, dp) => (v == null || v === '' ? '' : Number(v).toLocaleString('en-IN', { maximumFractionDigits: dp }));
     const block = (b) => {
-      const line = (label, key, dp) => `<tr><td>${label}</td>${b.months.map((m) => `<td><input data-ann="${m.month}|${key}" value="${m[key] == null ? '' : m[key]}" inputmode="decimal" style="width:84px;padding:4px 6px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;text-align:right;" /></td>`).join('')}<td><b>${nf(b.months.reduce((a, m) => a + (Number(m[key]) || 0), 0), dp)}</b></td></tr>`;
-      const cum = (label, key, dp) => { let run = 0; return `<tr class="memo"><td>${label}</td>${b.months.map((m) => { run += Number(m[key]) || 0; return `<td>${m[key] == null ? '' : nf(run, dp)}</td>`; }).join('')}<td></td></tr>`; };
+      const line = (label, key, dp) => `<tr><td>${label}</td>${b.months.map((m) => `<td><input data-ann="${m.month}|${key}" data-annfy="${b.fy}|${key}|${dp}" value="${m[key] == null ? '' : m[key]}" inputmode="decimal" style="width:84px;padding:4px 6px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;text-align:right;" /></td>`).join('')}<td><b data-anntot="${b.fy}|${key}">${nf(b.months.reduce((a, m) => a + (Number(m[key]) || 0), 0), dp)}</b></td></tr>`;
+      const cum = (label, key, dp) => { let run = 0; return `<tr class="memo"><td>${label}</td>${b.months.map((m) => { run += Number(m[key]) || 0; return `<td data-anncum="${b.fy}|${key}">${m[key] == null ? '' : nf(run, dp)}</td>`; }).join('')}<td></td></tr>`; };
       return `<div style="padding:12px 16px 4px;font-size:15px;font-weight:800;">${esc(b.fy)}</div>
         <table class="mf-tbl mf-pf"><thead><tr><th>Sales</th>${ANN_MON.map((m) => `<th>${m}</th>`).join('')}<th>Total</th></tr></thead><tbody>
         ${line('Qty (kg)', 'sales_qty', 2)}${line('Amount', 'sales_amt', 0)}${cum('Cumulative Qty', 'sales_qty', 0)}${cum('Cumulative Amt', 'sales_amt', 0)}
@@ -866,6 +866,17 @@ window.Pages['mis-finance'] = (() => {
     $('ann-div')?.addEventListener('change', (e) => { _annDiv = e.target.value; ANN = null; render(); });
     $('ann-fy')?.addEventListener('change', (e) => { _annFy = e.target.value; ANN = null; render(); });
     $('ann-file')?.addEventListener('change', (e) => { const f = e.target.files[0]; if (f) annexImport(f).catch(H.fail); e.target.value = ''; });
+    // Running totals follow the typing (26 Nov 2026) — no Save needed to see them.
+    document.querySelectorAll('[data-annfy]').forEach((inp) => inp.addEventListener('input', () => {
+      const [fy, key, dp] = inp.getAttribute('data-annfy').split('|');
+      const ins = [...document.querySelectorAll(`[data-annfy="${fy}|${key}|${dp}"]`)];
+      const cums = [...document.querySelectorAll(`[data-anncum="${fy}|${key}"]`)];
+      const fmt = (v) => v.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+      let run = 0;
+      ins.forEach((x, i) => { const v = Number(String(x.value).replace(/[,\s]/g, '')); const has = x.value.trim() !== ''; if (has && Number.isFinite(v)) run += v; if (cums[i]) cums[i].textContent = has ? fmt(run) : ''; });
+      const tot = document.querySelector(`[data-anntot="${fy}|${key}"]`);
+      if (tot) tot.textContent = run.toLocaleString('en-IN', { maximumFractionDigits: Number(dp) });
+    }));
     $('ann-save')?.addEventListener('click', async (e) => {
       const by = {};
       document.querySelectorAll('[data-ann]').forEach((i) => { const [m, k] = i.getAttribute('data-ann').split('|'); (by[m] = by[m] || { month: m })[k] = i.value.trim(); });

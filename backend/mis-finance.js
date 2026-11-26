@@ -921,32 +921,46 @@ function consoOf(cols, inputs, days) {
   // Shared by Gross Profit, among the operating divisions with a profit.
   const gpBase = ops.reduce((a, c) => a + Math.max(0, v[c.division].gp), 0);
   const share = (d, amt) => (isHO(d) || !gpBase ? 0 : round2(amt * Math.max(0, v[d].gp) / gpBase));
-  const row = (label, f, kind = '') => {
+  // opsTotal: the Total column adds the operating divisions only — the HO
+  // rows below are a transfer, so the HO column carries them as a minus.
+  const row = (label, f, kind = '', opsTotal = false) => {
     const vals = divs.map((d) => round2(f(d)));
-    return [kind, label, vals, round2(vals.reduce((a, x) => a + x, 0))];
+    return [kind, label, vals, round2(vals.reduce((a, x, i) => a + (opsTotal && isHO(divs[i]) ? 0 : x), 0))];
   };
-  const np0 = (d) => v[d].gp + v[d].ii - (isHO(d) ? 0 : v[d].ie);     // HO's expenses go below, shared out
-  const hoTotal = (d) => alloc[d] + share(d, unallocSalary) + share(d, unallocExp);
+  // The HO's own figures up to Net Profit before allocation (its real profit,
+  // 26 Nov 2026: "profit of others is -2,06,20,466"); below, what it charges
+  // out to the divisions shows in its column as a minus, so every column and
+  // the Total stay true to the books.
+  const opsSum = (f) => ops.reduce((a, c) => a + f(c.division), 0);
+  const np0 = (d) => v[d].gp + v[d].ii - v[d].ie;
+  const hoOps = (d) => alloc[d] + share(d, unallocSalary) + share(d, unallocExp);
+  const viaHO = (f) => (d) => (isHO(d) ? -opsSum(f) : f(d));
+  const hoTotal = viaHO(hoOps);
+  const allocL = viaHO((d) => alloc[d]);
+  const usL = viaHO((d) => share(d, unallocSalary));
+  const ueL = viaHO((d) => share(d, unallocExp));
+  const mgL = viaHO((d) => mgmt[d]);
+  const lgL = viaHO((d) => share(d, legal));
   const np1 = (d) => np0(d) - hoTotal(d);
-  const np2 = (d) => np1(d) - mgmt[d];
-  const np3 = (d) => np2(d) - share(d, legal);
+  const np2 = (d) => np1(d) - mgL(d);
+  const np3 = (d) => np2(d) - lgL(d);
   const pct = (num, den) => (Math.abs(den) < 0.5 ? null : Math.round((num / den) * 1000) / 10);
   const pl = [
     row('Revenue', (d) => v[d].rev, 'B'),
     row('Gross Profit', (d) => v[d].gp, 'B'),
     ['pct', 'Gross Profit %', divs.map((d) => pct(v[d].gp, v[d].rev)), pct(sumOf(Object.fromEntries(divs.map((d) => [d, v[d].gp]))), sumOf(Object.fromEntries(divs.map((d) => [d, v[d].rev]))))],
     row('Indirect Incomes', (d) => v[d].ii),
-    row('Indirect Expenses', (d) => (isHO(d) ? 0 : v[d].ie)),
+    row('Indirect Expenses', (d) => v[d].ie),
     row('Net Profit before allocation', np0, 'G'),
     ['pct', 'Net Profit %', divs.map((d) => pct(np0(d), v[d].rev)), null],
-    row('Indirect Expenses (HO)', hoTotal, 'B'),
-    row('Allocated Salary', (d) => alloc[d], 'l'),
-    row('Unallocated Salary', (d) => share(d, unallocSalary), 'l'),
-    row('Unallocated Expenses', (d) => share(d, unallocExp), 'l'),
+    row('Indirect Expenses (HO)', hoTotal, 'B', true),
+    row('Allocated Salary', allocL, 'l', true),
+    row('Unallocated Salary', usL, 'l', true),
+    row('Unallocated Expenses', ueL, 'l', true),
     row('Net Profit before Remuneration', np1, 'G'),
-    row('Management Salary', (d) => mgmt[d]),
+    row('Management Salary', mgL, '', true),
     row('Net Profit before extraordinary item', np2, 'G'),
-    row('Legal Fees', (d) => share(d, legal)),
+    row('Legal Fees', lgL, '', true),
     row('Net Profit', np3, 'G'),
   ];
   const revTotal = pl[0][3];
