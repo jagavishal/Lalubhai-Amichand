@@ -69,7 +69,7 @@ const MF_SCHEMA = [
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 ];
 
-const CFG = { divisions: 'misfin_divisions', map: 'misfin_map', heads: 'misfin_heads' };
+const CFG = { divisions: 'misfin_divisions', map: 'misfin_map', heads: 'misfin_heads', conso: 'misfin_conso' };
 // The four divisions the books are kept in (Saloni, Nov 2026) — renamable on the Divisions tab.
 const DEFAULT_DIVISIONS = ['Other', 'Export', 'Trading', 'Retail'];
 
@@ -866,6 +866,127 @@ function statements(t, from, to, names = {}) {
   return { F: profitability(t, names, { open: openingStock, close: closingStock }), P, C, R, days };
 }
 
+
+/* ── Conso (Jayesh, 26 Nov 2026 — the "6. Conso" workbook) ───────────────
+   Across the divisions of one period:
+   - Profit and Loss: Revenue, Gross Profit (and %), Indirect Incomes and
+     Expenses, Net Profit before allocation; then the Head Office's costs —
+     the "Other" division's indirect expenses — shared out: Allocated Salary
+     (typed per division), Unallocated Salary and Unallocated Expenses (by
+     each division's share of Gross Profit), Management Salary (typed per
+     division) and Legal Fees (a typed total, by Gross Profit share).
+     Unallocated Expenses = HO expenses − every salary line − Legal Fees, so
+     the HO's whole cost is spread and the Total column ties to the books.
+   - Cash Flow: each division's A / B / C, net, branch transfers, opening
+     and closing cash.
+   - Ratios: receivables, payables, inventory and working capital, DSO,
+     DPO, DIO, cash conversion cycle, operational current ratio, working
+     capital turnover.
+   cols = [{ division, t, F, C }] for the divisions that have an upload. */
+function consoOf(cols, inputs, days) {
+  const isHO = (d) => /^other/i.test(d);
+  const pick = (lines, re) => { const x = (lines || []).find((l) => l.length > 2 && re.test(String(l[1] || ''))); return x && x[2] != null ? Number(x[2]) : 0; };
+  const divs = cols.map((c) => c.division);
+  const ops = cols.filter((c) => !isHO(c.division));
+  const ho = cols.find((c) => isHO(c.division));
+  const v = {};
+  for (const c of cols) {
+    const F = c.F;
+    v[c.division] = {
+      rev: pick(F, /^Sales$/), gp: pick(F, /^Gross Profit$/), ii: pick(F, /^Indirect Incomes$/),
+      ie: pick(F, /^Total Indirect Expenses$/) - pick(F, /^Unadjusted Forex/),
+    };
+  }
+  const n = (x) => Number(x) || 0;
+  const alloc = {}, mgmt = {};
+  for (const d of divs) { alloc[d] = isHO(d) ? 0 : n(inputs.alloc?.[d]); mgmt[d] = isHO(d) ? 0 : n(inputs.mgmt?.[d]); }
+  const sumOf = (o) => Object.values(o).reduce((a, x) => a + x, 0);
+  const unallocSalary = n(inputs.unallocSalary), legal = n(inputs.legal);
+  const hoExp = ho ? v[ho.division].ie : 0;
+  const unallocExp = round2(hoExp - sumOf(alloc) - unallocSalary - sumOf(mgmt) - legal);
+  // Shared by Gross Profit, among the operating divisions with a profit.
+  const gpBase = ops.reduce((a, c) => a + Math.max(0, v[c.division].gp), 0);
+  const share = (d, amt) => (isHO(d) || !gpBase ? 0 : round2(amt * Math.max(0, v[d].gp) / gpBase));
+  const row = (label, f, kind = '') => {
+    const vals = divs.map((d) => round2(f(d)));
+    return [kind, label, vals, round2(vals.reduce((a, x) => a + x, 0))];
+  };
+  const np0 = (d) => v[d].gp + v[d].ii - (isHO(d) ? 0 : v[d].ie);     // HO's expenses go below, shared out
+  const hoTotal = (d) => alloc[d] + share(d, unallocSalary) + share(d, unallocExp);
+  const np1 = (d) => np0(d) - hoTotal(d);
+  const np2 = (d) => np1(d) - mgmt[d];
+  const np3 = (d) => np2(d) - share(d, legal);
+  const pct = (num, den) => (Math.abs(den) < 0.5 ? null : Math.round((num / den) * 1000) / 10);
+  const pl = [
+    row('Revenue', (d) => v[d].rev, 'B'),
+    row('Gross Profit', (d) => v[d].gp, 'B'),
+    ['pct', 'Gross Profit %', divs.map((d) => pct(v[d].gp, v[d].rev)), pct(sumOf(Object.fromEntries(divs.map((d) => [d, v[d].gp]))), sumOf(Object.fromEntries(divs.map((d) => [d, v[d].rev]))))],
+    row('Indirect Incomes', (d) => v[d].ii),
+    row('Indirect Expenses', (d) => (isHO(d) ? 0 : v[d].ie)),
+    row('Net Profit before allocation', np0, 'G'),
+    ['pct', 'Net Profit %', divs.map((d) => pct(np0(d), v[d].rev)), null],
+    row('Indirect Expenses (HO)', hoTotal, 'B'),
+    row('Allocated Salary', (d) => alloc[d], 'l'),
+    row('Unallocated Salary', (d) => share(d, unallocSalary), 'l'),
+    row('Unallocated Expenses', (d) => share(d, unallocExp), 'l'),
+    row('Net Profit before Remuneration', np1, 'G'),
+    row('Management Salary', (d) => mgmt[d]),
+    row('Net Profit before extraordinary item', np2, 'G'),
+    row('Legal Fees', (d) => share(d, legal)),
+    row('Net Profit', np3, 'G'),
+  ];
+  const revTotal = pl[0][3];
+  pl.forEach((r) => { if (r[0] !== 'pct') r.push(pct(r[3], revTotal)); });
+
+  const cf = cols.filter((c) => c.C).length ? [
+    row('Cash Flow before Working Capital', (d) => pick(cols.find((c) => c.division === d).C, /^Operating Profit before Working Capital/)),
+    row('Changes in Working Capital', (d) => pick(cols.find((c) => c.division === d).C, /^Changes in Working Capital$/) - pick(cols.find((c) => c.division === d).C, /^Less: Income Tax/) * -1),
+    row('Net Cash Flow from Operating Activities (A)', (d) => pick(cols.find((c) => c.division === d).C, /^Net Cash Flow from Operating/), 'B'),
+    row('Net Cash Flow from Investing Activities (B)', (d) => pick(cols.find((c) => c.division === d).C, /^Net Cash Flow from Investing/), 'B'),
+    row('Net Cash Flow from Financing Activities (C)', (d) => pick(cols.find((c) => c.division === d).C, /^Net Cash Flow from Financing/), 'B'),
+    row('Net Cashflow', (d) => pick(cols.find((c) => c.division === d).C, /^Net Cash Inflow/), 'G'),
+    row('Branch Division', (d) => pick(cols.find((c) => c.division === d).C, /^Branch \/ Divisions/)),
+    row('Opening Balance', (d) => pick(cols.find((c) => c.division === d).C, /^Opening Cash/)),
+    row('Closing Balance', (d) => pick(cols.find((c) => c.division === d).C, /^Closing Cash/), 'G'),
+  ] : null;
+
+  // Ratios, for the operating divisions (the HO has no trade of its own).
+  const rd = ops.map((c) => c.division);
+  const bal = (c, h, which) => { const x = c.t[which][h] || 0; return HEAD[h].side === 'cr' ? -x : x; };
+  const rv = {};
+  for (const c of ops) {
+    const d = c.division;
+    const sales = v[d].rev, cogs = v[d].rev - v[d].gp;
+    const recO = bal(c, 'debtors', 'open'), recC = bal(c, 'debtors', 'close');
+    const payO = bal(c, 'creditors', 'open'), payC = bal(c, 'creditors', 'close');
+    const invO = openingStockOf(c.t), invC = bal(c, 'stock', 'close');
+    const div0r = (a, b) => (Math.abs(b) < 0.5 ? null : a / b);
+    rv[d] = { sales, gp: v[d].gp, cogs, np: np0(d), recO, recC, payO, payC, invO, invC,
+      wcO: recO + invO - payO, wcC: recC + invC - payC,
+      dso: div0r((recO + recC) / 2 * days, sales), dpo: div0r((payO + payC) / 2 * days, cogs), dio: div0r((invO + invC) / 2 * days, cogs) };
+    rv[d].ccc = rv[d].dso == null || rv[d].dio == null ? null : rv[d].dso + rv[d].dio - (rv[d].dpo || 0);
+    rv[d].ocr = div0r(recC + invC, payC);
+    rv[d].wct = div0r(sales * (365 / days), recC + invC - payC);
+  }
+  const tot = {};
+  for (const k of ['sales', 'gp', 'cogs', 'np', 'recO', 'recC', 'payO', 'payC', 'invO', 'invC', 'wcO', 'wcC']) tot[k] = rd.reduce((a, d) => a + rv[d][k], 0);
+  const d0 = (a, b) => (Math.abs(b) < 0.5 ? null : a / b);
+  tot.dso = d0((tot.recO + tot.recC) / 2 * days, tot.sales); tot.dpo = d0((tot.payO + tot.payC) / 2 * days, tot.cogs); tot.dio = d0((tot.invO + tot.invC) / 2 * days, tot.cogs);
+  tot.ccc = tot.dso == null || tot.dio == null ? null : tot.dso + tot.dio - (tot.dpo || 0);
+  tot.ocr = d0(tot.recC + tot.invC, tot.payC); tot.wct = d0(tot.sales * (365 / days), tot.wcC);
+  const rr = (kind, label, k) => [kind, label, rd.map((d) => (rv[d][k] == null ? null : Math.round(rv[d][k] * 100) / 100)), tot[k] == null ? null : Math.round(tot[k] * 100) / 100];
+  const ratios = { divisions: rd, rows: [
+    rr('', 'Sales', 'sales'), rr('', 'Gross Profit', 'gp'), rr('', 'COGS', 'cogs'), rr('', 'Net Profit before allocation', 'np'),
+    ['h', 'Receivables'], rr('', 'Opening', 'recO'), rr('', 'Closing', 'recC'),
+    ['h', 'Payables'], rr('', 'Opening', 'payO'), rr('', 'Closing', 'payC'),
+    ['h', 'Inventory'], rr('', 'Opening', 'invO'), rr('', 'Closing', 'invC'),
+    ['h', 'Working Capital'], rr('', 'Opening', 'wcO'), rr('', 'Closing', 'wcC'),
+    ['h', 'Days & ratios'], rr('days', 'DSO (days)', 'dso'), rr('days', 'DPO (days)', 'dpo'), rr('days', 'DIO (days)', 'dio'), rr('days', 'CCC (days)', 'ccc'),
+    rr('x', 'Operational Current Ratio', 'ocr'), rr('x', 'Working Capital Turnover Ratio', 'wct'),
+  ] };
+  return { divisions: divs, ho: ho ? ho.division : null, hoExpenses: round2(hoExp), unallocExpenses: unallocExp, pl, cf, ratios };
+}
+
 /* ===================================================================== */
 
 function mountMisFinance(app, ctx) {
@@ -1195,7 +1316,23 @@ function mountMisFinance(app, ctx) {
     const names = detailNames(sum ? [...totals, sum] : totals);
     const columns = cols.map((c) => (c.missing ? c : { division: c.division, ...meta(c.u, c.t), ...statements(c.t, from, to, names) }));
     const consolidated = sum ? { division: 'Consolidated', ...statements(sum, from, to, names) } : null;
-    return { from, to, days: daysBetween(from, to), columns, consolidated };
+    // Conso: the inputs saved for this period (salary, legal fees), else
+    // what the Salary tab holds for these months.
+    const inputsAll = (await readCfg(CFG.conso)) || {};
+    const saved = inputsAll[`${from}|${to}`] || null;
+    const salaryHint = await salaryFor(from, to);
+    const inputs = saved || { alloc: {}, mgmt: {}, unallocSalary: salaryHint.unallocated || '', legal: '' };
+    if (!saved) {
+      // The Salary tab's categories that are division names ("Export") are that division's allocated salary.
+      for (const [cat, amt] of Object.entries(salaryHint.byCategory)) {
+        const d = divs.find((x) => x.toLowerCase() === cat.toLowerCase());
+        if (d) inputs.alloc[d] = amt;
+      }
+    }
+    const live = cols.filter((c) => !c.missing).map((c) => ({ division: c.division, t: c.t, ...columns.find((x) => x.division === c.division) }));
+    const conso = consoOf(live, inputs, daysBetween(from, to));
+    conso.inputs = inputs; conso.saved = !!saved; conso.salaryHint = salaryHint;
+    return { from, to, days: daysBetween(from, to), columns, consolidated, conso };
   }));
 
   // Every ledger / group name seen in the uploads, with its current head.
@@ -1287,6 +1424,33 @@ function mountMisFinance(app, ctx) {
       if (old[i] !== list[i] && !list.includes(old[i])) await q('UPDATE mis_tb_uploads SET division = $1 WHERE division = $2', [list[i], old[i]]);
     }
     await writeCfg(CFG.divisions, list.slice(0, 12));
+    return { ok: true };
+  }));
+
+  /* Salary tab totals for the months a period covers: by category, and the
+     uncategorised ("Not allocated") total. */
+  async function salaryFor(from, to) {
+    const rows = await q('SELECT category, SUM(total) AS t FROM mis_salary WHERE month >= $1 AND month <= $2 GROUP BY category', [from.slice(0, 7), to.slice(0, 7)]).catch(() => []);
+    const byCategory = {};
+    let unallocated = 0, management = 0;
+    for (const r of rows) {
+      const t = round2(Number(r.t) || 0);
+      if (!r.category) unallocated += t;
+      else if (/management/i.test(r.category)) management += t;
+      else byCategory[r.category] = t;
+    }
+    return { byCategory, unallocated: round2(unallocated), management: round2(management) };
+  }
+
+  // The Conso's typed figures for one period.
+  app.post('/api/mis-finance/conso-inputs', requireAuth, route(async (req) => {
+    const b = req.body || {};
+    if (!ISO.test(b.from || '') || !ISO.test(b.to || '')) bad('Choose the period');
+    const num = (x) => { if (x === '' || x == null) return ''; const v = Number(String(x).replace(/[,₹\s]/g, '')); if (!Number.isFinite(v)) bad('Amounts must be numbers'); return round2(v); };
+    const obj = (o) => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).map(([k, x]) => [String(k).slice(0, 64), num(x)]));
+    const all = (await readCfg(CFG.conso)) || {};
+    all[`${b.from}|${b.to}`] = { alloc: obj(b.alloc), mgmt: obj(b.mgmt), unallocSalary: num(b.unallocSalary), legal: num(b.legal) };
+    await writeCfg(CFG.conso, all);
     return { ok: true };
   }));
 

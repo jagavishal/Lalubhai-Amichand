@@ -27,7 +27,7 @@ window.Pages['mis-finance'] = (() => {
   let _mapOnlyOpen = false;
   let _split = {};         // ledger name → [{ h, p }] split not saved yet ('' = back to one head)
 
-  const STMT = { F: 'Profitability', P: 'Profit & Loss', C: 'Cash Flow', R: 'Ratios' };
+  const STMT = { F: 'Profitability', P: 'Profit & Loss', C: 'Cash Flow', R: 'Ratios', K: 'Conso' };
   const headLabel = (k) => D.heads.find((h) => h.key === k)?.label || '';
   const splitText = (list) => list.map((x) => `${x.p}% ${headLabel(x.h) || '?'}`).join(' + ');
   const periodLabel = (from, to) => `${H.fmtDate(from)} → ${H.fmtDate(to)}`;
@@ -149,9 +149,12 @@ window.Pages['mis-finance'] = (() => {
     if (unm.length) notes.push(`Ledgers with no report head: ${unm.map((c) => `<b>${esc(c.division)}</b> (${c.unmapped})`).join(', ')} — map them on the Ledger Mapping tab.`);
     const borrowed = R.columns.filter((c) => c.openingFrom && c.openingFrom !== 'file');
     if (borrowed.length) notes.push(`Opening balances taken from the previous upload for ${borrowed.map((c) => esc(c.division)).join(', ')}.`);
+    if (_stmt === 'K' && _div) _stmt = 'P';
     const lines = cols[0][_stmt];
     let table;
-    if (_stmt === 'C' && cols.some((c) => !c.C)) {
+    if (_stmt === 'K') {
+      table = consoView(R.conso);
+    } else if (_stmt === 'C' && cols.some((c) => !c.C)) {
       const no = cols.filter((c) => !c.C).map((c) => c.division);
       table = `<div class="mf-warn">The Cash Flow needs opening balances. ${esc(no.join(', '))}: upload the Trial Balance with the Opening Balance column turned on (F12 in Tally), or upload the previous period too so its closing is used as the opening.</div>`;
       const ok = cols.filter((c) => c.C);
@@ -170,12 +173,52 @@ window.Pages['mis-finance'] = (() => {
           <option value="">All divisions${here.divisions.length > 1 ? ' + consolidated' : ''}</option>
           ${here.divisions.map((d) => `<option value="${esc(d)}"${d === _div ? ' selected' : ''}>${esc(d)} — vs last year</option>`).join('')}
         </select>
-        <div class="mf-seg">${Object.entries(STMT).filter(([k]) => !HIDDEN_STMT.includes(k)).map(([k, l]) => `<button data-stmt="${k}" class="${k === _stmt ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>
+        <div class="mf-seg">${Object.entries(STMT).filter(([k]) => !HIDDEN_STMT.includes(k) && (k !== 'K' || !_div)).map(([k, l]) => `<button data-stmt="${k}" class="${k === _stmt ? 'on' : ''}">${esc(l)}</button>`).join('')}</div>
         <button class="btn-secondary btn-sm" id="mf-xlsx" style="margin-left:auto;">Download Excel</button>
       </div>
       ${notes.length ? `<div class="mf-note">${notes.join('<br>')}</div>` : ''}
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;max-height:72vh;">${table}</div>
       <div style="font-size:11.5px;color:#94a3b8;margin-top:6px;">${R.days} days · amounts in ₹ · ratios use closing balances; day counts use the period's ${R.days} days</div>`;
+  }
+
+  /* ── Conso (Jayesh, 26 Nov 2026 — "6. Conso" workbook) ─────────────
+     Profit and Loss across the divisions with the Head Office's costs shared
+     out, a Cash Flow summary and the Ratios. Salary and Legal Fees are typed
+     in the box above the table (prefilled from the Salary tab). */
+  const MON_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function consoTitle(what) { const [y, m] = R.to.split('-').map(Number); return `${what} for the period ended ${MON_SHORT[m - 1]}'${String(y).slice(2)}`; }
+  function consoTable(title, heads, rows, opts = {}) {
+    const fmt = (kind, v) => (v == null ? '' : kind === 'pct' ? v.toFixed(1) + '%' : kind === 'days' ? Math.round(v) + '' : kind === 'x' ? v.toFixed(2) : acct(v));
+    return `<div style="padding:14px 16px 4px;font-size:15px;font-weight:800;color:#0f172a;">${esc(title)}</div>
+      <table class="mf-tbl mf-pf"><thead><tr><th>Particulars</th>${heads.map((h) => `<th>${esc(h)}</th>`).join('')}<th>Total</th>${opts.pct ? '<th>% of Sales</th>' : ''}</tr></thead><tbody>
+      ${rows.map((r) => {
+        if (r[0] === 'h') return `<tr class="sec"><td colspan="${heads.length + 2 + (opts.pct ? 1 : 0)}">${esc(r[1])}</td></tr>`;
+        const kind = r[0];
+        const cls = kind === 'G' ? 'G' : kind === 'B' ? 'H' : kind === 'l' ? 'l' : kind === 'pct' ? 'memo' : '';
+        return `<tr class="${cls}"><td>${esc(r[1])}</td>${r[2].map((v) => `<td>${fmt(kind, v)}</td>`).join('')}<td><b>${fmt(kind, r[3])}</b></td>${opts.pct ? `<td>${r[4] == null ? '' : r[4].toFixed(1) + '%'}</td>` : ''}</tr>`;
+      }).join('')}
+      </tbody></table>`;
+  }
+  function consoView(k) {
+    if (!k) return '<div class="mf-warn">Nothing to consolidate for this period.</div>';
+    const ops = k.divisions.filter((d) => d !== k.ho);
+    const inp = k.inputs || {};
+    const box = (id, label, val, hint = '') => `<label style="display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:#475569;font-weight:600;min-width:150px;">${esc(label)}
+      <input data-ci="${esc(id)}" type="number" step="1" value="${val === '' || val == null ? '' : esc(val)}" placeholder="0" style="${H.CONTROL}padding:6px 8px;font-size:12.5px;" />${hint ? `<span style="font-weight:400;color:#94a3b8;">${hint}</span>` : ''}</label>`;
+    const sh = k.salaryHint || {};
+    const inputs = `<details class="mf-ci" ${k.saved ? '' : 'open'} style="margin:12px 16px;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;background:#f8fafc;">
+      <summary style="cursor:pointer;font-weight:700;font-size:13px;color:var(--color-primary);">Salary &amp; Legal Fees for this period ${k.saved ? '(saved)' : '(not saved yet — prefilled from the Salary tab)'}</summary>
+      <div style="font-size:11.5px;color:#64748b;margin:6px 0 10px;">Head Office expenses (${esc(k.ho || 'no Other division')}): <b>₹ ${H.inr0(Math.round(k.hoExpenses || 0))}</b> — what is not salary or legal fees is <b>Unallocated Expenses</b> (₹ ${H.inr0(Math.round(k.unallocExpenses || 0))}), shared by Gross Profit.
+        Salary tab for these months: Not allocated ₹ ${H.inr0(Math.round(sh.unallocated || 0))} · Management ₹ ${H.inr0(Math.round(sh.management || 0))}${Object.entries(sh.byCategory || {}).map(([c, v]) => ` · ${esc(c)} ₹ ${H.inr0(Math.round(v))}`).join('')}.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;"><b style="font-size:12px;width:100%;">Allocated Salary (by division)</b>${ops.map((d) => box('alloc:' + d, d, inp.alloc?.[d])).join('')}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:8px;"><b style="font-size:12px;width:100%;">Management Salary (by division)</b>${ops.map((d) => box('mgmt:' + d, d, inp.mgmt?.[d])).join('')}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">${box('unallocSalary', 'Unallocated Salary (total)', inp.unallocSalary, 'shared by Gross Profit')}${box('legal', 'Legal Fees (total)', inp.legal, 'shared by Gross Profit')}
+        <button class="btn-primary btn-sm" id="mf-ci-save" style="margin-left:auto;">Save &amp; Recalculate</button></div>
+    </details>`;
+    return inputs
+      + consoTable(consoTitle('Profitability Statement'), k.divisions, k.pl, { pct: true })
+      + (k.cf ? consoTable(consoTitle('Cashflow Statement'), k.divisions, k.cf) : '<div class="mf-warn" style="margin:12px 16px;">Cash Flow needs opening balances for every division.</div>')
+      + consoTable('Ratio Analysis', k.ratios.divisions, k.ratios.rows);
   }
 
   // As the books print it: no decimals, a loss in brackets, nil as "-".
@@ -252,6 +295,23 @@ window.Pages['mis-finance'] = (() => {
       // Excel shows these like the old sheet: 1,234 · (1,234) · -
       for (const addr of Object.keys(ws)) if (!addr.startsWith('!') && typeof ws[addr].v === 'number') ws[addr].z = '#,##0;(#,##0);"-"';
       XLSX.utils.book_append_sheet(wb, ws, 'Profitability');
+    }
+    if (R.conso) {
+      const k = R.conso;
+      const sheet = (title, heads, rows, pct) => {
+        const aoa = [[title], [], ['Particulars', ...heads, 'Total', ...(pct ? ['% of Sales'] : [])]];
+        for (const r of rows) {
+          if (r[0] === 'h') { aoa.push([r[1]]); continue; }
+          const conv = (v) => (v == null ? '' : r[0] === 'pct' ? v / 100 : r[0] === 'days' || r[0] === 'x' ? v : Math.round(v));
+          aoa.push([r[1], ...r[2].map(conv), conv(r[3]), ...(pct ? [r[4] == null ? '' : r[4] / 100] : [])]);
+        }
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = [{ wch: 40 }, ...heads.map(() => ({ wch: 15 })), { wch: 15 }, { wch: 11 }];
+        return ws;
+      };
+      XLSX.utils.book_append_sheet(wb, sheet(consoTitle('Profitability Statement'), k.divisions, k.pl, true), 'Conso P&L');
+      if (k.cf) XLSX.utils.book_append_sheet(wb, sheet(consoTitle('Cashflow Statement'), k.divisions, k.cf), 'Conso Cashflow');
+      XLSX.utils.book_append_sheet(wb, sheet('Ratio Analysis', k.ratios.divisions, k.ratios.rows), 'Conso Ratios');
     }
     for (const key of ['P', 'C', 'R']) {
       const withData = cols.filter((c) => c[key]);
@@ -755,6 +815,16 @@ window.Pages['mis-finance'] = (() => {
     $('mf-div')?.addEventListener('change', (e) => { _div = e.target.value; render(); });
     document.querySelectorAll('[data-stmt]').forEach((b) => b.addEventListener('click', () => { _stmt = b.getAttribute('data-stmt'); render(); }));
     $('mf-xlsx')?.addEventListener('click', () => downloadXlsx().catch(H.fail));
+    $('mf-ci-save')?.addEventListener('click', async (e) => {
+      const body = { from: R.from, to: R.to, alloc: {}, mgmt: {}, unallocSalary: '', legal: '' };
+      document.querySelectorAll('[data-ci]').forEach((i) => {
+        const [k, d] = i.getAttribute('data-ci').split(/:(.+)/);
+        if (d) body[k][d] = i.value; else body[k] = i.value;
+      });
+      e.target.disabled = true;
+      try { await H.post('/api/mis-finance/conso-inputs', body); H.toast('Saved — Conso recalculated'); R = null; await render(); }
+      catch (err) { e.target.disabled = false; H.fail(err); }
+    });
     document.querySelectorAll('[data-stock]').forEach((b) => b.addEventListener('click', () => {
       const u = D.uploads.find((x) => String(x.id) === b.getAttribute('data-stock'));
       H.openModal({
