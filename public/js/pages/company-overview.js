@@ -528,7 +528,7 @@ window.Pages['company-overview'] = (() => {
     .ceo { --ceo-surface:#ffffff; --ceo-page:transparent; --ceo-ink:#0b0b0b; --ceo-ink2:#52514e; --ceo-muted:#898781;
       --ceo-grid:#e9e8e3; --ceo-base:#c3c2b7; --ceo-border:rgba(11,11,11,.09); --ceo-hover:#f6f6f3;
       --ceo-s1:#2a78d6; --ceo-s2:#eb6834; --ceo-good:#0ca30c; --ceo-warn:#fab219; --ceo-crit:#d03b3b; --ceo-accent:#2a78d6;
-      --ceo-tone-bg:#eef4fc; font-family:inherit; color:var(--ceo-ink); max-width:1440px; margin:0 auto; padding:4px 0 40px; }
+      --ceo-tone-bg:#eef4fc; font-family:inherit; color:var(--ceo-ink); max-width:none; margin:0; padding:4px 0 40px; }
     :root[data-theme="dark"] .ceo { --ceo-surface:#1a1a19; --ceo-ink:#ffffff; --ceo-ink2:#c3c2b7; --ceo-muted:#898781;
       --ceo-grid:#2c2c2a; --ceo-base:#383835; --ceo-border:rgba(255,255,255,.10); --ceo-hover:#232322;
       --ceo-s1:#3987e5; --ceo-s2:#d95926; --ceo-accent:#3987e5; --ceo-tone-bg:#1f2a38; }
