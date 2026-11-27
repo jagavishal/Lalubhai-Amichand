@@ -187,7 +187,7 @@ window.Pages.dashboard = (function () {
     if (!wrap) return;
     const shown = (id) => { const b = document.getElementById(id); return !!b && b.style.display !== 'none'; };
     const n = ['db-shiptarget', 'db-trivia', 'db-onleave', 'db-notavail'].filter(shown).length;
-    wrap.style.display = (n || shown('db-announce')) ? '' : 'none';
+    wrap.style.display = (n || shown('db-announce') || shown('db-wishwall')) ? '' : 'none';
     wrap.classList.toggle('c2', n === 2);
     wrap.classList.toggle('c3', n === 3);
     wrap.classList.toggle('c4', n === 4);
@@ -595,6 +595,7 @@ window.Pages.dashboard = (function () {
     _watchStrips();
     _paintAnnouncements();
     _paintShipTarget();
+    window.WishWall?.paint(document.getElementById('db-wishwall'));
     _paintTrivia();
     _paintOnLeave();
     _paintMeetings();
@@ -743,7 +744,7 @@ window.Pages.dashboard = (function () {
         .tone-slate .db-stat-head  { color:#334155 !important; }
         #db-strips { display:grid; gap:14px; margin-bottom:14px; grid-template-columns:minmax(0,1fr); align-items:stretch; }
         #db-strips > div > .card { height:100%; box-sizing:border-box; margin:0; }
-        #db-strips > #db-announce { grid-column:1 / -1; }
+        #db-strips > #db-announce, #db-strips > #db-wishwall { grid-column:1 / -1; }
         #db-strips.c2 { grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); }
         #db-strips.c3 { grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr); }
         #db-strips.c4 { grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr); }
@@ -845,7 +846,8 @@ window.Pages.dashboard = (function () {
             ${admin ? `<button id="db-btn-announcement" class="btn-secondary db-qa">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>
               Announcement
-            </button>` : ''}
+            </button>
+            <button id="db-btn-wishwall" class="btn-secondary db-qa" title="Start a secret birthday Wish Wall">🎂 Wish Wall</button>` : ''}
             <!-- The less-used actions sit under More (desktop). On a phone the
                  menu is display:contents, so its buttons join the tile grid. -->
             <div id="db-more" style="position:relative;">
@@ -884,6 +886,7 @@ window.Pages.dashboard = (function () {
              target on the left, trivia + on-leave beside it (_layoutStrips). -->
         <div id="db-strips" style="display:none;">
           <div id="db-announce" style="display:none;"></div>
+          <div id="db-wishwall" style="display:none;"></div>
           <div id="db-shiptarget" style="display:none;"></div>
           <div id="db-trivia" style="display:none;"></div>
           <div id="db-onleave" style="display:none;"></div>
@@ -2013,6 +2016,8 @@ window.Pages.dashboard = (function () {
 
     const btnAnnouncement = el.querySelector('#db-btn-announcement');
     if (btnAnnouncement) btnAnnouncement.addEventListener('click', () => _openAnnouncementModal(admin));
+    const btnWishWall = el.querySelector('#db-btn-wishwall');
+    if (btnWishWall) btnWishWall.addEventListener('click', () => window.WishWall?.openStart(_state.users));
 
     const btnLeave = el.querySelector('#db-btn-leave');
     if (btnLeave) btnLeave.addEventListener('click', () => _openLeaveModal());

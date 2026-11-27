@@ -521,6 +521,10 @@ SCHEMA.push(...MJ_SCHEMA);
 // screen (/trivia-screen). Routes mounted further down (search "mountTrivia").
 const { TRIVIA_SCHEMA, mountTrivia } = require('./backend/trivia.js');
 SCHEMA.push(...TRIVIA_SCHEMA);
+// Birthday Wish Wall — the team writes in secret, delivered in the evening.
+// Routes mounted further down (search "mountWishWall").
+const { WISHWALL_SCHEMA, mountWishWall } = require('./backend/wish-wall.js');
+SCHEMA.push(...WISHWALL_SCHEMA);
 
 // The factory's own department list (the numbered list the plant keeps on
 // paper), used to seed the `departments` table on a fresh DB and as the
@@ -7024,6 +7028,32 @@ mountMouldingJobwork(app, {
 // mode too. See backend/trivia.js.
 mountTrivia(app, {
   q, ensureSchema, requireAuth, isAdminUser, isSuperAdmin, istToday, useDb: USE_DB,
+});
+
+// ── Birthday Wish Wall routes ─────────────────────────────────────────────────
+// /api/wishwall/*. Opens by itself for today's HR birthdays; Admin/HOD can
+// start one for any login. See backend/wish-wall.js.
+mountWishWall(app, {
+  q, pool, ensureSchema, requireAuth, isAdminUser, isSuperAdmin, istToday, useDb: USE_DB, getMailer,
+  async findUser(id) {
+    if (!id) return null;
+    if (USE_DB) return (await q('SELECT id, name, email FROM users WHERE id = $1', [id]))[0] || null;
+    return ((await readStoreJson()).users || []).find((u) => String(u.id) === id) || null;
+  },
+  // Same order as the birthday greeting: Profile's address, then the login's.
+  async resolveEmail(userId) {
+    if (!USE_DB) return ((await readStoreJson()).users || []).find((u) => String(u.id) === String(userId))?.email || '';
+    const r = (await q(`SELECT u.email AS login_email, p.notification_email FROM users u
+                          LEFT JOIN profile p ON p.user_id = u.id WHERE u.id = $1`, [userId]))[0];
+    return String(r?.notification_email || '').trim() || String(r?.login_email || '').trim();
+  },
+  async todaysBirthdays() {
+    const { md } = istToday();
+    const rows = await q(`SELECT e.name, e.dob, e.user_id, u.email FROM hr_employees e
+                            LEFT JOIN users u ON u.id = e.user_id
+                           WHERE e.status = 'Active' AND e.dob IS NOT NULL`);
+    return rows.filter((r) => toDateStr(r.dob).slice(5) === md).map((r) => ({ name: r.name, user_id: r.user_id, email: r.email || '' }));
+  },
 });
 
 /* ── Approve / reject straight from the notification email ────────────────────
