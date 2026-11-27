@@ -424,7 +424,11 @@ window.Pages.dashboard = (function () {
     // Not played yet today: open the game by itself, once a day.
     if (!done && !_paintTrivia._popped) {
       _paintTrivia._popped = true;
-      setTimeout(() => window.Pages.trivia.autoPopup?.(_paintTrivia), 800);
+      setTimeout(async () => {
+        // A birthday Wish Wall popup goes first; trivia waits until it closes.
+        try { await window.WishWall?.whenFree?.(); } catch { /* never block trivia */ }
+        window.Pages.trivia.autoPopup?.(_paintTrivia);
+      }, 800);
     }
   }
 

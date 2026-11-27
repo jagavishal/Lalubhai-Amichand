@@ -34,9 +34,20 @@
   }
 
   /* ── Writer: write / edit my wish, see the others ── */
-  function openWrite(w) {
-    const { el, close } = modal('ww-write', `
-      <div style="padding:20px 22px 14px;border-bottom:1px solid #f3e8d2;display:flex;gap:12px;align-items:center;">
+  function openWrite(w, opts = {}) {
+    const first = (w.person_name || '').split(' ')[0];
+    // Popped up by itself on the Dashboard (like Daily Trivia): a bigger,
+    // festive header and a "Maybe later" way out.
+    const popHead = opts.pop ? `
+      <div style="padding:26px 24px 8px;text-align:center;position:relative;">
+        <button type="button" data-ww-close style="position:absolute;top:12px;right:12px;width:30px;height:30px;border-radius:8px;border:none;background:#fef3c7;color:#92400e;cursor:pointer;font-size:15px;">✕</button>
+        <div style="font-size:50px;line-height:1;">🎂</div>
+        <div style="font-size:12px;font-weight:800;letter-spacing:.12em;color:#db2777;margin-top:10px;">🤫 SECRET BIRTHDAY WISH WALL</div>
+        <div style="font-size:24px;font-weight:800;color:#b45309;margin-top:6px;">Aaj ${esc(w.person_name)} ka birthday hai!</div>
+        <div style="font-size:13.5px;color:#78716c;margin-top:6px;">Chupke se ek wish likho — ${esc(first)} ko ye abhi nahi dikhega. Saari wishes ${hourLabel(_data.deliver_hour)} baje ek saath unhe milengi 🎁</div>
+      </div>` : '';
+    const { el, close } = modal('ww-write', popHead + `
+      <div style="padding:20px 22px 14px;${opts.pop ? 'display:none !important;' : ''}border-bottom:1px solid #f3e8d2;display:flex;gap:12px;align-items:center;">
         <div style="font-size:30px;">🎂</div>
         <div style="flex:1;">
           <div style="font-size:16px;font-weight:800;color:#92400e;">Wish ${esc(w.person_name)} a happy birthday</div>
@@ -48,6 +59,7 @@
         <textarea id="ww-msg" rows="4" maxlength="1000" placeholder="Write something from the heart… 🎉" style="width:100%;box-sizing:border-box;padding:12px 14px;border:1.5px solid #fcd34d;border-radius:12px;font-size:14px;line-height:1.5;color:#1f2937;background:#fff;outline:none;resize:vertical;">${esc(w.my_wish)}</textarea>
         <div id="ww-err" style="display:none;font-size:12px;color:#dc2626;margin-top:6px;"></div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+          ${opts.pop ? '<button type="button" data-ww-close class="btn-secondary">Maybe later</button>' : ''}
           ${w.my_wish ? '<button type="button" id="ww-remove" class="btn-secondary">Remove my wish</button>' : ''}
           <button type="button" id="ww-save" style="padding:9px 22px;border-radius:10px;border:none;background:#d97706;color:#fff;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(217,119,6,.35);">${w.my_wish ? 'Update wish' : 'Add my wish 🎁'}</button>
         </div>
@@ -56,6 +68,7 @@
       </div>`);
     const msg = el.querySelector('#ww-msg');
     msg.focus();
+    if (opts.pop) confetti(el.querySelector('[data-ww-card]'));
     const send = async (message) => {
       const btn = el.querySelector('#ww-save');
       btn.disabled = true;
@@ -369,10 +382,25 @@
       };
     });
 
-    // The surprise opens by itself, once per wall.
-    const fresh = d.for_me.find((w) => { try { return !localStorage.getItem('ww-seen-' + w.id); } catch { return false; } });
-    if (fresh && !document.getElementById('ww-surprise')) setTimeout(() => openSurprise(fresh), 700);
+    // The surprise opens by itself, once per wall. Otherwise, like Daily
+    // Trivia, the wall asks for a wish by itself — once a day per wall, and
+    // never again once you have written one.
+    const seen = (k) => { try { return !!localStorage.getItem(k); } catch { return true; } };
+    const mark = (k) => { try { localStorage.setItem(k, '1'); } catch { /* private mode */ } };
+    const onDash = () => (window.location.hash || '#dashboard').replace('#', '') === 'dashboard';
+    const fresh = d.for_me.find((w) => !seen('ww-seen-' + w.id));
+    if (fresh && onDash() && !document.getElementById('ww-surprise')) { openSurprise(fresh); return; }
+    const me = String(window.currentUser?.id || '');
+    const ask = d.walls.find((w) => !w.delivered && !w.my_wish && !seen(`ww-asked-${me}-${w.id}`));
+    if (ask && onDash() && !document.getElementById('ww-write')) { mark(`ww-asked-${me}-${ask.id}`); openWrite(ask, { pop: true }); }
   }
 
-  window.WishWall = { paint, openStart, cardImage, refresh: () => paint(_box) };
+  // Daily Trivia's own popup waits for ours, so the two never stack.
+  let _painting = Promise.resolve();
+  async function whenFree() {
+    await _painting;
+    while (document.getElementById('ww-write') || document.getElementById('ww-surprise')) await new Promise((r) => setTimeout(r, 400));
+  }
+
+  window.WishWall = { paint: (box) => (_painting = paint(box).catch(() => {})), openStart, cardImage, whenFree, refresh: () => paint(_box) };
 })();
