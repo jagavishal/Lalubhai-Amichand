@@ -62,6 +62,7 @@ window.Pages['mis-finance'] = (() => {
     else if (_tab === 'mapping') body = await mappingTab();
     else if (_tab === 'salary') body = await salaryTab();
     else if (_tab === 'annex') body = await annexTab();
+    else if (_tab === 'stock') body = await stockTab();
     else body = divisionsTab();
     el.innerHTML = `<div class="animate-fade-in">
       <style>
@@ -108,6 +109,7 @@ window.Pages['mis-finance'] = (() => {
         { key: 'mapping', label: 'Ledger Mapping' },
         { key: 'salary', label: 'Salary' },
         { key: 'annex', label: 'Annexure' },
+        { key: 'stock', label: 'Stock Summary' },
         { key: 'divisions', label: 'Divisions' },
       ], _tab)}
       ${body}
@@ -201,6 +203,7 @@ window.Pages['mis-finance'] = (() => {
       }).join('')}
       </tbody></table>`;
   }
+  let _consoTab = 'F';
   function consoView(k) {
     if (!k) return '<div class="mf-warn">Nothing to consolidate for this period.</div>';
     const ops = k.divisions.filter((d) => d !== k.ho);
@@ -217,10 +220,12 @@ window.Pages['mis-finance'] = (() => {
       <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">${box('unallocSalary', 'Unallocated Salary (total)', inp.unallocSalary, 'shared by Gross Profit')}${box('legal', 'Legal Fees (total)', inp.legal, 'shared by Gross Profit')}
         <button class="btn-primary btn-sm" id="mf-ci-save" style="margin-left:auto;">Save &amp; Recalculate</button></div>
     </details>`;
-    return inputs
-      + consoTable(consoTitle('Profitability Statement'), k.divisions, k.pl, { pct: true })
-      + (k.cf ? consoTable(consoTitle('Cashflow Statement'), k.divisions, k.cf) : '<div class="mf-warn" style="margin:12px 16px;">Cash Flow needs opening balances for every division.</div>')
-      + consoTable('Ratio Analysis', k.ratios.divisions, k.ratios.rows);
+    // Three tabs of their own (27 Nov 2026): Profitability · Cashflow · Ratio.
+    const seg = `<div style="display:flex;gap:6px;margin:12px 16px 0;">${[['F', 'Profitability'], ['C', 'Cashflow'], ['R', 'Ratio']].map(([key, l]) =>
+      `<button data-ctab="${key}" class="${_consoTab === key ? 'btn-primary' : 'btn-secondary'} btn-sm">${l}</button>`).join('')}</div>`;
+    if (_consoTab === 'C') return seg + (k.cf ? consoTable(consoTitle('Cashflow Statement'), k.divisions, k.cf) : '<div class="mf-warn" style="margin:12px 16px;">Cash Flow needs opening balances for every division.</div>');
+    if (_consoTab === 'R') return seg + consoTable('Ratio Analysis', k.ratios.divisions, k.ratios.rows);
+    return seg + inputs + consoTable(consoTitle('Profitability Statement'), k.divisions, k.pl, { pct: true });
   }
 
   // As the books print it: no decimals, a loss in brackets, nil as "-".
@@ -714,9 +719,17 @@ window.Pages['mis-finance'] = (() => {
       people.set(k, x);
     }
     const plist = [...people.values()].sort((a, b) => (a.category === b.category ? b.total - a.total : a.category === '' ? 1 : b.category === '' ? -1 : a.category.localeCompare(b.category)));
-    const emp = `<table class="mf-tbl"><thead><tr><th>Employee</th><th style="text-align:left;">Category</th><th>Months</th><th>Total</th><th>Per month</th></tr></thead><tbody>
-      ${plist.map((p) => `<tr><td>${esc(p.name)}</td><td style="text-align:left;color:${p.category ? '#334155' : '#b45309'};">${esc(catName(p.category))}</td><td>${p.months}</td><td>${H.inr0(Math.round(p.total))}</td><td>${p.months ? H.inr0(Math.round(p.total / p.months)) : '-'}</td></tr>`).join('')}
+    // Category and salary are editable here (27 Nov 2026) — a change applies
+    // to this employee's months in the range picked above.
+    const ed = 'padding:4px 6px;border:1px solid #e2e8f0;border-radius:6px;font-size:12.5px;';
+    const emp = `<datalist id="sal-cats">${cats.filter(Boolean).map((c) => `<option value="${esc(c)}"></option>`).join('')}</datalist>
+      <table class="mf-tbl"><thead><tr><th>Employee</th><th style="text-align:left;">Category</th><th>Months</th><th>Total</th><th>Per month</th></tr></thead><tbody>
+      ${plist.map((p) => { const pm = p.months ? Math.round(p.total / p.months) : 0; return `<tr data-salrow="${esc(p.name)}" data-cat0="${esc(p.category)}" data-pm0="${pm}"><td>${esc(p.name)}</td>
+        <td style="text-align:left;"><input class="sal-cat" list="sal-cats" value="${esc(p.category)}" placeholder="Not allocated" style="${ed}width:170px;color:${p.category ? '#334155' : '#b45309'};" /></td>
+        <td>${p.months}</td><td>${H.inr0(Math.round(p.total))}</td>
+        <td><input class="sal-pm" inputmode="decimal" value="${pm}" style="${ed}width:110px;text-align:right;" /></td></tr>`; }).join('')}
       </tbody></table>`;
+    const salSave = `<div style="display:flex;gap:10px;align-items:center;justify-content:flex-end;margin:10px 0 0;"><span id="sal-dirty" style="font-size:12px;color:#64748b;">Edit a category or the salary per month — it applies to ${monName(_salFrom)}${_salFrom !== _salTo ? ' – ' + monName(_salTo) : ''}.</span><button class="btn-primary btn-sm" id="sal-save">Save Changes</button></div>`;
     const upl = months.map((m) => { const r = SAL.find((x) => x.month === m); return `<span style="display:inline-flex;gap:6px;align-items:center;border:1px solid #e2e8f0;border-radius:8px;padding:4px 8px;font-size:12px;background:#fff;">
       <b>${monName(m)}</b> <span style="color:#94a3b8;">${esc(r.file_name || '')}${r.uploaded_by ? ' · ' + esc(r.uploaded_by) : ''}</span>
       <button class="btn-secondary btn-sm" data-saldel="${m}" style="padding:1px 7px;font-size:11px;color:#dc2626;">✕</button></span>`; }).join(' ');
@@ -725,7 +738,7 @@ window.Pages['mis-finance'] = (() => {
         <div style="background:#0f172a;color:#fff;border-radius:12px;padding:12px 16px;min-width:180px;"><div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.7;">Total salary</div>
         <div style="font-size:20px;font-weight:800;margin-top:2px;">₹ ${H.inr0(Math.round(total))}</div><div style="font-size:11.5px;opacity:.7;">${monName(_salFrom)}${_salFrom !== _salTo ? ' – ' + monName(_salTo) : ''}</div></div></div>
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;margin-bottom:12px;">${grid}</div>
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;max-height:60vh;">${emp}</div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;max-height:60vh;">${emp}</div>${salSave}
       <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;"><span style="font-size:11.5px;color:#94a3b8;">Uploaded:</span> ${upl}</div>`;
   }
 
@@ -835,6 +848,61 @@ window.Pages['mis-finance'] = (() => {
     ANN = null; await render();
   }
 
+  /* ── Stock Summary (own tab, 27 Nov 2026) ────────────────────────
+     Their Export sheet's Stock Summary month by month: opening as on
+     1 April (typed) + purchases − sales from the Annexure = closing, at the
+     average cost. Retail types each month's closing. "Apply to uploads"
+     copies the figures onto the uploads' stock boxes — nothing changes in
+     the reports until then. */
+  let STK = null, _stkDiv = '', _stkFy = '';
+  async function stockTab() {
+    if (!_stkDiv) _stkDiv = D.divisions.find((d) => /export/i.test(d)) || D.divisions[0];
+    if (!STK || STK.division !== _stkDiv || (_stkFy && STK.fy !== _stkFy)) STK = await H.api(`/api/mis-finance/stock?division=${encodeURIComponent(_stkDiv)}${_stkFy ? '&fy=' + _stkFy : ''}`);
+    _stkFy = STK.fy;
+    const y0 = Number(STK.fy.slice(0, 4));
+    const fyList = [-2, -1, 0, 1].map((d) => `${y0 + d}-${String(y0 + d + 1).slice(2)}`).reverse();
+    const nf = (v, dp = 0) => (v == null || v === '' ? '' : Number(v).toLocaleString('en-IN', { maximumFractionDigits: dp }));
+    const o = STK.opening || {};
+    const inp = (attr, v, w = 92) => `<input ${attr} value="${v == null ? '' : v}" inputmode="decimal" style="width:${w}px;padding:4px 6px;border:1px solid #c7d2fe;border-radius:6px;font-size:12px;text-align:right;background:#eef2ff;" />`;
+    const M = STK.months;
+    const row = (label, f, cls = '') => `<tr class="${cls}"><td>${label}</td>${M.map((m) => `<td>${f(m)}</td>`).join('')}</tr>`;
+    const table = `<table class="mf-tbl mf-pf"><thead><tr><th>Particulars</th>${ANN_MON.map((m) => `<th>${m}</th>`).join('')}</tr></thead><tbody>
+      ${row('Opening Stock (Kgs)', (m) => nf(m.open && m.open.qty))}
+      ${row('Opening Stock (₹)', (m) => nf(m.open && m.open.amt))}
+      ${row('Purchases (Kgs)', (m) => nf(m.purch.qty, 2), 'memo')}
+      ${row('Purchases (₹)', (m) => nf(m.purch.amt), 'memo')}
+      ${row('Sales (Kgs)', (m) => nf(m.sales.qty, 2), 'memo')}
+      ${row('Sales (₹)', (m) => nf(m.sales.amt), 'memo')}
+      ${row('Closing Stock (Kgs)', (m) => nf(m.close && m.close.qty))}
+      ${row('Rate / kg', (m) => nf(m.close && m.close.rate, 2), 'memo')}
+      ${row('<b>Closing Stock (₹)</b>', (m) => (m.close ? '<b>' + nf(m.close.amt) + '</b>' : ''), 'G')}
+      <tr class="sec"><td colspan="13">Closing typed for a month <span style="font-weight:500;color:#64748b;font-size:11px;">— used instead of the working above (Retail: type each month's closing here)</span></td></tr>
+      ${row('Closing ₹ (typed)', (m) => inp(`data-stkc="${m.month}|close_amt"`, m.typed.close_amt, 88))}
+      ${row('Closing Kgs (typed)', (m) => inp(`data-stkc="${m.month}|close_qty"`, m.typed.close_qty, 88))}
+      </tbody></table>`;
+    const ups = STK.uploads || [];
+    const cmp = (typed, sum) => (sum == null ? '<span style="color:#94a3b8;">—</span>' : `${nf(sum)}${typed != null && Math.abs(typed - sum) >= 1 ? ` <span style="color:#b45309;font-size:11px;">(upload has ${nf(typed)})</span>` : typed != null ? ' <span style="color:#15803d;">✓</span>' : ''}`);
+    const upl = ups.length ? `<table class="mf-tbl"><thead><tr><th style="text-align:left;">Upload period</th><th>Opening ₹ (summary)</th><th>Closing ₹ (summary)</th><th></th></tr></thead><tbody>
+      ${ups.map((u) => `<tr><td style="text-align:left;">${esc(periodLabel(u.from, u.to))}</td><td>${cmp(u.opening_stock, u.summary.open && u.summary.open.amt)}</td><td>${cmp(u.closing_stock, u.summary.close && u.summary.close.amt)}</td>
+        <td><button class="btn-secondary btn-sm" data-stkapply="${u.id}" ${u.summary.open || u.summary.close ? '' : 'disabled'}>Apply</button></td></tr>`).join('')}</tbody></table>`
+      : '<div style="padding:12px 16px;font-size:12.5px;color:#94a3b8;">No Trial Balance uploaded for this division yet.</div>';
+    return `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+        <select id="stk-div" style="${H.CONTROL}max-width:220px;">${D.divisions.map((d) => `<option${d === _stkDiv ? ' selected' : ''}>${esc(d)}</option>`).join('')}</select>
+        <select id="stk-fy" style="${H.CONTROL}max-width:150px;">${fyList.map((f) => `<option${f === STK.fy ? ' selected' : ''}>${f}</option>`).join('')}</select>
+        <button class="btn-primary btn-sm" id="stk-save" style="margin-left:auto;">Save</button>
+      </div>
+      <div class="mf-note">Stock Summary of <b>${esc(_stkDiv)}</b>, ${esc(STK.fy)}: opening as on 1 April + purchases − sales (from the <b>Annexure</b> tab) = closing, valued at the average cost of opening + purchases. Each month opens with the month before's closing. The reports change only when you press <b>Apply</b> below.</div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px 16px;margin-bottom:12px;display:flex;gap:16px;flex-wrap:wrap;align-items:flex-end;">
+        <b style="font-size:13px;width:100%;">Opening stock as on 1 April ${esc(STK.fy.slice(0, 4))}${o.typed === false ? ' <span style="font-weight:400;color:#64748b;font-size:11.5px;">(carried from last March — type to change)</span>' : ''}</b>
+        <label style="font-size:12px;color:#475569;font-weight:600;display:flex;flex-direction:column;gap:3px;">Kgs${inp('id="stk-oq"', o.typed ? o.qty : (o.qty != null ? Math.round(o.qty * 1000) / 1000 : ''), 140)}</label>
+        <label style="font-size:12px;color:#475569;font-weight:600;display:flex;flex-direction:column;gap:3px;">Amount (₹)${inp('id="stk-oa"', o.typed ? o.amt : (o.amt != null ? Math.round(o.amt) : ''), 160)}</label>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;margin-bottom:12px;">${table}</div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;">
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 16px 6px;"><b style="font-size:13px;">Use in the reports</b><span style="font-size:12px;color:#64748b;">copies the opening / closing above onto that upload's stock boxes (Uploads → Edit Stock)</span>
+          ${ups.length ? '<button class="btn-primary btn-sm" id="stk-apply-all" style="margin-left:auto;">Apply to all uploads</button>' : ''}</div>${upl}</div>`;
+  }
+
   function divisionsTab() {
     return `<div class="br-card" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;max-width:560px;">
       <div style="font-size:12px;color:#64748b;margin-bottom:8px;">One per line. Renaming a line keeps its uploads (same position).</div>
@@ -864,6 +932,37 @@ window.Pages['mis-finance'] = (() => {
     document.querySelectorAll('[data-stmt]').forEach((b) => b.addEventListener('click', () => { _stmt = b.getAttribute('data-stmt'); render(); }));
     $('mf-xlsx')?.addEventListener('click', () => downloadXlsx().catch(H.fail));
     $('ann-div')?.addEventListener('change', (e) => { _annDiv = e.target.value; ANN = null; render(); });
+    document.querySelectorAll('[data-ctab]').forEach((b) => b.addEventListener('click', () => { _consoTab = b.getAttribute('data-ctab'); render(); }));
+    $('stk-div')?.addEventListener('change', (e) => { _stkDiv = e.target.value; STK = null; render(); });
+    $('stk-fy')?.addEventListener('change', (e) => { _stkFy = e.target.value; STK = null; render(); });
+    $('stk-save')?.addEventListener('click', async (e) => {
+      const closings = {};
+      document.querySelectorAll('[data-stkc]').forEach((i) => { const [m, k] = i.getAttribute('data-stkc').split('|'); (closings[m] = closings[m] || { month: m })[k] = i.value.trim(); });
+      e.target.disabled = true;
+      try { await H.post('/api/mis-finance/stock', { division: _stkDiv, fy: _stkFy, opening: { qty: H.val('stk-oq'), amt: H.val('stk-oa') }, closings: Object.values(closings) }); H.toast('Stock Summary saved'); STK = null; await render(); }
+      catch (err) { e.target.disabled = false; H.fail(err); }
+    });
+    const stkApply = async (btn, uploads) => {
+      if (!(await Utils.showConfirm(`Copy the Stock Summary's opening / closing onto ${uploads ? 'this upload' : 'every ' + _stkDiv + ' upload'}? The stock typed there now is replaced, and the reports recalculate.`, { title: 'Use in the reports', confirmText: 'Apply' }))) return;
+      btn.disabled = true;
+      try { const r = await H.post('/api/mis-finance/stock/apply', { division: _stkDiv, uploads }); H.toast(r.updated.length ? `Applied to ${r.updated.length} upload${r.updated.length > 1 ? 's' : ''}` : 'Nothing to apply — no matching months'); STK = null; R = null; await refresh(); }
+      catch (err) { btn.disabled = false; H.fail(err); }
+    };
+    $('stk-apply-all')?.addEventListener('click', (e) => stkApply(e.target, null));
+    document.querySelectorAll('[data-stkapply]').forEach((b) => b.addEventListener('click', () => stkApply(b, [Number(b.getAttribute('data-stkapply'))])));
+    $('sal-save')?.addEventListener('click', async (e) => {
+      const changes = [...document.querySelectorAll('[data-salrow]')].map((tr) => {
+        const cat = tr.querySelector('.sal-cat').value.trim(), pm = tr.querySelector('.sal-pm').value.trim();
+        const body = { name: tr.getAttribute('data-salrow'), from: _salFrom, to: _salTo };
+        if (cat !== tr.getAttribute('data-cat0')) body.category = cat;
+        if (pm !== '' && Number(pm.replace(/[,\s]/g, '')) !== Number(tr.getAttribute('data-pm0'))) body.per_month = pm;
+        return body;
+      }).filter((b) => 'category' in b || 'per_month' in b);
+      if (!changes.length) { H.toast('Nothing changed'); return; }
+      e.target.disabled = true;
+      try { for (const c of changes) await H.patch('/api/mis-finance/salary/employee', c); H.toast(`Saved — ${changes.length} employee${changes.length > 1 ? 's' : ''} updated`); SAL = null; await render(); }
+      catch (err) { e.target.disabled = false; H.fail(err); }
+    });
     $('ann-fy')?.addEventListener('change', (e) => { _annFy = e.target.value; ANN = null; render(); });
     $('ann-file')?.addEventListener('change', (e) => { const f = e.target.files[0]; if (f) annexImport(f).catch(H.fail); e.target.value = ''; });
     // Running totals follow the typing (26 Nov 2026) — no Save needed to see them.
