@@ -49,7 +49,7 @@ window.Pages.trivia = (() => {
     const tabs = [{ key: 'today', label: 'Today' }, { key: 'board', label: 'Leaderboard' }];
     if (T.manage) tabs.push({ key: 'questions', label: 'Questions' });
     if (!tabs.some((t) => t.key === _tab)) _tab = 'today';
-    el.innerHTML = `<div style="max-width:1100px;margin:0 auto;">
+    el.innerHTML = `<div style="width:100%;">
       ${H.header('Daily Trivia', `One question a day · ${T.limitSec} seconds · one try`,
         `<a href="/trivia-screen" target="_blank" rel="noopener" class="btn-secondary" style="text-decoration:none;">📺 Big screen</a>`)}
       ${H.tabs('tv', tabs, _tab)}
