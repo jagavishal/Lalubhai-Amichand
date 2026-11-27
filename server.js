@@ -14354,7 +14354,9 @@ app.get('/api/packing-list/pending', requireAuth, async (req, res) => {
 
     const { orders, packingLists } = await _plReadLogs(sheets);
     await _plFillBuyerOrderNos(sheets, orders);
-    const packed = _plPackedByLine(packingLists);
+    // ?except=<plNo> leaves that list's own quantities out — the Revise form
+    // offers its lines with what they held added back to the balance.
+    const packed = _plPackedByLine(packingLists, String(req.query.except || '').trim() || undefined);
     const showAll = String(req.query.all || '') === '1';
     const barcodeOf = await _plBarcodeLookup();
 
@@ -14649,14 +14651,14 @@ async function _fillPackingTemplate(sheets, form, templateSheetId) {
 // A4 at any readable scale. No =IMAGE() photos on this one either, so the
 // pause before the page is captured is shorter. Never lets a Drive/export
 // hiccup block the data write.
-async function _finishPackingSubmission(plNo, templateSheetId) {
+async function _finishPackingSubmission(plNo, templateSheetId, suffix) {
   await _sleep(1200);
   try {
     const pdfBuffer = await _exportSheetTabPdf(PI_CREATION_SHEET_ID, templateSheetId, {
       c1: 0, c2: PL_FMT.LAYOUT.colCount, r1: 0, r2: PL_FMT.LAYOUT.lastRow, portrait: false, scale: 4,
     });
     // "VTV/PL/001/26-27" has slashes in it — a Drive filename must not.
-    return await safeUploadPdfToDrive(pdfBuffer, `${plNo.replace(/\//g, '-')} - Packing List.pdf`, PI_PDF_DRIVE_FOLDER_ID);
+    return await safeUploadPdfToDrive(pdfBuffer, `${plNo.replace(/\//g, '-')} - Packing List${suffix || ''}.pdf`, PI_PDF_DRIVE_FOLDER_ID);
   } catch (e) {
     console.error('[packing-list] PDF export failed:', e.message);
     return null;
@@ -14813,6 +14815,90 @@ app.post('/api/packing-list', requireAuth, sheetSerialised('packing', async (req
   }
 }));
 
+// PUT /api/packing-list/revise?plNo=... — same body as the create. Rewrites an
+// existing packing list in place under the SAME number (Khurshid, 27 Nov: one
+// carton was added after it was raised and there was no way to re-issue it).
+// Its own quantities are left out of the balance check, the PDF is re-printed
+// as "(Rev n)" — the old one stays in Drive — and approval goes back to
+// Pending with a fresh mail, since the approver signed off different figures.
+app.put('/api/packing-list/revise', requireAuth, sheetSerialised('packing', async (req, res) => {
+  try {
+    const plNo = String(req.query.plNo || '').trim();
+    const b = req.body || {};
+    if (!plNo) return res.status(400).json({ error: 'plNo is required' });
+    if (!b.plDate) return res.status(400).json({ error: 'Date is required' });
+    const auth = getGoogleAuth();
+    if (!auth) return res.status(500).json({ error: 'Google Sheets is not configured on this server' });
+    const { google } = require('googleapis');
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const { orders, packingLists } = await _plReadLogs(sheets);
+    const row = packingLists.find(p => p.plNo === plNo);
+    if (!row) return res.status(404).json({ error: 'Entry not found' });
+    if (!canManageDeptRow(req.session.user, null, row.createdBy)) {
+      return res.status(403).json({ error: 'Only who raised this packing list (or an Admin/HOD) can revise it' });
+    }
+    if (row.status === 'Cancelled') return res.status(400).json({ error: plNo + ' is cancelled' });
+
+    const ordersByNo = new Map(orders.map(o => [o.orderNo, o]));
+    const packed = _plPackedByLine(packingLists, plNo);
+    const { lines, error } = _plCollectLines(b, ordersByNo, packed);
+    if (error) return res.status(400).json({ error });
+
+    const shipped = [...new Set(lines.map(l => l.orderNo))].map(no => ordersByNo.get(no));
+    await _plFillBuyerOrderNos(sheets, shipped);
+    const buyerKeys = [...new Set(shipped.map(o => _plBuyerKey((o.form && o.form.buyerName) || o.buyer)))];
+    if (buyerKeys.length > 1) {
+      return res.status(400).json({ error: 'A packing list ships to one consignee. These orders are for ' + shipped.map(o => (o.form && o.form.buyerName) || o.buyer).join(' and ') + '.' });
+    }
+
+    const old = row.form || {};
+    const form = _plFormFromBody(b, shipped, req.session.user, lines);
+    form.madeBy = old.madeBy || row.createdBy || form.madeBy;
+    form.revision = (Number(old.revision) || 0) + 1;
+    form.revisedBy = req.session.user.name || '';
+    form.revisedAt = _timestampForSheet();
+
+    const { templateSheetId } = await _packingListMeta(_piFyLabel(b.plDate));
+    await _fillPackingTemplate(sheets, { ...form, plNo }, templateSheetId);
+    const pdfLink = (await _finishPackingSubmission(plNo, templateSheetId, ' (Rev ' + form.revision + ')')) || row.pdfLink;
+
+    const n = (await _findRowIndexByKey(PI_CREATION_SHEET_ID, PACKING_LOG_TAB, plNo)) + 1;
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: PI_CREATION_SHEET_ID,
+      requestBody: {
+        valueInputOption: 'USER_ENTERED',
+        data: [
+          { range: `'${PACKING_LOG_TAB}'!B${n}:I${n}`, values: [["'" + b.plDate, "'" + form.invoiceNo, "'" + form.orderNos.join(', '), "'" + form.piNos.join(', '), form.buyerName, form.totalPackedQty || '', form.totalCartons || '', pdfLink || '']] },
+          { range: `'${PACKING_LOG_TAB}'!L${n}`, values: [[JSON.stringify(form)]] },
+          { range: `'${PACKING_LOG_TAB}'!N${n}:P${n}`, values: [['Pending', '', '']] },
+        ],
+      },
+    });
+    console.log('[packing-list] revised', plNo, 'rev', form.revision, 'by', req.session.user?.name);
+
+    const by = req.session.user.name || '';
+    sendPackingListApprovalEmail({
+      plNo, buyer: form.buyerName, orderNos: form.orderNos, invoiceNo: form.invoiceNo,
+      totalQty: form.totalPackedQty, totalCartons: form.totalCartons, pdfLink, createdBy: by, revision: form.revision,
+    }).catch((e) => console.error('[packing-list] revised approval mail failed:', e.message));
+    sendPackingListCreatedEmail({ plNo, form, pdfLink, createdBy: by, revision: form.revision })
+      .catch((e) => console.error('[packing-list] revised notification mail failed:', e.message));
+
+    let ordersUpdated = true;
+    try {
+      await _plSyncOrderStatuses(sheets, [...(old.orderNos || []), ...form.orderNos]);
+    } catch (e) {
+      ordersUpdated = false;
+      console.error('[packing-list] order status write-back after revise failed:', e.message);
+    }
+    return res.json({ success: true, plNo, pdfLink, revision: form.revision, totalQty: form.totalPackedQty, totalCartons: form.totalCartons, ordersUpdated });
+  } catch (e) {
+    console.error('[packing-list] revise failed:', e.message);
+    return res.status(500).json({ error: e.message });
+  }
+}));
+
 // GET /api/packing-list/list — recent packing lists, newest first, capped at 200.
 app.get('/api/packing-list/list', requireAuth, async (req, res) => {
   try {
@@ -14953,7 +15039,7 @@ const PL_TOKEN_NS = 'pl:';
 const plActionUrl = (plNo, decision, email) =>
   `${APP_ORIGIN}/pl-action?t=${encodeURIComponent(leaveTokenFor(PL_TOKEN_NS + plNo, decision, email))}`;
 
-async function sendPackingListCreatedEmail({ plNo, form, pdfLink, createdBy }) {
+async function sendPackingListCreatedEmail({ plNo, form, pdfLink, createdBy, revision }) {
   const mailer = getMailer();
   if (!mailer) { console.log('[email] Packing List mail skipped — SMTP not configured'); return; }
   const to = await _notifyRecipients('packing_list_notify', ['queen1911@laltd.in']);
@@ -14962,11 +15048,11 @@ async function sendPackingListCreatedEmail({ plNo, form, pdfLink, createdBy }) {
   await mailer.sendMail({
     from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
     to: to.join(', '),
-    subject: `Packing List ${plNo} created — ${form.buyerName || ''}${buyerOrderNos ? ' (Order No. ' + buyerOrderNos + ')' : ''}`,
+    subject: `Packing List ${plNo} ${revision ? 'revised (Rev ' + revision + ')' : 'created'} — ${form.buyerName || ''}${buyerOrderNos ? ' (Order No. ' + buyerOrderNos + ')' : ''}`,
     html: _leaveMailHtml({
-      heading: 'New Packing List',
+      heading: revision ? 'Packing List Revised (Rev ' + revision + ')' : 'New Packing List',
       colour: '#0150AA',
-      lead: `<b>${escHtml(createdBy || 'The export team')}</b> has raised a Packing List in the ERP. It has gone to the approver for sign-off.`,
+      lead: `<b>${escHtml(createdBy || 'The export team')}</b> has ${revision ? 'revised' : 'raised'} a Packing List in the ERP. It has gone to the approver for sign-off.`,
       rows: [
         ['Packing List No', plNo], ['Invoice No', form.invoiceNo || '—'], ['Customer', form.buyerName],
         ['Buyer Order No', buyerOrderNos || '—'], ['Order Sheets', (form.orderNos || []).join(', ')],
@@ -14982,7 +15068,7 @@ async function sendPackingListCreatedEmail({ plNo, form, pdfLink, createdBy }) {
   console.log('[email] Packing List mail sent to:', to.join(', '), 'for', plNo);
 }
 
-async function sendPackingListApprovalEmail({ plNo, buyer, orderNos, invoiceNo, totalQty, totalCartons, pdfLink, createdBy }) {
+async function sendPackingListApprovalEmail({ plNo, buyer, orderNos, invoiceNo, totalQty, totalCartons, pdfLink, createdBy, revision }) {
   const mailer = getMailer();
   if (!mailer) { console.log('[email] Packing List approval mail skipped — SMTP not configured'); return null; }
   const approverName = await _configuredApprover('packing_list_approver');
@@ -14994,11 +15080,11 @@ async function sendPackingListApprovalEmail({ plNo, buyer, orderNos, invoiceNo, 
   await mailer.sendMail({
     from: `"Lallubhai Amichand ERP" <${process.env.SMTP_USER}>`,
     to: who.email,
-    subject: `Approval needed — ${plNo}${buyer ? ' (' + buyer + ')' : ''}`,
+    subject: `Approval needed — ${plNo}${revision ? ' (Rev ' + revision + ')' : ''}${buyer ? ' (' + buyer + ')' : ''}`,
     html: _leaveMailHtml({
       heading: 'Packing List Awaiting Your Approval',
       colour: '#0150AA',
-      lead: `Hi <b>${who.name}</b>, <b>${createdBy || 'the export team'}</b> has raised a Packing List in the ERP. Please review the PDF and approve or reject it below.`,
+      lead: `Hi <b>${who.name}</b>, <b>${createdBy || 'the export team'}</b> has ${revision ? 'revised a Packing List (Rev ' + revision + ') — the figures changed since it was raised' : 'raised a Packing List in the ERP'}. Please review the PDF and approve or reject it below.`,
       rows: [
         ['Packing List No', plNo], ['Invoice No', invoiceNo], ['Customer', buyer],
         ['Order Nos', Array.isArray(orderNos) ? orderNos.join(', ') : orderNos],

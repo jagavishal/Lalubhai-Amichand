@@ -2683,7 +2683,8 @@ window.Pages['proforma-invoice'] = (() => {
         + '<td class="m-card-actions" style="padding:8px 10px;font-size:12.5px;white-space:nowrap;">'
           + (r.status === 'Cancelled'
             ? '<span style="display:inline-flex;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;">Cancelled</span>'
-            : '<button type="button" class="pkl-inv-btn" data-pl="' + esc(r.plNo) + '" data-inv="' + esc(r.invoiceNo || '') + '" title="Change the invoice number and re-print the PDF" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Edit Inv. No.</button>'
+            : '<button type="button" class="pkl-revise-btn" data-pl="' + esc(r.plNo) + '" title="Change cartons / lines and re-print under the same number" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:700;padding:2px 6px;">Revise</button>'
+              + '<button type="button" class="pkl-inv-btn" data-pl="' + esc(r.plNo) + '" data-inv="' + esc(r.invoiceNo || '') + '" title="Change the invoice number and re-print the PDF" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Edit Inv. No.</button>'
               + '<button type="button" class="pkl-cancel-btn" data-pl="' + esc(r.plNo) + '" style="border:none;background:transparent;color:#ef4444;cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Cancel</button>')
           + (r.status !== 'Cancelled' && r.approvalStatus !== 'Approved' && r.approvalStatus !== 'Rejected'
             ? '<button type="button" class="pkl-resend-btn" data-pl="' + esc(r.plNo) + '" title="Email the approver again with Approve / Reject buttons" style="border:none;background:transparent;color:var(--color-primary);cursor:pointer;font-size:12.5px;font-weight:600;padding:2px 6px;">Resend mail</button>'
@@ -2733,6 +2734,13 @@ window.Pages['proforma-invoice'] = (() => {
           Utils.showToast(err.message || 'Failed to change the invoice number', 'error');
           invBtn.disabled = false; invBtn.textContent = 'Edit Inv. No.';
         }
+        return;
+      }
+      const reviseBtn = e.target.closest('.pkl-revise-btn');
+      if (reviseBtn) {
+        const row = _pklRows.find(x => x.plNo === reviseBtn.dataset.pl);
+        if (!row || !row.form || !Array.isArray(row.form.items)) { Utils.showToast('This packing list has no stored lines to revise from', 'error'); return; }
+        _plStartRevise(row);
         return;
       }
       const cancelBtn = e.target.closest('.pkl-cancel-btn');
@@ -2821,7 +2829,10 @@ window.Pages['proforma-invoice'] = (() => {
     _plPendingLoaded = false;
     _plPendingError = '';
     try {
-      _plPending = await Utils.apiFetch('/api/packing-list/pending?all=1') || [];
+      // When revising, that list's own quantities are added back to the
+      // balance — otherwise its own cartons would read as already shipped.
+      const ex = _plNew && _plNew.revising ? '&except=' + encodeURIComponent(_plNew.revising) : '';
+      _plPending = await Utils.apiFetch('/api/packing-list/pending?all=1' + ex) || [];
     } catch (e) {
       _plPending = [];
       _plPendingError = e.message || 'Failed to load orders pending dispatch';
@@ -2873,6 +2884,35 @@ window.Pages['proforma-invoice'] = (() => {
     // looked exactly like "there is nothing to pack".
     _plPendingLoaded = false;
     _view = 'packing';
+  }
+
+  // Revise (Khurshid, 27 Nov: "addition or deletion ka option nahi hai" —
+  // one carton was added after the list was raised). The same form, filled
+  // from the stored list; saving rewrites it under the same number.
+  function _plStartRevise(row) {
+    const f = row.form || {};
+    _plSeedNew('');
+    _plNew.revising = row.plNo;
+    _plNew.revision = (Number(f.revision) || 0) + 1;
+    _plNew.picked = (f.orderNos || []).slice();
+    _plNew.order = [];
+    const str = (v) => (v == null || v === '' || Number(v) === 0) ? '' : String(v);
+    (f.items || []).forEach(it => {
+      const key = _plLineKey(it.orderNo, it.lineIdx);
+      _plNew.order.push(key);
+      const auto = _num(it.packedQty) === _num(it.cartons) * _num(it.perCarton);
+      _plNew.values[key] = {
+        barcode: it.barcode || '', cartons: str(it.cartons), perCarton: str(it.perCarton),
+        packedQty: auto ? '' : str(it.packedQty),
+        netPerCarton: str(it.netPerCarton), grossPerCarton: str(it.grossPerCarton), cbmPerCarton: str(it.cbmPerCarton),
+        auto: { packedQty: auto },
+      };
+    });
+    _plNew.header = {
+      plDate: row.plDate || f.plDate || _today(), invoiceNo: f.invoiceNo || row.invoiceNo || '', cha: f.cha || '',
+      containerSize: f.containerSize || '', productCategory: f.productCategory || '',
+    };
+    _goToView();
   }
 
   function _plStartNew(orderNo) {
@@ -3133,7 +3173,11 @@ window.Pages['proforma-invoice'] = (() => {
       // is done is more useful than wondering where it went.
       const done = line.balanceQty <= 0;
       const key = _plLineKey(o.orderNo, line.lineIdx);
-      const v = _plNew.values[key] || (_plNew.values[key] = done
+      // On a revision a line that was not on the list starts with its
+      // per-carton hints but no cartons — typing cartons adds it.
+      const v = _plNew.values[key] || (_plNew.values[key] = (!done && _plNew.revising)
+        ? Object.assign(_plSeedValues(line), { cartons: '' })
+        : done
         ? { barcode: '', cartons: '', perCarton: '', packedQty: '', netPerCarton: '', grossPerCarton: '', cbmPerCarton: '', auto: {} }
         : _plSeedValues(line));
       const cell = (f, extra) => '<td style="padding:3px 4px;vertical-align:top;"><input type="text" data-field="' + f + '" value="' + esc(v[f] == null ? '' : v[f]) + '"'
@@ -3194,8 +3238,11 @@ window.Pages['proforma-invoice'] = (() => {
     return '<form id="pl-form" style="display:flex;flex-direction:column;gap:16px;">'
       + '<div class="pi-banner" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">'
         + '<div>'
-          + '<div style="font-size:13px;font-weight:700;color:#1e40af;">New Packing List</div>'
-          + '<div style="font-size:11.5px;color:#1e40af;opacity:.85;margin-top:2px;">Pick every order going in this container — they must all be for one party. Then count the cartons; the quantities, weights, CBM and carton numbers follow from that.</div>'
+          + (_plNew.revising
+            ? '<div style="font-size:13px;font-weight:700;color:#1e40af;">Revise Packing List ' + esc(_plNew.revising) + ' (Rev ' + _plNew.revision + ')</div>'
+              + '<div style="font-size:11.5px;color:#1e40af;opacity:.85;margin-top:2px;">Change the cartons, add a line (type its cartons) or remove one (clear its cartons), or tick another order. Saving keeps the same number, re-prints the PDF as Rev ' + _plNew.revision + ' and sends it for approval again.</div>'
+            : '<div style="font-size:13px;font-weight:700;color:#1e40af;">New Packing List</div>'
+              + '<div style="font-size:11.5px;color:#1e40af;opacity:.85;margin-top:2px;">Pick every order going in this container — they must all be for one party. Then count the cartons; the quantities, weights, CBM and carton numbers follow from that.</div>')
         + '</div>'
         + '<button type="button" id="pl-form-cancel" style="padding:6px 12px;border-radius:8px;background:#fff;border:1.5px solid #bfdbfe;color:#1e40af;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Back to Packing Lists</button>'
       + '</div>'
@@ -3204,7 +3251,7 @@ window.Pages['proforma-invoice'] = (() => {
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">'
         // Issued server-side on submit, so the form cannot promise a number a
         // concurrent packing list would take first.
-        + _readonlyField('pl-next-no', 'Packing List No.', 'Assigned on save')
+        + _readonlyField('pl-next-no', 'Packing List No.', _plNew.revising || 'Assigned on save')
         + _textField('pl-invoice-no', 'Invoice No.', { value: h.invoiceNo, placeholder: 'e.g. LA - 14' })
         + _textField('pl-date', 'Date', { type: 'date', value: h.plDate })
         + _plListField('pl-container-size', 'Container Size', h.containerSize, D.containerSizeOptions, 'e.g. 20 FT HC')
@@ -3218,7 +3265,7 @@ window.Pages['proforma-invoice'] = (() => {
       + _sectionTitle('Carton Count')
       + _plLinesHtml()
 
-      + '<button type="submit" id="pl-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">Create Packing List</button>'
+      + '<button type="submit" id="pl-submit-btn" style="align-self:flex-start;padding:10px 28px;border-radius:9px;background:var(--color-primary);color:var(--color-primary-text);border:none;font-size:13.5px;font-weight:700;cursor:pointer;">' + (_plNew.revising ? 'Save Revision' : 'Create Packing List') + '</button>'
     + '</form>';
   }
 
@@ -3404,7 +3451,8 @@ window.Pages['proforma-invoice'] = (() => {
     if (over) { Utils.showToast(over._label + ': only ' + over._balance + ' left to ship', 'error'); return; }
 
     _plSaving = true;
-    if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+    const revising = _plNew.revising;
+    if (btn) { btn.disabled = true; btn.textContent = revising ? 'Saving…' : 'Creating…'; }
     try {
       const body = {
         plDate,
@@ -3415,8 +3463,10 @@ window.Pages['proforma-invoice'] = (() => {
         items: items.map(({ _qty, _balance, _label, ...it }) => it),
       };
       _listsStale(); // a new PI / order / packing list → the list tabs fetch again
-      const out = await Utils.apiFetch('/api/packing-list', { method: 'POST', body: JSON.stringify(body) });
-      Utils.showToast('Packing List ' + out.plNo + ' created — ' + out.totalCartons + ' cartons, ' + out.totalQty + ' pcs', 'success');
+      const out = revising
+        ? await Utils.apiFetch('/api/packing-list/revise?plNo=' + encodeURIComponent(revising), { method: 'PUT', body: JSON.stringify(body) })
+        : await Utils.apiFetch('/api/packing-list', { method: 'POST', body: JSON.stringify(body) });
+      Utils.showToast('Packing List ' + out.plNo + (revising ? ' revised (Rev ' + out.revision + ') — ' : ' created — ') + out.totalCartons + ' cartons, ' + out.totalQty + ' pcs' + (revising ? '. Sent for approval again.' : ''), 'success');
       if (!out.pdfLink) Utils.showToast('The packing list is logged, but its PDF could not be filed — raise it again or export the tab by hand', 'error');
       if (out.ordersUpdated === false) Utils.showToast('The packing list is saved, but the orders it ships could not be moved to Partly Packed / Packed', 'warning');
       // The balances every order carries have just changed, so the pending
@@ -3430,7 +3480,7 @@ window.Pages['proforma-invoice'] = (() => {
     } finally {
       _plSaving = false;
       const b2 = document.getElementById('pl-submit-btn');
-      if (b2) { b2.disabled = false; b2.textContent = 'Create Packing List'; }
+      if (b2) { b2.disabled = false; b2.textContent = revising ? 'Save Revision' : 'Create Packing List'; }
     }
   }
 
