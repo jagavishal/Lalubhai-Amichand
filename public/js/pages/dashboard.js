@@ -222,7 +222,7 @@ window.Pages.dashboard = (function () {
             <div class="db-big" style="font-size:1.6rem;font-weight:800;color:var(--text-primary);margin-top:2px;line-height:1.2;">${list.length} from Management</div>
             <div class="db-sub" style="display:flex;flex-direction:column;gap:2px;margin-top:8px;">
               ${list.map((r) => `<div style="font-size:13px;"><b style="color:var(--text-primary);">${esc(r.name)}</b>
-                <span style="color:#475569;font-size:11.5px;font-weight:600;">· not available${r.half ? ' (half day)' : ''}${r.till && r.till > today ? ' till ' + esc(dm(r.till)) : ''}</span></div>`).join('')}
+                <span style="color:#475569;font-size:11.5px;font-weight:600;">· ${r.reason ? esc(r.reason) : 'not available'}${r.half ? ' (half day)' : ''}${r.till && r.till > today ? ' till ' + esc(dm(r.till)) : ''}</span></div>`).join('')}
             </div>
           </div>
         </div>

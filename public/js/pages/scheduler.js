@@ -168,7 +168,7 @@ window.Pages.scheduler = (() => {
 
   function _leaveLabel(l) {
     // "Management", not "leave" (26 Nov 2026) — Directors' days away.
-    if (l.mgmt) return `${l.name || 'Management'} [Management${l.halfDay && l.halfDay !== 'full' ? ' ½' : ''}]`;
+    if (l.mgmt) return `${l.name || 'Management'} [${l.reason || 'Management'}${l.halfDay && l.halfDay !== 'full' ? ' ½' : ''}]`;
     return `${l.name || 'Leave'} [${l.leaveType || 'Leave'}${l.halfDay && l.halfDay !== 'full' ? ' ½' : ''}]`;
   }
 
@@ -463,9 +463,9 @@ window.Pages.scheduler = (() => {
         + _row('note', 'Open <b>All Tasks</b> to update it.');
     } else if (kind === 'leave') {
       const l = item;
-      title = `${l.name || 'Employee'} — on leave`;
+      title = l.mgmt && l.reason === 'Ahmedabad Office' ? `${l.name} — at Ahmedabad Office` : `${l.name || 'Employee'} — on leave`;
       when = l.fromDate === l.toDate ? _fmtLongDate(l.fromDate) : `${_fmtLongDate(l.fromDate)} – ${_fmtLongDate(l.toDate)}`;
-      body = _row('flag', esc([l.mgmt ? 'Management · not available' : l.leaveType, l.halfDay && l.halfDay !== 'full' ? l.halfDay + ' half' : ''].filter(Boolean).join(' · ')))
+      body = _row('flag', esc([l.mgmt ? 'Management · ' + (l.reason || 'not available') : l.leaveType, l.halfDay && l.halfDay !== 'full' ? l.halfDay + ' half' : ''].filter(Boolean).join(' · ')))
         + (l.mgmt
           ? _row('note', esc(l.note || '')) + _row('user', l.createdByName ? `Added by ${esc(l.createdByName)}` : '')
           : _row('note', 'Approved leave — from HR → Leave Management.'));
@@ -1101,13 +1101,12 @@ window.Pages.scheduler = (() => {
           <input id="sch-ml-to" type="date" value="${esc(dateStr)}" style="${inputStyle}" />
         </div>
         <div style="grid-column:1/-1;">
-          <label style="${labelStyle}">Day</label>
-          <select id="sch-ml-half" style="${inputStyle}">
-            <option value="full">Full day</option>
-            <option value="first">First half</option>
-            <option value="second">Second half</option>
+          <label style="${labelStyle}">Reason <span style="color:var(--color-danger)">*</span></label>
+          <select id="sch-ml-reason" style="${inputStyle}">
+            <option value="">— Select —</option>
+            <option value="Ahmedabad Office">Ahmedabad Office</option>
+            <option value="On Leave">On Leave</option>
           </select>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Half day works for a single date only.</div>
         </div>
         <div style="grid-column:1/-1;">
           <label style="${labelStyle}">Note</label>
@@ -1138,14 +1137,16 @@ window.Pages.scheduler = (() => {
     document.getElementById('sch-ml-save').addEventListener('click', async () => {
       const name = document.getElementById('sch-ml-name').value.trim();
       const fromDate = fromEl.value, toDate = toEl.value || fromEl.value;
+      const reason = document.getElementById('sch-ml-reason').value;
       if (!name || !fromDate) { Utils.showToast('Name and From date are required', 'error'); return; }
+      if (!reason) { Utils.showToast('Pick a reason', 'error'); return; }
       if (toDate < fromDate) { Utils.showToast('To date is before From date', 'error'); return; }
       const btn = document.getElementById('sch-ml-save');
       btn.disabled = true; btn.textContent = 'Saving…';
       try {
         await Utils.apiFetch('/api/management-leaves', {
           method: 'POST',
-          body: JSON.stringify({ name, fromDate, toDate, halfDay: document.getElementById('sch-ml-half').value, note: document.getElementById('sch-ml-note').value.trim() }),
+          body: JSON.stringify({ name, fromDate, toDate, reason, note: document.getElementById('sch-ml-note').value.trim() }),
         });
         close();
         Utils.showToast(`Leave added for ${name}`, 'success');

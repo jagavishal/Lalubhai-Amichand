@@ -434,6 +434,8 @@ const SCHEMA = [
   // Management (Directors) never apply for leave in HR, so Admin/HOD put their
   // days away straight on the Scheduler (23 Nov 2026).
   `CREATE TABLE IF NOT EXISTS management_leaves (id VARCHAR(16) PRIMARY KEY, name VARCHAR(255) NOT NULL, from_date DATE NOT NULL, to_date DATE NOT NULL, half_day VARCHAR(8) DEFAULT 'full', note VARCHAR(500) DEFAULT '', created_by VARCHAR(16) DEFAULT NULL, created_by_name VARCHAR(255) DEFAULT '', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  // Why they are away — "Ahmedabad Office" or "On Leave" (27 Nov 2026, replaces the half-day pick).
+  `ALTER TABLE management_leaves ADD COLUMN IF NOT EXISTS reason VARCHAR(40) DEFAULT ''`,
 ];
 
 // ── HRMS ──────────────────────────────────────────────────────────────────────
@@ -6296,7 +6298,7 @@ app.get('/api/scheduler', requireAuth, async (req, res) => {
           WHERE l.status = 'Approved' AND l.from_date <= $1 AND l.to_date >= $2`,
         [to, from]).catch(() => []);
       const mgRows = await q(
-        `SELECT id, name, from_date AS "fromDate", to_date AS "toDate", half_day AS "halfDay", note, created_by_name AS "createdByName"
+        `SELECT id, name, from_date AS "fromDate", to_date AS "toDate", half_day AS "halfDay", note, reason, created_by_name AS "createdByName"
            FROM management_leaves WHERE from_date <= $1 AND to_date >= $2`,
         [to, from]).catch(() => []);
       leaves = lvRows.map(l => ({ ...l, fromDate: toDateStr(l.fromDate), toDate: toDateStr(l.toDate) }))
@@ -6324,6 +6326,7 @@ app.get('/api/scheduler', requireAuth, async (req, res) => {
 // handed the 'management_leave' feature on the Scheduler page, e.g. Archana,
 // who keeps the office calendar — and shown to everyone on the Scheduler as a
 // leave. Not part of HR leave balances or payroll.
+const MGMT_REASONS = ['Ahmedabad Office', 'On Leave'];
 app.post('/api/management-leaves', requireAuth, requireFeature('scheduler', 'management_leave'), async (req, res) => {
   try {
     await ensureSchema();
@@ -6335,10 +6338,12 @@ app.post('/api/management-leaves', requireAuth, requireFeature('scheduler', 'man
     if (!name || !from || !to) return res.status(400).json({ error: 'Name and dates are required' });
     if (to < from) return res.status(400).json({ error: 'To date is before From date' });
     const half = ['first', 'second'].includes(b.halfDay) && from === to ? b.halfDay : 'full';
+    const reason = MGMT_REASONS.includes(b.reason) ? b.reason : '';
+    if (!reason) return res.status(400).json({ error: 'Pick a reason' });
     const id = 'ML' + Date.now().toString(36).toUpperCase();
     await pool.query(
-      'INSERT INTO management_leaves (id,name,from_date,to_date,half_day,note,created_by,created_by_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-      [id, name, from, to, half, String(b.note || '').trim().slice(0, 500), req.session.user?.id || null, req.session.user?.name || '']);
+      'INSERT INTO management_leaves (id,name,from_date,to_date,half_day,note,reason,created_by,created_by_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [id, name, from, to, half, String(b.note || '').trim().slice(0, 500), reason, req.session.user?.id || null, req.session.user?.name || '']);
     return res.status(201).json({ success: true, id });
   } catch (e) { return res.status(500).json({ error: e.message }); }
 });
@@ -16801,8 +16806,8 @@ app.get('/api/company-overview', requireAuth, requireCeoDashboard, async (req, r
         from: toDateStr(r.fromDate), to: toDateStr(r.toDate),
       }));
       // Directors away (Scheduler → Management leave), 25 Nov 2026.
-      const mg = await q(`SELECT name, half_day AS "halfDay", from_date AS "fromDate", to_date AS "toDate" FROM management_leaves WHERE from_date <= $1 AND to_date >= $2 ORDER BY from_date ASC`, [weekEnd, today]).catch(() => []);
-      for (const r of mg) all.push({ name: r.name || '—', type: 'Management', mgmt: true, halfDay: String(r.halfDay || 'full') !== 'full', from: toDateStr(r.fromDate), to: toDateStr(r.toDate) });
+      const mg = await q(`SELECT name, half_day AS "halfDay", from_date AS "fromDate", to_date AS "toDate", reason FROM management_leaves WHERE from_date <= $1 AND to_date >= $2 ORDER BY from_date ASC`, [weekEnd, today]).catch(() => []);
+      for (const r of mg) all.push({ name: r.name || '—', type: r.reason || 'Management', mgmt: true, halfDay: String(r.halfDay || 'full') !== 'full', from: toDateStr(r.fromDate), to: toDateStr(r.toDate) });
       data.leave.onLeaveToday = all.filter(x => x.from <= today);
       data.leave.upcoming = all.filter(x => x.from > today);
       const pend = await q(`SELECT COUNT(*) AS c FROM leaves WHERE LOWER(status) LIKE 'pending%'`);
