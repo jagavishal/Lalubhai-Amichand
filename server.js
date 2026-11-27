@@ -6932,6 +6932,7 @@ mountHiring(app, {
   tokenFor: leaveTokenFor, readToken: readLeaveToken, actionPage: _leaveActionPage,
   createMeeting: (b, me) => createSchedulerMeeting(b, me),
   departments: () => listDepartments(),
+  isAdminRole: (user) => isSuperAdmin(user) || rolesOf(user).includes('Admin'),
   isManager: async (user) => {
     if (isSuperAdmin(user) || rolesOf(user).includes('Admin')) return true;
     const perms = await getUserPermissions(user?.id);

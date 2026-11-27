@@ -443,7 +443,7 @@ function publicPage({ title, body, script = '', wide = false }) {
 function mountHiring(app, ctx) {
   const {
     q, pool, ensureSchema, requireAuth, withSeqId, getMailer, notifyAddressFor,
-    appOrigin, useDb, tokenFor, readToken, actionPage, isManager, createMeeting, departments,
+    appOrigin, useDb, tokenFor, readToken, actionPage, isManager, isAdminRole, createMeeting, departments,
   } = ctx;
   // server.js's istToday() returns { iso, md }.
   const istToday = () => { const t = ctx.istToday(); return typeof t === 'string' ? t : t.iso; };
@@ -519,6 +519,10 @@ function mountHiring(app, ctx) {
         me.dues = cfg.dues.includes(user.id);
         me.staff = me.hr || me.manager;
         me.all = me.staff || me.mgmt;
+        // The owner, or anyone holding the Admin role — exit records may be
+        // deleted by an Admin (27 Nov 2026: "exit mai delete krne ka option
+        // bhi do admin ko"). Requests and candidates stay owner-only.
+        me.admin = typeof isAdminRole === 'function' ? !!isAdminRole(user) : !!user.isSuperAdmin;
         if (need === 'manager' && !me.manager) return res.status(403).json({ error: 'Only an Admin (or someone given Hiring FMS (admin) in Users → Access) can change these settings' });
         if (need === 'hr' && !me.staff) return res.status(403).json({ error: 'Only HR can do this' });
         req.hire = me;
@@ -629,7 +633,7 @@ function mountHiring(app, ctx) {
       complete: me.staff && x.status === X.CONTRACT,
       settle: me.staff && x.status === X.SETTLE,
       withdraw: (me.staff || x.user_id === me.user.id) && X_OPEN.includes(x.status),
-      del: !!me.user.isSuperAdmin,
+      del: !!me.admin,
     };
   }
 
@@ -1765,7 +1769,7 @@ function mountHiring(app, ctx) {
 
   app.delete('/api/hiring/exits/:id', requireAuth, route(null, async (req) => {
     const { x } = await loadExit(req.params.id, req.hire);
-    if (!exitRights(x, req.hire).del) bad('Only the owner account can delete an exit record');
+    if (!exitRights(x, req.hire).del) bad('Only an Admin can delete an exit record');
     await q('DELETE FROM hire_log WHERE ref_id = $1', [x.id]);
     await q('DELETE FROM hire_exits WHERE id = $1', [x.id]);
     fs.promises.rm(path.join(UPLOAD_ROOT, x.id), { recursive: true, force: true }).catch(() => {});
