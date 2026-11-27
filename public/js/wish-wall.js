@@ -94,6 +94,143 @@
     host.appendChild(layer);
     setTimeout(() => layer.remove(), 5500);
   }
+  /* ── Keepsake card: one tall PNG with every wish as a sticky note ──
+     Drawn on a canvas in the browser, so it needs no server library and
+     can be shared on WhatsApp as it is. */
+  function loadImg(src) {
+    return new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
+  }
+  function wrapLines(ctx, txt, maxW) {
+    const out = [];
+    for (const para of String(txt || '').split('\n')) {
+      let line = '';
+      for (const word of para.split(/\s+/).filter(Boolean)) {
+        // A single word wider than the note is broken by characters.
+        let wd = word;
+        while (ctx.measureText(wd).width > maxW) {
+          let k = wd.length; while (k > 1 && ctx.measureText(wd.slice(0, k)).width > maxW) k--;
+          if (line) { out.push(line); line = ''; }
+          out.push(wd.slice(0, k)); wd = wd.slice(k);
+        }
+        const t = line ? line + ' ' + wd : wd;
+        if (ctx.measureText(t).width > maxW && line) { out.push(line); line = wd; } else line = t;
+      }
+      out.push(line);
+    }
+    while (out.length > 1 && !out[out.length - 1]) out.pop();
+    return out;
+  }
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+  async function cardImage(w, day) {
+    const W = 1200, PAD = 70, GAP = 28, COLS = w.wishes.length > 2 ? 2 : 1;
+    const noteW = (W - PAD * 2 - GAP * (COLS - 1)) / COLS;
+    const FONT = '"Segoe UI", "Noto Sans", Arial, sans-serif';
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    // Measure every note first, then pack them into the shorter column.
+    ctx.font = `26px ${FONT}`;
+    const notesM = w.wishes.map((n) => {
+      const lines = wrapLines(ctx, n.message, noteW - 56);
+      return { n, lines, h: 40 + lines.length * 38 + 20 + 30 + 34 };
+    });
+    const HEAD = 470, FOOT = 150;
+    const colH = Array(COLS).fill(0);
+    const placed = notesM.map((m) => {
+      const ci = colH.indexOf(Math.min(...colH));
+      const p = { ...m, x: PAD + ci * (noteW + GAP), y: HEAD + colH[ci] };
+      colH[ci] += m.h + GAP;
+      return p;
+    });
+    const H = HEAD + Math.max(...colH, 0) + FOOT;
+    const scale = 2;   // crisp on phones
+    c.width = W * scale; c.height = H * scale;
+    ctx.scale(scale, scale);
+
+    // Background
+    const bg = ctx.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, '#fff7e6'); bg.addColorStop(0.5, '#fffdf7'); bg.addColorStop(1, '#fdeef6');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+    // Confetti dots, the same on every render of the same wall
+    let seed = [...w.id].reduce((a, ch) => a * 31 + ch.charCodeAt(0), 7) >>> 0;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
+    const dots = ['#f59e0b', '#ec4899', '#8b5cf6', '#10b981', '#3b82f6', '#f97316'];
+    for (let i = 0; i < 90; i++) {
+      ctx.fillStyle = dots[i % dots.length]; ctx.globalAlpha = 0.18 + rnd() * 0.3;
+      const x = rnd() * W, y = rnd() < 0.7 ? rnd() * HEAD : rnd() * H, s = 4 + rnd() * 9;
+      // keep the name, the line under it and the footer clean
+      if ((x > 230 && x < W - 230 && y > 250 && y < 440) || y > H - 130) continue;
+      if (i % 3) { ctx.beginPath(); ctx.arc(x, y, s / 2, 0, Math.PI * 2); ctx.fill(); }
+      else { ctx.save(); ctx.translate(x, y); ctx.rotate(rnd() * 3); ctx.fillRect(-s, -s / 4, s * 2, s / 2); ctx.restore(); }
+    }
+    ctx.globalAlpha = 1;
+    // Gold frame
+    ctx.strokeStyle = '#e9c46a'; ctx.lineWidth = 3; roundRect(ctx, 22, 22, W - 44, H - 44, 28); ctx.stroke();
+    ctx.strokeStyle = 'rgba(233,196,106,.45)'; ctx.lineWidth = 1.5; roundRect(ctx, 34, 34, W - 68, H - 68, 22); ctx.stroke();
+
+    // Header
+    const logo = await loadImg('/logo.png');
+    if (logo) { const lh = 62, lw = logo.width * (lh / logo.height); ctx.drawImage(logo, (W - lw) / 2, 62, lw, lh); }
+    ctx.textAlign = 'center';
+    ctx.font = `86px ${FONT}`; ctx.fillText('🎂', W / 2, 225);
+    ctx.fillStyle = '#b45309'; ctx.font = `600 34px ${FONT}`;
+    ctx.fillText('H A P P Y   B I R T H D A Y', W / 2, 290);
+    const name = w.person_name || '';
+    let fs = 76; ctx.font = `800 ${fs}px ${FONT}`;
+    while (ctx.measureText(name).width > W - 2 * PAD && fs > 40) { fs -= 4; ctx.font = `800 ${fs}px ${FONT}`; }
+    const ng = ctx.createLinearGradient(W / 2 - 300, 0, W / 2 + 300, 0);
+    ng.addColorStop(0, '#d97706'); ng.addColorStop(1, '#db2777');
+    ctx.fillStyle = ng; ctx.fillText(name, W / 2, 372);
+    ctx.fillStyle = '#78716c'; ctx.font = `24px ${FONT}`;
+    ctx.fillText(`${w.wishes.length} wish${w.wishes.length === 1 ? '' : 'es'} from your team, written just for you 💛`, W / 2, 420);
+    ctx.textAlign = 'left';
+
+    // Notes
+    placed.forEach((p, i) => {
+      ctx.save();
+      ctx.translate(p.x + noteW / 2, p.y + p.h / 2);
+      ctx.rotate((((i % 5) - 2) * 0.5) * Math.PI / 180);
+      ctx.translate(-noteW / 2, -p.h / 2);
+      ctx.shadowColor = 'rgba(15,23,42,.12)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 6;
+      ctx.fillStyle = NOTE[i % NOTE.length]; roundRect(ctx, 0, 0, noteW, p.h, 18); ctx.fill();
+      ctx.shadowColor = 'transparent';
+      // a strip of "tape"
+      ctx.fillStyle = 'rgba(255,255,255,.65)'; ctx.fillRect(noteW / 2 - 45, -10, 90, 22);
+      ctx.fillStyle = '#1f2937'; ctx.font = `26px ${FONT}`;
+      p.lines.forEach((ln, k) => ctx.fillText(ln, 28, 40 + 26 + k * 38));
+      ctx.fillStyle = '#6b7280'; ctx.font = `700 21px ${FONT}`;
+      let by = '— ' + (p.n.user_name || '') + (p.n.department ? ' · ' + p.n.department : '');
+      while (ctx.measureText(by).width > noteW - 56 && by.length > 4) by = by.slice(0, -2) + '…';
+      ctx.fillText(by, 28, p.h - 26);
+      ctx.restore();
+    });
+
+    // Footer
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#a16207'; ctx.font = `600 24px ${FONT}`;
+    ctx.fillText('With love, from everyone at Lallubhai Amichand Limited', W / 2, H - 92);
+    const dt = day ? new Date(day + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+    ctx.fillStyle = '#a8a29e'; ctx.font = `20px ${FONT}`;
+    if (dt) ctx.fillText(dt, W / 2, H - 60);
+    return new Promise((res) => c.toBlob(res, 'image/png'));
+  }
+  async function downloadCard(w, day, btn) {
+    const old = btn?.innerHTML;
+    if (btn) { btn.disabled = true; btn.textContent = 'Making card…'; }
+    try {
+      const blob = await cardImage(w, day);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `Happy-Birthday-${String(w.person_name || 'card').trim().replace(/[^\w-]+/g, '-')}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    } catch (e) { Utils.showToast('Could not make the card: ' + (e.message || e), 'error'); }
+    finally { if (btn) { btn.disabled = false; btn.innerHTML = old; } }
+  }
+
   function openSurprise(w) {
     if (!document.getElementById('ww-kf')) {
       document.head.insertAdjacentHTML('beforeend', '<style id="ww-kf">@keyframes wwfall{to{transform:translateY(105vh) rotate(540deg);opacity:.2}}</style>');
@@ -107,7 +244,11 @@
         <div style="font-size:14px;color:#78716c;margin-top:6px;">Your team kept a secret today — <b>${w.wishes.length} wish${w.wishes.length === 1 ? '' : 'es'}</b>, written just for you 💛</div>
       </div>
       <div style="padding:16px 24px 26px;">${notes(w.wishes, { big: true, min: 220 })}</div>
+      <div style="text-align:center;padding:0 0 12px;">
+        <button type="button" id="ww-dl" style="background:#db2777;color:#fff;border:none;border-radius:10px;padding:10px 22px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(219,39,119,.35);">🖼️ Download as card</button>
+      </div>
       <div style="text-align:center;color:#a8a29e;font-size:12px;padding:0 0 20px;">With love, from everyone at Lallubhai Amichand</div>`, 760);
+    el.querySelector('#ww-dl').onclick = (e) => downloadCard(w, w.day || _data?.day, e.currentTarget);
     confetti(el.querySelector('[data-ww-card]'));
     try { localStorage.setItem('ww-seen-' + w.id, '1'); } catch { /* private mode */ }
   }
@@ -168,6 +309,7 @@
               <div class="db-hero-label" style="color:#db2777;">Happy Birthday 🎂</div>
               <div style="font-size:15px;font-weight:700;color:var(--text-primary);margin-top:3px;">Your team wrote you ${w.wishes.length} secret wish${w.wishes.length === 1 ? '' : 'es'}!</div>
             </div>
+            <button type="button" data-ww-card="${esc(w.id)}" class="btn-secondary btn-sm" title="Download all wishes as an image">🖼️ Card</button>
             <button type="button" data-ww-open="${esc(w.id)}" style="background:#db2777;color:#fff;border:none;border-radius:10px;padding:9px 20px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(219,39,119,.35);">Open 💌</button>
           </div>
         </div>`);
@@ -189,6 +331,7 @@
               </div>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              ${w.delivered && w.count ? `<button type="button" data-ww-card="${esc(w.id)}" class="btn-secondary btn-sm" title="Download all wishes as an image">🖼️ Download card</button>` : ''}
               ${w.delivered ? '' : `<button type="button" data-ww-write="${esc(w.id)}" style="background:#d97706;color:#fff;border:none;border-radius:10px;padding:9px 18px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(217,119,6,.35);">${w.my_wish ? '✏️ Edit my wish' : '✍️ Write a wish'}</button>`}
               ${d.manage && !w.delivered ? `<button type="button" data-ww-deliver="${esc(w.id)}" class="btn-secondary btn-sm" title="Send all wishes to ${esc(w.person_name)} now">Deliver now</button>` : ''}
               ${d.manage ? `<button type="button" data-ww-del="${esc(w.id)}" class="btn-secondary btn-sm" title="Remove this wall">✕</button>` : ''}
@@ -200,6 +343,12 @@
     box.innerHTML = `<div style="display:grid;gap:10px;">${cards.join('')}</div>`;
 
     box.querySelectorAll('[data-ww-write]').forEach((b) => { b.onclick = () => openWrite(d.walls.find((w) => w.id === b.dataset.wwWrite)); });
+    box.querySelectorAll('[data-ww-card]').forEach((b) => {
+      b.onclick = () => {
+        const w = d.for_me.find((x) => x.id === b.dataset.wwCard) || d.walls.find((x) => x.id === b.dataset.wwCard);
+        downloadCard(w, w.day || d.day, b);
+      };
+    });
     box.querySelectorAll('[data-ww-open]').forEach((b) => { b.onclick = () => openSurprise(d.for_me.find((w) => w.id === b.dataset.wwOpen)); });
     box.querySelectorAll('[data-ww-deliver]').forEach((b) => {
       b.onclick = async () => {
@@ -225,5 +374,5 @@
     if (fresh && !document.getElementById('ww-surprise')) setTimeout(() => openSurprise(fresh), 700);
   }
 
-  window.WishWall = { paint, openStart, refresh: () => paint(_box) };
+  window.WishWall = { paint, openStart, cardImage, refresh: () => paint(_box) };
 })();
