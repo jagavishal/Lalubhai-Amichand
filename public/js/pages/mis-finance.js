@@ -810,7 +810,27 @@ window.Pages['mis-finance'] = (() => {
         ${line('Qty (kg)', 'sales_qty', 2)}${line('Amount', 'sales_amt', 0)}${cum('Cumulative Qty', 'sales_qty', 0)}${cum('Cumulative Amt', 'sales_amt', 0)}
         <tr class="sec"><td colspan="14">Purchase</td></tr>
         ${line('Qty (kg)', 'purch_qty', 2)}${line('Amount', 'purch_amt', 0)}${cum('Cumulative Qty', 'purch_qty', 0)}${cum('Cumulative Amt', 'purch_amt', 0)}
+        ${stockRows(b)}
         </tbody></table>`;
+    };
+    // Stock Summary (Jayesh, 27 Nov 2026) — their sheet's Opening + Purchases
+    // − Sales = Closing, month by month. 1 April's opening is typed here;
+    // a closing typed for a month (Retail) is used as it is.
+    const stockRows = (b) => {
+      const S = b.stock || { months: [] };
+      const o = S.opening || {};
+      const box = (attr, v, ph) => `<input ${attr} value="${v == null ? '' : v}" placeholder="${ph == null ? '' : ph}" inputmode="decimal" style="width:84px;padding:4px 6px;border:1px solid #c7d2fe;border-radius:6px;font-size:12px;text-align:right;background:#eef2ff;" />`;
+      const calc = (label, f, dp, bold) => `<tr${bold ? '' : ' class="memo"'}><td>${label}</td>${S.months.map((m) => { const v = f(m); return `<td>${v == null ? '' : (bold ? '<b>' + nf(v, dp) + '</b>' : nf(v, dp))}</td>`; }).join('')}<td></td></tr>`;
+      const openRow = (label, k, dp) => `<tr><td>${label}</td>${S.months.map((m, i) => (i === 0
+        ? `<td>${box(`data-annopen="${b.fy}|${k}"`, o.typed ? o[k] : '', !o.typed && o[k] != null ? Math.round(o[k]) : '')}</td>`
+        : `<td>${m.open && m.open[k] != null ? nf(m.open[k], dp) : ''}</td>`)).join('')}<td></td></tr>`;
+      const typed = (label, k) => `<tr><td>${label}</td>${b.months.map((m) => `<td>${box(`data-ann="${m.month}|${k}"`, m[k])}</td>`).join('')}<td></td></tr>`;
+      return `<tr class="sec"><td colspan="14">Stock Summary <span style="font-weight:500;color:#64748b;font-size:11px;">— type the opening as on 1 Apr (blue boxes); closing = opening + purchases − sales, at average cost. The reports take the period's opening and closing from here.</span></td></tr>
+        ${openRow('Opening Stock (Kgs)', 'qty', 0)}${openRow('Opening Stock (₹)', 'amt', 0)}
+        ${calc('Closing Stock (Kgs)', (m) => m.close && m.close.qty, 0)}
+        ${calc('Rate / kg', (m) => m.close && m.close.rate, 2)}
+        ${calc('Closing Stock (₹)', (m) => m.close && m.close.amt, 0, true)}
+        ${typed('Closing ₹ — type (no annexure, e.g. Retail)', 'close_amt')}${typed('Closing Kgs — type', 'close_qty')}`;
     };
     return `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
         <select id="ann-div" style="${H.CONTROL}max-width:220px;">${D.divisions.map((d) => `<option${d === _annDiv ? ' selected' : ''}>${esc(d)}</option>`).join('')}</select>
@@ -819,7 +839,7 @@ window.Pages['mis-finance'] = (() => {
         <label class="btn-secondary btn-sm" style="margin-left:auto;cursor:pointer;">Import “Ann” sheet<input type="file" id="ann-file" accept=".xlsx,.xls" style="display:none;" /></label>
         <button class="btn-primary btn-sm" id="ann-save">Save</button>
       </div>
-      <div class="mf-note">Month-wise Sales and Purchase of <b>${esc(_annDiv)}</b>. These feed the Stock Summary: in Uploads → <b>Edit Stock / Interest</b>, “Work out from Annexure” gives the closing stock (opening Kgs + purchased − sold, valued at the average cost).</div>
+      <div class="mf-note">Month-wise Sales and Purchase of <b>${esc(_annDiv)}</b> and its <b>Stock Summary</b>. Type the opening stock as on 1 April once; each month's closing (opening Kgs + purchased − sold, valued at the average cost) becomes the next month's opening. For Retail, type each month's closing stock in “Closing ₹ — type”. Every report (P&L, Profitability, Conso, Cash Flow) takes the period's opening and closing stock from here — press Save to recalculate.</div>
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:auto;">${ANN.blocks.map(block).join('')}</div>`;
   }
   async function annexImport(file) {
@@ -880,8 +900,10 @@ window.Pages['mis-finance'] = (() => {
     $('ann-save')?.addEventListener('click', async (e) => {
       const by = {};
       document.querySelectorAll('[data-ann]').forEach((i) => { const [m, k] = i.getAttribute('data-ann').split('|'); (by[m] = by[m] || { month: m })[k] = i.value.trim(); });
+      const op = {};
+      document.querySelectorAll('[data-annopen]').forEach((i) => { const [fy, k] = i.getAttribute('data-annopen').split('|'); (op[fy] = op[fy] || { fy })[k] = i.value.trim(); });
       e.target.disabled = true;
-      try { const r = await H.post('/api/mis-finance/annex', { division: _annDiv, months: Object.values(by) }); H.toast(`Saved — ${r.saved} months`); ANN = null; await render(); }
+      try { const r = await H.post('/api/mis-finance/annex', { division: _annDiv, months: Object.values(by), openings: Object.values(op) }); H.toast(`Saved — ${r.saved} months`); ANN = null; await render(); }
       catch (err) { e.target.disabled = false; H.fail(err); }
     });
     $('mf-ci-save')?.addEventListener('click', async (e) => {
@@ -904,8 +926,15 @@ window.Pages['mis-finance'] = (() => {
           + H.field('ms-oqty', 'Opening Stock (Kgs)', u.opening_qty ?? '', { type: 'number', step: '0.001', hint: 'Blank = last period\'s closing Kgs' })
           + H.field('ms-cqty', 'Closing Stock (Kgs)', u.closing_qty ?? '', { type: 'number', step: '0.001' })
           + H.field('ms-int', 'Interest Paid (₹)', u.interest_paid ?? '', { type: 'number', step: '0.01', hint: 'Interest on loans in this period' }))
-          + `<div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><button type="button" class="btn-secondary btn-sm" id="ms-ann">Work out closing stock from Annexure</button><span id="ms-ann-out" style="font-size:12px;color:#475569;"></span></div>`,
+          + `<div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><button type="button" class="btn-secondary btn-sm" id="ms-ann">Work out closing stock from Annexure</button><span id="ms-ann-out" style="font-size:12px;color:#475569;"></span></div>`
+          + '<div id="ms-annsum" style="margin-top:10px;font-size:12px;color:#475569;"></div>',
         onOpen: () => {
+          H.api(`/api/mis-finance/annex/for-upload?upload=${u.id}`).then((a) => {
+            const el = document.getElementById('ms-annsum'); if (!el) return;
+            const f = (x) => (x && x.amt != null ? `₹ ${H.inr0(x.amt)}${x.qty != null ? ' · ' + H.inr0(x.qty) + ' kg' : ''}` : null);
+            const parts = [f(a.open) && 'opening ' + f(a.open), f(a.close) && 'closing ' + f(a.close)].filter(Boolean);
+            el.innerHTML = parts.length ? `<div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;padding:8px 10px;">Annexure → Stock Summary gives ${parts.join(', ')}. The reports use that; the stock boxes above count only where the Annexure has no figure.</div>` : '';
+          }).catch(() => {});
           document.getElementById('ms-ann').onclick = async () => {
             const out = document.getElementById('ms-ann-out');
             try {
