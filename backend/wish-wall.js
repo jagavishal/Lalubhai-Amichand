@@ -145,11 +145,27 @@ function mountWishWall(app, ctx) {
       const r = await pool.query('UPDATE wish_walls SET delivered_at = $1 WHERE id = $2 AND delivered_at IS NULL', [at, id]);
       return Number(r?.rowCount) > 0;
     },
+    // The writer's name is read from users each time, not the one saved with
+    // the wish — a login renamed later (Admin → Vishal) shows its new name.
     async entries(wallIds) {
       if (!wallIds.length) return [];
       if (!useDb) return (await readFile()).entries.filter((e) => wallIds.includes(e.wall_id)).sort((a, b) => a.created_at - b.created_at);
       const ph = wallIds.map((_, i) => '$' + (i + 1)).join(',');
-      return (await q(`SELECT * FROM wish_wall_entries WHERE wall_id IN (${ph}) ORDER BY created_at, id`, wallIds)).map(eOut);
+      const rows = (await q(`SELECT * FROM wish_wall_entries WHERE wall_id IN (${ph}) ORDER BY created_at, id`, wallIds)).map(eOut);
+      // Separate lookup, no JOIN (collations of the two tables may differ);
+      // a failure here just leaves the names the wishes were saved with.
+      try {
+        const ids = [...new Set(rows.map((r) => r.user_id))];
+        if (ids.length) {
+          const users = await q(`SELECT id, name, department FROM users WHERE id IN (${ids.map((_, i) => '$' + (i + 1)).join(',')})`, ids);
+          const by = new Map(users.map((u) => [String(u.id), u]));
+          for (const r of rows) {
+            const u = by.get(r.user_id);
+            if (u && String(u.name || '').trim()) { r.user_name = String(u.name).trim(); r.department = String(u.department || '').trim() || r.department; }
+          }
+        }
+      } catch (e) { console.error('[wishwall] live names:', e.message); }
+      return rows;
     },
     async saveEntry(e) {
       if (!useDb) {
