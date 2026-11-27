@@ -65,21 +65,6 @@ const MF_SCHEMA = [
      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
      PRIMARY KEY (division, month)
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-  // Stock Summary on the Annexure tab (Jayesh, 27 Nov 2026): the opening stock
-  // as on 1 April per division + FY, and a closing stock typed for a month
-  // (Retail Bopal / Satellite have no Sales/Purchase annexure — they type the
-  // closing value). Reports take the period's opening / closing from here.
-  `ALTER TABLE mis_annex ADD COLUMN IF NOT EXISTS close_qty DECIMAL(16,3) DEFAULT NULL`,
-  `ALTER TABLE mis_annex ADD COLUMN IF NOT EXISTS close_amt DECIMAL(16,2) DEFAULT NULL`,
-  `CREATE TABLE IF NOT EXISTS mis_stock_open (
-     division VARCHAR(64) NOT NULL,
-     fy CHAR(7) NOT NULL,
-     qty DECIMAL(16,3) DEFAULT NULL,
-     amt DECIMAL(16,2) DEFAULT NULL,
-     updated_by VARCHAR(255) NOT NULL DEFAULT '',
-     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-     PRIMARY KEY (division, fy)
-   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
   // The monthly salary sheet (Months · Employee Name · Category · BASIC …
   // TOTAL), one row per employee per month — category-wise salary for the
   // MIS (Jayesh, 24 Nov 2026). Uploading a month again replaces it.
@@ -1254,12 +1239,6 @@ function mountMisFinance(app, ctx) {
     const prevQ = all.find((x) => x.division === u.division && dOut(x.period_to) === prevDay(dOut(u.period_from)) && x.closing_qty != null);
     const oq = u.opening_qty != null ? Number(u.opening_qty) : prevQ ? Number(prevQ.closing_qty) : null;
     t.stockQty = { open: oq, close: u.closing_qty == null ? null : Number(u.closing_qty) };
-    // The Annexure's Stock Summary, when it has the month, over everything
-    // above — one place to keep the stock (Jayesh, 27 Nov 2026).
-    const ann = await annexStockFor(u.division, dOut(u.period_from), dOut(u.period_to));
-    if (ann.open && ann.open.amt != null) { t.open.stock = ann.open.amt; t.openStockTyped = true; if (ann.open.qty != null) t.stockQty.open = ann.open.qty; }
-    if (ann.close && ann.close.amt != null) { t.close.stock = ann.close.amt; if (ann.close.qty != null) t.stockQty.close = ann.close.qty; }
-    t.stockFrom = { open: ann.open && ann.open.amt != null ? 'annexure' : '', close: ann.close && ann.close.amt != null ? 'annexure' : '' };
     return t;
   }
   function addTotals(list) {
@@ -1509,63 +1488,6 @@ function mountMisFinance(app, ctx) {
   const fyOf = (iso) => { const [y, m] = iso.split('-').map(Number); const s = m >= 4 ? y : y - 1; return `${s}-${String(s + 1).slice(2)}`; };
   const annNum = (v, dp) => { if (v === '' || v == null) return null; const n = Number(String(v).replace(/[,₹\s]/g, '').replace(/^\((.*)\)$/, '-$1')); return Number.isFinite(n) ? Math.round(n * 10 ** dp) / 10 ** dp : null; };
 
-  /* Stock Summary, month by month within a financial year — their Export
-     sheet's rows 68-74: opening (1 April, typed) + purchases − sales so far
-     = closing Kgs, valued at the average cost of opening + purchases. A
-     closing typed for a month (Retail) is taken as it is. Each month's
-     opening is the month before's closing. */
-  const nOrNull = (v) => (v == null ? null : Number(v));
-  async function stockSummary(division, fy, depth = 0) {
-    const months = FY_MONTHS(fy);
-    const [rows, op] = await Promise.all([
-      q('SELECT * FROM mis_annex WHERE division = $1 AND month >= $2 AND month <= $3', [division, months[0], months[11]]),
-      q('SELECT qty, amt FROM mis_stock_open WHERE division = $1 AND fy = $2', [division, fy]),
-    ]);
-    const by = Object.fromEntries(rows.map((r) => [r.month, r]));
-    let opening = op[0] ? { qty: nOrNull(op[0].qty), amt: nOrNull(op[0].amt), typed: true } : null;
-    if ((!opening || opening.amt == null) && depth < 2) {
-      const prev = await stockSummary(division, `${Number(fy.slice(0, 4)) - 1}-${fy.slice(2, 4)}`, depth + 1);
-      const mar = prev.months[11];
-      if (mar && mar.close && mar.close.amt != null) opening = { qty: mar.close.qty, amt: mar.close.amt, typed: false };
-    }
-    const has = (r) => r && ['sales_qty', 'sales_amt', 'purch_qty', 'purch_amt'].some((k) => r[k] != null);
-    const lastData = months.filter((m) => has(by[m])).pop() || '';
-    let pq = 0, pa = 0, sq = 0, sa = 0, prevClose = opening;
-    const out = months.map((m) => {
-      const r = by[m] || {};
-      pq += Number(r.purch_qty) || 0; pa += Number(r.purch_amt) || 0; sq += Number(r.sales_qty) || 0; sa += Number(r.sales_amt) || 0;
-      let close = null;
-      const calc = opening && opening.qty != null && opening.amt != null && lastData && m <= lastData;
-      const cQty = calc ? Math.round((opening.qty + pq - sq) * 1000) / 1000 : null;
-      const rate = calc && opening.qty + pq ? (opening.amt + pa) / (opening.qty + pq) : null;
-      if (r.close_amt != null) close = { qty: r.close_qty != null ? Number(r.close_qty) : cQty, amt: Number(r.close_amt), typed: true };
-      else if (calc) close = { qty: cQty, amt: Math.round(cQty * rate), rate: Math.round(rate * 100) / 100 };
-      if (close && close.rate == null && close.qty) close.rate = Math.round((close.amt / close.qty) * 100) / 100;
-      const row = { month: m, open: prevClose, close, cum: { purch_qty: round2(pq), purch_amt: round2(pa), sales_qty: round2(sq), sales_amt: round2(sa) } };
-      prevClose = close;
-      return row;
-    });
-    return { division, fy, opening, months: out };
-  }
-  const monthBefore = (m) => { const [y, mo] = m.split('-').map(Number); return mo === 1 ? `${y - 1}-12` : `${y}-${String(mo - 1).padStart(2, '0')}`; };
-  // Opening on the period's first day and closing on its last, from the summary.
-  async function annexStockFor(division, from, to) {
-    try {
-      const endM = to.slice(0, 7), startM = from.slice(0, 7);
-      const S = await stockSummary(division, fyOf(to));
-      const close = (S.months.find((x) => x.month === endM) || {}).close || null;
-      let open = null;
-      if (from.slice(8) === '01') {
-        if (startM.slice(5) === '04') open = S.opening && fyOf(from) === S.fy ? S.opening : null;
-        else {
-          const S2 = fyOf(from) === S.fy ? S : await stockSummary(division, fyOf(from));
-          open = (S2.months.find((x) => x.month === monthBefore(startM)) || {}).close || null;
-        }
-      }
-      return { open, close };
-    } catch (e) { return { open: null, close: null }; }
-  }
-
   app.get('/api/mis-finance/annex', requireAuth, route(async (req) => {
     const division = String(req.query.division || '');
     const fy = /^\d{4}-\d{2}$/.test(req.query.fy || '') ? req.query.fy : fyOf(new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10));
@@ -1573,12 +1495,9 @@ function mountMisFinance(app, ctx) {
     const months = [...FY_MONTHS(prevFy), ...FY_MONTHS(fy)];
     const rows = await q(`SELECT * FROM mis_annex WHERE division = $1 AND month >= $2 AND month <= $3`, [division, months[0], months[months.length - 1]]);
     const by = Object.fromEntries(rows.map((r) => [r.month, { sales_qty: r.sales_qty == null ? null : Number(r.sales_qty), sales_amt: r.sales_amt == null ? null : Number(r.sales_amt),
-      purch_qty: r.purch_qty == null ? null : Number(r.purch_qty), purch_amt: r.purch_amt == null ? null : Number(r.purch_amt),
-      close_qty: r.close_qty == null ? null : Number(r.close_qty), close_amt: r.close_amt == null ? null : Number(r.close_amt) }]));
+      purch_qty: r.purch_qty == null ? null : Number(r.purch_qty), purch_amt: r.purch_amt == null ? null : Number(r.purch_amt) }]));
     const fys = (await q('SELECT DISTINCT month FROM mis_annex WHERE division = $1', [division])).map((r) => fyOf(r.month + '-01'));
-    const stock = {};
-    for (const f of [prevFy, fy]) stock[f] = await stockSummary(division, f);
-    return { division, fy, prevFy, blocks: [prevFy, fy].map((f) => ({ fy: f, months: FY_MONTHS(f).map((m) => ({ month: m, ...(by[m] || {}) })), stock: stock[f] })), fys: [...new Set(fys)].sort() };
+    return { division, fy, prevFy, blocks: [prevFy, fy].map((f) => ({ fy: f, months: FY_MONTHS(f).map((m) => ({ month: m, ...(by[m] || {}) })) })), fys: [...new Set(fys)].sort() };
   }));
 
   // Save a grid: { division, months: [{ month, sales_qty, sales_amt, purch_qty, purch_amt }] }
@@ -1591,24 +1510,12 @@ function mountMisFinance(app, ctx) {
     let n = 0;
     for (const m of list) {
       if (!/^\d{4}-\d{2}$/.test(m.month || '')) continue;
-      // An import sends only Sales / Purchase — a typed closing it does not
-      // carry is kept, not wiped.
-      const keepClose = !('close_amt' in m) && !('close_qty' in m);
-      const old = keepClose ? (await q('SELECT close_qty, close_amt FROM mis_annex WHERE division = $1 AND month = $2', [b.division, m.month]))[0] : null;
-      const vals = [annNum(m.sales_qty, 3), annNum(m.sales_amt, 2), annNum(m.purch_qty, 3), annNum(m.purch_amt, 2),
-        keepClose ? nOrNull(old?.close_qty) : annNum(m.close_qty, 3), keepClose ? nOrNull(old?.close_amt) : annNum(m.close_amt, 2)];
+      const vals = [annNum(m.sales_qty, 3), annNum(m.sales_amt, 2), annNum(m.purch_qty, 3), annNum(m.purch_amt, 2)];
       if (vals.every((x) => x == null)) { await q('DELETE FROM mis_annex WHERE division = $1 AND month = $2', [b.division, m.month]); continue; }
-      await q(`INSERT INTO mis_annex (division, month, sales_qty, sales_amt, purch_qty, purch_amt, close_qty, close_amt, updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-               ON CONFLICT (division, month) DO UPDATE SET sales_qty=$10, sales_amt=$11, purch_qty=$12, purch_amt=$13, close_qty=$14, close_amt=$15, updated_by=$16, updated_at=NOW()`,
+      await q(`INSERT INTO mis_annex (division, month, sales_qty, sales_amt, purch_qty, purch_amt, updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7)
+               ON CONFLICT (division, month) DO UPDATE SET sales_qty=$8, sales_amt=$9, purch_qty=$10, purch_amt=$11, updated_by=$12, updated_at=NOW()`,
         [b.division, m.month, ...vals, by, ...vals, by]);
       n++;
-    }
-    for (const o of Array.isArray(b.openings) ? b.openings : []) {
-      if (!/^\d{4}-\d{2}$/.test(o.fy || '')) continue;
-      const qty = annNum(o.qty, 3), amt = annNum(o.amt, 2);
-      if (qty == null && amt == null) { await q('DELETE FROM mis_stock_open WHERE division = $1 AND fy = $2', [b.division, o.fy]); continue; }
-      await q(`INSERT INTO mis_stock_open (division, fy, qty, amt, updated_by) VALUES ($1,$2,$3,$4,$5)
-               ON CONFLICT (division, fy) DO UPDATE SET qty=$6, amt=$7, updated_by=$8, updated_at=NOW()`, [b.division, o.fy, qty, amt, by, qty, amt, by]);
     }
     return { ok: true, saved: n };
   }));
@@ -1647,13 +1554,6 @@ function mountMisFinance(app, ctx) {
     }
     return Object.values(out).sort((x, y) => x.month.localeCompare(y.month));
   }
-  // What the Stock Summary gives one upload — shown in Edit Stock.
-  app.get('/api/mis-finance/annex/for-upload', requireAuth, route(async (req) => {
-    const u = (await q('SELECT division, period_from, period_to FROM mis_tb_uploads WHERE id = $1', [Number(req.query.upload)]))[0];
-    if (!u) bad('That upload is not there any more');
-    return annexStockFor(u.division, dOut(u.period_from), dOut(u.period_to));
-  }));
-
   app.post('/api/mis-finance/annex/import', requireAuth, route(async (req) => {
     const months = parseAnnSheet(req.body?.sheet);
     if (!months.length) bad('No Sales / Purchase months found — upload the sheet laid out like the "Ann" sheet (year, Sales / Purchase, Months, Qty, Amount)');
@@ -1772,7 +1672,7 @@ function mountMisFinance(app, ctx) {
       const from = dOut(u.period_from), to = dOut(u.period_to);
       const t = await totalsFor(u, map, all, custom);
       const st = statements(t, from, to, detailNames([t]));
-      out.push({ division: d, from, to, closingStock: t.stockFrom && t.stockFrom.close ? Number(t.close.stock) : u.closing_stock == null ? null : Number(u.closing_stock),
+      out.push({ division: d, from, to, closingStock: u.closing_stock == null ? null : Number(u.closing_stock),
         sales: pick(st.F, /^Sales$/), gp: pick(st.F, /^Gross Profit$/), np: pick(st.F, /^Net Profit/) });
     }
     return out;
