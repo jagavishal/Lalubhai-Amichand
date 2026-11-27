@@ -36,8 +36,11 @@
                                                 └─► Dues Clearance
       Final dues cleared by Jayesh Udani + Mahendrabhai + the manager
                                                 └─► Leave Contract Pending
-      Employee signs the leave contract; HR uploads it └─► Completed
-      (hr_exits row written, employee Inactive, ERP login off)
+      Employee signs the leave contract; HR uploads it └─► Final Settlement
+      HR: company assets returned (Yes/No), full & final settlement
+      (In Process → Done), email ID password changed  └─► Completed
+      (hr_exits row written, employee Inactive + off the dashboard, ERP login
+      off, record kept in the Exit Folder, management mailed the summary)
 
    Who is who (app_config, Settings tab):
    - HR: hire_hr (default ARCHANA by name; else Admins act as HR)
@@ -155,6 +158,9 @@ const HIRE_SCHEMA = [
      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  // Final settlement checklist (27 Nov 2026): assets returned, F&F status,
+  // email password changed — see the /settlement route.
+  `ALTER TABLE hire_exits ADD COLUMN IF NOT EXISTS settlement TEXT`,
   `CREATE TABLE IF NOT EXISTS hire_log (
      id INT AUTO_INCREMENT PRIMARY KEY,
      ref_id VARCHAR(16) NOT NULL,
@@ -180,8 +186,8 @@ const C = {
 const C_HIRING = [C.NEW, C.SHORT, C.INTERVIEW];
 const C_ONBOARD = [C.SELECTED, C.OFFER_APPROVAL, C.OFFER_REVISION, C.OFFER_APPROVED, C.OFFER_SENT, C.CAND_CHANGES, C.ACCEPTED, C.JOINED];
 const C_CLOSED = [C.CVREJ, C.NOTSEL, C.DECLINED, C.ONBOARDED, C.DROPPED];
-const X = { NOTICE: 'Notice Received', DUES: 'Dues Clearance', CONTRACT: 'Leave Contract Pending', DONE: 'Completed', WITHDRAWN: 'Withdrawn' };
-const X_OPEN = [X.NOTICE, X.DUES, X.CONTRACT];
+const X = { NOTICE: 'Notice Received', DUES: 'Dues Clearance', CONTRACT: 'Leave Contract Pending', SETTLE: 'Final Settlement', DONE: 'Completed', WITHDRAWN: 'Withdrawn' };
+const X_OPEN = [X.NOTICE, X.DUES, X.CONTRACT, X.SETTLE];
 const EXIT_TYPES = ['Resignation', 'Termination', 'Retirement', 'Contract End', 'Absconding', 'Other'];
 
 /* The onboarding checklist — the handwritten pages, in order. `stage`
@@ -568,6 +574,7 @@ function mountHiring(app, ctx) {
       designation: r.designation || '', department: r.department || '', exit_type: r.exit_type, notice_date: dstr(r.notice_date),
       last_working_day: dstr(r.last_working_day), reason: r.reason || '', manager_id: r.manager_id || null, manager_name: r.manager_name || '',
       dues: parseJson(r.dues, []), docs: docsOut(r.documents), status: r.status,
+      settlement: parseJson(r.settlement, {}) || {},
       created_by_id: r.created_by_id || null, created_by_name: r.created_by_name || '',
       completed_at: tsOut(r.completed_at), created_at: tsOut(r.created_at), updated_at: tsOut(r.updated_at),
     };
@@ -620,6 +627,7 @@ function mountHiring(app, ctx) {
       myDue: x.status === X.DUES && !!myDue,
       contract: me.staff && x.status === X.CONTRACT,
       complete: me.staff && x.status === X.CONTRACT,
+      settle: me.staff && x.status === X.SETTLE,
       withdraw: (me.staff || x.user_id === me.user.id) && X_OPEN.includes(x.status),
       del: !!me.user.isSuperAdmin,
     };
@@ -750,6 +758,11 @@ function mountHiring(app, ctx) {
     const candidates = candRowsAll.map(candOut).filter((c) => candVisible(c, reqMap.get(c.request_id), me))
       .map((c) => { const r = reqMap.get(c.request_id); return { ...c, position: r?.position || '', can: candRights(c, r, me) }; });
     const exits = exitRowsAll.map(exitOut).filter((x) => exitVisible(x, me)).map((x) => ({ ...x, can: exitRights(x, me) }));
+    const heldBy = exits.filter((x) => x.employee_id && X_OPEN.includes(x.status)).map((x) => x.employee_id);
+    if (heldBy.length) {
+      const assets = await q(`SELECT id, name, asset_type, serial_no, assigned_to FROM hr_assets WHERE assigned_to IN (${heldBy.map((_, i) => '$' + (i + 1)).join(',')})`, heldBy).catch(() => []);
+      exits.forEach((x) => { x.assets = assets.filter((a) => a.assigned_to === x.employee_id).map((a) => ({ id: a.id, name: a.name, type: a.asset_type || '', serial: a.serial_no || '' })); });
+    }
     const users = me.cfg.users.map((u) => ({ id: u.id, name: u.name, department: u.department || '', email: me.staff ? u.email || '' : undefined }));
     const out = {
       me: { id: me.user.id, name: me.user.name, manager: me.manager, hr: me.hr, mgmt: me.mgmt, dues: me.dues, staff: me.staff, all: me.all },
@@ -1615,9 +1628,8 @@ function mountHiring(app, ctx) {
     return { ok: true };
   }));
 
-  // Step 5: the signed contract on the dashboard → Completed. Also writes the
-  // HR exit record and retires the employee + their login (like Employee
-  // Master's own exit form).
+  // Step 5: the signed contract is uploaded → Final Settlement. The exit is
+  // not closed yet — the settlement checklist below closes it.
   app.post('/api/hiring/exits/:id/complete', requireAuth, route(null, async (req) => {
     const me = req.hire;
     const { x } = await loadExit(req.params.id, me);
@@ -1625,35 +1637,113 @@ function mountHiring(app, ctx) {
     const b = req.body || {};
     const files = decodeFiles(b.documents, 'Signed leave contract', { only: ['pdf', 'jpg', 'png', 'webp', 'doc', 'docx'] });
     if (files.length !== 1) bad('Attach the leave contract signed by the employee');
-    await move('hire_exits', x.id, X.CONTRACT, X.DONE, ', completed_at=NOW()');
+    const st = { ...x.settlement, deactivate: b.deactivate !== false, fnf: x.settlement.fnf || 'Process' };
+    await move('hire_exits', x.id, X.CONTRACT, X.SETTLE, ', settlement=$2', [JSON.stringify(st)]);
     const ns = await saveDocs(x.id, files, { kind: 'signed_contract', by: me.by });
-    const net = x.dues.reduce((s, d) => s + (d.direction === 'payable' ? Number(d.amount || 0) : d.direction === 'recoverable' ? -Number(d.amount || 0) : 0), 0);
+    await logStep(x.id, 'Signed Leave Contract Uploaded', ['Final settlement next', str(b.note, 2000)].filter(Boolean).join(' · '), actor(me), ns);
+    return { ok: true };
+  }));
+
+  // Step 6 (Archana's points, 27 Nov 2026): company assets returned yes/no,
+  // full & final settlement In Process → Done, email ID password changed.
+  // Saved as often as HR likes; `close` needs all three and then finishes
+  // the exit: HR exit record, employee Inactive (off the dashboard), login
+  // off, assets handed back, and the summary mailed to management.
+  app.post('/api/hiring/exits/:id/settlement', requireAuth, route(null, async (req) => {
+    const me = req.hire;
+    const { x, row } = await loadExit(req.params.id, me);
+    if (!exitRights(x, me).settle) bad(`It is ${x.status}`);
+    const b = req.body || {};
+    const prev = x.settlement || {};
+    const st = {
+      ...prev,
+      assets: ['Yes', 'No'].includes(b.assets) ? b.assets : '',
+      assets_note: str(b.assets_note, 1000),
+      fnf: b.fnf === 'Done' ? 'Done' : 'Process',
+      fnf_amount: b.fnf_amount === '' || b.fnf_amount == null ? null : optMoney(b.fnf_amount, 'Settlement amount'),
+      fnf_on: optDate(b.fnf_on, 'Settlement date') || (b.fnf === 'Done' ? (prev.fnf_on || istToday()) : null),
+      email_changed: !!b.email_changed,
+      updated_by: me.by, updated_at: new Date().toISOString(),
+    };
+    if (st.assets === 'No' && !st.assets_note) bad('Write which company assets are not returned');
+    const changes = [];
+    if (st.assets !== (prev.assets || '')) changes.push(`Company assets returned: ${st.assets || '—'}`);
+    if (st.fnf !== (prev.fnf || 'Process')) changes.push(`Full & final settlement: ${st.fnf === 'Done' ? 'Done' : 'In Process'}`);
+    if (st.email_changed !== !!prev.email_changed) changes.push(`Email ID password changed: ${st.email_changed ? 'Yes' : 'No'}`);
+    const close = !!b.close;
+    if (close) {
+      if (!st.assets) bad('Answer: company assets returned — Yes or No');
+      if (st.fnf !== 'Done') bad('Full & final settlement must be Done to close the exit');
+      if (!st.email_changed) bad('Change the email ID password first, then tick it');
+      st.closed_by = me.by; st.closed_at = new Date().toISOString();
+    }
+    const r = await pool.query(`UPDATE hire_exits SET settlement=$1, status=$2, updated_at=NOW()${close ? ', completed_at=NOW()' : ''} WHERE id=$3 AND status=$4 AND (settlement <=> $5)`,
+      [JSON.stringify(st), close ? X.DONE : X.SETTLE, x.id, X.SETTLE, row.settlement ?? null]);
+    if (!r.rowCount) bad('This record just changed — reload');
+    if (!close) {
+      if (changes.length || st.assets_note !== (prev.assets_note || '')) await logStep(x.id, 'Final Settlement Updated', [...changes, st.assets === 'No' ? 'Pending: ' + st.assets_note : ''].filter(Boolean).join(' · '), actor(me));
+      return { ok: true };
+    }
+
+    const net = x.dues.reduce((s2, d) => s2 + (d.direction === 'payable' ? Number(d.amount || 0) : d.direction === 'recoverable' ? -Number(d.amount || 0) : 0), 0);
+    const fnfAmount = st.fnf_amount != null ? st.fnf_amount : net;
     const notes = [];
+    const lwdPassed = !x.last_working_day || x.last_working_day <= istToday();
     if (x.employee_id) {
       try {
         const noticeDays = x.notice_date && x.last_working_day ? Math.round((new Date(x.last_working_day) - new Date(x.notice_date)) / 86400000) : 0;
-        const clearance = Object.fromEntries(x.dues.map((d) => [d.name, `${d.direction}${d.amount ? ' ' + d.amount : ''}${d.note ? ' — ' + d.note : ''}`]));
+        const clearance = Object.fromEntries([
+          ...x.dues.map((d) => [d.name, `${d.direction}${d.amount ? ' ' + d.amount : ''}${d.note ? ' — ' + d.note : ''}`]),
+          ['Company assets returned', st.assets + (st.assets_note ? ' — ' + st.assets_note : '')],
+          ['Email ID password changed', 'Yes'],
+        ]);
         await pool.query(
-          `INSERT INTO hr_exits (id, employee_id, resign_date, last_working_day, exit_type, reason, notice_days, notice_served, clearance, fnf_amount, fnf_status, remarks, created_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$9,'pending',$10,$11)
-           ON CONFLICT (employee_id) DO UPDATE SET resign_date=$12, last_working_day=$13, exit_type=$14, reason=$15, notice_days=$16, clearance=$17, fnf_amount=$18, remarks=$19`,
-          [`EXT${Date.now().toString(36).toUpperCase()}`, x.employee_id, x.notice_date, x.last_working_day, x.exit_type, x.reason, noticeDays, JSON.stringify(clearance), net, `Hiring FMS ${x.id}`, me.by,
-            x.notice_date, x.last_working_day, x.exit_type, x.reason, noticeDays, JSON.stringify(clearance), net, `Hiring FMS ${x.id}`]);
-        if (b.deactivate !== false) {
-          await pool.query(`UPDATE hr_employees SET dol=$1, status=$2 WHERE id=$3`,
-            [x.last_working_day, !x.last_working_day || x.last_working_day <= istToday() ? 'Inactive' : 'Active', x.employee_id]);
-          notes.push('employee marked Inactive');
+          `INSERT INTO hr_exits (id, employee_id, resign_date, last_working_day, exit_type, reason, notice_days, notice_served, clearance, fnf_amount, fnf_status, fnf_paid_on, remarks, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$9,'paid',$10,$11,$12)
+           ON CONFLICT (employee_id) DO UPDATE SET resign_date=$13, last_working_day=$14, exit_type=$15, reason=$16, notice_days=$17, clearance=$18, fnf_amount=$19, fnf_status='paid', fnf_paid_on=$20, remarks=$21`,
+          [`EXT${Date.now().toString(36).toUpperCase()}`, x.employee_id, x.notice_date, x.last_working_day, x.exit_type, x.reason, noticeDays, JSON.stringify(clearance), fnfAmount, st.fnf_on, `Hiring FMS ${x.id}`, me.by,
+            x.notice_date, x.last_working_day, x.exit_type, x.reason, noticeDays, JSON.stringify(clearance), fnfAmount, st.fnf_on, `Hiring FMS ${x.id}`]);
+        notes.push('saved to the HR exit record');
+        if (st.deactivate !== false) {
+          await pool.query(`UPDATE hr_employees SET dol=$1, status=$2 WHERE id=$3`, [x.last_working_day, lwdPassed ? 'Inactive' : 'Active', x.employee_id]);
+          if (lwdPassed) notes.push('employee marked Inactive (off the dashboard)');
+        }
+        if (st.assets === 'Yes') {
+          const freed = await pool.query(
+            `UPDATE hr_assets SET assigned_to = '', assigned_name = '', assigned_on = NULL,
+                    status = CASE WHEN status = 'Assigned' THEN 'Available' ELSE status END
+              WHERE assigned_to = $1`, [x.employee_id]);
+          if (freed.rowCount) notes.push(`${freed.rowCount} asset${freed.rowCount > 1 ? 's' : ''} back to Available`);
         }
       } catch (e) {
         console.error('[hire] hr_exits sync failed for', x.id, '—', e.message);
         notes.push('HR exit record not updated: ' + e.message);
       }
     }
-    if (b.deactivate !== false && x.user_id && (!x.last_working_day || x.last_working_day <= istToday())) {
-      await q('UPDATE users SET active = 0 WHERE id = $1', [x.user_id]).catch((e) => notes.push('login not disabled: ' + e.message));
-      notes.push('ERP login disabled');
+    if (st.deactivate !== false && x.user_id && lwdPassed) {
+      await q('UPDATE users SET active = 0 WHERE id = $1', [x.user_id]).then(() => notes.push('ERP login disabled')).catch((e) => notes.push('login not disabled: ' + e.message));
     }
-    await logStep(x.id, 'Signed Leave Contract Uploaded — Completed', [`Net ${net >= 0 ? 'payable' : 'recoverable'} ${inr(Math.abs(net))}`, ...notes, str(b.note, 2000)].filter(Boolean).join(' · '), actor(me), ns);
+    await logStep(x.id, 'Exit Completed — moved to the Exit Folder',
+      [`Assets returned: ${st.assets}${st.assets_note ? ' (' + st.assets_note + ')' : ''}`, `F&F Done${fnfAmount ? ' · ' + inr(Math.abs(fnfAmount)) + (fnfAmount >= 0 ? ' paid' : ' recovered') : ''}`, 'Email password changed', ...notes].join(' · '), actor(me));
+
+    later('exit-done ' + x.id, async () => {
+      const to = await emails(me.cfg.mgmt, me.cfg.users);
+      const cc = await emails([...me.cfg.hr, ...x.dues.map((d) => d.id), x.manager_id].filter(Boolean), me.cfg.users);
+      if (!to.length && !cc.length) return;
+      await send({
+        to: (to.length ? to : cc).join(','), cc: to.length ? cc.filter((e) => !to.includes(e)).join(',') : '',
+        subject: `Exit completed: ${x.employee_name} — all formalities done`,
+        html: mailHtml({ heading: 'Exit Completed', colour: '#16a34a',
+          lead: `Every exit formality of <b>${escHtml(x.employee_name)}</b> is done. The record is saved in the Exit Folder of the Hiring & Exit FMS.`,
+          rows: [['Employee', `${escHtml(x.employee_name)} (${escHtml(x.employee_id || '')})`], ['Designation', escHtml(x.designation)], ['Department', escHtml(x.department)],
+            ['Exit Type', escHtml(x.exit_type)], ['Notice Date', fmtDate(x.notice_date)], ['Last Working Day', fmtDate(x.last_working_day)],
+            ['Final Dues', escHtml(x.dues.map((d) => `${d.name}: ${d.direction === 'nil' ? 'Nil' : inr(d.amount) + ' ' + (d.direction === 'payable' ? 'payable' : 'recoverable')}`).join(' · '))],
+            ['Company Assets Returned', escHtml(st.assets + (st.assets_note ? ' — ' + st.assets_note : ''))],
+            ['Full & Final Settlement', escHtml(`Done${fnfAmount ? ' · ' + inr(Math.abs(fnfAmount)) + (fnfAmount >= 0 ? ' paid' : ' recovered') : ''}${st.fnf_on ? ' on ' + fmtDate(st.fnf_on) : ''}`)],
+            ['Email ID Password', 'Changed'], ['ERP', escHtml(notes.join(' · '))], ['Closed By', escHtml(me.by)]],
+          link: pageLink('exit') }),
+      }, 'exit-done');
+    });
     return { ok: true, notes };
   }));
 

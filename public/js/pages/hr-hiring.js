@@ -48,7 +48,7 @@ window.Pages['hr-hiring'] = (() => {
   const candNeeds = (c) => c.can.screen || c.can.result || c.can.offer || c.can.offerDecide || c.can.sendOffer
     || c.can.changesDecide || c.can.joined || (c.can.checklist && c.status === 'Joined')
     || (c.can.schedule && c.status === 'Shortlisted');
-  const exitNeeds = (x) => x.can.confirm || x.can.myDue || x.can.complete;
+  const exitNeeds = (x) => x.can.confirm || x.can.myDue || x.can.complete || x.can.settle;
 
   /* ── Load ─────────────────────────────────────────────────────────── */
 
@@ -151,7 +151,7 @@ window.Pages['hr-hiring'] = (() => {
     if (k.checklist) return 'Joining-day Checklist';
     return 'Open';
   }
-  const exitAction = (x) => (x.can.confirm ? 'Confirm Last Day' : x.can.myDue ? 'Clear My Dues' : x.can.complete ? 'Upload Signed Contract' : 'Open');
+  const exitAction = (x) => (x.can.confirm ? 'Confirm Last Day' : x.can.myDue ? 'Clear My Dues' : x.can.complete ? 'Upload Signed Contract' : x.can.settle ? 'Final Settlement' : 'Open');
 
   function actionTab() {
     const rows = [
@@ -269,15 +269,16 @@ window.Pages['hr-hiring'] = (() => {
   function exitTab() {
     const list = D.exits.filter((x) => {
       if (_f.exit === 'Open' && !D.lists.X_OPEN.includes(x.status)) return false;
+      if (_f.exit === 'Folder' && x.status !== 'Completed') return false;
       return matches([x.id, x.employee_name, x.department, x.designation]);
     });
     const dues = (x) => (x.dues.length ? `${x.dues.filter((d) => d.status === 'cleared').length} / ${x.dues.length}` : '—');
     return `
-      ${flow(['Notice', 'Last working day', 'Final dues (Accounts + manager)', 'Leave contract signed', 'Uploaded → Completed'])}
+      ${flow(['Notice', 'Last working day', 'Final dues (Accounts + manager)', 'Leave contract signed', 'Assets · F&F · email password', 'Completed → Exit Folder'])}
       <div class="hh-filt" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
         ${search('Search employee, department…')}
         <select id="hh-exit-status" style="${H.CONTROL}max-width:180px;">
-          ${[['Open', 'In progress'], ['All', 'All']].map(([v, l]) => `<option value="${v}"${_f.exit === v ? ' selected' : ''}>${l}</option>`).join('')}
+          ${[['Open', 'In progress'], ['Folder', 'Exit Folder (completed)'], ['All', 'All']].map(([v, l]) => `<option value="${v}"${_f.exit === v ? ' selected' : ''}>${l}</option>`).join('')}
         </select>
       </div>
       ${H.table(['Exit No.', { label: 'Employee', m: 'title' }, 'Type', 'Notice', 'Last Day', 'Dues Cleared', 'Status', { label: '', m: 'actions' }],
@@ -991,7 +992,23 @@ window.Pages['hr-hiring'] = (() => {
         ${H.grid(fileInput('xs-file', 'Signed leave contract', ACCEPT_ANY, { required: true })
           + H.textarea('xs-note', 'Note (optional)', '', { rows: 2 }))}
         <label style="font-size:12.5px;display:flex;gap:6px;align-items:center;margin-top:8px;"><input type="checkbox" id="xs-deact" checked/> Mark the employee Inactive and switch off their ERP login (after the last working day)</label>
-        <div class="hh-btns"><button class="btn-primary btn-sm" id="xs-go">Upload & Complete</button></div></div>`;
+        <div class="hh-btns"><button class="btn-primary btn-sm" id="xs-go">Upload — Next: Final Settlement</button></div></div>`;
+    }
+    if (k.settle) {
+      const st = x.settlement || {};
+      const yn = (id, v) => `<div style="display:flex;gap:14px;">${['Yes', 'No'].map((o) => `<label style="font-size:13px;display:flex;gap:5px;align-items:center;"><input type="radio" name="${id}" value="${o}"${v === o ? ' checked' : ''}/> ${o}</label>`).join('')}</div>`;
+      const assets = (x.assets || []).length
+        ? `<div style="font-size:11.5px;color:#64748b;margin:2px 0 6px;">With ${esc(x.employee_name)} on the dashboard: ${x.assets.map((a) => esc([a.name, a.serial].filter(Boolean).join(' · '))).join(', ')}. “Yes” puts them back to Available.</div>`
+        : '<div style="font-size:11.5px;color:#94a3b8;margin:2px 0 6px;">No company assets are assigned to them in Assets.</div>';
+      const box = (n, title, inner) => `<div style="border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff;"><div style="font-size:12.5px;font-weight:700;color:#0f172a;margin-bottom:6px;">${n}. ${title}</div>${inner}</div>`;
+      return `<div class="hh-act warn"><h3>Final settlement</h3>
+        ${box(1, 'Company assets returned?', yn('xf-assets', st.assets || '') + assets
+          + H.textarea('xf-anote', 'If No — which assets are still with them', st.assets_note || '', { rows: 2 }))}
+        ${box(2, 'Full & final settlement', `<div style="display:flex;gap:14px;margin-bottom:6px;">${[['Process', 'In Process'], ['Done', 'Done']].map(([v, l]) => `<label style="font-size:13px;display:flex;gap:5px;align-items:center;"><input type="radio" name="xf-fnf" value="${v}"${(st.fnf || 'Process') === v ? ' checked' : ''}/> ${l}</label>`).join('')}</div>`
+          + H.grid(H.field('xf-amt', 'Amount settled (₹, optional)', st.fnf_amount ?? '', { type: 'number' }) + H.field('xf-on', 'Settled on', st.fnf_on || '', { type: 'date' })))}
+        ${box(3, 'Email ID password changed', `<label style="font-size:13px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="xf-mail"${st.email_changed ? ' checked' : ''}/> Password of ${esc(x.email || 'their email ID')} has been changed</label>`)}
+        <div style="font-size:11.5px;color:#64748b;">Close Exit needs all three. It removes ${esc(x.employee_name)} from the dashboard (Inactive, login off), saves the record in the Exit Folder and mails management that every formality is done.</div>
+        <div class="hh-btns"><button class="btn-secondary btn-sm" id="xf-save">Save</button><button class="btn-primary btn-sm" id="xf-close">Close Exit &amp; Notify Management</button></div></div>`;
     }
     return '';
   }
@@ -1020,7 +1037,13 @@ window.Pages['hr-hiring'] = (() => {
         </div>
         ${x.reason ? `<div style="font-size:12.5px;color:#334155;margin-top:10px;white-space:pre-wrap;">${esc(x.reason)}</div>` : ''}
         ${dues ? sub('Final Dues') + dues : ''}
-        ${x.docs.length ? sub('Documents') + docList('exits', x.id, x.docs) : ''}
+        ${x.status === 'Completed' && x.settlement && x.settlement.closed_at ? sub('Final Settlement') + `<div class="m-grid-1" style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px;">
+          ${H.readout('Company Assets Returned', [x.settlement.assets, x.settlement.assets_note].filter(Boolean).join(' — '))}
+          ${H.readout('Full & Final Settlement', ['Done', x.settlement.fnf_amount != null ? money(Math.abs(x.settlement.fnf_amount)) : '', x.settlement.fnf_on ? H.fmtDate(x.settlement.fnf_on) : ''].filter(Boolean).join(' · '))}
+          ${H.readout('Email ID Password', x.settlement.email_changed ? 'Changed' : '—')}
+          ${H.readout('Closed By', [x.settlement.closed_by, x.settlement.closed_at ? H.fmtDate(x.settlement.closed_at) : ''].filter(Boolean).join(' · '))}
+        </div>` : ''}
+        ${x.docs.length ? sub(x.status === 'Completed' ? 'Exit Folder — Documents' : 'Documents') + docList('exits', x.id, x.docs) : ''}
         <div class="hh-btns">
           ${x.can.withdraw ? '<button class="btn-secondary btn-sm" id="xv-wd">Withdraw</button>' : ''}
           ${x.can.del ? '<button class="btn-secondary btn-sm" id="xv-del" style="color:#dc2626;">Delete</button>' : ''}
@@ -1051,7 +1074,27 @@ window.Pages['hr-hiring'] = (() => {
           const documents = await readFiles($('xs-file'), 'Signed contract', 1);
           if (!documents.length) throw new Error('Attach the signed leave contract');
           const out = await H.post(`${base}/complete`, { documents, note: H.val('xs-note').trim(), deactivate: !!$('xs-deact')?.checked });
-          await done(`Exit completed${out.notes?.length ? ' — ' + out.notes.join(', ') : ''}`);
+          await done('Signed contract saved — now the final settlement');
+          void out;
+        }));
+        const settleBody = () => ({
+          assets: (document.querySelector('input[name="xf-assets"]:checked') || {}).value || '',
+          assets_note: H.val('xf-anote').trim(),
+          fnf: (document.querySelector('input[name="xf-fnf"]:checked') || {}).value || 'Process',
+          fnf_amount: H.val('xf-amt'), fnf_on: H.val('xf-on'),
+          email_changed: !!$('xf-mail')?.checked,
+        });
+        $('xf-save')?.addEventListener('click', (e) => busy(e.target, async () => {
+          await H.post(`${base}/settlement`, settleBody());
+          await done('Final settlement saved');
+        }));
+        $('xf-close')?.addEventListener('click', (e) => busy(e.target, async () => {
+          const body = settleBody();
+          if (!body.assets) throw new Error('Answer: company assets returned — Yes or No');
+          if (body.fnf !== 'Done') throw new Error('Full & final settlement must be Done to close');
+          if (!body.email_changed) throw new Error('Tick “email ID password changed” first');
+          const out = await H.post(`${base}/settlement`, { ...body, close: true });
+          await done(`Exit completed and saved in the Exit Folder — management notified${out.notes?.length ? ' · ' + out.notes.join(', ') : ''}`);
         }));
         $('xv-wd')?.addEventListener('click', async () => {
           const note = await promptText(`Withdraw ${x.id}`, 'Reason', false);
