@@ -996,6 +996,7 @@ window.Pages['hr-hiring'] = (() => {
     }
     if (k.settle) {
       const st = x.settlement || {};
+      const fnfDocs = (x.docs || []).filter((d) => d.kind === 'fnf');
       const yn = (id, v) => `<div style="display:flex;gap:14px;">${['Yes', 'No'].map((o) => `<label style="font-size:13px;display:flex;gap:5px;align-items:center;"><input type="radio" name="${id}" value="${o}"${v === o ? ' checked' : ''}/> ${o}</label>`).join('')}</div>`;
       const assets = (x.assets || []).length
         ? `<div style="font-size:11.5px;color:#64748b;margin:2px 0 6px;">With ${esc(x.employee_name)} on the dashboard: ${x.assets.map((a) => esc([a.name, a.serial].filter(Boolean).join(' · '))).join(', ')}. “Yes” puts them back to Available.</div>`
@@ -1005,9 +1006,11 @@ window.Pages['hr-hiring'] = (() => {
         ${box(1, 'Company assets returned?', yn('xf-assets', st.assets || '') + assets
           + H.textarea('xf-anote', 'If No — which assets are still with them', st.assets_note || '', { rows: 2 }))}
         ${box(2, 'Full & final settlement', `<div style="display:flex;gap:14px;margin-bottom:6px;">${[['Process', 'In Process'], ['Done', 'Done']].map(([v, l]) => `<label style="font-size:13px;display:flex;gap:5px;align-items:center;"><input type="radio" name="xf-fnf" value="${v}"${(st.fnf || 'Process') === v ? ' checked' : ''}/> ${l}</label>`).join('')}</div>`
-          + H.grid(H.field('xf-amt', 'Amount settled (₹, optional)', st.fnf_amount ?? '', { type: 'number' }) + H.field('xf-on', 'Settled on', st.fnf_on || '', { type: 'date' })))}
+          + H.grid(H.field('xf-amt', 'Amount settled (₹, optional)', st.fnf_amount ?? '', { type: 'number' }) + H.field('xf-on', 'Settled on', st.fnf_on || '', { type: 'date' }))
+          + (fnfDocs.length ? `<div style="font-size:12px;color:#15803d;margin:6px 0 2px;">✓ Uploaded: ${fnfDocs.map((d) => esc(d.name)).join(', ')}</div>` : '')
+          + fileInput('xf-docs', fnfDocs.length ? 'Add more settlement documents' : 'Final settlement documents (compulsory)', ACCEPT_ANY, { multiple: true, required: !fnfDocs.length, hint: 'F&F statement, payment proof, no-dues — PDF / image, up to 5 files' }))}
         ${box(3, 'Email ID password changed', `<label style="font-size:13px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="xf-mail"${st.email_changed ? ' checked' : ''}/> Password of ${esc(x.email || 'their email ID')} has been changed</label>`)}
-        <div style="font-size:11.5px;color:#64748b;">Close Exit needs all three. It removes ${esc(x.employee_name)} from the dashboard (Inactive, login off), saves the record in the Exit Folder and mails management that every formality is done.</div>
+        <div style="font-size:11.5px;color:#64748b;">Close Exit needs all three plus the settlement documents. It removes ${esc(x.employee_name)} from the dashboard (Inactive, login off), saves the record in the Exit Folder and mails management that every formality is done.</div>
         <div class="hh-btns"><button class="btn-secondary btn-sm" id="xf-save">Save</button><button class="btn-primary btn-sm" id="xf-close">Close Exit &amp; Notify Management</button></div></div>`;
     }
     return '';
@@ -1084,8 +1087,9 @@ window.Pages['hr-hiring'] = (() => {
           fnf_amount: H.val('xf-amt'), fnf_on: H.val('xf-on'),
           email_changed: !!$('xf-mail')?.checked,
         });
+        const fnfHad = (x.docs || []).some((d) => d.kind === 'fnf');
         $('xf-save')?.addEventListener('click', (e) => busy(e.target, async () => {
-          await H.post(`${base}/settlement`, settleBody());
+          await H.post(`${base}/settlement`, { ...settleBody(), documents: await readFiles($('xf-docs'), 'Settlement documents', 5) });
           await done('Final settlement saved');
         }));
         $('xf-close')?.addEventListener('click', (e) => busy(e.target, async () => {
@@ -1093,7 +1097,9 @@ window.Pages['hr-hiring'] = (() => {
           if (!body.assets) throw new Error('Answer: company assets returned — Yes or No');
           if (body.fnf !== 'Done') throw new Error('Full & final settlement must be Done to close');
           if (!body.email_changed) throw new Error('Tick “email ID password changed” first');
-          const out = await H.post(`${base}/settlement`, { ...body, close: true });
+          const documents = await readFiles($('xf-docs'), 'Settlement documents', 5);
+          if (!fnfHad && !documents.length) throw new Error('Upload the final settlement documents — they are compulsory');
+          const out = await H.post(`${base}/settlement`, { ...body, documents, close: true });
           await done(`Exit completed and saved in the Exit Folder — management notified${out.notes?.length ? ' · ' + out.notes.join(', ') : ''}`);
         }));
         $('xv-wd')?.addEventListener('click', async () => {

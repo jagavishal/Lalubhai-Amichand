@@ -1666,6 +1666,10 @@ function mountHiring(app, ctx) {
       updated_by: me.by, updated_at: new Date().toISOString(),
     };
     if (st.assets === 'No' && !st.assets_note) bad('Write which company assets are not returned');
+    // Final settlement papers (F&F statement, cheque / bank proof, no-dues …)
+    // are compulsory before the exit closes (27 Nov 2026).
+    const fnfFiles = decodeFiles(b.documents, 'Final settlement documents');
+    const hadFnfDocs = x.docs.some((d) => d.kind === 'fnf');
     const changes = [];
     if (st.assets !== (prev.assets || '')) changes.push(`Company assets returned: ${st.assets || '—'}`);
     if (st.fnf !== (prev.fnf || 'Process')) changes.push(`Full & final settlement: ${st.fnf === 'Done' ? 'Done' : 'In Process'}`);
@@ -1675,11 +1679,14 @@ function mountHiring(app, ctx) {
       if (!st.assets) bad('Answer: company assets returned — Yes or No');
       if (st.fnf !== 'Done') bad('Full & final settlement must be Done to close the exit');
       if (!st.email_changed) bad('Change the email ID password first, then tick it');
+      if (!hadFnfDocs && !fnfFiles.length) bad('Upload the final settlement documents — they are compulsory to close the exit');
       st.closed_by = me.by; st.closed_at = new Date().toISOString();
     }
     const r = await pool.query(`UPDATE hire_exits SET settlement=$1, status=$2, updated_at=NOW()${close ? ', completed_at=NOW()' : ''} WHERE id=$3 AND status=$4 AND (settlement <=> $5)`,
       [JSON.stringify(st), close ? X.DONE : X.SETTLE, x.id, X.SETTLE, row.settlement ?? null]);
     if (!r.rowCount) bad('This record just changed — reload');
+    const fnfSaved = await saveDocs(x.id, fnfFiles, { kind: 'fnf', by: me.by });
+    if (fnfSaved.length) changes.push(`${fnfSaved.length} final settlement document${fnfSaved.length > 1 ? 's' : ''} uploaded`);
     if (!close) {
       if (changes.length || st.assets_note !== (prev.assets_note || '')) await logStep(x.id, 'Final Settlement Updated', [...changes, st.assets === 'No' ? 'Pending: ' + st.assets_note : ''].filter(Boolean).join(' · '), actor(me));
       return { ok: true };
@@ -1724,7 +1731,7 @@ function mountHiring(app, ctx) {
       await q('UPDATE users SET active = 0 WHERE id = $1', [x.user_id]).then(() => notes.push('ERP login disabled')).catch((e) => notes.push('login not disabled: ' + e.message));
     }
     await logStep(x.id, 'Exit Completed — moved to the Exit Folder',
-      [`Assets returned: ${st.assets}${st.assets_note ? ' (' + st.assets_note + ')' : ''}`, `F&F Done${fnfAmount ? ' · ' + inr(Math.abs(fnfAmount)) + (fnfAmount >= 0 ? ' paid' : ' recovered') : ''}`, 'Email password changed', ...notes].join(' · '), actor(me));
+      [...(fnfSaved.length ? [`${fnfSaved.length} settlement document(s) uploaded`] : []), `Assets returned: ${st.assets}${st.assets_note ? ' (' + st.assets_note + ')' : ''}`, `F&F Done${fnfAmount ? ' · ' + inr(Math.abs(fnfAmount)) + (fnfAmount >= 0 ? ' paid' : ' recovered') : ''}`, 'Email password changed', ...notes].join(' · '), actor(me));
 
     later('exit-done ' + x.id, async () => {
       const to = await emails(me.cfg.mgmt, me.cfg.users);
@@ -1732,7 +1739,7 @@ function mountHiring(app, ctx) {
       if (!to.length && !cc.length) return;
       await send({
         to: (to.length ? to : cc).join(','), cc: to.length ? cc.filter((e) => !to.includes(e)).join(',') : '',
-        subject: `Exit completed: ${x.employee_name} — all formalities done`,
+        subject: `Exit completed: ${x.employee_name} — all formalities done`, attachments: await attachmentsFor(x.id, [...x.docs.filter((d) => d.kind === 'fnf').map((d) => d.n), ...fnfSaved]).catch(() => []),
         html: mailHtml({ heading: 'Exit Completed', colour: '#16a34a',
           lead: `Every exit formality of <b>${escHtml(x.employee_name)}</b> is done. The record is saved in the Exit Folder of the Hiring & Exit FMS.`,
           rows: [['Employee', `${escHtml(x.employee_name)} (${escHtml(x.employee_id || '')})`], ['Designation', escHtml(x.designation)], ['Department', escHtml(x.department)],
