@@ -101,7 +101,13 @@ function parseSheet(rows) {
     const r = rows[i];
     const c = { party: find(r, /party|supplier|vendor|creditor|name/i), date: find(r, /bill\s*date|inv(oice)?\s*date|^date$/i),
       no: find(r, /bill\s*no|inv(oice)?\s*no|bill\s*number|^no\.?$/i), amount: find(r, /amount|amt|value|total/i) };
-    if (c.party >= 0 && c.date >= 0 && c.amount >= 0) { hr = i; col = c; break; }
+    if (c.party >= 0 && c.date >= 0 && c.amount >= 0) {
+      // Optional "Cheque No." + the "Date" beside it (Bopal SA CR.LIST, 27 Nov 2026):
+      // a bill with a cheque number comes in already settled.
+      c.chq = find(r, /cheque\s*no|chq\.?\s*no/i);
+      c.chqDate = c.chq >= 0 ? r.findIndex((x, j) => j > c.chq && /date/i.test(txt(x))) : -1;
+      hr = i; col = c; break;
+    }
   }
   if (hr < 0) bad('Could not find the columns — the sheet needs Party Name, Bill Date, Bill No and Amount headings');
   const out = [], skipped = [];
@@ -117,7 +123,10 @@ function parseSheet(rows) {
     if (!party) { skipped.push(`Row ${i + 1}: no party`); continue; }
     if (!date) { skipped.push(`Row ${i + 1} (${party}): bill date "${txt(r[col.date])}" not read`); continue; }
     if (amount == null) { skipped.push(`Row ${i + 1} (${party}): no amount`); continue; }
-    out.push({ party: party.slice(0, 255), date, no: col.no >= 0 ? txt(r[col.no]).slice(0, 64) : '', amount: round2(amount) });
+    const bill = { party: party.slice(0, 255), date, no: col.no >= 0 ? txt(r[col.no]).slice(0, 64) : '', amount: round2(amount) };
+    const chq = col.chq >= 0 ? txt(r[col.chq]).slice(0, 64) : '';
+    if (chq) { bill.chequeNo = chq; bill.chequeDate = (col.chqDate >= 0 && dateIn(r[col.chqDate])) || null; }
+    out.push(bill);
   }
   if (!out.length) bad('No bills found under the headings');
   return { bills: out, skipped };
@@ -178,7 +187,7 @@ function mountRetailCreditors(app, ctx) {
     const p = parseSheet(req.body?.sheet);
     return { count: p.bills.length, total: round2(p.bills.reduce((a, b) => a + b.amount, 0)), parties: new Set(p.bills.map((b) => b.party.toLowerCase())).size,
       from: p.bills.reduce((a, b) => (a && a < b.date ? a : b.date), null), to: p.bills.reduce((a, b) => (a && a > b.date ? a : b.date), null),
-      skipped: p.skipped.slice(0, 30), sample: p.bills.slice(0, 8) };
+      settled: p.bills.filter((b) => b.chequeNo).length, skipped: p.skipped.slice(0, 30), sample: p.bills.slice(0, 8) };
   }));
 
   // Upload: new bills added; a bill already there (same party, date, no. and amount) is skipped.
@@ -186,19 +195,35 @@ function mountRetailCreditors(app, ctx) {
     const branch = await branchIn(req.body?.branch);
     const p = parseSheet(req.body?.sheet);
     const file = str(req.body?.file_name);
-    const have = await q('SELECT party, bill_date, bill_no, amount FROM retail_creditor_bills WHERE branch = $1', [branch]);
+    const have = await q('SELECT id, party, bill_date, bill_no, amount, status FROM retail_creditor_bills WHERE branch = $1', [branch]);
     const key = (party, date, no, amt) => [party.toLowerCase().replace(/\s+/g, ' '), date, String(no).toLowerCase(), round2(amt).toFixed(2)].join('|');
     const seen = new Set(have.map((r) => key(r.party, dOut(r.bill_date), r.bill_no, Number(r.amount))));
-    let added = 0, dup = 0;
+    // An open bill the sheet now shows a cheque against (next month's tab) gets settled.
+    const openId = new Map(have.filter((r) => r.status === 'Open').map((r) => [key(r.party, dOut(r.bill_date), r.bill_no, Number(r.amount)), r.id]));
+    let added = 0, dup = 0, settled = 0;
     for (const b of p.bills) {
       const k = key(b.party, b.date, b.no, b.amount);
-      if (seen.has(k)) { dup++; continue; }
+      if (seen.has(k)) {
+        dup++;
+        if (b.chequeNo && openId.has(k)) {
+          await q("UPDATE retail_creditor_bills SET status='Settled', cheque_no=$1, cheque_date=$2, settled_by=$3, settled_at=NOW() WHERE id=$4 AND status='Open'",
+            [b.chequeNo, b.chequeDate || istToday(), req.rc.by, openId.get(k)]);
+          openId.delete(k); settled++;
+        }
+        continue;
+      }
       seen.add(k);
-      await q('INSERT INTO retail_creditor_bills (branch, party, bill_date, bill_no, amount, file_name, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-        [branch, b.party, b.date, b.no, b.amount, file, req.rc.by]);
+      if (b.chequeNo) {
+        await q(`INSERT INTO retail_creditor_bills (branch, party, bill_date, bill_no, amount, file_name, uploaded_by, status, cheque_no, cheque_date, settled_by, settled_at)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,'Settled',$8,$9,$10,NOW())`,
+          [branch, b.party, b.date, b.no, b.amount, file, req.rc.by, b.chequeNo, b.chequeDate || b.date, req.rc.by]);
+      } else {
+        await q('INSERT INTO retail_creditor_bills (branch, party, bill_date, bill_no, amount, file_name, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+          [branch, b.party, b.date, b.no, b.amount, file, req.rc.by]);
+      }
       added++;
     }
-    return { ok: true, added, duplicates: dup, skipped: p.skipped };
+    return { ok: true, added, duplicates: dup, settled, skipped: p.skipped };
   }));
 
   // Settle: cheque number + signing date on one or more bills of the shop.

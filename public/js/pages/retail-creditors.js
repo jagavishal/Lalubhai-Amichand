@@ -132,25 +132,43 @@ window.Pages['retail-creditors'] = (() => {
         <div id="rcu-prev" style="margin-top:12px;"></div>`,
       confirmText: 'Upload',
       onOpen: () => {
-        document.getElementById('rcu-file').addEventListener('change', async (e) => {
-          const f = e.target.files[0];
-          const box = document.getElementById('rcu-prev');
-          if (!f) return;
-          box.innerHTML = H.spinner('Reading…');
+        let wb = null, XLSX = null;
+        const box = document.getElementById('rcu-prev');
+        const preview = async (name) => {
+          box.querySelector('#rcu-out')?.remove();
+          box.insertAdjacentHTML('beforeend', `<div id="rcu-out">${H.spinner('Reading…')}</div>`);
+          const out = box.querySelector('#rcu-out');
           try {
-            const XLSX = await Utils.loadXlsx();
-            if (!XLSX) throw new Error('Could not load the Excel library — check the internet connection');
-            const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
-            // raw:true keeps a real date cell as its number; text dates come as typed.
-            sheet = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+            // The dates as the sheet shows them, read day first. A sheet typed
+            // dd/mm on a US-format Excel stores 07/08 as 8 July but shows
+            // "07/08/2026" — what the shop meant is what is shown (Bopal SA CR.LIST).
+            sheet = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: '' });
             const p = await H.post('/api/retail-creditors/preview', { sheet });
-            box.innerHTML = `<div style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;border-radius:10px;padding:10px 14px;font-size:12.5px;">
+            out.innerHTML = `${p.settled ? `<div style="background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;border-radius:10px;padding:8px 12px;font-size:12px;margin-bottom:8px;">${p.settled} bill${p.settled > 1 ? 's have' : ' has'} a cheque no. — they come in as Settled.</div>` : ''}<div style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;border-radius:10px;padding:10px 14px;font-size:12.5px;">
               <b>${p.count}</b> bills · <b>${p.parties}</b> parties · total <b>${amt(p.total)}</b> · bill dates ${dmy(p.from)} to ${dmy(p.to)}</div>
               ${p.skipped.length ? `<div style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:8px 12px;font-size:12px;margin-top:8px;">Left out:<br>${p.skipped.map(esc).join('<br>')}</div>` : ''}
               <table class="rc-tbl" style="margin-top:8px;"><thead><tr><th>Party</th><th>Bill Date</th><th>Bill No</th><th class="n">Amount</th></tr></thead><tbody>
               ${p.sample.map((b) => `<tr><td>${esc(b.party)}</td><td>${dmy(b.date)}</td><td>${esc(b.no)}</td><td class="n">${amt(b.amount)}</td></tr>`).join('')}</tbody></table>
               <div style="font-size:11px;color:#94a3b8;margin-top:4px;">First ${p.sample.length} shown — check the dates read right.</div>`;
-          } catch (err) { sheet = null; box.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:10px 14px;font-size:12.5px;">${esc(err.message)}</div>`; }
+          } catch (err) { sheet = null; out.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:10px 14px;font-size:12.5px;">${esc(err.message)}</div>`; }
+        };
+        document.getElementById('rcu-file').addEventListener('change', async (e) => {
+          const f = e.target.files[0];
+          sheet = null;
+          if (!f) { box.innerHTML = ''; return; }
+          box.innerHTML = H.spinner('Reading…');
+          try {
+            XLSX = await Utils.loadXlsx();
+            if (!XLSX) throw new Error('Could not load the Excel library — check the internet connection');
+            wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+          } catch (err) { box.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:10px 14px;font-size:12.5px;">${esc(err.message)}</div>`; return; }
+          // A month per tab (AUG-26, SEP-26 …): pick the tab, the latest by default.
+          const names = wb.SheetNames;
+          box.innerHTML = names.length > 1
+            ? `<div style="margin-bottom:10px;"><label style="${H.LABEL}">Sheet (month tab)</label><select id="rcu-tab" style="${H.CONTROL}">${names.map((n, i) => `<option${i === names.length - 1 ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select></div>`
+            : '';
+          box.querySelector('#rcu-tab')?.addEventListener('change', (ev) => preview(ev.target.value));
+          await preview(names[names.length - 1]);
         });
       },
       onConfirm: async () => {
@@ -158,7 +176,7 @@ window.Pages['retail-creditors'] = (() => {
         const shop = H.val('rcu-shop');
         const r = await H.post('/api/retail-creditors/upload', { branch: shop, sheet, file_name: document.getElementById('rcu-file').files[0]?.name || '' });
         H.closeModal('rc-upl');
-        H.toast(`${r.added} bill${r.added === 1 ? '' : 's'} added${r.duplicates ? ` · ${r.duplicates} already there, skipped` : ''}`);
+        H.toast(`${r.added} bill${r.added === 1 ? '' : 's'} added${r.duplicates ? ` · ${r.duplicates} already there, skipped` : ''}${r.settled ? ` · ${r.settled} settled by the cheque no. in the sheet` : ''}`);
         _branch = shop; remember(shop);
         await loadBills(); render();
       },
